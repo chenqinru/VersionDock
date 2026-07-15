@@ -1,0 +1,194 @@
+export interface RepoMeta {
+  id: string;              // stable repo instance id: "<rootPath>::<kind>"
+  name: string;
+  rootPath: string;
+  color: string;
+  kind?: 'git' | 'svn';
+  remoteUrl?: string;
+  relativeUrl?: string;
+  isSubmodule?: boolean;
+  parentRepoId?: string;
+  submodulePath?: string;  // path relative to the parent repo for submodules or nested VCS roots
+  depth?: number;          // 0 = top-level repo, 1 = direct child repo/submodule, 2 = nested child
+  isWorktree?: boolean;    // true when this workspace folder is a linked git worktree
+  mainWorktreePath?: string; // rootPath of the main worktree repo
+}
+
+export interface SubmoduleEntry {
+  name: string;
+  path: string;       // relativo al repo padre
+  url: string;
+  repoId: string;     // stable git repo instance id for the submodule
+  initialized: boolean;
+  headCommit?: string;
+  isDirty: boolean;
+}
+
+export interface BranchInfo {
+  repoId: string;
+  name: string;
+  fullName: string;
+  isHead: boolean;
+  isRemote: boolean;
+  remoteName?: string;
+  upstream?: string;
+  aheadBehind?: { ahead: number; behind: number };
+  lastCommitHash?: string;
+  lastCommitDate?: string;
+  detachedTag?: string;   // set when HEAD is detached on a tag
+  detachedHash?: string;  // short commit hash when HEAD is detached without a tag
+}
+
+export interface LineRange {
+  start: number;
+  end: number;
+}
+
+export interface CommitNode {
+  hash: string;
+  shortHash: string;
+  repoId: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  committerDate: string;
+  parents: string[];
+  refs: string[];
+  unpushed?: boolean;
+  incoming?: boolean;
+  lane?: number;
+  totalLanes?: number;
+  graphLines?: GraphLine[];
+}
+
+export interface GraphLine {
+  fromLane: number;
+  toLane: number;
+  type: 'straight' | 'merge-in' | 'fork-out' | 'pass-through';
+  repoId: string;
+}
+
+export type GitFileStatus =
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'untracked'
+  | 'conflicted'
+  | 'submodule';
+
+export interface SubmoduleStatus {
+  isSubmodule: boolean;
+  hasGitlinkChange: boolean;
+  hasTrackedChanges: boolean;
+  hasUntrackedChanges: boolean;
+}
+
+export interface FileStatus {
+  repoId: string;
+  path: string;
+  absolutePath: string;
+  oldPath?: string;
+  status: GitFileStatus;
+  staged: boolean;
+  unstaged: boolean;
+  added?: number;
+  removed?: number;
+  submodule?: SubmoduleStatus;
+}
+
+export interface DiffLine {
+  type: 'context' | 'add' | 'remove';
+  content: string;
+  oldLineNo?: number;
+  newLineNo?: number;
+}
+
+export interface DiffHunk {
+  header: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: DiffLine[];
+}
+
+export interface FileDiff {
+  repoId: string;
+  oldPath: string;
+  newPath: string;
+  isBinary: boolean;
+  isNew: boolean;
+  isDeleted: boolean;
+  hunks: DiffHunk[];
+  originalContent?: string;
+  modifiedContent?: string;
+  language?: string;
+}
+
+export interface ConflictBlock {
+  index: number;
+  oursLabel: string;
+  theirsLabel: string;
+  oursLines: string[];
+  baseLines: string[];
+  theirsLines: string[];
+  startLine: number;
+  endLine: number;
+}
+
+export interface MergeConflictFile {
+  absolutePath: string;
+  relativePath: string;
+  repoId: string;
+  conflicts: ConflictBlock[];
+  oursLabel: string;
+  theirsLabel: string;
+  content: string;
+  oursStatus?: 'modified' | 'added' | 'deleted';
+  theirsStatus?: 'modified' | 'added' | 'deleted';
+  baseContent?: string;
+  oursContent?: string;
+  theirsContent?: string;
+  language?: string;
+}
+
+export interface MergeFileVersions {
+  base: string;
+  ours: string;
+  theirs: string;
+  language: string;
+}
+
+export interface WorkspaceStatus {
+  repos: RepoStatus[];
+}
+
+// ─── Changelists ─────────────────────────────────────────────────────────────
+
+export interface ChangelistFileAssignment {
+  repoId: string;
+  path: string;
+}
+
+export interface ChangelistData {
+  id: string;
+  name: string;
+  color?: string;
+  // repoId → file paths belonging to this changelist
+  fileAssignments: Record<string, string[]>;
+}
+
+export const CHANGELIST_DEFAULT_ID = 'default';
+export const CHANGELIST_UNVERSIONED_ID = 'unversioned';
+
+export interface RepoStatus {
+  repoId: string;
+  branch: BranchInfo;
+  stagedFiles: FileStatus[];
+  unstagedFiles: FileStatus[];
+  isDetachedHead: boolean;
+  conflictCount: number;
+}

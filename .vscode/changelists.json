@@ -1,0 +1,11 @@
+{
+  "changelists": [
+    {
+      "name": "Default",
+      "files": [
+        "package.json"
+      ]
+    }
+  ],
+  "active": "Default"
+}

@@ -1,0 +1,641 @@
+{
+  "name": "versiondock",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.0.0",
+  "publisher": "chenqinru",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chenqinru/VersionDock.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "svn",
+    "vcs",
+    "version-control",
+    "scm",
+    "commit",
+    "log",
+    "merge",
+    "changelist",
+    "shelve",
+    "intellij",
+    "phpstorm"
+  ],
+  "icon": "media/icons/versiondock-logo-v2.png",
+  "galleryBanner": {
+    "color": "#071b45",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "workspaceContains:**/.git",
+    "workspaceContains:**/.svn",
+    "onStartupFinished"
+  ],
+  "main": "./out/host/extension.js",
+  "l10n": "./l10n",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "versiondock-commit",
+          "title": "%viewsContainers.activitybar.commit.title%",
+          "icon": "media/icons/git-commit.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "versiondock-log",
+          "title": "%viewsContainers.panel.log.title%",
+          "icon": "media/icons/git-branch.svg"
+        }
+      ]
+    },
+    "views": {
+      "versiondock-commit": [
+        {
+          "type": "webview",
+          "id": "versiondock.commitPanel",
+          "name": "%views.commitPanel.name%",
+          "retainContextWhenHidden": true
+        },
+        {
+          "id": "versiondock.commitBadge",
+          "name": "",
+          "when": "false"
+        }
+      ],
+      "versiondock-log": [
+        {
+          "type": "webview",
+          "id": "versiondock.gitLog",
+          "name": "%views.gitLog.name%",
+          "retainContextWhenHidden": true
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "versiondock.openLog",
+        "title": "%commands.openLog.title%",
+        "icon": "$(history)"
+      },
+      {
+        "command": "versiondock.commit",
+        "title": "%commands.commit.title%"
+      },
+      {
+        "command": "versiondock.commitAndPush",
+        "title": "%commands.commitAndPush.title%"
+      },
+      {
+        "command": "versiondock.pull",
+        "title": "%commands.pull.title%"
+      },
+      {
+        "command": "versiondock.push",
+        "title": "%commands.push.title%"
+      },
+      {
+        "command": "versiondock.fetchAll",
+        "title": "%commands.fetchAll.title%"
+      },
+      {
+        "command": "versiondock.openMergeEditor",
+        "title": "%commands.openMergeEditor.title%"
+      },
+      {
+        "command": "versiondock.openConflicts",
+        "title": "%commands.openConflicts.title%",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "versiondock.openMergeEditorFromSCM",
+        "title": "%commands.openMergeEditorFromSCM.title%",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "versiondock.showFileHistory",
+        "title": "%commands.showFileHistory.title%",
+        "icon": "$(history)"
+      },
+      {
+        "command": "versiondock.showSelectionHistory",
+        "title": "%commands.showSelectionHistory.title%",
+        "icon": "$(selection)"
+      },
+      {
+        "command": "versiondock.refreshCommitPanel",
+        "title": "%commands.refreshCommitPanel.title%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "versiondock.reloadRepositories",
+        "title": "%commands.reloadRepositories.title%",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "versiondock.showBranchMenu",
+        "title": "%commands.showBranchMenu.title%",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "versiondock.updateProject",
+        "title": "%commands.updateProject.title%",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "versiondock.openSettings",
+        "title": "%commands.openSettings.title%",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "versiondock.openGitAnnotations",
+        "title": "%commands.openGitAnnotations.title%",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "versiondock.closeGitAnnotations",
+        "title": "%commands.closeGitAnnotations.title%",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "versiondock.navigateToAnnotationCommit",
+        "title": "%commands.navigateToAnnotationCommit.title%"
+      },
+      {
+        "command": "versiondock.manageHiddenRepos",
+        "title": "%commands.manageHiddenRepos.title%",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "versiondock.manageProfiles",
+        "title": "%commands.manageProfiles.title%",
+        "icon": "$(account)"
+      },
+      {
+        "command": "versiondock.switchProfile",
+        "title": "%commands.switchProfile.title%",
+        "icon": "$(account)"
+      },
+      {
+        "command": "versiondock.submodule.init",
+        "title": "%commands.submoduleInit.title%"
+      },
+      {
+        "command": "versiondock.submodule.update",
+        "title": "%commands.submoduleUpdate.title%"
+      },
+      {
+        "command": "versiondock.submodule.updateRecursive",
+        "title": "%commands.submoduleUpdateRecursive.title%"
+      },
+      {
+        "command": "versiondock.submodule.deinit",
+        "title": "%commands.submoduleDeinit.title%"
+      },
+      {
+        "command": "versiondock.submodule.deinitForce",
+        "title": "%commands.submoduleDeinitForce.title%"
+      },
+      {
+        "command": "versiondock.submodule.openInNewWindow",
+        "title": "%commands.submoduleOpenInNewWindow.title%"
+      },
+      {
+        "command": "versiondock.worktree.add",
+        "title": "%commands.worktreeAdd.title%"
+      },
+      {
+        "command": "versiondock.worktree.prune",
+        "title": "%commands.worktreePrune.title%"
+      },
+      {
+        "command": "versiondock.subtree.add",
+        "title": "%commands.subtreeAdd.title%"
+      },
+      {
+        "command": "versiondock.subtree.pull",
+        "title": "%commands.subtreePull.title%"
+      },
+      {
+        "command": "versiondock.subtree.push",
+        "title": "%commands.subtreePush.title%"
+      },
+      {
+        "command": "versiondock.subtree.split",
+        "title": "%commands.subtreeSplit.title%"
+      },
+      {
+        "command": "versiondock.subtree.merge",
+        "title": "%commands.subtreeMerge.title%"
+      },
+      {
+        "command": "versiondock.subtree.remove",
+        "title": "%commands.subtreeRemove.title%"
+      },
+      {
+        "command": "versiondock.subtree.manage",
+        "title": "%commands.subtreeManage.title%"
+      },
+      {
+        "command": "versiondock.svn.cleanup",
+        "title": "%commands.svnCleanup.title%",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "versiondock.svn.resolveWorking",
+        "title": "%commands.svnResolveWorking.title%",
+        "icon": "$(check)"
+      },
+      {
+        "command": "versiondock.svn.lock",
+        "title": "%commands.svnLock.title%",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "versiondock.svn.unlock",
+        "title": "%commands.svnUnlock.title%",
+        "icon": "$(unlock)"
+      },
+      {
+        "command": "versiondock.svn.relocate",
+        "title": "%commands.svnRelocate.title%",
+        "icon": "$(link)"
+      },
+      {
+        "command": "versiondock.svn.switch",
+        "title": "%commands.svnSwitch.title%",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "versiondock.svn.createBranch",
+        "title": "%commands.svnCreateBranch.title%",
+        "icon": "$(git-branch-create)"
+      },
+      {
+        "command": "versiondock.svn.createTag",
+        "title": "%commands.svnCreateTag.title%",
+        "icon": "$(tag)"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "versiondock.context.editor",
+        "label": "VersionDock"
+      },
+      {
+        "id": "versiondock.context.explorer",
+        "label": "VersionDock"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "versiondock.updateProject",
+          "when": "view == versiondock.commitPanel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "versiondock.refreshCommitPanel",
+          "when": "view == versiondock.commitPanel",
+          "group": "navigation@2"
+        },
+        {
+          "command": "versiondock.showBranchMenu",
+          "when": "view == versiondock.commitPanel",
+          "group": "navigation@3"
+        },
+        {
+          "command": "versiondock.openLog",
+          "when": "view == versiondock.commitPanel",
+          "group": "navigation@4"
+        },
+        {
+          "command": "versiondock.openSettings",
+          "when": "view == versiondock.commitPanel",
+          "group": "navigation@5"
+        }
+      ],
+      "scm/sourceControl": [
+        {
+          "command": "versiondock.manageHiddenRepos",
+          "group": "versiondock@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "versiondock.manageHiddenRepos"
+        },
+        {
+          "command": "versiondock.openLog"
+        },
+        {
+          "command": "versiondock.fetchAll"
+        },
+        {
+          "command": "versiondock.openMergeEditor"
+        },
+        {
+          "command": "versiondock.openConflicts"
+        },
+        {
+          "command": "versiondock.openGitAnnotations",
+          "when": "resourceScheme == file && config.versiondock.gitAnnotations.enabled"
+        },
+        {
+          "command": "versiondock.closeGitAnnotations",
+          "when": "resourceScheme == file && versiondock.annotationsVisible"
+        },
+        {
+          "command": "versiondock.navigateToAnnotationCommit",
+          "when": "false"
+        }
+      ],
+      "editor/lineNumber/context": [
+        {
+          "command": "versiondock.openGitAnnotations",
+          "when": "resourceScheme == file && config.versiondock.gitAnnotations.enabled && !versiondock.annotationsVisible",
+          "group": "versiondock@1"
+        },
+        {
+          "command": "versiondock.closeGitAnnotations",
+          "when": "resourceScheme == file && versiondock.annotationsVisible",
+          "group": "versiondock@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "submenu": "versiondock.context.editor",
+          "when": "editorTextFocus && resourceScheme == file",
+          "group": "git@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "submenu": "versiondock.context.explorer",
+          "when": "!explorerResourceIsFolder",
+          "group": "git@1"
+        }
+      ],
+      "versiondock.context.editor": [
+        {
+          "command": "versiondock.openGitAnnotations",
+          "when": "config.versiondock.gitAnnotations.enabled && !versiondock.annotationsVisible",
+          "group": "navigation@2"
+        },
+        {
+          "command": "versiondock.closeGitAnnotations",
+          "when": "versiondock.annotationsVisible",
+          "group": "navigation@2"
+        },
+        {
+          "command": "versiondock.showFileHistory",
+          "group": "history@1"
+        },
+        {
+          "command": "versiondock.showSelectionHistory",
+          "group": "history@2"
+        }
+      ],
+      "versiondock.context.explorer": [
+        {
+          "command": "versiondock.showFileHistory",
+          "group": "history@1"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "versiondock.openConflicts",
+          "when": "scmProvider == git && scmResourceGroup == merge",
+          "group": "versiondock@0"
+        },
+        {
+          "command": "versiondock.openMergeEditorFromSCM",
+          "when": "scmProvider == git && scmResourceGroup == merge",
+          "group": "versiondock@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "versiondock.openLog",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l"
+      },
+      {
+        "command": "versiondock.commit",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k"
+      }
+    ],
+    "colors": [
+      {
+        "id": "versiondock.statusBarPullForeground",
+        "description": "%colors.statusBarPullForeground.description%",
+        "defaults": {
+          "dark": "#64b5f6",
+          "light": "#1565c0",
+          "highContrast": "#64b5f6",
+          "highContrastLight": "#1565c0"
+        }
+      },
+      {
+        "id": "versiondock.statusBarPushForeground",
+        "description": "%colors.statusBarPushForeground.description%",
+        "defaults": {
+          "dark": "#ce93d8",
+          "light": "#6a1b9a",
+          "highContrast": "#ce93d8",
+          "highContrastLight": "#6a1b9a"
+        }
+      },
+      {
+        "id": "versiondock.statusBarDirtyForeground",
+        "description": "%colors.statusBarDirtyForeground.description%",
+        "defaults": {
+          "dark": "#81c784",
+          "light": "#2e7d32",
+          "highContrast": "#81c784",
+          "highContrastLight": "#2e7d32"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "versiondock.graphMaxCommits": {
+          "order": 80,
+          "type": "number",
+          "default": 1000,
+          "minimum": 100,
+          "maximum": 10000,
+          "description": "%configuration.graphMaxCommits.description%"
+        },
+        "versiondock.repositoryScanMaxDepth": {
+          "order": 60,
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "%configuration.repositoryScanMaxDepth.description%"
+        },
+        "versiondock.repositoryScanIgnoredFolders": {
+          "order": 70,
+          "type": "array",
+          "default": [
+            "node_modules"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.repositoryScanIgnoredFolders.description%"
+        },
+        "versiondock.fetchOnStartup": {
+          "order": 40,
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.fetchOnStartup.description%"
+        },
+        "versiondock.notifyOnIncomingCommits": {
+          "order": 50,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.notifyOnIncomingCommits.description%"
+        },
+        "versiondock.notifyOnUnpushedCommits": {
+          "order": 55,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.notifyOnUnpushedCommits.description%"
+        },
+        "versiondock.projectColors": {
+          "order": 110,
+          "type": "object",
+          "default": {},
+          "description": "%configuration.projectColors.description%"
+        },
+        "versiondock.autoRefreshInterval": {
+          "order": 30,
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "%configuration.autoRefreshInterval.description%"
+        },
+        "versiondock.gitAnnotations.enabled": {
+          "order": 90,
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.gitAnnotationsEnabled.description%"
+        },
+        "versiondock.gitGhostText.enabled": {
+          "order": 100,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.gitGhostTextEnabled.description%"
+        },
+        "versiondock.aiCommitMessage.provider": {
+          "type": "string",
+          "enum": ["githubCopilot", "aiCommitMessageExtension"],
+          "enumDescriptions": [
+            "%configuration.aiCommitMessage.provider.enum.githubCopilot%",
+            "%configuration.aiCommitMessage.provider.enum.aiCommitMessageExtension%"
+          ],
+          "default": "aiCommitMessageExtension",
+          "description": "%configuration.aiCommitMessage.provider.description%"
+        },
+        "versiondock.changesViewMode": {
+          "order": 10,
+          "type": "string",
+          "enum": [
+            "simplified",
+            "changelists",
+            "vscode"
+          ],
+          "enumDescriptions": [
+            "%configuration.changesViewMode.enum.simplified%",
+            "%configuration.changesViewMode.enum.changelists%",
+            "%configuration.changesViewMode.enum.vscode%"
+          ],
+          "default": "simplified",
+          "description": "%configuration.changesViewMode.description%"
+        },
+        "versiondock.promptAddUntrackedToGit": {
+          "order": 25,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.promptAddUntrackedToGit.description%"
+        },
+        "versiondock.defaultCommitAction": {
+          "order": 20,
+          "type": "string",
+          "enum": [
+            "commit",
+            "commitAndPush"
+          ],
+          "enumDescriptions": [
+            "%configuration.defaultCommitAction.enum.commit%",
+            "%configuration.defaultCommitAction.enum.commitAndPush%"
+          ],
+          "default": "commit",
+          "description": "%configuration.defaultCommitAction.description%"
+        },
+        "versiondock.suppressDivergedBranchWarning": {
+          "order": 35,
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.suppressDivergedBranchWarning.description%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "npm run build:host && npm run build:webview",
+    "build:host": "node esbuild.mjs --prod",
+    "build:webview": "node build-webview.mjs",
+    "watch": "concurrently \"npm run watch:host\" \"npm run watch:webview\"",
+    "watch:host": "node esbuild.mjs --watch",
+    "watch:webview": "node build-webview.mjs --watch",
+    "package": "vsce package",
+    "publish": "vsce publish",
+    "lint": "eslint src --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json"
+  },
+  "dependencies": {
+    "simple-git": "^3.22.0"
+  },
+  "devDependencies": {
+    "@monaco-editor/react": "^4.6.0",
+    "@tanstack/react-virtual": "^3.2.0",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "@vscode/codicons": "^0.0.45",
+    "@vscode/vsce": "^2.24.0",
+    "concurrently": "^8.2.0",
+    "esbuild": "^0.28.0",
+    "eslint": "^8.56.0",
+    "material-icon-theme": "^5.34.0",
+    "monaco-editor": "^0.47.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "shiki": "^3.23.0",
+    "typescript": "^5.3.0",
+    "vite": "^7.0.0",
+    "zustand": "^4.5.0"
+  }
+}

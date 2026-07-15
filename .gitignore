@@ -1,0 +1,9 @@
+node_modules/
+out/
+*.vsix
+.DS_Store
+MEMORY.md
+.claude/
+.vscode/settings.json
+.idea/
+.vscode/versiondock-changelists.json
