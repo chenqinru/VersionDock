@@ -151,7 +151,6 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   const [containerWidth, setContainerWidth] = useState<number>(9999);
   const containerRoRef = useRef<ResizeObserver | null>(null);
   const loadMoreCommitCountRef = useRef(-1);
-  const wasNearBottomRef = useRef(false);
 
   const containerRefCb = useCallback((el: HTMLDivElement | null) => {
     if (containerRoRef.current) { containerRoRef.current.disconnect(); containerRoRef.current = null; }
@@ -220,28 +219,29 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     const el = parentRef.current;
     if (!el) return;
     const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - ROW_HEIGHT * 5;
-    const crossedIntoBottom = nearBottom && !wasNearBottomRef.current;
-    wasNearBottomRef.current = nearBottom;
+    if (!nearBottom || !hasMore || loading || backgroundLoading) return;
+    if (loadMoreCommitCountRef.current === commits.length) return;
 
-    if (hasMore && !loading && crossedIntoBottom && loadMoreCommitCountRef.current !== commits.length) {
-      loadMoreCommitCountRef.current = commits.length;
-      onLoadMore();
-    }
-  }, [commits.length, hasMore, loading, onLoadMore]);
+    loadMoreCommitCountRef.current = commits.length;
+    onLoadMore();
+  }, [backgroundLoading, commits.length, hasMore, loading, onLoadMore]);
 
   useEffect(() => {
+    if (showSkeleton) return;
     const el = parentRef.current;
     if (!el) return;
     el.addEventListener('scroll', handleScroll, { passive: true });
+    // Re-check when a request finishes or the list size changes. This covers
+    // the case where the user reached the bottom while loading was still true.
+    handleScroll();
     return () => el.removeEventListener('scroll', handleScroll);
-  }, [handleScroll]);
+  }, [handleScroll, showSkeleton]);
 
   useEffect(() => {
-    if (!hasMore) {
+    if (loading || !storeHasMore) {
       loadMoreCommitCountRef.current = -1;
-      wasNearBottomRef.current = false;
     }
-  }, [hasMore]);
+  }, [loading, storeHasMore]);
 
   useEffect(() => {
     if (!scrollToHash) return;
@@ -552,9 +552,20 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
       </div>
 
       {(backgroundLoading || (loading && commits.length > 0)) && (
-        <div style={styles.bgLoadingBar}>
-          <div className="versiondock-bg-loading-fill" style={styles.bgLoadingBarFill} />
-        </div>
+        <>
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label={t('Loading commits…')}
+            style={styles.loadingMore}
+          >
+            <Codicon name="loading~spin" style={styles.loadingMoreIcon} />
+            <span>{t('Loading commits…')}</span>
+          </div>
+          <div style={styles.bgLoadingBar}>
+            <div className="versiondock-bg-loading-fill" style={styles.bgLoadingBarFill} />
+          </div>
+        </>
       )}
     </div>
   );
@@ -1536,5 +1547,29 @@ const styles = {
     opacity: 0.85,
     borderRadius: '999px',
     willChange: 'transform',
+  } as React.CSSProperties,
+  loadingMore: {
+    position: 'absolute' as const,
+    bottom: 8,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 21,
+    minHeight: 26,
+    padding: '0 10px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '1px solid var(--vscode-widget-border, var(--vscode-panel-border))',
+    borderRadius: '4px',
+    background: 'var(--vscode-editorWidget-background, var(--vscode-editor-background))',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.28)',
+    color: 'var(--vscode-foreground)',
+    fontSize: '11px',
+    whiteSpace: 'nowrap' as const,
+    pointerEvents: 'none' as const,
+  } as React.CSSProperties,
+  loadingMoreIcon: {
+    color: 'var(--vscode-progressBar-background)',
+    fontSize: '14px',
   } as React.CSSProperties,
 };
