@@ -63,8 +63,8 @@ export interface CommitState {
   setShelveViewMode: (mode: ViewMode) => void;
   isShelveCollapsed: (key: string) => boolean;
   toggleShelveCollapsed: (key: string) => void;
-  shelveExpandAll: (shelveIds: string[], allDirPaths: string[]) => void;
-  shelveCollapseAll: (shelveIds: string[], allDirPaths: string[]) => void;
+  shelveExpandAll: (keys: string[]) => void;
+  shelveCollapseAll: () => void;
   setLoading: (v: boolean) => void;
   setError: (err: string | null) => void;
   startWorktreeDiff: (state: Omit<WorktreeDiffState, 'selectedFile' | 'currentDiff' | 'loadingFiles' | 'loadingDiff' | 'error'>) => void;
@@ -226,15 +226,10 @@ export const useCommitStore = create<CommitState>((set, get) => ({
     if (next.has(key)) next.delete(key); else next.add(key);
     return { shelveCollapsedKeys: next };
   }),
-  shelveExpandAll: (shelveIds: string[], allDirPaths: string[]) => {
-    const keys = new Set<string>();
-    for (const id of shelveIds) {
-      keys.add(id);
-      for (const p of allDirPaths) keys.add(`${id}:${p}`);
-    }
-    set({ shelveCollapsedKeys: keys });
+  shelveExpandAll: (keys) => {
+    set({ shelveCollapsedKeys: new Set(keys) });
   },
-  shelveCollapseAll: (_shelveIds: string[], _allDirPaths: string[]) => {
+  shelveCollapseAll: () => {
     // Collapsing = removing from the expanded set = empty set
     set({ shelveCollapsedKeys: new Set() });
   },

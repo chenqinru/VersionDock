@@ -6,8 +6,8 @@ import { ChangelistView } from './components/ChangelistView';
 import { VscodeView } from './components/VscodeView';
 import { UnifiedCommitForm } from './components/UnifiedCommitForm';
 import { ContextMenu, type ContextMenuEntry } from './components/ContextMenu';
-import { ShelvePanel } from './components/ShelvePanel';
-import { StashTab } from './components/StashTab';
+import { ShelvePanel, getShelveExpansionKeys } from './components/ShelvePanel';
+import { StashTab, type ExpansionCommand } from './components/StashTab';
 import { PushTab } from './components/PushTab';
 import { WorktreeDiffPanel } from './components/WorktreeDiffPanel';
 import { WorktreePanel } from './components/WorktreePanel';
@@ -303,7 +303,7 @@ export function CommitApp() {
   const [stashMap, setStashMap]       = useState<Record<string, StashEntry[]>>({});
   const [stashLoading, setStashLoading] = useState<Record<string, boolean>>({});
   const [stashError, setStashError]   = useState<Record<string, string | null>>({});
-  const [stashExpandAll, setStashExpandAll] = useState(false);
+  const [stashExpansionCommand, setStashExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: false });
 
   // ── Worktree state ────────────────────────────────────────────────────────
   const [worktreeRepos, setWorktreeRepos] = useState<Array<{ repoId: string; repoName: string; repoColor: string; worktrees: WorktreeEntry[]; isLinkedWorktree: boolean }>>([]);
@@ -1555,21 +1555,14 @@ export function CommitApp() {
           </>)}
           {activeTab === 'shelf' && (<>
             <button style={css.iconBtn} title={t('Expand all')} onClick={() => {
-              const allShelves = Object.values(shelveMap).flat();
-              const shelveIds = allShelves.map(s => s.id);
-              const dirPaths = new Set<string>();
-              for (const s of allShelves) {
-                for (const f of s.files) {
-                  const parts = f.path.split('/');
-                  for (let i = 1; i < parts.length; i++) dirPaths.add(parts.slice(0, i).join('/'));
-                }
-              }
-              store.shelveExpandAll(shelveIds, Array.from(dirPaths));
+              const keys = Object.entries(shelveMap)
+                .flatMap(([repoId, shelves]) => getShelveExpansionKeys(repoId, shelves));
+              store.shelveExpandAll(keys);
             }}>
               <Codicon name="expand-all" />
             </button>
             <button style={css.iconBtn} title={t('Collapse all')} onClick={() => {
-              store.shelveCollapseAll([], []);
+              store.shelveCollapseAll();
             }}>
               <Codicon name="collapse-all" />
             </button>
@@ -1598,10 +1591,14 @@ export function CommitApp() {
             </div>
           </>)}
           {activeTab === 'stash' && (<>
-            <button style={css.iconBtn} title={t('Expand all')} onClick={() => setStashExpandAll(true)}>
+            <button style={css.iconBtn} title={t('Expand all')} onClick={() => {
+              setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: true }));
+            }}>
               <Codicon name="expand-all" />
             </button>
-            <button style={css.iconBtn} title={t('Collapse all')} onClick={() => setStashExpandAll(false)}>
+            <button style={css.iconBtn} title={t('Collapse all')} onClick={() => {
+              setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: false }));
+            }}>
               <Codicon name="collapse-all" />
             </button>
           </>)}
@@ -2018,7 +2015,7 @@ export function CommitApp() {
                   onPop={handleStashPop}
                   onDrop={handleStashDrop}
                   onOpenFileDiff={handleStashShowFileDiff}
-                  expandAll={stashExpandAll}
+                  expansionCommand={stashExpansionCommand}
                 />
               );
             })}

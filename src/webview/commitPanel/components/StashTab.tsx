@@ -22,7 +22,12 @@ interface Props {
   onPop: (repoId: string, stashRef: string) => void;
   onDrop: (repoId: string, stashRef: string) => void;
   onOpenFileDiff: (repoId: string, stashRef: string, filePath: string) => void;
-  expandAll?: boolean;
+  expansionCommand: ExpansionCommand;
+}
+
+export interface ExpansionCommand {
+  sequence: number;
+  expanded: boolean;
 }
 
 const STASH_CTX_ITEMS: ContextMenuEntry[] = [
@@ -108,6 +113,15 @@ function countFiles(node: TreeDir): number {
     else c += countFiles(ch);
   }
   return c;
+}
+
+function collectDirPaths(nodes: TreeNode[], paths: string[] = []): string[] {
+  for (const node of nodes) {
+    if (node.kind !== 'dir') continue;
+    paths.push(node.path);
+    collectDirPaths(node.children, paths);
+  }
+  return paths;
 }
 
 // ── File row ──────────────────────────────────────────────────────────────────
@@ -201,7 +215,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
 
 // ── Single stash entry row ────────────────────────────────────────────────────
 
-function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileDiff, expandAll }: {
+function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileDiff, expansionCommand }: {
   entry: StashEntry;
   repoId: string;
   viewMode: ViewMode;
@@ -209,7 +223,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   onPop: Props['onPop'];
   onDrop: Props['onDrop'];
   onOpenFileDiff: Props['onOpenFileDiff'];
-  expandAll: boolean;
+  expansionCommand: ExpansionCommand;
 }) {
   const [hovered, setHovered] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -217,12 +231,20 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   // Per-directory open state (tree mode)
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
 
-  const treeNodes = viewMode === 'tree' ? buildTree(entry.files) : null;
+  const treeNodes = React.useMemo(
+    () => viewMode === 'tree' ? buildTree(entry.files) : null,
+    [entry.files, viewMode],
+  );
+  const allDirPaths = React.useMemo(
+    () => treeNodes ? collectDirPaths(treeNodes) : [],
+    [treeNodes],
+  );
 
   // Sync with expand/collapse all
   React.useEffect(() => {
-    setExpanded(expandAll);
-  }, [expandAll]);
+    setExpanded(expansionCommand.expanded);
+    setOpenDirs(expansionCommand.expanded ? new Set(allDirPaths) : new Set());
+  }, [allDirPaths, expansionCommand.expanded, expansionCommand.sequence]);
 
   const toggleDir = (path: string) => {
     setOpenDirs(prev => {
@@ -317,7 +339,7 @@ export function StashTab({
   worktreeBranch, mainRepoName,
   stashes, loading, error, viewMode,
   onApply, onPop, onDrop, onOpenFileDiff,
-  expandAll = false,
+  expansionCommand,
 }: Props) {
   return (
     <div style={css.root}>
@@ -354,7 +376,7 @@ export function StashTab({
             onPop={onPop}
             onDrop={onDrop}
             onOpenFileDiff={onOpenFileDiff}
-            expandAll={expandAll}
+            expansionCommand={expansionCommand}
           />
         ))
       )}

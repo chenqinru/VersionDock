@@ -6,6 +6,7 @@ import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import type { ViewMode } from '../store/commitStore';
 import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
+import { scopedKey } from '../../shared/scopedKey';
 
 interface Props {
   repoId: string;
@@ -67,6 +68,28 @@ type ShelfFile = ShelveEntry['files'][number];
 interface TreeDir { kind: 'dir'; name: string; path: string; children: TreeNode[] }
 interface TreeFile { kind: 'file'; name: string; file: ShelfFile }
 type TreeNode = TreeDir | TreeFile;
+
+function shelveEntryKey(repoId: string, shelveId: string): string {
+  return scopedKey('shelve', repoId, shelveId);
+}
+
+function shelveDirKey(repoId: string, shelveId: string, dirPath: string): string {
+  return scopedKey('shelve-dir', repoId, shelveId, dirPath);
+}
+
+export function getShelveExpansionKeys(repoId: string, shelves: ShelveEntry[]): string[] {
+  const keys = new Set<string>();
+  for (const entry of shelves) {
+    keys.add(shelveEntryKey(repoId, entry.id));
+    for (const file of entry.files) {
+      const parts = file.path.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        keys.add(shelveDirKey(repoId, entry.id, parts.slice(0, i).join('/')));
+      }
+    }
+  }
+  return [...keys];
+}
 
 function buildTree(files: ShelfFile[]): TreeNode[] {
   const root: TreeDir = { kind: 'dir', name: '', path: '', children: [] };
@@ -164,7 +187,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
 }) {
   const [hovered, setHovered] = useState(false);
   const { isShelveCollapsed, toggleShelveCollapsed, iconTheme } = useCommitStore();
-  const key = `${entry.id}:${node.path}`;
+  const key = shelveDirKey(repoId, entry.id, node.path);
   const open = !isShelveCollapsed(key);
   const paddingLeft = BASE_PAD + depth * LEVEL_PAD;
 
@@ -225,7 +248,8 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
   const [hovered, setHovered] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const { isShelveCollapsed, toggleShelveCollapsed } = useCommitStore();
-  const expanded = !isShelveCollapsed(entry.id);
+  const entryKey = shelveEntryKey(repoId, entry.id);
+  const expanded = !isShelveCollapsed(entryKey);
 
   const treeNodes = viewMode === 'tree' ? buildTree(entry.files) : null;
 
@@ -240,7 +264,7 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
         onDoubleClick={() => onUnshelve(repoId, entry.id)}
         title={t('{0} — double-click to unshelve', entry.name)}
       >
-        <button style={rowStyle.chevronBtn} onClick={e => { e.stopPropagation(); toggleShelveCollapsed(entry.id); }}>
+        <button style={rowStyle.chevronBtn} onClick={e => { e.stopPropagation(); toggleShelveCollapsed(entryKey); }}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', opacity: 0.65 }} />
         </button>
         <Codicon name="archive" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
