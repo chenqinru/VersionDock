@@ -1451,7 +1451,11 @@ export class SvnService extends GitService {
   }
 
   async getStatusFresh(): Promise<RepoStatus> {
-    const [branch, files] = await Promise.all([this.getCurrentBranch(), this.parseSvnStatus()]);
+    const [branch, files, operationState] = await Promise.all([
+      this.getCurrentBranch(),
+      this.parseSvnStatus(),
+      this.getMergeRebaseState(),
+    ]);
     const conflictCount = files.filter(file => file.status === 'conflicted').length;
     return {
       repoId: this.repoId,
@@ -1460,6 +1464,7 @@ export class SvnService extends GitService {
       unstagedFiles: files,
       isDetachedHead: !!branch.detachedTag,
       conflictCount,
+      operationState,
     };
   }
 

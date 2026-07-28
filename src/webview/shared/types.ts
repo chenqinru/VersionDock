@@ -177,6 +177,7 @@ export interface RepoStatus {
   unstagedFiles: FileStatus[];
   isDetachedHead: boolean;
   conflictCount: number;
+  operationState: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
 }
 
 // ─── Changelists ─────────────────────────────────────────────────────────────

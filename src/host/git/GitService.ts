@@ -370,10 +370,11 @@ export class GitService {
 
   /** Read status directly from git (bypasses VSCode's cached state). */
   async getStatusFresh(): Promise<RepoStatus> {
-    const [status, branchInfo, submoduleStatuses] = await Promise.all([
+    const [status, branchInfo, submoduleStatuses, operationState] = await Promise.all([
       this.git.status(),
       this.getCurrentBranch(),
       this.getSubmoduleStatuses(),
+      this.getOperationState(),
     ]);
 
     // Override aheadBehind with a direct git count — always attempt rev-list since
@@ -434,7 +435,7 @@ export class GitService {
       }
     }
 
-    return { repoId: this.repoId, branch: freshBranchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount };
+    return { repoId: this.repoId, branch: freshBranchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount, operationState };
   }
 
   private async getShortHash(): Promise<string | undefined> {
@@ -510,7 +511,10 @@ export class GitService {
         detachedHash,
       };
 
-      const submoduleStatuses = await this.getSubmoduleStatuses();
+      const [submoduleStatuses, operationState] = await Promise.all([
+        this.getSubmoduleStatuses(),
+        this.getOperationState(),
+      ]);
       const stagedFiles: FileStatus[] = [];
       const unstagedFiles: FileStatus[] = [];
       let conflictCount = 0;
@@ -606,14 +610,16 @@ export class GitService {
         unstagedFiles,
         isDetachedHead: isDetached,
         conflictCount,
+        operationState,
       };
     }
 
     // Fallback: simple-git
-    const [status, branchInfo, submoduleStatuses] = await Promise.all([
+    const [status, branchInfo, submoduleStatuses, operationState] = await Promise.all([
       this.git.status(),
       this.getCurrentBranch(),
       this.getSubmoduleStatuses(),
+      this.getOperationState(),
     ]);
 
     const stagedFiles: FileStatus[] = [];
@@ -658,7 +664,7 @@ export class GitService {
       }
     }
 
-    return { repoId: this.repoId, branch: branchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount };
+    return { repoId: this.repoId, branch: branchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount, operationState };
   }
 
   async getCurrentBranch(): Promise<BranchInfo> {
@@ -1761,20 +1767,22 @@ export class GitService {
     return result.summary.changes.toString();
   }
 
-  async getMergeRebaseState(): Promise<'merge' | 'rebase' | null> {
-    const vsRepo = this.vsRepo();
-    if (vsRepo) {
-      if (vsRepo.state.rebaseCommit !== undefined) return 'rebase';
-      if (vsRepo.state.mergeChanges.length > 0) return 'merge';
-      return null;
-    }
-    const mergeHead = await this.git.raw(['rev-parse', '--verify', 'MERGE_HEAD']).catch(() => '');
-    if (mergeHead.trim()) return 'merge';
-    const rebaseDir = await this.git.raw(['rev-parse', '--git-path', 'rebase-merge']).catch(() => '');
-    try {
-      if (rebaseDir.trim() && fs.existsSync(rebaseDir.trim())) return 'rebase';
-    } catch { /* */ }
+  async getOperationState(): Promise<'merge' | 'rebase' | 'cherry-pick' | 'revert' | null> {
+    const rawGitDir = await this.git.raw(['rev-parse', '--absolute-git-dir'])
+      .catch(() => this.git.raw(['rev-parse', '--git-dir']).catch(() => ''));
+    const gitDirValue = rawGitDir.trim();
+    if (!gitDirValue) return null;
+    const gitDir = path.isAbsolute(gitDirValue) ? gitDirValue : path.resolve(this.rootPath, gitDirValue);
+    if (fs.existsSync(path.join(gitDir, 'MERGE_HEAD'))) return 'merge';
+    if (fs.existsSync(path.join(gitDir, 'rebase-merge')) || fs.existsSync(path.join(gitDir, 'rebase-apply'))) return 'rebase';
+    if (fs.existsSync(path.join(gitDir, 'CHERRY_PICK_HEAD'))) return 'cherry-pick';
+    if (fs.existsSync(path.join(gitDir, 'REVERT_HEAD'))) return 'revert';
     return null;
+  }
+
+  async getMergeRebaseState(): Promise<'merge' | 'rebase' | null> {
+    const state = await this.getOperationState();
+    return state === 'merge' || state === 'rebase' ? state : null;
   }
 
   async abortMerge(): Promise<void> {

@@ -5,6 +5,7 @@ import * as os from 'os';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
+import type { GitService } from '../git/GitService';
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent } from '../utils/ShelveDocumentProvider';
@@ -2870,10 +2871,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       }
 
-      case 'COMMIT_ABORT_MERGE': {
+      case 'COMMIT_ABORT_OPERATION': {
         try {
-          const targets = await collectAbortOperationTargets(this.manager, msg.repoIds, ['merge']);
-          if (targets.length === 0) throw new Error(t('No merge in progress'));
+          const targets = await collectAbortOperationTargets(this.manager, msg.repoIds);
+          if (targets.length === 0) throw new Error(t('No merge or rebase in progress'));
           const result = await runAbortOperationFlow(this.manager, targets);
           if (!result.ok && 'cancelled' in result) {
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
@@ -2885,6 +2886,63 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const status = await this.manager.getAllStatusesFresh();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+        } catch (e: unknown) {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'COMMIT_RESTORE_CONFLICTS': {
+        try {
+          const targets: Array<{ repo: GitService; paths: string[] }> = [];
+          for (const repoId of [...new Set(msg.repoIds)]) {
+            const meta = this.manager.getRepoMetas().find(item => item.id === repoId);
+            const repo = this.manager.getRepo(repoId);
+            if (!meta || !repo) throw new Error(t('Repo not found'));
+            if (meta.kind !== 'git') throw new Error(t('Only Git conflicts can be restored to the current branch version.'));
+
+            const operationState = await repo.getOperationState();
+            if (operationState) {
+              throw new Error(t('Cannot restore conflicted files while another Git operation is in progress.'));
+            }
+
+            const status = await repo.getStatusFresh();
+            const paths = [...new Set([...status.stagedFiles, ...status.unstagedFiles]
+              .filter(file => file.status === 'conflicted')
+              .map(file => file.path))];
+            if (paths.length > 0) targets.push({ repo, paths });
+          }
+
+          const fileCount = targets.reduce((sum, target) => sum + target.paths.length, 0);
+          if (fileCount === 0) throw new Error(t('No restorable conflicted files found'));
+          const confirm = await vscode.window.showWarningMessage(
+            fileCount === 1
+              ? t('Restore the conflicted file to the current branch version? This discards its index and working tree changes.')
+              : t('Restore {0} conflicted files to their current branch versions? This discards their index and working tree changes.', fileCount),
+            { modal: true },
+            t('Restore Current Branch'),
+          );
+          if (confirm !== t('Restore Current Branch')) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+            break;
+          }
+
+          const errors: string[] = [];
+          for (const target of targets) {
+            for (const filePath of target.paths) {
+              try {
+                await target.repo.discardFile(filePath);
+              } catch (error: unknown) {
+                errors.push(`${filePath}: ${String(error)}`);
+              }
+            }
+          }
+
+          const status = await this.manager.getAllStatusesFresh();
+          this.postChangelistsUpdate(status);
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          if (errors.length > 0) throw new Error(errors.join('\n'));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }

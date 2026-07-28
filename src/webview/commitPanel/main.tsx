@@ -12,6 +12,7 @@ import { PushTab } from './components/PushTab';
 import { WorktreeDiffPanel } from './components/WorktreeDiffPanel';
 import { WorktreePanel } from './components/WorktreePanel';
 import { SubtreePanel } from './components/SubtreePanel';
+import { ConflictBanner, type ConflictBannerAction } from './components/ConflictBanner';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { Codicon } from '../shared/Codicon';
 import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../shared/msgTypes';
@@ -983,6 +984,24 @@ export function CommitApp() {
   const multiRepo = repos.length >= 1;
   const totalConflictCount = repos.reduce((sum, repo) => sum + repo.conflictCount, 0);
   const conflictRepoIds = repos.filter(repo => repo.conflictCount > 0).map(repo => repo.repoId);
+  const abortableConflictRepos = repos.filter(repo =>
+    repo.conflictCount > 0 && (repo.operationState === 'merge' || repo.operationState === 'rebase')
+  );
+  const abortableConflictRepoIds = abortableConflictRepos.map(repo => repo.repoId);
+  const abortableConflictStates = new Set(abortableConflictRepos.map(repo => repo.operationState));
+  const abortOperationLabel = abortableConflictStates.size > 1
+    ? t('Abort Merge/Rebase')
+    : abortableConflictStates.has('rebase')
+      ? t('Abort Rebase')
+      : t('Abort Merge');
+  const abortOperationTitle = abortableConflictStates.size > 1
+    ? t('Merge or rebase in progress — abort and restore previous state')
+    : abortableConflictStates.has('rebase')
+      ? t('Rebase in progress — abort and restore previous state')
+      : t('Merge in progress — abort and restore previous state');
+  const restorableConflictRepoIds = repos
+    .filter(repo => repo.conflictCount > 0 && repo.operationState === null && metaMap.get(repo.repoId)?.kind !== 'svn')
+    .map(repo => repo.repoId);
   const conflictRepoCount = conflictRepoIds.length;
   const conflictRepoSummary = conflictRepoCount === 1
     ? t('{0} repository', conflictRepoCount)
@@ -993,6 +1012,29 @@ export function CommitApp() {
   const conflictSummary = conflictRepoCount > 0
     ? `${conflictRepoSummary} ${t('·')} ${conflictFileSummary}`
     : '';
+  const conflictBannerActions: ConflictBannerAction[] = totalConflictCount > 0 ? [
+    {
+      id: 'resolve',
+      label: t('Resolve Conflicts'),
+      title: t('Open the conflicts panel to resolve files'),
+      tone: 'primary',
+      onClick: () => send({ type: 'COMMIT_OPEN_CONFLICTS' }),
+    },
+    ...(abortableConflictRepoIds.length > 0 ? [{
+      id: 'abort',
+      label: abortOperationLabel,
+      title: abortOperationTitle,
+      tone: 'danger' as const,
+      onClick: () => send({ type: 'COMMIT_ABORT_OPERATION', requestId: generateId(), repoIds: abortableConflictRepoIds }),
+    }] : []),
+    ...(restorableConflictRepoIds.length > 0 ? [{
+      id: 'restore',
+      label: t('Restore Current Branch'),
+      title: t('Discard conflicted index and working tree changes, then restore the current branch versions'),
+      tone: 'danger' as const,
+      onClick: () => send({ type: 'COMMIT_RESTORE_CONFLICTS', requestId: generateId(), repoIds: restorableConflictRepoIds }),
+    }] : []),
+  ] : [];
 
   useEffect(() => {
     if (!visibleTabs.includes(activeTab)) setActiveTab('changes');
@@ -1672,30 +1714,7 @@ export function CommitApp() {
         {activeTab === 'changes' && (<>
 
           {totalConflictCount > 0 && (
-            <div
-              style={css.conflictBanner}
-            >
-              <span style={css.conflictBannerIcon}><Codicon name="git-merge" /></span>
-              <span style={css.conflictBannerText}>
-                {conflictSummary}
-              </span>
-              <span style={css.conflictBannerActions}>
-                <button
-                  style={css.conflictBannerAction}
-                  title={t('Open the conflicts panel to resolve files')}
-                  onClick={() => send({ type: 'COMMIT_OPEN_CONFLICTS' })}
-                >
-                  {t('Resolve Conflicts')}
-                </button>
-                <button
-                  style={css.conflictBannerActionDanger}
-                  title={t('Merge in progress — abort and restore previous state')}
-                  onClick={() => send({ type: 'COMMIT_ABORT_MERGE', requestId: generateId(), repoIds: conflictRepoIds })}
-                >
-                  {t('Abort Merge')}
-                </button>
-              </span>
-            </div>
+            <ConflictBanner summary={conflictSummary} actions={conflictBannerActions} />
           )}
 
           {/* File list */}
@@ -2368,38 +2387,6 @@ const css = {
     textAlign: 'center' as const,
   } as React.CSSProperties,
   main: { display: 'flex', flexDirection: 'column' as const, flex: 1, overflow: 'hidden' },
-  conflictBanner: {
-    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
-    padding: '7px 10px', border: 'none', borderBottom: '1px solid var(--vscode-inputValidation-warningBorder, rgba(255,170,0,0.45))',
-    background: 'var(--vscode-inputValidation-warningBackground, rgba(255,170,0,0.14))',
-    color: 'var(--vscode-editorWarning-foreground, #e9ae00)',
-    fontFamily: 'var(--vscode-font-family)', fontSize: '12px', textAlign: 'left' as const, flexShrink: 0,
-  } as React.CSSProperties,
-  conflictBannerIcon: { display: 'flex', alignItems: 'center', fontSize: '14px', flexShrink: 0 } as React.CSSProperties,
-  conflictBannerText: { flex: 1, minWidth: 0, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } as React.CSSProperties,
-  conflictBannerActions: { display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 } as React.CSSProperties,
-  conflictBannerAction: {
-    border: '1px solid transparent',
-    background: 'transparent',
-    color: 'var(--vscode-textLink-foreground)',
-    fontWeight: 600,
-    padding: '2px 6px',
-    borderRadius: 3,
-    cursor: 'pointer',
-    fontFamily: 'var(--vscode-font-family)',
-    fontSize: '12px',
-  } as React.CSSProperties,
-  conflictBannerActionDanger: {
-    border: '1px solid transparent',
-    background: 'transparent',
-    color: 'var(--vscode-errorForeground, #f85149)',
-    fontWeight: 600,
-    padding: '2px 6px',
-    borderRadius: 3,
-    cursor: 'pointer',
-    fontFamily: 'var(--vscode-font-family)',
-    fontSize: '12px',
-  } as React.CSSProperties,
   repoList: { flex: 1, overflowY: 'auto' as const },
   // Shelve name prompt bar (above commit form)
   detachedBanner: {

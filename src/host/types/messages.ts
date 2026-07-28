@@ -170,7 +170,8 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_MANAGE_SVN_IGNORE'; repoId: string }
   | { type: 'COMMIT_SHOW_BRANCH_MENU'; repoId?: string }
   | { type: 'COMMIT_OPEN_CONFLICTS' }
-  | { type: 'COMMIT_ABORT_MERGE'; requestId: string; repoIds: string[] }
+  | { type: 'COMMIT_ABORT_OPERATION'; requestId: string; repoIds: string[] }
+  | { type: 'COMMIT_RESTORE_CONFLICTS'; requestId: string; repoIds: string[] }
   | { type: 'COMMIT_OPEN_MERGE_EDITOR'; repoId: string; filePath: string }
   | { type: 'COMMIT_ACCEPT_OURS'; requestId: string; repoId: string; filePath: string }
   | { type: 'COMMIT_ACCEPT_THEIRS'; requestId: string; repoId: string; filePath: string }
