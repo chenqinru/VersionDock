@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { RepoMeta, RepoStatus } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
@@ -204,19 +204,22 @@ export function UnifiedCommitForm({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyIndexRef = useRef(-1);
   const historyDraftRef = useRef(message);
+  const messageRef = useRef(message);
   const appliedHistoryMessageRef = useRef<string | null>(null);
   const manualTextareaHeightRef = useRef<number | null>(null);
   const resizeDragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
   const [manualTextareaHeight, setManualTextareaHeight] = useState<number | null>(null);
   const [resizingTextarea, setResizingTextarea] = useState(false);
 
-  const updateManualTextareaHeight = (height: number) => {
+  messageRef.current = message;
+
+  const updateManualTextareaHeight = useCallback((height: number) => {
     const nextHeight = Math.min(getMaxTextareaHeight(), Math.max(MIN_TEXTAREA_HEIGHT, height));
     manualTextareaHeightRef.current = nextHeight;
     setManualTextareaHeight(nextHeight);
-  };
+  }, []);
 
-  const resizeTextarea = () => {
+  const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     const manualHeight = manualTextareaHeightRef.current;
@@ -234,7 +237,7 @@ export function UnifiedCommitForm({
       el.style.height = `${el.scrollHeight}px`;
       el.style.overflow = 'hidden';
     }
-  };
+  }, [updateManualTextareaHeight]);
 
   const startTextareaResize = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = textareaRef.current;
@@ -265,7 +268,7 @@ export function UnifiedCommitForm({
     setResizingTextarea(false);
   };
 
-  useEffect(() => { resizeTextarea(); }, [message]);
+  useEffect(() => { resizeTextarea(); }, [message, resizeTextarea]);
 
   useEffect(() => {
     if (appliedHistoryMessageRef.current === message) {
@@ -278,14 +281,14 @@ export function UnifiedCommitForm({
 
   useEffect(() => {
     historyIndexRef.current = -1;
-    historyDraftRef.current = message;
+    historyDraftRef.current = messageRef.current;
     appliedHistoryMessageRef.current = null;
   }, [messageHistory]);
 
   useEffect(() => {
     window.addEventListener('resize', resizeTextarea);
     return () => window.removeEventListener('resize', resizeTextarea);
-  }, []);
+  }, [resizeTextarea]);
 
   useEffect(() => {
     const id = 'gs-commit-textarea-effects';

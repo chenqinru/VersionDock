@@ -1,17 +1,18 @@
 import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useLogStore, getCommitKey, type CommitFileEntry, type CompareSide, type LogViewFileEntry } from './store/logStore';
+import { useLogStore, getCommitKey, type CommitFileEntry, type CommitSelectionMode, type CompareSide, type LogViewFileEntry } from './store/logStore';
 import { BranchSidebar } from './components/BranchSidebar';
 import { CommitList } from './components/CommitList';
 import { CommitDetail } from './components/CommitDetail';
 import { CommitFiltersBar, type AuthorOption } from './components/CommitFiltersBar';
 import { CompareView } from './components/CompareView';
-import { assignLanes } from './utils/graphLayout';
+import { assignLanes, type LaidOutCommit } from './utils/graphLayout';
 import { ResizeHandle } from '../shared/ResizeHandle';
 import { useResize } from '../shared/useResize';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { t } from '../shared/i18n';
 import { Codicon } from '../shared/Codicon';
+import { scopedKey } from '../shared/scopedKey';
 import type { LogToHostMsg, HostToLogMsg } from '../../host/types/messages';
 
 function generateId() {
@@ -52,14 +53,19 @@ function formatUnknownError(error: unknown): { message: string; stack?: string }
 
 export function GitLogApp() {
   const store = useLogStore();
+  const { setCommitFiles, setCommitFilters, setLoadingFiles, selectCommit, setPendingScrollHash } = store;
   const pendingRef = useRef<Map<string, (msg: HostToLogMsg) => void>>(new Map());
-  const { panelRef: sidebarRef, onMouseDown: onSidebarResize } = useResize('right', 220, 120, 400);
-  const { panelRef: detailRef, onMouseDown: onDetailResize } = useResize('left', 380, 260, 680);
+  const { panelRef: sidebarRef, onMouseDown: onSidebarResize, onKeyDown: onSidebarResizeKeyDown } = useResize('right', 220, 120, 400);
+  const { panelRef: detailRef, onMouseDown: onDetailResize, onKeyDown: onDetailResizeKeyDown } = useResize('left', 380, 260, 680);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadRef = useRef<() => void>(() => {});
   const filterRepoRef = useRef<(repoId: string | null, branch?: string | null) => void>(() => {});
   const bgGenRef = useRef(0);
   const activeRequestIdRef = useRef<string | null>(null);
+  const activeCompareRequestIdsRef = useRef<Record<CompareSide, string | null>>({
+    baseOnly: null,
+    targetOnly: null,
+  });
   const compareInitKeyRef = useRef('');
   const authorCacheRef = useRef<Map<string, CachedAuthorOption>>(new Map());
   const [authorOptions, setAuthorOptions] = useState<AuthorOption[]>([]);
@@ -98,15 +104,24 @@ export function GitLogApp() {
     if (append && (pane.loading || !pane.hasMore)) return;
     const filters = { ...pane, ...overrides };
     const requestId = generateId();
+    const previousRequestId = activeCompareRequestIdsRef.current[side];
+    if (previousRequestId) pendingRef.current.delete(previousRequestId);
+    activeCompareRequestIdsRef.current[side] = requestId;
+    const compareKey = scopedKey(compare.repoId, compare.baseRef, compare.targetRef);
     state.setComparePaneState(side, { loading: true }, append);
     pendingRef.current.set(requestId, (msg) => {
       if (msg.type !== 'LOG_COMPARE_COMMITS_RESULT' || msg.side !== side) return;
-      state.setComparePaneState(side, {
+      if (activeCompareRequestIdsRef.current[side] !== requestId) return;
+      activeCompareRequestIdsRef.current[side] = null;
+      const freshState = useLogStore.getState();
+      const freshCompare = freshState.compareState;
+      if (!freshCompare || scopedKey(freshCompare.repoId, freshCompare.baseRef, freshCompare.targetRef) !== compareKey) return;
+      freshState.setComparePaneState(side, {
         commits: msg.commits,
         hasMore: !msg.isLast,
         loading: false,
       }, append);
-      if (msg.error) state.setError(msg.error);
+      if (msg.error) freshState.setError(msg.error);
     });
     send({
       type: 'LOG_REQUEST_COMPARE_COMMITS',
@@ -163,6 +178,8 @@ export function GitLogApp() {
         case 'LOG_APPLY_HISTORY_FILTER': {
           const filters = {
             repoId: msg.repoId,
+            repoIds: null,
+            branch: '',
             path: msg.filePath,
             lineRange: msg.lineRange,
           };
@@ -200,7 +217,7 @@ export function GitLogApp() {
     activeRequestIdRef.current = requestId;
     send({
       type: 'LOG_REQUEST_COMMITS',
-      repoIds: [],
+      repoIds: null,
       limit: LOG_PAGE_SIZE,
       skip: 0,
       generation: bgGenRef.current,
@@ -214,9 +231,14 @@ export function GitLogApp() {
   useEffect(() => {
     if (store.mode !== 'compare' || !store.compareState) {
       compareInitKeyRef.current = '';
+      for (const side of ['baseOnly', 'targetOnly'] as const) {
+        const requestId = activeCompareRequestIdsRef.current[side];
+        if (requestId) pendingRef.current.delete(requestId);
+        activeCompareRequestIdsRef.current[side] = null;
+      }
       return;
     }
-    const compareKey = `${store.compareState.repoId}:${store.compareState.baseRef}:${store.compareState.targetRef}`;
+    const compareKey = scopedKey(store.compareState.repoId, store.compareState.baseRef, store.compareState.targetRef);
     if (compareInitKeyRef.current === compareKey) return;
     compareInitKeyRef.current = compareKey;
     requestCompareCommits('baseOnly');
@@ -227,12 +249,14 @@ export function GitLogApp() {
     bgGenRef.current += 1;
     const requestId = generateId();
     activeRequestIdRef.current = requestId;
+    authorCacheRef.current.clear();
+    setAuthorOptions([]);
 
     const f = { ...useLogStore.getState().commitFilters, ...overrides };
     useLogStore.getState().beginCommitsReload();
     send({
       type: 'LOG_REQUEST_COMMITS',
-      repoIds: f.repoId ? [f.repoId] : [],
+      repoIds: f.repoId ? [f.repoId] : f.repoIds,
       limit: LOG_PAGE_SIZE,
       skip: 0,
       generation: bgGenRef.current,
@@ -268,7 +292,7 @@ export function GitLogApp() {
     s.setBackgroundLoading(true);
     send({
       type: 'LOG_REQUEST_COMMITS',
-      repoIds: f.repoId ? [f.repoId] : [],
+      repoIds: f.repoId ? [f.repoId] : f.repoIds,
       limit: LOG_PAGE_SIZE,
       skip: s.commits.length,
       generation: bgGenRef.current,
@@ -314,11 +338,11 @@ export function GitLogApp() {
     selectedCommits.forEach(commit => {
       const key = getCommitKey(commit.repoId, commit.hash);
       if (store.commitFilesByKey[key] || store.loadingFilesByKey[key]) return;
-      store.setLoadingFiles(commit.repoId, commit.hash, true);
+      setLoadingFiles(commit.repoId, commit.hash, true);
       const requestId = generateId();
       pendingRef.current.set(requestId, (msg) => {
         if (msg.type === 'LOG_COMMIT_FILES') {
-          store.setCommitFiles(commit.repoId, commit.hash, msg.files);
+          setCommitFiles(commit.repoId, commit.hash, msg.files);
         }
       });
       getVsCodeApi().postMessage({
@@ -329,13 +353,28 @@ export function GitLogApp() {
         parents: commit.parents,
       } satisfies LogToHostMsg);
     });
-  }, [isCommitListReloading, selectedCommits, store.commitFilesByKey, store.loadingFilesByKey]);
+  }, [isCommitListReloading, selectedCommits, setCommitFiles, setLoadingFiles, store.commitFilesByKey, store.loadingFilesByKey]);
 
   const repoColors = useMemo(() => {
     const map: Record<string, string> = {};
     store.repos.forEach(repo => { map[repo.id] = repo.color; });
     return map;
   }, [store.repos]);
+  const repoKindById = useMemo<Record<string, 'git' | 'svn'>>(() => (
+    Object.fromEntries(store.repos.map(repo => [repo.id, repo.kind ?? 'git']))
+  ), [store.repos]);
+  const remoteNamesByRepo = useMemo<Record<string, string[]>>(() => {
+    const namesByRepo = new Map<string, Set<string>>();
+    for (const branch of store.branches) {
+      if (!branch.isRemote || !branch.remoteName) continue;
+      const names = namesByRepo.get(branch.repoId) ?? new Set<string>();
+      names.add(branch.remoteName);
+      namesByRepo.set(branch.repoId, names);
+    }
+    return Object.fromEntries(
+      Array.from(namesByRepo, ([repoId, names]) => [repoId, Array.from(names).sort((a, b) => b.length - a.length)]),
+    );
+  }, [store.branches]);
 
   const isFiltered = !!(
     store.commitFilters.text ||
@@ -345,13 +384,16 @@ export function GitLogApp() {
     store.commitFilters.dateTo ||
     store.commitFilters.path
   );
-  const laidOutCommits = useMemo(() => assignLanes(store.commits, isFiltered), [store.commits, isFiltered]);
+  const laidOutCommits = useMemo(
+    () => assignLanes(store.commits, isFiltered, repoKindById, remoteNamesByRepo),
+    [store.commits, isFiltered, remoteNamesByRepo, repoKindById],
+  );
   const laidOutCompareBase = useMemo(() => (
-    store.compareState ? assignLanes(store.compareState.baseOnly.commits) : []
-  ), [store.compareState]);
+    store.compareState ? assignLanes(store.compareState.baseOnly.commits, false, repoKindById, remoteNamesByRepo) : []
+  ), [remoteNamesByRepo, repoKindById, store.compareState]);
   const laidOutCompareTarget = useMemo(() => (
-    store.compareState ? assignLanes(store.compareState.targetOnly.commits) : []
-  ), [store.compareState]);
+    store.compareState ? assignLanes(store.compareState.targetOnly.commits, false, repoKindById, remoteNamesByRepo) : []
+  ), [remoteNamesByRepo, repoKindById, store.compareState]);
 
   const currentBranchByRepo = useMemo(() => {
     const map: Record<string, string> = {};
@@ -395,7 +437,7 @@ export function GitLogApp() {
     const ordered = [...selectedCommitFiles].reverse();
     const fileMap = new Map<string, LogViewFileEntry>();
     for (const file of ordered) {
-      const key = `${file.repoId}:${file.path}`;
+      const key = scopedKey(file.repoId, file.path);
       const existing = fileMap.get(key);
       if (!existing) {
         fileMap.set(key, { ...file });
@@ -415,7 +457,7 @@ export function GitLogApp() {
   const selectedCommitFilesByPath = useMemo(() => {
     const map: Record<string, LogViewFileEntry[]> = {};
     for (const file of selectedCommitFiles) {
-      const key = `${file.repoId}:${file.path}`;
+      const key = scopedKey(file.repoId, file.path);
       if (!map[key]) map[key] = [];
       map[key].push(file);
     }
@@ -456,7 +498,7 @@ export function GitLogApp() {
       const email = commit.authorEmail;
       const value = email || name;
       if (!value) continue;
-      const commitKey = `${commit.repoId}:${commit.hash}`;
+      const commitKey = getCommitKey(commit.repoId, commit.hash);
       const current = cache.get(value);
       if (current) {
         if (!current.commitKeys.has(commitKey)) {
@@ -477,27 +519,28 @@ export function GitLogApp() {
     );
   }, [store.commits]);
 
-  const handleFilterChange = useCallback((key: keyof import('./store/logStore').CommitFilters, value: string) => {
+  const handleFilterChange = useCallback((key: Exclude<keyof import('./store/logStore').CommitFilters, 'repoIds'>, value: string) => {
     if (store.mode === 'compare' && key === 'branch') return;
-    store.setCommitFilters({ [key]: value });
+    const scopeReset = key === 'branch' ? { repoIds: null } : {};
+    setCommitFilters({ [key]: value, ...scopeReset });
     if (key === 'text' || key === 'author') {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-      searchDebounceRef.current = setTimeout(() => reloadCommits({ [key]: value }), 0);
+      searchDebounceRef.current = setTimeout(() => reloadCommits({ [key]: value, ...scopeReset }), 0);
     } else {
       if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-      reloadCommits({ [key]: value });
+      reloadCommits({ [key]: value, ...scopeReset });
     }
-  }, [reloadCommits, store.mode]);
+  }, [reloadCommits, setCommitFilters, store.mode]);
 
   const handleRepoChange = useCallback((repoId: string | null) => {
-    store.setCommitFilters({ repoId });
+    setCommitFilters({ repoId, repoIds: null });
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    reloadCommits({ repoId });
-  }, [reloadCommits]);
+    reloadCommits({ repoId, repoIds: null });
+  }, [reloadCommits, setCommitFilters]);
 
   filterRepoRef.current = (repoId: string | null, branch?: string | null) => {
-    const filters: { repoId: string | null; branch?: string; path?: string; lineRange?: undefined } = { repoId };
-    if (branch) filters.branch = branch;
+    const filters: { repoId: string | null; repoIds: null; branch?: string; path?: string; lineRange?: undefined } = { repoId, repoIds: null };
+    filters.branch = branch ?? '';
     filters.path = '';
     filters.lineRange = undefined;
     store.setCommitFilters(filters);
@@ -506,11 +549,19 @@ export function GitLogApp() {
   };
 
   const handleClearFilters = useCallback(() => {
-    const cleared = { text: '', author: '', branch: '', dateFrom: '', dateTo: '', repoId: null, path: '', lineRange: undefined };
-    store.setCommitFilters(cleared);
+    const cleared = { text: '', author: '', branch: '', dateFrom: '', dateTo: '', repoId: null, repoIds: null, path: '', lineRange: undefined };
+    setCommitFilters(cleared);
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     reloadCommits(cleared);
-  }, [reloadCommits]);
+  }, [reloadCommits, setCommitFilters]);
+
+  const handleSelectCommit = useCallback((commit: LaidOutCommit, mode: CommitSelectionMode) => {
+    selectCommit(commit, mode);
+  }, [selectCommit]);
+
+  const handleScrolledToHash = useCallback(() => {
+    setPendingScrollHash(null);
+  }, [setPendingScrollHash]);
 
   const showNoRepo = store.repos.length === 0 && store.initialized;
   const noRepoOverlay = showNoRepo ? (
@@ -576,10 +627,14 @@ export function GitLogApp() {
               tags={store.tags}
               filter={store.branchFilter}
               selectedBranchFilter={store.commitFilters.branch}
+              selectedBranchRepoIds={store.commitFilters.repoIds}
               selectedRepoId={store.commitFilters.repoId}
               onFilterChange={store.setBranchFilter}
-              onBranchFilterSelect={(branchName: string) => {
-                handleFilterChange('branch', branchName);
+              onBranchFilterSelect={(branchName: string, repoIds: string[]) => {
+                const filters = { branch: branchName, repoId: null, repoIds };
+                setCommitFilters(filters);
+                if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+                reloadCommits(filters);
               }}
               onRepoFilterSelect={handleRepoChange}
               onCheckout={(repoIds, branch) => {
@@ -627,7 +682,7 @@ export function GitLogApp() {
               }}
               onCollapse={() => setSidebarCollapsed(true)}
             />
-            <ResizeHandle onMouseDown={onSidebarResize} />
+            <ResizeHandle onMouseDown={onSidebarResize} onKeyDown={onSidebarResizeKeyDown} />
           </>
         )}
 
@@ -637,6 +692,7 @@ export function GitLogApp() {
             repoColors={repoColors}
             repos={filterRepos}
             currentBranchByRepo={currentBranchByRepo}
+            remoteNamesByRepo={remoteNamesByRepo}
             baseCommits={laidOutCompareBase}
             targetCommits={laidOutCompareTarget}
             selectedHashes={store.selectedCommitHashes}
@@ -654,7 +710,10 @@ export function GitLogApp() {
               store.setComparePaneState(side, partial);
               requestCompareCommits(side, false, partial);
             }}
-            onClose={() => store.closeCompare()}
+            onClose={() => {
+              store.closeCompare();
+              reloadCommits();
+            }}
           />
         ) : (
           <CommitList
@@ -664,7 +723,8 @@ export function GitLogApp() {
             repos={store.repos}
             currentBranchByRepo={currentBranchByRepo}
             headHashByRepo={headHashByRepo}
-            onSelect={(commit, mode) => store.selectCommit(commit, mode)}
+            remoteNamesByRepo={remoteNamesByRepo}
+            onSelect={handleSelectCommit}
             onLoadMore={handleLoadMore}
             hasMore={store.hasMore && !store.loadingCommits && !store.backgroundLoading}
             storeHasMore={store.hasMore}
@@ -673,11 +733,11 @@ export function GitLogApp() {
             expandedRepoIds={expandedRepoIds}
             onToggleRepoName={toggleRepoName}
             scrollToHash={store.pendingScrollHash}
-            onScrolledToHash={() => store.setPendingScrollHash(null)}
+            onScrolledToHash={handleScrolledToHash}
           />
         )}
 
-        {hasSelectedCommit && <ResizeHandle onMouseDown={onDetailResize} />}
+        {hasSelectedCommit && <ResizeHandle onMouseDown={onDetailResize} onKeyDown={onDetailResizeKeyDown} />}
 
         {hasSelectedCommit && (
           <div ref={detailRef} style={detailPane}>
@@ -690,6 +750,7 @@ export function GitLogApp() {
               loadingFiles={detailLoading}
               repoColor={selectedRepoColor}
               repos={store.repos}
+              remoteNamesByRepo={remoteNamesByRepo}
               iconTheme={store.iconTheme}
               isMultiCommitSelection={isMultiCommitSelection}
               activeHistoryPath={isCommitListReloading ? '' : store.commitFilters.path}

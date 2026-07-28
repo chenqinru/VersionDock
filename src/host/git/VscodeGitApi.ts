@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { API, GitExtension, Repository } from './git.d';
 
 let _api: API | undefined;
@@ -26,7 +28,13 @@ export function getVscodeRepository(rootPath: string): Repository | undefined {
   // api.getRepository() returns the nearest ancestor repo, which may be the
   // parent repo when querying a submodule path — causing operations to run
   // against the wrong repository.
-  const repoRoot = repo.rootUri.fsPath.replace(/[/\\]+$/, '');
-  const requested = rootPath.replace(/[/\\]+$/, '');
+  const canonicalize = (value: string): string => {
+    let resolved = path.resolve(value);
+    try { resolved = fs.realpathSync.native(resolved); } catch { /* best-effort for transient paths */ }
+    resolved = resolved.replace(/[/\\]+$/, '');
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const repoRoot = canonicalize(repo.rootUri.fsPath);
+  const requested = canonicalize(rootPath);
   return repoRoot === requested ? repo : undefined;
 }

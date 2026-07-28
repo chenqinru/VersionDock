@@ -667,7 +667,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   const ahead = repoStatus.branch.aheadBehind?.ahead ?? 0;
   const behind = repoStatus.branch.aheadBehind?.behind ?? 0;
   const hasUpstream = !!repoStatus.branch.upstream;
-  const commits = unpushed?.commits ?? [];
+  const commits = useMemo(() => unpushed?.commits ?? [], [unpushed?.commits]);
   const commitHashesKey = commits.map(commit => commit.hash).join(',');
   const commitCount = hasUpstream ? ahead : commits.length;
   const selectedCommitFiles = expandedCommitHash ? (filesByHash[expandedCommitHash] ?? []) : [];

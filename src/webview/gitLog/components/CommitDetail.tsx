@@ -4,14 +4,14 @@ import { getVsCodeApi } from '../../shared/vscodeApi';
 import type { HostToLogMsg, LogCommitPathEntry, LogToHostMsg, IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
-import { groupRefs, branchColor, tagColor, headColor } from '../utils/refs';
+import { groupRefs, branchColor, tagColor, headColor, splitRemoteRefName } from '../utils/refs';
 import { formatDateTime } from '../../shared/dateUtils';
 import type { RefGroup } from '../utils/refs';
 import { isPrimaryBranch } from '../../shared/branchUtils';
-import { baseNameFromPath } from '../../shared/pathUtils';
 import { AuthorAvatar } from './AuthorAvatar';
 import { t } from '../../shared/i18n';
 import type { LogViewFileEntry } from '../store/logStore';
+import { scopedKey } from '../../shared/scopedKey';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -62,6 +62,7 @@ interface Props {
   loadingFiles: boolean;
   repoColor?: string;
   repos: RepoMeta[];
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>>;
   iconTheme?: IconThemeData | null;
   isMultiCommitSelection: boolean;
   activeHistoryPath?: string;
@@ -92,6 +93,8 @@ interface TreeNode {
   isRepoRoot?: boolean;
   repoId?: string;
   repoColor?: string;
+  repoName?: string;
+  repoRootPath?: string;
 }
 
 interface ContextMenuState {
@@ -145,7 +148,7 @@ function collapseSingleChildDirs(node: TreeNode): TreeNode {
   return collapsedNode;
 }
 
-function buildTree(files: LogViewFileEntry[], repoNameById: Record<string, string>, repoColorById: Record<string, string>, groupByRepo: boolean): TreeNode {
+function buildTree(files: LogViewFileEntry[], repoNameById: Record<string, string>, repoRootPathById: Record<string, string>, repoColorById: Record<string, string>, groupByRepo: boolean): TreeNode {
   const root = makeNode('', '');
 
   for (const file of files) {
@@ -157,13 +160,15 @@ function buildTree(files: LogViewFileEntry[], repoNameById: Record<string, strin
       const part = parts[index];
       const isRepoRoot = groupByRepo && index === 0;
       accumulated = accumulated ? `${accumulated}/${part}` : part;
-      const key = isRepoRoot ? `${file.repoId}:${part}` : accumulated;
+      const key = isRepoRoot ? scopedKey(file.repoId, part) : accumulated;
       if (!node.children.has(key)) {
         node.children.set(key, makeNode(part, key, isRepoRoot, isRepoRoot ? file.repoId : undefined, isRepoRoot ? repoColorById[file.repoId] : undefined));
       }
       node = node.children.get(key)!;
       if (index === parts.length - 1) {
         node.file = file;
+        node.repoName = repoName;
+        node.repoRootPath = repoRootPathById[file.repoId];
       }
     }
   }
@@ -178,12 +183,16 @@ function remoteLabel(group: RefGroup): string {
 }
 
 function formatRefLabel(group: RefGroup): string {
+  if (group.isSvnRevision) return group.label;
   if (group.isRemoteHead) return `${group.remoteName || t('remote')}/HEAD`;
   if (group.isRemote) return remoteLabel(group);
   return group.label;
 }
 
 function badgeTitle(group: RefGroup): string {
+  if (group.isSvnRevision) {
+    return group.label === 'HEAD' ? t('SVN repository HEAD revision') : t('SVN working copy BASE revision');
+  }
   if (group.isRemoteHead) return t('Remote HEAD ({0})', `${group.remoteName || t('remote')}/HEAD`);
   if (group.isDetached && group.isHead) return t('HEAD (detached)');
   if (group.isTag) return group.isDetached ? t('Tag: {0} (HEAD)', group.label) : t('Tag: {0}', group.label);
@@ -197,6 +206,7 @@ function headBadgeTitle(group: RefGroup): string {
 
 function RefBadgeIcon({ group }: { group: RefGroup }) {
   const style: React.CSSProperties = { fontSize: '11px', flexShrink: 0, lineHeight: 1 };
+  if (group.isSvnRevision) return <Codicon name="versions" style={style} />;
   if (group.isRemoteHead) return <Codicon name="milestone" style={style} />;
   if (group.isDetached && group.isHead) return <Codicon name="warning" style={style} />;
   if (group.isTag) return <Codicon name="tag" style={style} />;
@@ -280,7 +290,6 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
   iconTheme?: IconThemeData | null;
 }) {
   const [localOpen, setLocalOpen] = useState(true);
-  const [hovered, setHovered] = useState(false);
   const open = allExpanded !== null ? allExpanded : localOpen;
   const indent = depth * 14;
 
@@ -290,7 +299,7 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
     const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
     const status = normalizeStatus(file.status);
     const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
-    const displayName = isRepoRootChange ? (baseNameFromPath(file.repoId) ?? file.repoId) : node.name;
+    const displayName = isRepoRootChange ? node.repoName ?? file.repoId : node.name;
     return (
       <div
         style={styles.fileRow(isSelected)}
@@ -301,7 +310,7 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
           event.preventDefault();
           onFileContextMenu(event, file);
         })}
-        title={isRepoRootChange ? file.repoId : `${file.path}\n${t('Click to open diff')}`}
+        title={isRepoRootChange ? node.repoRootPath ?? node.repoName ?? file.repoId : `${file.path}\n${t('Click to open diff')}`}
       >
         <div style={{ width: indent + 18, flexShrink: 0 }} />
         {isRepoRootChange ? (
@@ -369,7 +378,7 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
   );
 }
 
-export function CommitDetail({ commit, commits, files, groupedEntries, selectedFile, loadingFiles, repoColor, repos, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onClose }: Props) {
+export function CommitDetail({ commit, commits, files, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onClose }: Props) {
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null);
   const [containingBranches, setContainingBranches] = useState<ContainingBranches>({ local: [], remote: [], tags: [] });
@@ -397,6 +406,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   const infoSectionRef = useRef<HTMLDivElement>(null);
 
   const repoNameById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.name])), [repos]);
+  const repoRootPathById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.rootPath])), [repos]);
   const repoColorById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.color])), [repos]);
   const repoKindById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.kind ?? 'git'])), [repos]);
   const involvedRepoIds = useMemo(() => Array.from(new Set(commits.map(selectedCommit => selectedCommit.repoId))), [commits]);
@@ -406,16 +416,19 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   ), [mergeCommits, selectedMergeHash]);
   const activeFiles = selectedMergeHash ? mergeFiles : files;
   const activeLoadingFiles = selectedMergeHash ? loadingMergeFiles : loadingFiles;
-  const primaryCommitMessageKey = commit ? `${commit.repoId}:${commit.hash}` : '';
+  const primaryCommitMessageKey = commit ? scopedKey(commit.repoId, commit.hash) : '';
   const fullCommitMessage = primaryCommitMessageKey ? fullCommitMessages[primaryCommitMessageKey] ?? null : null;
   const loadingCommitMessage = primaryCommitMessageKey ? loadingCommitMessageKeys.has(primaryCommitMessageKey) : false;
   const displayedCommitMessage = useMemo(
     () => splitCommitMessage(fullCommitMessage, commit?.message ?? ''),
     [commit?.message, fullCommitMessage],
   );
-  const selectedCommitMessageSignature = isMultiCommitSelection
-    ? commits.map(selectedCommit => `${selectedCommit.repoId}:${selectedCommit.hash}`).join('|')
-    : primaryCommitMessageKey;
+  const selectedCommitMessageKeys = useMemo(
+    () => isMultiCommitSelection
+      ? commits.map(selectedCommit => scopedKey(selectedCommit.repoId, selectedCommit.hash))
+      : primaryCommitMessageKey ? [primaryCommitMessageKey] : [],
+    [commits, isMultiCommitSelection, primaryCommitMessageKey],
+  );
   const singleCommitMessageExpanded = primaryCommitMessageKey
     ? expandedCommitMessageKeys.has(primaryCommitMessageKey)
     : false;
@@ -436,11 +449,10 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     const vscodeApi = getVsCodeApi();
     const currentState = vscodeApi.getState<Record<string, unknown>>() ?? {};
     vscodeApi.setState({ ...currentState, commitMessagesExpandedByDefault: nextExpandedByDefault });
-    const selectedKeys = selectedCommitMessageSignature.split('|').filter(Boolean);
-    setExpandedCommitMessageKeys(new Set(nextExpandedByDefault ? selectedKeys : []));
-  }, [commitMessagesExpandedByDefault, selectedCommitMessageSignature]);
+    setExpandedCommitMessageKeys(new Set(nextExpandedByDefault ? selectedCommitMessageKeys : []));
+  }, [commitMessagesExpandedByDefault, selectedCommitMessageKeys]);
 
-  const tree = useMemo(() => buildTree(activeFiles, repoNameById, repoColorById, showRepoGrouping), [activeFiles, repoNameById, repoColorById, showRepoGrouping]);
+  const tree = useMemo(() => buildTree(activeFiles, repoNameById, repoRootPathById, repoColorById, showRepoGrouping), [activeFiles, repoNameById, repoRootPathById, repoColorById, showRepoGrouping]);
   const visibleTreeChildren = useMemo(() => (
     Array.from(tree.children.values())
       .sort((left, right) => {
@@ -470,33 +482,33 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   }, [commit?.hash, isMultiCommitSelection]);
 
   useEffect(() => {
-    const selectedKeys = selectedCommitMessageSignature.split('|').filter(Boolean);
-    setExpandedCommitMessageKeys(new Set(commitMessagesExpandedByDefault ? selectedKeys : []));
-  }, [commitMessagesExpandedByDefault, selectedCommitMessageSignature]);
+    setExpandedCommitMessageKeys(new Set(commitMessagesExpandedByDefault ? selectedCommitMessageKeys : []));
+  }, [commitMessagesExpandedByDefault, selectedCommitMessageKeys]);
 
   useEffect(() => {
     const targets = isMultiCommitSelection ? commits : commit ? [commit] : [];
-    const missingTargets = targets.filter(target => !commitMessageCacheRef.current.has(`${target.repoId}:${target.hash}`));
+    const missingTargets = targets.filter(target => !commitMessageCacheRef.current.has(scopedKey(target.repoId, target.hash)));
     setFullCommitMessages(current => {
       const next = { ...current };
       for (const target of targets) {
-        const cacheKey = `${target.repoId}:${target.hash}`;
+        const cacheKey = scopedKey(target.repoId, target.hash);
         if (commitMessageCacheRef.current.has(cacheKey)) {
           next[cacheKey] = commitMessageCacheRef.current.get(cacheKey) ?? '';
         }
       }
       return next;
     });
-    setLoadingCommitMessageKeys(new Set(missingTargets.map(target => `${target.repoId}:${target.hash}`)));
+    setLoadingCommitMessageKeys(new Set(missingTargets.map(target => scopedKey(target.repoId, target.hash))));
     if (missingTargets.length === 0) return;
 
     let cancelled = false;
+    const pendingRequests = pendingRef.current;
     const requestIds: string[] = [];
     for (const target of missingTargets) {
-      const cacheKey = `${target.repoId}:${target.hash}`;
+      const cacheKey = scopedKey(target.repoId, target.hash);
       const requestId = generateId();
       requestIds.push(requestId);
-      pendingRef.current.set(requestId, (msg) => {
+      pendingRequests.set(requestId, (msg) => {
         if (cancelled || msg.type !== 'LOG_COMMIT_MESSAGE_RESULT') return;
         if (!msg.error) commitMessageCacheRef.current.set(cacheKey, msg.fullMessage);
         setFullCommitMessages(current => ({ ...current, [cacheKey]: msg.error ? '' : msg.fullMessage }));
@@ -516,7 +528,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
 
     return () => {
       cancelled = true;
-      requestIds.forEach(requestId => pendingRef.current.delete(requestId));
+      requestIds.forEach(requestId => pendingRequests.delete(requestId));
     };
   }, [commit, commits, isMultiCommitSelection]);
 
@@ -530,7 +542,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     const targets = commits.map(selectedCommit => ({
       repoId: selectedCommit.repoId,
       hash: selectedCommit.hash,
-      key: `${selectedCommit.repoId}:${selectedCommit.hash}`,
+      key: scopedKey(selectedCommit.repoId, selectedCommit.hash),
     }));
     const cachedBranches: Record<string, ContainingBranches> = {};
     const missingTargets = targets.filter(target => {
@@ -544,11 +556,12 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     if (missingTargets.length === 0) return;
 
     let cancelled = false;
+    const pendingRequests = pendingRef.current;
     const requestIds: string[] = [];
     for (const target of missingTargets) {
       const requestId = generateId();
       requestIds.push(requestId);
-      pendingRef.current.set(requestId, (msg) => {
+      pendingRequests.set(requestId, (msg) => {
         if (cancelled || msg.type !== 'LOG_COMMIT_BRANCHES_RESULT') return;
         containingBranchesCacheRef.current.set(target.key, msg.branches);
         setAggregateContainingBranches(current => ({ ...current, [target.key]: msg.branches }));
@@ -568,9 +581,9 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
 
     return () => {
       cancelled = true;
-      requestIds.forEach(requestId => pendingRef.current.delete(requestId));
+      requestIds.forEach(requestId => pendingRequests.delete(requestId));
     };
-  }, [isMultiCommitSelection, selectedCommitMessageSignature]);
+  }, [commits, isMultiCommitSelection]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -609,8 +622,11 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     setMergeFiles([]);
     setLoadingMergeFiles(false);
     setLoadingBranches(true);
+    const pendingRequests = pendingRef.current;
+    const requestIds: string[] = [];
     const branchesRequestId = generateId();
-    pendingRef.current.set(branchesRequestId, (msg) => {
+    requestIds.push(branchesRequestId);
+    pendingRequests.set(branchesRequestId, (msg) => {
       if (msg.type === 'LOG_COMMIT_BRANCHES_RESULT') {
         setContainingBranches(msg.branches);
         setLoadingBranches(false);
@@ -626,7 +642,8 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     if (commit.parents.length >= 2) {
       setLoadingMerge(true);
       const mergeRequestId = generateId();
-      pendingRef.current.set(mergeRequestId, (msg) => {
+      requestIds.push(mergeRequestId);
+      pendingRequests.set(mergeRequestId, (msg) => {
         if (msg.type === 'LOG_MERGE_COMMITS_RESULT') {
           setMergeCommits(msg.commits);
           setLoadingMerge(false);
@@ -643,13 +660,17 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
       setMergeCommits([]);
       setLoadingMerge(false);
     }
-  }, [commit?.hash, isMultiCommitSelection]);
+
+    return () => {
+      requestIds.forEach(requestId => pendingRequests.delete(requestId));
+    };
+  }, [commit, isMultiCommitSelection]);
 
   const buildPathEntries = useCallback((targetFiles: LogViewFileEntry[]): LogCommitPathEntry[] => {
     const entries = targetFiles.flatMap(file => (
-      groupedEntries[`${file.repoId}:${file.path}`] ?? [file]
+      groupedEntries[scopedKey(file.repoId, file.path)] ?? [file]
     ));
-    return Array.from(new Map(entries.map(entry => [`${entry.repoId}:${entry.commitHash}:${entry.path}`, {
+    return Array.from(new Map(entries.map(entry => [scopedKey(entry.repoId, entry.commitHash, entry.path), {
       repoId: entry.repoId,
       hash: entry.commitHash,
       path: entry.path,
@@ -897,7 +918,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
               onFileContextMenu={(event, file) => setContextMenu({
                 x: event.clientX,
                 y: event.clientY,
-                files: groupedEntries[`${file.repoId}:${file.path}`] ?? [file],
+                files: groupedEntries[scopedKey(file.repoId, file.path)] ?? [file],
                 file,
               })}
               onDirectoryContextMenu={(event, node) => {
@@ -918,11 +939,11 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
             const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
             const status = normalizeStatus(file.status);
             const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
-            const fileName = isRepoRootChange ? (baseNameFromPath(file.repoId) ?? file.repoId) : (file.path.split('/').pop() ?? file.path);
-            const dir = isRepoRootChange ? file.repoId : (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '');
+            const fileName = isRepoRootChange ? repoNameById[file.repoId] ?? file.repoId : (file.path.split('/').pop() ?? file.path);
+            const dir = isRepoRootChange ? repoRootPathById[file.repoId] ?? fileName : (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '');
             return (
               <div
-                key={`${file.repoId}:${file.commitHash}:${file.path}`}
+                key={scopedKey(file.repoId, file.commitHash, file.path)}
                 style={styles.fileRow(isSelected)}
                 className="versiondock-detail-row"
                 data-selected={isSelected}
@@ -932,11 +953,11 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                   setContextMenu({
                     x: event.clientX,
                     y: event.clientY,
-                    files: groupedEntries[`${file.repoId}:${file.path}`] ?? [file],
+                    files: groupedEntries[scopedKey(file.repoId, file.path)] ?? [file],
                     file,
                   });
                 })}
-                title={isRepoRootChange ? file.repoId : `${file.path}\n${t('Click to open diff')}`}
+                title={isRepoRootChange ? dir : `${file.path}\n${t('Click to open diff')}`}
               >
                 <div style={{ width: 4, flexShrink: 0 }} />
                 {isRepoRootChange ? (
@@ -1023,7 +1044,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
             </div>
             <div style={styles.summaryList}>
               {commits.map((selectedCommit, index) => {
-                const messageKey = `${selectedCommit.repoId}:${selectedCommit.hash}`;
+                const messageKey = scopedKey(selectedCommit.repoId, selectedCommit.hash);
                 const message = splitCommitMessage(fullCommitMessages[messageKey] ?? null, selectedCommit.message);
                 const loadingMessage = loadingCommitMessageKeys.has(messageKey);
                 const messageExpanded = expandedCommitMessageKeys.has(messageKey);
@@ -1034,8 +1055,8 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                   ...(selectedBranches?.local ?? []).map(branch => branch.startsWith('refs/') ? branch : `refs/heads/${branch}`),
                   ...(selectedBranches?.remote ?? []).map(branch => branch.startsWith('refs/') ? branch : `refs/remotes/${branch}`),
                   ...(selectedBranches?.tags ?? []).map(tag => tag.startsWith('refs/tags/') ? tag : `refs/tags/${tag}`),
-                ])));
-                const selectedHeadGroup = selectedRefGroups.find(group => group.isHead && !group.isDetached && !group.isRemoteHead);
+                ])), repoKindById[selectedCommit.repoId] ?? 'git', remoteNamesByRepo[selectedCommit.repoId] ?? []);
+                const selectedHeadGroup = selectedRefGroups.find(group => group.isHead && !group.isDetached && !group.isRemoteHead && !group.isSvnRevision);
                 const loadingSelectedBranches = loadingAggregateBranchKeys.has(messageKey);
                 return (
                   <div key={messageKey} style={styles.summaryItem(index === commits.length - 1)}>
@@ -1088,7 +1109,9 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                           </span>
                         )}
                         {selectedRefGroups.map(group => {
-                          const isSpecialHead = group.isRemoteHead || (group.isHead && group.isDetached);
+                          const isSpecialHead = group.isRemoteHead
+                            || (group.isHead && group.isDetached)
+                            || (group.isSvnRevision && group.label === 'HEAD');
                           const color = group.isTag ? tagColor() : isSpecialHead ? headColor() : branchColor(group.label, false);
                           return (
                             <span
@@ -1196,7 +1219,8 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
             </div>
             {(() => {
               const LIMIT = 5;
-              const refGroups = groupRefs(commit.refs);
+              const remoteNames = remoteNamesByRepo[commit.repoId] ?? [];
+              const refGroups = groupRefs(commit.refs, repoKindById[commit.repoId] ?? 'git', remoteNames);
               const refLabels = new Set(refGroups.map(group => group.label));
               type Badge =
                 | { kind: 'ref'; group: RefGroup }
@@ -1204,18 +1228,20 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 | { kind: 'remote'; name: string; remoteName: string }
                 | { kind: 'tag'; name: string };
 
-              const stripRemote = (branch: string) => branch.includes('/') ? branch.slice(branch.indexOf('/') + 1) : branch;
-              const getRemote = (branch: string) => branch.includes('/') ? branch.slice(0, branch.indexOf('/')) : '';
+              const splitRemote = (branch: string) => splitRemoteRefName(branch, remoteNames);
+              const stripRemote = (branch: string) => splitRemote(branch)?.name ?? branch;
+              const getRemote = (branch: string) => splitRemote(branch)?.remoteName ?? '';
               const isHEADRef = (branch: string) => stripRemote(branch).toUpperCase() === 'HEAD';
 
-              const headBadges = refGroups.filter(group => group.isHead).map(group => ({ kind: 'ref' as const, group }));
+              const revisionBadges = refGroups.filter(group => group.isSvnRevision).map(group => ({ kind: 'ref' as const, group }));
+              const headBadges = refGroups.filter(group => group.isHead && !group.isSvnRevision).map(group => ({ kind: 'ref' as const, group }));
               const refTagBadges = refGroups.filter(group => group.isTag).map(group => ({ kind: 'ref' as const, group }));
               const refLocalPrimary = refGroups.filter(group => !group.isHead && !group.isTag && group.isLocal && isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
               const refLocalOther = refGroups.filter(group => !group.isHead && !group.isTag && group.isLocal && !isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
               const refRemotePrimary = refGroups.filter(group => !group.isHead && !group.isTag && group.isRemote && isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
               const refRemoteOther = refGroups.filter(group => !group.isHead && !group.isTag && group.isRemote && !isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
 
-              const localOnly = containingBranches.local.filter(branch => !branch.includes('/'));
+              const localOnly = containingBranches.local;
               const extraLocalPrimary = localOnly.filter(branch => !refLabels.has(branch) && isPrimaryBranch(branch)).map(name => ({ kind: 'local' as const, name }));
               const extraLocalOther = localOnly.filter(branch => !refLabels.has(branch) && !isPrimaryBranch(branch)).map(name => ({ kind: 'local' as const, name }));
               const extraRemotePrimary = containingBranches.remote
@@ -1227,6 +1253,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
               const extraTags = containingBranches.tags.filter(tag => !refLabels.has(tag)).map(name => ({ kind: 'tag' as const, name }));
 
               const allBadges: Badge[] = [
+                ...revisionBadges,
                 ...headBadges,
                 ...refTagBadges,
                 ...refLocalPrimary,
@@ -1247,7 +1274,9 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
               function renderBadge(badge: Badge, key: string) {
                 if (badge.kind === 'ref') {
                   const group = badge.group;
-                  const isSpecialHead = group.isRemoteHead || (group.isHead && group.isDetached);
+                  const isSpecialHead = group.isRemoteHead
+                    || (group.isHead && group.isDetached)
+                    || (group.isSvnRevision && group.label === 'HEAD');
                   const color = group.isTag ? tagColor() : isSpecialHead ? headColor() : branchColor(group.label, false);
                   return (
                     <span key={key} style={styles.refBadge(color, (group.isHead || group.isDetached) && !group.isRemoteHead)} title={badgeTitle(group)}>
@@ -1277,7 +1306,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 );
               }
 
-              const nonDetachedHeadGroup = refGroups.find(group => group.isHead && !group.isDetached && !group.isRemoteHead);
+              const nonDetachedHeadGroup = refGroups.find(group => group.isHead && !group.isDetached && !group.isRemoteHead && !group.isSvnRevision);
               return (
                 <div style={refsExpanded ? styles.refsRowExpanded : styles.refsRow}>
                   {nonDetachedHeadGroup && (
@@ -1345,7 +1374,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                             const fileName = file.path.split('/').pop() ?? file.path;
                             return (
                               <div
-                                key={`${file.repoId}:${file.commitHash}:${file.path}`}
+                                key={scopedKey(file.repoId, file.commitHash, file.path)}
                                 style={styles.mergeFileRow}
                                 className="versiondock-detail-row"
                                 data-selected={false}

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import type { BundledLanguage, Highlighter, SpecialLanguage, ThemeRegistrationRaw } from 'shiki';
+import type { HighlighterCore, SpecialLanguage, ThemeRegistrationRaw } from 'shiki/core';
 import type { ConflictBlock, MergeConflictFile } from '../../shared/types';
 import type { NormalEdits, Resolution } from '../store/mergeStore';
 import { t } from '../../shared/i18n';
@@ -33,6 +33,11 @@ interface SideChange {
   lines: string[];
 }
 
+interface LineMatch {
+  baseIndex: number;
+  sideIndex: number;
+}
+
 interface ThreeWayBlock {
   state: MergeBlockState;
   baseLines: string[];
@@ -42,6 +47,11 @@ interface ThreeWayBlock {
 
 const CODE_LINE_HEIGHT = 21;
 const CONFLICT_HEADER_HEIGHT = 26;
+// Exact LCS remains quadratic in time even with linear-space reconstruction.
+// Above this budget we conservatively treat the changed middle as one block.
+// That can disable the convenience "apply non-conflicting" action for a very
+// large divergent file, but it cannot silently apply a wrong merge result.
+const MAX_EXACT_DIFF_CELLS = 4_000_000;
 
 function splitConflictSegments(content: string, file: MergeConflictFile): Segment[] {
   const lines = content.split('\n');
@@ -87,57 +97,170 @@ function splitLines(content: string): string[] {
   return content.split('\n');
 }
 
-function diffLineChanges(baseLines: string[], sideLines: string[]): SideChange[] {
+function lcsPrefixLengths(
+  left: string[], leftStart: number, leftEnd: number,
+  right: string[], rightStart: number, rightEnd: number,
+): Uint32Array {
+  const rightLength = rightEnd - rightStart;
+  let previous = new Uint32Array(rightLength + 1);
+  let current = new Uint32Array(rightLength + 1);
+
+  for (let leftIndex = leftStart; leftIndex < leftEnd; leftIndex += 1) {
+    current[0] = 0;
+    for (let offset = 1; offset <= rightLength; offset += 1) {
+      current[offset] = left[leftIndex] === right[rightStart + offset - 1]
+        ? previous[offset - 1] + 1
+        : Math.max(previous[offset], current[offset - 1]);
+    }
+    [previous, current] = [current, previous];
+  }
+
+  return previous;
+}
+
+function lcsSuffixLengths(
+  left: string[], leftStart: number, leftEnd: number,
+  right: string[], rightStart: number, rightEnd: number,
+): Uint32Array {
+  const rightLength = rightEnd - rightStart;
+  let previous = new Uint32Array(rightLength + 1);
+  let current = new Uint32Array(rightLength + 1);
+
+  for (let leftIndex = leftEnd - 1; leftIndex >= leftStart; leftIndex -= 1) {
+    current[rightLength] = 0;
+    for (let offset = rightLength - 1; offset >= 0; offset -= 1) {
+      current[offset] = left[leftIndex] === right[rightStart + offset]
+        ? previous[offset + 1] + 1
+        : Math.max(previous[offset], current[offset + 1]);
+    }
+    [previous, current] = [current, previous];
+  }
+
+  return previous;
+}
+
+function findLcsSplit(
+  left: string[], leftStart: number, leftMid: number, leftEnd: number,
+  right: string[], rightStart: number, rightEnd: number,
+): number {
+  const prefix = lcsPrefixLengths(left, leftStart, leftMid, right, rightStart, rightEnd);
+  const suffix = lcsSuffixLengths(left, leftMid, leftEnd, right, rightStart, rightEnd);
+  let bestOffset = 0;
+  let bestScore = -1;
+
+  for (let offset = 0; offset < prefix.length; offset += 1) {
+    const score = prefix[offset] + suffix[offset];
+    if (score > bestScore) {
+      bestScore = score;
+      bestOffset = offset;
+    }
+  }
+  return rightStart + bestOffset;
+}
+
+function collectLcsMatches(
+  left: string[], leftStart: number, leftEnd: number,
+  right: string[], rightStart: number, rightEnd: number,
+  output: Array<{ leftIndex: number; rightIndex: number }>,
+): void {
+  if (leftStart >= leftEnd || rightStart >= rightEnd) return;
+
+  if (leftEnd - leftStart === 1) {
+    for (let rightIndex = rightStart; rightIndex < rightEnd; rightIndex += 1) {
+      if (left[leftStart] === right[rightIndex]) {
+        output.push({ leftIndex: leftStart, rightIndex });
+        break;
+      }
+    }
+    return;
+  }
+
+  if (rightEnd - rightStart === 1) {
+    for (let leftIndex = leftStart; leftIndex < leftEnd; leftIndex += 1) {
+      if (left[leftIndex] === right[rightStart]) {
+        output.push({ leftIndex, rightIndex: rightStart });
+        break;
+      }
+    }
+    return;
+  }
+
+  const leftMid = leftStart + Math.floor((leftEnd - leftStart) / 2);
+  const rightMid = findLcsSplit(left, leftStart, leftMid, leftEnd, right, rightStart, rightEnd);
+  collectLcsMatches(left, leftStart, leftMid, right, rightStart, rightMid, output);
+  collectLcsMatches(left, leftMid, leftEnd, right, rightMid, rightEnd, output);
+}
+
+function findLineMatches(baseLines: string[], sideLines: string[]): LineMatch[] {
+  if (sideLines.length <= baseLines.length) {
+    const matches: Array<{ leftIndex: number; rightIndex: number }> = [];
+    collectLcsMatches(baseLines, 0, baseLines.length, sideLines, 0, sideLines.length, matches);
+    return matches.map(match => ({ baseIndex: match.leftIndex, sideIndex: match.rightIndex }));
+  }
+
+  // Hirschberg uses O(length of the right sequence) memory, so swap the
+  // sequences when the side is longer and map the coordinates back.
+  const matches: Array<{ leftIndex: number; rightIndex: number }> = [];
+  collectLcsMatches(sideLines, 0, sideLines.length, baseLines, 0, baseLines.length, matches);
+  return matches.map(match => ({ baseIndex: match.rightIndex, sideIndex: match.leftIndex }));
+}
+
+export function diffLineChanges(baseLines: string[], sideLines: string[]): SideChange[] {
   const baseLength = baseLines.length;
   const sideLength = sideLines.length;
-  const table = Array.from({ length: baseLength + 1 }, () => new Array<number>(sideLength + 1).fill(0));
-
-  for (let i = baseLength - 1; i >= 0; i -= 1) {
-    for (let j = sideLength - 1; j >= 0; j -= 1) {
-      table[i][j] = baseLines[i] === sideLines[j]
-        ? table[i + 1][j + 1] + 1
-        : Math.max(table[i + 1][j], table[i][j + 1]);
-    }
+  let prefixLength = 0;
+  while (
+    prefixLength < baseLength
+    && prefixLength < sideLength
+    && baseLines[prefixLength] === sideLines[prefixLength]
+  ) {
+    prefixLength += 1;
   }
 
+  let suffixLength = 0;
+  while (
+    suffixLength < baseLength - prefixLength
+    && suffixLength < sideLength - prefixLength
+    && baseLines[baseLength - suffixLength - 1] === sideLines[sideLength - suffixLength - 1]
+  ) {
+    suffixLength += 1;
+  }
+
+  const baseMiddleEnd = baseLength - suffixLength;
+  const sideMiddleEnd = sideLength - suffixLength;
+  if (prefixLength === baseMiddleEnd && prefixLength === sideMiddleEnd) return [];
+
+  const baseMiddle = baseLines.slice(prefixLength, baseMiddleEnd);
+  const sideMiddle = sideLines.slice(prefixLength, sideMiddleEnd);
+  if (baseMiddle.length > 0 && sideMiddle.length > Math.floor(MAX_EXACT_DIFF_CELLS / baseMiddle.length)) {
+    return [{ baseStart: prefixLength, baseEnd: baseMiddleEnd, lines: sideMiddle }];
+  }
+
+  const matches = findLineMatches(baseMiddle, sideMiddle);
   const changes: SideChange[] = [];
-  let baseStart: number | null = null;
-  let replacementLines: string[] = [];
+  let baseCursor = 0;
+  let sideCursor = 0;
 
-  const ensureChange = (index: number) => {
-    if (baseStart === null) baseStart = index;
-  };
-
-  const flush = (baseEnd: number) => {
-    if (baseStart === null) return;
-    changes.push({ baseStart, baseEnd, lines: replacementLines });
-    baseStart = null;
-    replacementLines = [];
-  };
-
-  let i = 0;
-  let j = 0;
-  while (i < baseLength || j < sideLength) {
-    if (i < baseLength && j < sideLength && baseLines[i] === sideLines[j]) {
-      flush(i);
-      i += 1;
-      j += 1;
-      continue;
+  for (const match of matches) {
+    if (baseCursor < match.baseIndex || sideCursor < match.sideIndex) {
+      changes.push({
+        baseStart: prefixLength + baseCursor,
+        baseEnd: prefixLength + match.baseIndex,
+        lines: sideMiddle.slice(sideCursor, match.sideIndex),
+      });
     }
-
-    const deleteScore = i < baseLength ? table[i + 1][j] : -1;
-    const insertScore = j < sideLength ? table[i][j + 1] : -1;
-    if (j < sideLength && (i >= baseLength || insertScore >= deleteScore)) {
-      ensureChange(i);
-      replacementLines.push(sideLines[j]);
-      j += 1;
-    } else if (i < baseLength) {
-      ensureChange(i);
-      i += 1;
-    }
+    baseCursor = match.baseIndex + 1;
+    sideCursor = match.sideIndex + 1;
   }
 
-  flush(i);
+  if (baseCursor < baseMiddle.length || sideCursor < sideMiddle.length) {
+    changes.push({
+      baseStart: prefixLength + baseCursor,
+      baseEnd: baseMiddleEnd,
+      lines: sideMiddle.slice(sideCursor),
+    });
+  }
+
   return changes;
 }
 
@@ -169,7 +292,9 @@ function createThreeWayBlock(baseLines: string[], leftLines: string[], rightLine
 }
 
 function parseThreeWayBlocks(file: MergeConflictFile): ThreeWayBlock[] | null {
-  if (!file.baseContent || !file.oursContent || !file.theirsContent) return null;
+  // Empty content is a valid side of add/delete conflicts; only an absent
+  // version means three-way analysis is unavailable.
+  if (file.baseContent === undefined || file.oursContent === undefined || file.theirsContent === undefined) return null;
 
   const baseLines = splitLines(file.baseContent);
   const leftChanges = diffLineChanges(baseLines, splitLines(file.oursContent));
@@ -402,7 +527,10 @@ function removeResolutionSide(resolution: Resolution | undefined, side: 'ours' |
 }
 
 function useSyncedScroll(enabled = true) {
-  const refs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)] as const;
+  const leftRef = useRef<HTMLDivElement>(null);
+  const centerRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+  const refs = useMemo(() => [leftRef, centerRef, rightRef] as const, []);
   const syncing = useRef(false);
   const onScroll = (source: number) => (event: React.UIEvent<HTMLDivElement>) => {
     if (!enabled || syncing.current) return;
@@ -426,7 +554,7 @@ export function ThreeWayLayout({ file, language, resolutions, normalEdits, onRes
     const active = container?.querySelector(`[data-conflict-index="${currentConflictIndex}"]`) as HTMLElement | null;
     if (!container || !active) return;
     container.scrollTop = Math.max(0, active.offsetTop - 120);
-  }, [currentConflictIndex, file]);
+  }, [currentConflictIndex, file, refs]);
 
   const applyResolution = (index: number, resolution: Resolution) => {
     const segment = segments.find(item => item.kind === 'conflict' && item.index === index) as ConflictSegment | undefined;
@@ -612,7 +740,7 @@ function CodeLines({ lines, startLine, language, dim }: { lines: string[]; start
   const colorTheme = getVersionDockColorTheme();
 
   const renderedLines = useMemo(() => {
-    return lines.map(line => renderShikiLine(highlighter, line, language, colorTheme));
+    return renderShikiLines(highlighter, lines, language, colorTheme);
   }, [colorTheme, highlighter, language, lines]);
 
   return (
@@ -641,7 +769,7 @@ function EditableCodeBlock({ value, startLine, language, dim, onChange }: {
     return split.length > 0 ? split : [''];
   }, [value]);
   const renderedLines = useMemo(() => {
-    return lines.map(line => renderShikiLine(highlighter, line, language, colorTheme));
+    return renderShikiLines(highlighter, lines, language, colorTheme);
   }, [colorTheme, highlighter, language, lines]);
   const lineTotal = Math.max(lines.length, 1);
   const lineNumbers = Array.from({ length: lineTotal }, (_, index) => startLine + index);
@@ -675,28 +803,67 @@ function EditableCodeBlock({ value, startLine, language, dim, onChange }: {
   );
 }
 
-function renderShikiLine(highlighter: Highlighter | null, line: string, language: string, colorTheme: WebviewColorThemeData | null): React.ReactNode {
-  if (!highlighter) return line || ' ';
+type SupportedShikiLanguage =
+  | 'javascript' | 'typescript' | 'json' | 'css' | 'html' | 'markdown' | 'java'
+  | 'xml' | 'yaml' | 'php' | 'python' | 'go' | 'shellscript' | SpecialLanguage;
+
+interface ShikiToken {
+  content: string;
+  color?: string;
+  fontStyle?: string;
+}
+
+const loadedCustomThemes = new WeakMap<HighlighterCore, Set<string>>();
+
+function ensureShikiTheme(highlighter: HighlighterCore, theme: ThemeRegistrationRaw): void {
+  if (!theme.name) {
+    highlighter.loadThemeSync(theme);
+    return;
+  }
+  let loaded = loadedCustomThemes.get(highlighter);
+  if (!loaded) {
+    loaded = new Set();
+    loadedCustomThemes.set(highlighter, loaded);
+  }
+  if (loaded.has(theme.name)) return;
+  highlighter.loadThemeSync(theme);
+  loaded.add(theme.name);
+}
+
+function renderShikiLines(
+  highlighter: HighlighterCore | null,
+  lines: string[],
+  language: string,
+  colorTheme: WebviewColorThemeData | null,
+): React.ReactNode[] {
+  if (!highlighter) return lines.map(line => line || ' ');
 
   const theme = getShikiTheme(colorTheme);
-  if (typeof theme !== 'string') highlighter.loadThemeSync(theme);
+  if (typeof theme !== 'string') ensureShikiTheme(highlighter, theme);
 
   try {
-    const result = highlighter.codeToTokens(line || ' ', {
+    // Tokenizing a segment in one pass is both faster and more accurate for
+    // multiline constructs than invoking Shiki independently for every line.
+    const tokenize = highlighter.codeToTokens as unknown as (
+      code: string,
+      options: { lang: SupportedShikiLanguage; theme: string | ThemeRegistrationRaw },
+    ) => unknown;
+    const result = tokenize(lines.join('\n') || ' ', {
       lang: normalizeShikiLang(language),
       theme,
     });
     const tokenLines = Array.isArray(result)
       ? result
-      : ((result as unknown as { tokens?: Array<Array<{ content: string; color?: string; fontStyle?: string }>> }).tokens ?? []);
-    const firstLine: Array<{ content: string; color?: string; fontStyle?: string }> = tokenLines[0] ?? [];
-
-    if (firstLine.length === 0) return line || ' ';
-    return firstLine.map((token, index) => (
-      <span key={index} style={{ color: token.color, fontStyle: token.fontStyle }}>{token.content}</span>
-    ));
+      : ((result as { tokens?: ShikiToken[][] }).tokens ?? []);
+    return lines.map((line, lineIndex) => {
+      const tokens: ShikiToken[] = tokenLines[lineIndex] ?? [];
+      if (tokens.length === 0) return line || ' ';
+      return tokens.map((token, tokenIndex) => (
+        <span key={tokenIndex} style={{ color: token.color, fontStyle: token.fontStyle }}>{token.content}</span>
+      ));
+    });
   } catch {
-    return line || ' ';
+    return lines.map(line => line || ' ');
   }
 }
 
@@ -714,10 +881,10 @@ function getShikiTheme(colorTheme: WebviewColorThemeData | null): 'github-light'
   return document.body.classList.contains('vscode-light') ? 'github-light' : 'github-dark';
 }
 
-function normalizeShikiLang(language: string): BundledLanguage | SpecialLanguage {
+function normalizeShikiLang(language: string): SupportedShikiLanguage {
   const lang = language.toLowerCase();
-  if (lang === 'typescriptreact' || lang === 'tsx') return 'tsx';
-  if (lang === 'javascriptreact' || lang === 'jsx') return 'jsx';
+  if (lang === 'typescriptreact' || lang === 'tsx') return 'typescript';
+  if (lang === 'javascriptreact' || lang === 'jsx') return 'javascript';
   if (lang === 'plaintext') return 'text';
   if (lang === 'shell' || lang === 'bash' || lang === 'zsh') return 'shellscript';
   if (lang === 'typescript') return 'typescript';

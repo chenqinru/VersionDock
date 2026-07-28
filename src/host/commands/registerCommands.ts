@@ -47,11 +47,11 @@ export function registerCommands(
   context.subscriptions.push(
     // Focus the Git Log panel in the bottom bar
     vscode.commands.registerCommand('versiondock.openLog', () => {
-      logPanel.focus();
+      return logPanel.focus();
     }),
 
     vscode.commands.registerCommand('versiondock.refreshCommitPanel', () => {
-      void commitPanel.refresh({ refreshSubtrees: commitPanel.isSubtreeTabActive() });
+      return commitPanel.refresh({ refreshSubtrees: commitPanel.isSubtreeTabActive() });
     }),
 
     vscode.commands.registerCommand('versiondock.openMergeEditor', (resource?: unknown) => {
@@ -100,7 +100,11 @@ export function registerCommands(
     }),
 
     vscode.commands.registerCommand('versiondock.commit', () => {
-      vscode.commands.executeCommand('versiondock.commitPanel.focus');
+      return commitPanel.triggerCommitAction(false);
+    }),
+
+    vscode.commands.registerCommand('versiondock.commitAndPush', () => {
+      return commitPanel.triggerCommitAction(true);
     }),
 
     vscode.commands.registerCommand('versiondock.pull', () => {
@@ -116,19 +120,19 @@ export function registerCommands(
     }),
 
     vscode.commands.registerCommand('versiondock.showBranchMenu', (repoId?: string) => {
-      branchStatusBar.showMenu(repoId);
+      return branchStatusBar.showMenu(repoId);
     }),
 
     vscode.commands.registerCommand('versiondock.showBranchOptions', (repoId: string, branchName: string) => {
-      branchStatusBar.showBranchOptions(repoId, branchName);
+      return branchStatusBar.showBranchOptions(repoId, branchName);
     }),
 
     vscode.commands.registerCommand('versiondock.updateProject', () => {
-      branchStatusBar.updateProject();
+      return branchStatusBar.updateProject();
     }),
 
     vscode.commands.registerCommand('versiondock.openSettings', () => {
-      vscode.commands.executeCommand('workbench.action.openSettings', '@ext:chenqinru.versiondock');
+      return vscode.commands.executeCommand('workbench.action.openSettings', '@ext:chenqinru.versiondock');
     }),
 
     vscode.commands.registerCommand('versiondock.openGitAnnotations', async () => {
@@ -146,15 +150,15 @@ export function registerCommands(
     }),
 
     vscode.commands.registerCommand('versiondock.manageHiddenRepos', () => {
-      commitPanel.manageHiddenRepos();
+      return commitPanel.manageHiddenRepos();
     }),
 
     vscode.commands.registerCommand('versiondock.manageProfiles', () => {
-      profileStatusBar.showMenu();
+      return profileStatusBar.showMenu();
     }),
 
     vscode.commands.registerCommand('versiondock.switchProfile', () => {
-      profileStatusBar.switchProfile();
+      return profileStatusBar.switchProfile();
     }),
 
     vscode.commands.registerCommand('versiondock.reloadRepositories', () => {
@@ -314,6 +318,7 @@ export function registerCommands(
         prompt: t('Optional lock message'),
         placeHolder: t('Lock message'),
       });
+      if (message === undefined) return;
       const svn = target.repo as typeof target.repo & { lock?: (paths: string[], message?: string) => Promise<string> };
       await svn.lock?.([target.relativePath], message);
       await commitPanel.refresh();
@@ -514,7 +519,7 @@ async function pickSvnFile(
 async function pickSubmodule(
   manager: WorkspaceGitManager | undefined,
   repoId: string | undefined,
-  requireInitialized: boolean,
+  _requireInitialized: boolean,
 ): Promise<{ parentRepoId: string; submodulePath: string } | undefined> {
   const metas = manager?.getRepoMetas().filter(m => m.isSubmodule) ?? [];
   if (metas.length === 0) {

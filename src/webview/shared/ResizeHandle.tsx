@@ -1,13 +1,20 @@
 import React from 'react';
+import { t } from './i18n';
 
 interface Props {
   onMouseDown: (e: React.MouseEvent) => void;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
 }
 
-export function ResizeHandle({ onMouseDown }: Props) {
+export function ResizeHandle({ onMouseDown, onKeyDown }: Props) {
   return (
     <div
       onMouseDown={onMouseDown}
+      onKeyDown={onKeyDown}
+      role="separator"
+      aria-label={t('Resize panel')}
+      aria-orientation="vertical"
+      tabIndex={0}
       style={{
         width: '4px',
         flexShrink: 0,

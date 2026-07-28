@@ -11,28 +11,80 @@ export interface BlameLine {
 }
 
 export class BlameService {
+  private static readonly MAX_CACHE_ENTRIES = 50;
   private cache = new Map<string, BlameLine[]>();
+  private pending = new Map<string, Promise<BlameLine[]>>();
+  private revisions = new Map<string, number>();
+  private activeRequests = new Map<string, number>();
 
   async getBlame(filePath: string, rootPath: string): Promise<BlameLine[]> {
-    if (this.cache.has(filePath)) return this.cache.get(filePath)!;
-
-    const git = simpleGit(rootPath);
-    const relPath = path.relative(rootPath, filePath);
-
-    let raw: string;
-    try {
-      raw = await git.raw(['blame', '--porcelain', relPath]);
-    } catch {
-      return [];
+    const cached = this.cache.get(filePath);
+    if (cached) {
+      // Refresh insertion order to keep recently-used annotations cached.
+      this.cache.delete(filePath);
+      this.cache.set(filePath, cached);
+      return cached;
     }
+    const inFlight = this.pending.get(filePath);
+    if (inFlight) return inFlight;
 
-    const result = this.parsePorcelain(raw);
-    this.cache.set(filePath, result);
-    return result;
+    const revision = this.revisions.get(filePath) ?? 0;
+    this.activeRequests.set(filePath, (this.activeRequests.get(filePath) ?? 0) + 1);
+    const request = (async () => {
+      const git = simpleGit(rootPath);
+      const relPath = path.relative(rootPath, filePath).split(path.sep).join('/');
+
+      let raw: string;
+      try {
+        // `git blame` accepts one literal path rather than a general pathspec;
+        // keep the global guard explicit so future command changes cannot turn a
+        // filename beginning with `:(...)` into pathspec magic.
+        raw = await git.raw(['--literal-pathspecs', 'blame', '--porcelain', '--', relPath]);
+      } catch {
+        return [];
+      }
+
+      const result = this.parsePorcelain(raw);
+      if ((this.revisions.get(filePath) ?? 0) === revision) {
+        this.cache.set(filePath, result);
+        while (this.cache.size > BlameService.MAX_CACHE_ENTRIES) {
+          const oldest = this.cache.keys().next().value as string | undefined;
+          if (!oldest) break;
+          this.cache.delete(oldest);
+        }
+      }
+      return result;
+    })();
+    this.pending.set(filePath, request);
+    try {
+      return await request;
+    } finally {
+      if (this.pending.get(filePath) === request) {
+        this.pending.delete(filePath);
+      }
+      const activeCount = (this.activeRequests.get(filePath) ?? 1) - 1;
+      if (activeCount <= 0) {
+        this.activeRequests.delete(filePath);
+        this.revisions.delete(filePath);
+      } else {
+        this.activeRequests.set(filePath, activeCount);
+      }
+    }
   }
 
   invalidate(filePath: string): void {
     this.cache.delete(filePath);
+    // An invalidated request is removed from `pending` so a replacement can
+    // start immediately, but it remains in `activeRequests` until its process
+    // finishes. Keep the revision monotonic while any older request is active;
+    // otherwise a second invalidation can reset it to zero and let the oldest
+    // result repopulate the cache.
+    if ((this.activeRequests.get(filePath) ?? 0) > 0) {
+      this.pending.delete(filePath);
+      this.revisions.set(filePath, (this.revisions.get(filePath) ?? 0) + 1);
+    } else {
+      this.revisions.delete(filePath);
+    }
   }
 
   private parsePorcelain(raw: string): BlameLine[] {
@@ -43,7 +95,7 @@ export class BlameService {
     let i = 0;
     while (i < lines.length) {
       const headerLine = lines[i];
-      if (!headerLine || !/^[0-9a-f]{40} /.test(headerLine)) {
+      if (!headerLine || !/^[0-9a-f]{40,64} /.test(headerLine)) {
         i++;
         continue;
       }

@@ -4,6 +4,7 @@ import { t } from '../utils/l10n';
 import type { CommitToHostMsg, HostToCommitMsg, HostToLogMsg, LogToHostMsg } from '../types/messages';
 import type { CommitPanelProvider } from './CommitPanelProvider';
 import type { GitLogPanelProvider } from './GitLogPanelProvider';
+import { loadIconTheme } from '../utils/IconThemeService';
 
 type UndockedToHostMsg = CommitToHostMsg | LogToHostMsg;
 
@@ -22,6 +23,8 @@ export class UndockedPanelProvider implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
   private currentShowCommit = true;
   private movedToNewWindow = false;
+  private iconThemeGeneration = 0;
+  private iconThemeLoaded = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -29,11 +32,17 @@ export class UndockedPanelProvider implements vscode.Disposable {
     private readonly logPanel: GitLogPanelProvider,
   ) {}
 
+  hasCommitPane(): boolean {
+    return this.panel !== null && this.currentShowCommit;
+  }
+
   open(target: 'editorTab' | 'newWindow', showCommit = true): void {
     if (this.panel) {
       this.panel.reveal();
       if (this.currentShowCommit !== showCommit) {
         this.currentShowCommit = showCommit;
+        this.iconThemeGeneration++;
+        this.iconThemeLoaded = false;
         this.panel.webview.html = getWebviewHtml(
           this.panel.webview,
           this.extensionUri,
@@ -50,6 +59,8 @@ export class UndockedPanelProvider implements vscode.Disposable {
     }
 
     this.currentShowCommit = showCommit;
+    this.iconThemeGeneration++;
+    this.iconThemeLoaded = false;
     this.panel = vscode.window.createWebviewPanel(
       UndockedPanelProvider.viewType,
       'VersionDock',
@@ -82,9 +93,17 @@ export class UndockedPanelProvider implements vscode.Disposable {
       }
     }, null, this.disposables);
 
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('workbench.iconTheme') || event.affectsConfiguration('workbench.colorTheme')) {
+        this.refreshIconTheme(true);
+      }
+    }, null, this.disposables);
+
     this.panel.onDidDispose(() => {
       this.panel = null;
       this.movedToNewWindow = false;
+      this.iconThemeGeneration++;
+      this.iconThemeLoaded = false;
       this.disposables.forEach(disposable => disposable.dispose());
       this.disposables = [];
     }, null, this.disposables);
@@ -110,11 +129,53 @@ export class UndockedPanelProvider implements vscode.Disposable {
   }
 
   postToCommit(msg: HostToCommitMsg): void {
-    this.panel?.webview.postMessage({ target: 'commit', msg } satisfies HostToUndockedMsg);
+    const panel = this.panel;
+    if (!panel) return;
+    if (msg.type === 'COMMIT_STATUS_UPDATE') {
+      const forceThemeRefresh = msg.iconTheme !== undefined;
+      const status: HostToCommitMsg = { ...msg, iconTheme: undefined };
+      panel.webview.postMessage({ target: 'commit', msg: status } satisfies HostToUndockedMsg);
+      this.refreshIconTheme(forceThemeRefresh);
+      return;
+    }
+    panel.webview.postMessage({ target: 'commit', msg } satisfies HostToUndockedMsg);
   }
 
   postToLog(msg: HostToLogMsg): void {
-    this.panel?.webview.postMessage({ target: 'log', msg } satisfies HostToUndockedMsg);
+    const panel = this.panel;
+    if (!panel) return;
+    if (msg.type === 'LOG_INIT_DATA') {
+      const forceThemeRefresh = msg.iconTheme !== undefined;
+      const initData: HostToLogMsg = { ...msg, iconTheme: undefined };
+      panel.webview.postMessage({ target: 'log', msg: initData } satisfies HostToUndockedMsg);
+      this.refreshIconTheme(forceThemeRefresh);
+      return;
+    }
+    if (msg.type === 'LOG_ICON_THEME_UPDATE') {
+      this.refreshIconTheme(true);
+      return;
+    }
+    panel.webview.postMessage({ target: 'log', msg } satisfies HostToUndockedMsg);
+  }
+
+  private refreshIconTheme(force = false): void {
+    const panel = this.panel;
+    if (!panel || (this.iconThemeLoaded && !force)) return;
+    const generation = ++this.iconThemeGeneration;
+    void loadIconTheme(panel.webview).then(iconTheme => {
+      if (this.panel !== panel || generation !== this.iconThemeGeneration) return;
+      this.iconThemeLoaded = true;
+      panel.webview.postMessage({
+        target: 'commit',
+        msg: { type: 'COMMIT_ICON_THEME_UPDATE', iconTheme },
+      } satisfies HostToUndockedMsg);
+      panel.webview.postMessage({
+        target: 'log',
+        msg: { type: 'LOG_ICON_THEME_UPDATE', iconTheme },
+      } satisfies HostToUndockedMsg);
+    }).catch(error => {
+      console.error('[VersionDock] Failed to load icon theme for undocked panel:', error);
+    });
   }
 
   dispose(): void {

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { ShelveService } from '../git/ShelveService';
@@ -18,11 +19,11 @@ import type { UndockedPanelProvider } from './UndockedPanelProvider';
 import { openSquashEditor } from './SquashEditorPanel';
 import { openEditMessageEditor } from './EditMessageEditorPanel';
 import type { GitProfileService } from '../git/GitProfileService';
-import { LOCAL_PROFILE_ID, GLOBAL_PROFILE_ID } from '../git/GitProfileService';
 import type { SvnIgnoreEntry, SvnIgnoreUpdateResult } from '../svn/SvnService';
 import { t } from '../utils/l10n';
 import { collectAbortOperationTargets, runAbortOperationFlow } from '../utils/abortOperation';
 import { toGitUri } from '../utils/resourceUri';
+import { assertNoSymlinkAncestors } from '../utils/repoPath';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AI_COMMIT_MESSAGE_EXTENSION_ID = 'venberstep.ai-commit-message';
@@ -80,17 +81,35 @@ function pathMaybeMatchesRepo(repoPath: string, targetPath: string): boolean {
     || (!repoRelative.startsWith('..') && !path.isAbsolute(repoRelative));
 }
 
-export class CommitPanelProvider implements vscode.WebviewViewProvider {
+export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewType = 'versiondock.commitPanel';
   private view?: vscode.WebviewView;
   private logProvider?: GitLogPanelProvider;
   private undockedPanel?: UndockedPanelProvider;
   private changelistService?: ChangelistService;
   private badgeController?: import('../ui/BadgeController').BadgeController;
-  private activeReplyTarget: 'sidebar' | 'undocked' = 'sidebar';
+  private readonly replyTarget = new AsyncLocalStorage<'sidebar' | 'undocked'>();
+  private readonly managerListeners: vscode.Disposable[] = [];
+  private viewListeners: vscode.Disposable[] = [];
+  private branchSyncGeneration = 0;
+  private repoSyncGeneration = 0;
+  private pendingSidebarMessages: HostToCommitMsg[] = [];
+  private sidebarReady = false;
+  private sidebarViewGeneration = 0;
 
   async focus(): Promise<void> {
     await vscode.commands.executeCommand(`${CommitPanelProvider.viewType}.focus`);
+  }
+
+  async triggerCommitAction(andPush: boolean): Promise<void> {
+    const message: HostToCommitMsg = { type: 'COMMIT_TRIGGER_ACTION', andPush };
+    this.postSidebarWhenReady(message);
+    try {
+      await this.focus();
+    } catch (error) {
+      this.removePendingSidebarMessage(message);
+      throw error;
+    }
   }
 
   setMergeEditorProvider(provider: MergeEditorProvider): void {
@@ -106,16 +125,26 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
   }
 
   handleUndockedMessage(msg: CommitToHostMsg, _provider: UndockedPanelProvider): void {
-    this.activeReplyTarget = 'undocked';
-    this.handleMessage(msg, undefined).finally(() => { this.activeReplyTarget = 'sidebar'; });
+    void this.replyTarget.run('undocked', () => this.handleMessage(msg)).catch(error => {
+      console.error('[VersionDock] Undocked commit-panel message failed:', error);
+    });
   }
 
   setBadgeController(controller: import('../ui/BadgeController').BadgeController): void {
     this.badgeController = controller;
   }
 
-  prefillCommitMessage(message: string): void {
-    this.post({ type: 'COMMIT_SET_MESSAGE', message });
+  prefillCommitMessage(message: string, target: 'sidebar' | 'undocked' = 'sidebar'): void {
+    const effectiveTarget = target === 'undocked' && this.undockedPanel?.hasCommitPane()
+      ? 'undocked'
+      : 'sidebar';
+    if (effectiveTarget === 'sidebar') {
+      this.postSidebarWhenReady({ type: 'COMMIT_SET_MESSAGE', message });
+      return;
+    }
+    this.replyTarget.run(effectiveTarget, () => {
+      this.post({ type: 'COMMIT_SET_MESSAGE', message });
+    });
   }
   private shelveServices = new Map<string, ShelveService>();
   private subtreeStatusCache = new Map<string, CachedSubtreeStatus>();
@@ -153,33 +182,60 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
   ) {
     this.updateVcsContext();
 
-    this.manager.onStatusChange((status) => {
-      this.postChangelistsUpdate(status);
-      this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-    });
+    this.managerListeners.push(
+      this.manager.onStatusChange((status) => {
+        this.postChangelistsUpdate(status);
+        this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+      })
+    );
 
     const postAllBranches = async () => {
-      for (const meta of this.manager.getRepoMetas()) {
+      const generation = ++this.branchSyncGeneration;
+      const repos = this.manager.getRepoMetas().flatMap(meta => {
         const repo = this.manager.getRepo(meta.id);
-        if (!repo) continue;
-        const branches = await repo.getBranches();
-        this.post({ type: 'COMMIT_BRANCHES_UPDATE', repoId: meta.id, branches });
+        return repo ? [{ meta, repo }] : [];
+      });
+      const results = await Promise.allSettled(
+        repos.map(async ({ meta, repo }) => ({ repoId: meta.id, branches: await repo.getBranches() })),
+      );
+      if (generation !== this.branchSyncGeneration) return;
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          this.post({ type: 'COMMIT_BRANCHES_UPDATE', ...result.value });
+        }
       }
     };
 
-    this.manager.onBranchChange(postAllBranches);
+    this.managerListeners.push(this.manager.onBranchChange(() => {
+      void postAllBranches().catch(error => {
+        console.error('[VersionDock] Failed to refresh commit-panel branches:', error);
+      });
+    }));
 
-    this.manager.onReposChange(async () => {
+    const syncRepos = async () => {
+      const generation = ++this.repoSyncGeneration;
       const status = await this.manager.getAllStatusesFresh();
+      if (generation !== this.repoSyncGeneration) return;
       this.postChangelistsUpdate(status);
       this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
       await postAllBranches();
-    });
+    };
+    this.managerListeners.push(this.manager.onReposChange(() => {
+      void syncRepos().catch(error => {
+        console.error('[VersionDock] Failed to synchronize commit-panel repositories:', error);
+      });
+    }));
 
-    this.manager.onWorktreeChange(async () => {
-      const repos = await this.manager.getAllWorktrees();
-      this.post({ type: 'WORKTREE_LIST_RESULT', repos });
-    });
+    this.managerListeners.push(
+      this.manager.onWorktreeChange(() => {
+        void (async () => {
+          const repos = await this.manager.getAllWorktrees();
+          this.post({ type: 'WORKTREE_LIST_RESULT', repos });
+        })().catch(error => {
+          console.error('[VersionDock] Failed to refresh worktrees:', error);
+        });
+      }),
+    );
   }
 
   /**
@@ -211,7 +267,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.disposeViewListeners();
     this.view = webviewView;
+    this.sidebarReady = false;
+    this.sidebarViewGeneration += 1;
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -229,51 +288,79 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
       'VersionDock Commit'
     );
 
-    webviewView.webview.onDidReceiveMessage((msg: CommitToHostMsg) =>
-      this.handleMessage(msg, webviewView.webview)
+    this.viewListeners.push(
+      webviewView.webview.onDidReceiveMessage((msg: CommitToHostMsg) => {
+        void this.replyTarget.run('sidebar', () => this.handleMessage(msg)).catch(error => {
+          console.error('[VersionDock] Sidebar commit-panel message failed:', error);
+        });
+      })
     );
 
     // Refresh status whenever the panel becomes visible (e.g. user switches to it)
-    webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) {
-        this.manager.getAllStatuses().then(status => {
-          this.postChangelistsUpdate(status);
-          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-        });
-      }
-    });
+    this.viewListeners.push(
+      webviewView.onDidChangeVisibility(() => {
+        if (webviewView.visible) {
+          void this.manager.getAllStatuses().then(status => {
+            this.postChangelistsUpdate(status);
+            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          }).catch(error => {
+            console.error('[VersionDock] Failed to refresh visible commit panel:', error);
+          });
+        }
+      })
+    );
 
     // Sync current state — send changelists first so setStatus can read the correct viewMode
-    this.manager.getAllStatuses().then(status => {
+    void this.manager.getAllStatuses().then(status => {
       this.postChangelistsUpdate(status);
       this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status, fileViewMode: this.getFileViewMode() });
       this.post({ type: 'COMMIT_HIDDEN_REPOS_UPDATE', hiddenRepoIds: this.getHiddenRepoIds() });
-      loadIconTheme(webviewView.webview).then(iconTheme => {
+      void loadIconTheme(webviewView.webview).then(iconTheme => {
         this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status, iconTheme, fileViewMode: this.getFileViewMode() });
       }).catch(() => { /* icon theme optional */ });
+    }).catch(error => {
+      console.error('[VersionDock] Failed to initialize commit panel:', error);
     });
 
     // Re-send icon theme when the user changes icon or color theme
     const configWatcher = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('workbench.iconTheme') || e.affectsConfiguration('workbench.colorTheme')) {
         if (this.view) {
-          loadIconTheme(this.view.webview).then(iconTheme => {
-            this.manager.getAllStatuses().then(status => {
+          void loadIconTheme(this.view.webview).then(async iconTheme => {
+            const status = await this.manager.getAllStatuses();
+            if (this.view) {
               this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status, iconTheme });
-            });
+            }
           }).catch(() => { /* icon theme optional */ });
         }
       }
       if (e.affectsConfiguration('versiondock.changesViewMode') || e.affectsConfiguration('versiondock.defaultCommitAction')) {
         this.changelistService?.setChangelistMode(this.getChangesViewMode() === 'changelists');
-        this.manager.getAllStatuses().then(status => {
+        void this.manager.getAllStatuses().then(status => {
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+        }).catch(error => {
+          console.error('[VersionDock] Failed to apply commit-panel configuration:', error);
         });
       }
     });
 
-    webviewView.onDidDispose(() => configWatcher.dispose());
+    this.viewListeners.push(
+      configWatcher,
+      webviewView.onDidDispose(() => {
+        if (this.view !== webviewView) return;
+        this.view = undefined;
+        this.sidebarReady = false;
+        this.sidebarViewGeneration += 1;
+        this.disposeViewListeners();
+      })
+    );
+  }
+
+  private disposeViewListeners(): void {
+    const listeners = this.viewListeners;
+    this.viewListeners = [];
+    listeners.forEach(disposable => disposable.dispose());
   }
 
   private post(msg: HostToCommitMsg): void {
@@ -285,21 +372,47 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
       if (m.defaultCommitAction === undefined) m.defaultCommitAction = this.getDefaultCommitAction();
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
     }
-    if (this.activeReplyTarget === 'undocked') {
+    const broadcast = msg.type === 'COMMIT_STATUS_UPDATE'
+      || msg.type === 'COMMIT_BRANCHES_UPDATE'
+      || msg.type === 'COMMIT_HIDDEN_REPOS_UPDATE'
+      || msg.type === 'CHANGELISTS_UPDATE'
+      || msg.type === 'SHELVE_LIST_RESULT'
+      || msg.type === 'STASH_LIST_RESULT'
+      || msg.type === 'PUSH_UNPUSHED_RESULT'
+      || msg.type === 'WORKTREE_LIST_RESULT'
+      || msg.type === 'SUBTREE_LIST_RESULT'
+      || msg.type === 'SUBTREE_STATUS_RESULT';
+    if (this.replyTarget.getStore() === 'undocked') {
       this.undockedPanel?.postToCommit(msg);
+      if (broadcast) this.view?.webview.postMessage(msg);
       return;
     }
     this.view?.webview.postMessage(msg);
-    if (
-      msg.type === 'COMMIT_STATUS_UPDATE'
-      || msg.type === 'COMMIT_HIDDEN_REPOS_UPDATE'
-      || msg.type === 'CHANGELISTS_UPDATE'
-      || msg.type === 'WORKTREE_LIST_RESULT'
-      || msg.type === 'SUBTREE_LIST_RESULT'
-      || msg.type === 'SUBTREE_STATUS_RESULT'
-    ) {
+    if (broadcast) {
       this.undockedPanel?.postToCommit(msg);
     }
+  }
+
+  private postSidebarWhenReady(msg: HostToCommitMsg): void {
+    if (!this.view || !this.sidebarReady) {
+      this.pendingSidebarMessages.push(msg);
+      return;
+    }
+    this.replyTarget.run('sidebar', () => this.post(msg));
+  }
+
+  private removePendingSidebarMessage(msg: HostToCommitMsg): void {
+    const pendingIndex = this.pendingSidebarMessages.indexOf(msg);
+    if (pendingIndex >= 0) this.pendingSidebarMessages.splice(pendingIndex, 1);
+  }
+
+  private flushPendingSidebarMessages(): void {
+    if (!this.view || !this.sidebarReady || this.pendingSidebarMessages.length === 0) return;
+    const pending = this.pendingSidebarMessages;
+    this.pendingSidebarMessages = [];
+    this.replyTarget.run('sidebar', () => {
+      for (const message of pending) this.post(message);
+    });
   }
 
   private async openWorktreeDiffEditor(
@@ -307,8 +420,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
     baseRef: string,
     filePath: string,
   ): Promise<void> {
-    const fs = require('fs') as typeof import('fs');
-    const path = require('path') as typeof import('path');
     const resolvedPath = repo.resolveRepoPath(filePath);
     const relativePath = resolvedPath.relativePath;
     const absolutePath = resolvedPath.absolutePath;
@@ -506,7 +617,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  async startWorktreeDiff(repoId: string, baseRef: string): Promise<void> {
+  async startWorktreeDiff(
+    repoId: string,
+    baseRef: string,
+    target: 'sidebar' | 'undocked' = 'sidebar',
+  ): Promise<void> {
     const repo = this.manager.getRepo(repoId);
     const meta = this.manager.getRepoMetas().find(item => item.id === repoId);
     if (!repo || !meta) return;
@@ -516,25 +631,51 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
       repo.getCurrentBranch(),
     ]);
     const currentRef = current.detachedTag ?? current.detachedHash ?? current.name;
-    await vscode.commands.executeCommand(`${CommitPanelProvider.viewType}.focus`);
-    if (!this.view) {
-      await new Promise(resolve => setTimeout(resolve, 50));
+    const effectiveTarget = target === 'undocked' && this.undockedPanel?.hasCommitPane()
+      ? 'undocked'
+      : 'sidebar';
+    if (effectiveTarget === 'sidebar') {
+      const startMessage: HostToCommitMsg = {
+        type: 'COMMIT_WORKTREE_DIFF_STARTED',
+        repoId,
+        repoName: meta.name,
+        repoColor: meta.color,
+        baseRef,
+        currentRef,
+        files,
+      };
+      const switchMessage: HostToCommitMsg = { type: 'COMMIT_SWITCH_TAB', tab: 'worktree' };
+      this.postSidebarWhenReady(startMessage);
+      this.postSidebarWhenReady(switchMessage);
+      try {
+        await this.focus();
+      } catch (error) {
+        this.removePendingSidebarMessage(startMessage);
+        this.removePendingSidebarMessage(switchMessage);
+        throw error;
+      }
+      return;
     }
-    this.post({
-      type: 'COMMIT_WORKTREE_DIFF_STARTED',
-      repoId,
-      repoName: meta.name,
-      repoColor: meta.color,
-      baseRef,
-      currentRef,
-      files,
+    this.replyTarget.run(effectiveTarget, () => {
+      this.post({
+        type: 'COMMIT_WORKTREE_DIFF_STARTED',
+        repoId,
+        repoName: meta.name,
+        repoColor: meta.color,
+        baseRef,
+        currentRef,
+        files,
+      });
+      this.switchToTab('worktree');
     });
-
-    this.switchToTab('worktree');
   }
 
   switchToTab(tab: 'changes' | 'shelf' | 'stash' | 'worktree' | 'push'): void {
-    this.post({ type: 'COMMIT_SWITCH_TAB', tab });
+    if (this.replyTarget.getStore() === 'undocked' && this.undockedPanel?.hasCommitPane()) {
+      this.post({ type: 'COMMIT_SWITCH_TAB', tab });
+      return;
+    }
+    this.postSidebarWhenReady({ type: 'COMMIT_SWITCH_TAB', tab });
   }
 
   /** Reads fresh status after a stage/unstage op. simple-git reads directly from the git index so it's always accurate once the op completes. */
@@ -628,7 +769,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
     const selectedTargets = (targets ?? [])
       .map(target => ({
         repoId: target.repoId,
-        paths: Array.from(new Set(target.paths.map(filePath => filePath.trim()).filter(Boolean))),
+        paths: Array.from(new Set(target.paths.filter(filePath => filePath.length > 0))),
         source: 'selected' as const,
       }))
       .filter(target => target.paths.length > 0 && statusByRepo.has(target.repoId));
@@ -1086,7 +1227,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
     let commandPromise: Promise<unknown> | undefined;
     try {
       throwIfCancellationRequested(cancellationToken);
-      commandPromise = vscode.commands.executeCommand(AI_COMMIT_MESSAGE_COMMAND_ID, commandArg);
+      commandPromise = Promise.resolve(vscode.commands.executeCommand(AI_COMMIT_MESSAGE_COMMAND_ID, commandArg));
       const message = await this.waitForGeneratedCommitMessage(
         proxyInputBox,
         undefined,
@@ -2009,10 +2150,16 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
     return picked ? entries.find(entry => entry.id === picked.entryId) : undefined;
   }
 
-  private async handleMessage(msg: CommitToHostMsg, webview?: vscode.Webview): Promise<void> {
+  private async handleMessage(msg: CommitToHostMsg): Promise<void> {
     switch (msg.type) {
       case 'COMMIT_REQUEST_STATUS': {
+        const isSidebarRequest = this.replyTarget.getStore() !== 'undocked';
+        const sidebarGeneration = this.sidebarViewGeneration;
         await this.postCommitStatusUpdate({ includeIconTheme: true, refreshSubtrees: msg.refreshSubtrees });
+        if (isSidebarRequest && sidebarGeneration === this.sidebarViewGeneration && this.view) {
+          this.sidebarReady = true;
+          this.flushPendingSidebarMessages();
+        }
         break;
       }
 
@@ -2277,7 +2424,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
               if (!repo) { errors.push(`${r.repoId}: not found`); continue; }
               try {
                 if (repo.kind === 'svn') {
-                  const selectedPaths = Array.from(new Set(r.filesToStage.map(p => p.trim()).filter(Boolean)));
+                  // SVN permits leading/trailing whitespace in node names.
+                  // Preserve repository paths byte-for-byte instead of treating
+                  // them like user-entered labels.
+                  const selectedPaths = Array.from(new Set(r.filesToStage.filter(p => p.length > 0)));
                   const svnRepo = repo as typeof repo & { commitPaths?: (message: string, paths: string[]) => Promise<string> };
                   if (svnRepo.commitPaths) {
                     await svnRepo.commitPaths(r.message, selectedPaths);
@@ -2314,7 +2464,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
       case 'COMMIT_PULL_ALL': {
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling all repositories'), cancellable: false },
-          async (progress) => {
+          async () => {
             const results = await this.manager.pullAll();
             const failed = results.filter(r => !r.ok);
             if (failed.length > 0) {
@@ -2430,7 +2580,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
-        const fs = require('fs') as typeof import('fs');
         const resolvedPath = repo.resolveRepoPath(msg.filePath);
         const absUri = vscode.Uri.file(resolvedPath.absolutePath);
         if (fs.existsSync(absUri.fsPath) && fs.statSync(absUri.fsPath).isDirectory()) {
@@ -2510,6 +2659,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
         );
         if (confirm !== t('Delete')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' }); return; }
         try {
+          assertNoSymlinkAncestors(repo.rootPath, resolvedPath.absolutePath);
           await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { useTrash: true });
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
@@ -2534,6 +2684,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
         );
         if (confirm !== t('Delete')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' }); return; }
         try {
+          assertNoSymlinkAncestors(repo.rootPath, resolvedPath.absolutePath, { includeTarget: true });
           await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { recursive: true, useTrash: true });
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
           const status = await this.manager.getAllStatusesFresh();
@@ -2547,8 +2698,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
       case 'COMMIT_ADD_TO_GITIGNORE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
-        const path = require('path') as typeof import('path');
-        const fs = require('fs') as typeof import('fs');
         const ignoredPath = repo.resolveRepoPath(msg.entryPath);
 
         // Find all .gitignore files in the repo
@@ -2908,8 +3057,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
         const repo = this.manager.getRepo(msg.repoId);
         if (!svc || !repo) return;
         try {
-          const fs = require('fs') as typeof import('fs');
-
           const resolvedPath = repo.resolveRepoPath(msg.filePath);
           const diffChunk = svc.getFileDiff(msg.shelveId, resolvedPath.relativePath);
           const absFilePath = resolvedPath.absolutePath;
@@ -2952,7 +3099,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
         try {
-          const fs = require('fs') as typeof import('fs');
           const resolvedPath = repo.resolveRepoPath(msg.filePath);
           const fileName = resolvedPath.relativePath.split('/').pop() ?? resolvedPath.relativePath;
           const absPath = resolvedPath.absolutePath;
@@ -3410,9 +3556,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
           if (!repo) continue;
           if (repo.kind === 'svn') continue;
           try {
-            const git = require('simple-git').default(repo.rootPath);
             const safePaths = paths.map(filePath => repo.resolveRepoPath(filePath).relativePath);
-            await git.stash(['push', '--message', stashName.trim(), '--', ...safePaths]);
+            await repo.stashPush(stashName.trim(), safePaths);
           } catch (e: unknown) {
             vscode.window.showErrorMessage(t('Stash failed for repo {0}: {1}', repoId, String(e)));
           }
@@ -3514,7 +3659,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
             branch = branchName;
           }
         }
-        this.logProvider?.focusRepo(logRepoId, branch);
+        this.logProvider?.focusRepo(logRepoId, branch, this.replyTarget.getStore() ?? 'sidebar');
         break;
       }
 
@@ -3609,7 +3754,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
               await parentRepoU.updateSubmodule(msg.submodulePath, true, msg.recursive);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: true });
               // Check if the submodule is now in detached HEAD (almost always true after update)
-              const subRepoPath = require('path').join(parentRepoU.rootPath, msg.submodulePath);
+              const subRepoPath = path.join(parentRepoU.rootPath, msg.submodulePath);
               const subMeta = this.manager.getRepoMetas().find(candidate =>
                 candidate.kind !== 'svn' && candidate.rootPath === subRepoPath
               );
@@ -3637,8 +3782,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
       case 'WORKTREE_CREATE_PROMPT': {
         const repoCP = this.manager.getRepo(msg.repoId);
         if (!repoCP) return;
-
-        const nodePath = require('path') as typeof import('path');
 
         // Step 1: pick branch or "new branch"
         const branches = await repoCP.getBranches();
@@ -3673,9 +3816,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
         }
 
         // Step 2: worktree path — format: <repo-folder-name>--<branch-name>
-        const repoParent = nodePath.dirname(repoCP.rootPath);
-        const repoFolderName = nodePath.basename(repoCP.rootPath);
-        const defaultPath = nodePath.join(repoParent, `${repoFolderName}--${baseBranchName.replace(/\//g, '-')}`);
+        const repoParent = path.dirname(repoCP.rootPath);
+        const repoFolderName = path.basename(repoCP.rootPath);
+        const defaultPath = path.join(repoParent, `${repoFolderName}--${baseBranchName.replace(/\//g, '-')}`);
         const worktreePath = await vscode.window.showInputBox({
           prompt: t('Path for the new worktree directory'),
           value: defaultPath,
@@ -3956,13 +4099,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
   }
 
   handleSubmoduleCommand(msg: import('../types/messages').CommitToHostMsg): void {
-    void this.handleMessage(msg, this.view?.webview);
+    void this.handleMessage(msg);
   }
 
   async handleSubtreeCommand(op: 'add' | 'pull' | 'push' | 'split' | 'merge' | 'remove' | 'manage'): Promise<void> {
     if (op === 'manage') {
-      await this.focus();
-      this.post({ type: 'COMMIT_SET_ACTIVE_TAB', tab: 'subtree' });
+      const message: HostToCommitMsg = { type: 'COMMIT_SET_ACTIVE_TAB', tab: 'subtree' };
+      this.postSidebarWhenReady(message);
+      try {
+        await this.focus();
+      } catch (error) {
+        this.removePendingSidebarMessage(message);
+        throw error;
+      }
       this.postSubtreeList({ notifyStatusUpdates: true });
       return;
     }
@@ -3991,5 +4140,20 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider {
 
   async refresh(options: { refreshSubtrees?: boolean } = {}): Promise<void> {
     await this.postCommitStatusUpdate(options);
+  }
+
+  dispose(): void {
+    this.disposeViewListeners();
+    this.managerListeners.forEach(disposable => disposable.dispose());
+    this.managerListeners.length = 0;
+    for (const source of this.activeCommitMessageGenerations.values()) {
+      source.cancel();
+      source.dispose();
+    }
+    this.activeCommitMessageGenerations.clear();
+    this.view = undefined;
+    this.sidebarReady = false;
+    this.sidebarViewGeneration += 1;
+    this.pendingSidebarMessages = [];
   }
 }

@@ -21,7 +21,6 @@ interface Props {
   onApply: (repoId: string, stashRef: string) => void;
   onPop: (repoId: string, stashRef: string) => void;
   onDrop: (repoId: string, stashRef: string) => void;
-  onRequestList: (repoId: string) => void;
   onOpenFileDiff: (repoId: string, stashRef: string, filePath: string) => void;
   expandAll?: boolean;
 }
@@ -317,7 +316,7 @@ export function StashTab({
   repoId, repoName, repoColor, multiRepo,
   worktreeBranch, mainRepoName,
   stashes, loading, error, viewMode,
-  onApply, onPop, onDrop, onRequestList, onOpenFileDiff,
+  onApply, onPop, onDrop, onOpenFileDiff,
   expandAll = false,
 }: Props) {
   return (

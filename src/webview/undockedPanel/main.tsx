@@ -6,11 +6,13 @@ import { CommitApp } from '../commitPanel/main';
 import { GitLogApp } from '../gitLog/main';
 import { ResizeHandle } from '../shared/ResizeHandle';
 import { useResize } from '../shared/useResize';
+import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
+import { t } from '../shared/i18n';
 
 declare const window: Window & { __INITIAL_CONFIG__?: { showCommit?: boolean } };
 
 function UndockedApp() {
-  const { panelRef: commitRef, onMouseDown: onCommitResize } = useResize('right', 420, 280, 720);
+  const { panelRef: commitRef, onMouseDown: onCommitResize, onKeyDown: onCommitResizeKeyDown } = useResize('right', 420, 280, 720);
   const showCommit = window.__INITIAL_CONFIG__?.showCommit !== false;
 
   return (
@@ -18,13 +20,17 @@ function UndockedApp() {
       {showCommit && (
         <>
           <div ref={commitRef} style={styles.commitPane}>
-            <CommitApp />
+            <WebviewErrorBoundary title={t('Commit panel render failed')}>
+              <CommitApp />
+            </WebviewErrorBoundary>
           </div>
-          <ResizeHandle onMouseDown={onCommitResize} />
+          <ResizeHandle onMouseDown={onCommitResize} onKeyDown={onCommitResizeKeyDown} />
         </>
       )}
       <div style={styles.logPane}>
-        <GitLogApp />
+        <WebviewErrorBoundary title={t('Git Log render failed')}>
+          <GitLogApp />
+        </WebviewErrorBoundary>
       </div>
     </div>
   );

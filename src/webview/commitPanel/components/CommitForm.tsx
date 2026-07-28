@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { t } from '../../shared/i18n';
 
 interface Props {
-  repoId: string;
   repoName: string;
   repoColor: string;
   message: string;
@@ -19,7 +18,7 @@ interface Props {
 }
 
 export function CommitForm({
-  repoId, repoName, repoColor, message, amend, stagedCount, branchName, aheadBehind,
+  repoName, repoColor, message, amend, stagedCount, branchName, aheadBehind,
   onMessageChange, onAmendChange, onCommit, onCommitAndPush, onPull, loading,
 }: Props) {
   const canCommit = (message.trim().length > 0 || amend) && (stagedCount > 0 || amend);

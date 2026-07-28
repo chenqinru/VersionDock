@@ -11,6 +11,7 @@ interface Props {
   repoColors: Record<string, string>;
   repos: RepoMeta[];
   currentBranchByRepo: Record<string, string>;
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>>;
   baseCommits: LaidOutCommit[];
   targetCommits: LaidOutCommit[];
   selectedHashes: string[];
@@ -21,11 +22,16 @@ interface Props {
   onClose: () => void;
 }
 
+function formatRefLabel(ref: string): string {
+  return ref.replace(/^refs\/(?:heads|remotes|tags)\//, '');
+}
+
 export function CompareView({
   compareState,
   repoColors,
   repos,
   currentBranchByRepo,
+  remoteNamesByRepo,
   baseCommits,
   targetCommits,
   selectedHashes,
@@ -38,6 +44,8 @@ export function CompareView({
   const [topPaneHeight, setTopPaneHeight] = useState<number | null>(null);
   const stackRef = useRef<HTMLDivElement>(null);
   const repoColor = repoColors[compareState.repoId] ?? repos.find(repo => repo.id === compareState.repoId)?.color ?? '#888';
+  const baseLabel = formatRefLabel(compareState.baseRef);
+  const targetLabel = formatRefLabel(compareState.targetRef);
 
   useLayoutEffect(() => {
     const stack = stackRef.current;
@@ -95,7 +103,7 @@ export function CompareView({
           <span style={styles.headerRepoDot(repoColor)} />
           <span style={styles.headerRepoName}>{compareState.repoName}</span>
         </span>
-        <span style={styles.headerTitle}>{t('{0} vs {1}', compareState.baseRef, compareState.targetRef)}</span>
+        <span style={styles.headerTitle}>{t('{0} vs {1}', baseLabel, targetLabel)}</span>
         <button style={styles.closeButton} onClick={onClose} title={t('Close Compare')}>
           <Codicon name="close" style={{ fontSize: '14px' }} />
         </button>
@@ -105,13 +113,14 @@ export function CompareView({
         <div style={styles.topPaneSlot(topPaneHeight)}>
           <ComparePane
             pane={compareState.targetOnly}
-            title={t('Exists in {0} but not in {1}', compareState.targetRef, compareState.baseRef)}
-            emptyText={t('{0} contains all commits from {1}', compareState.baseRef, compareState.targetRef)}
+            title={t('Exists in {0} but not in {1}', targetLabel, baseLabel)}
+            emptyText={t('{0} contains all commits from {1}', baseLabel, targetLabel)}
             commits={targetCommits}
             selectedHashes={selectedHashes}
             primarySelectedHash={primarySelectedHash}
             repos={repos}
             currentBranchByRepo={currentBranchByRepo}
+            remoteNamesByRepo={remoteNamesByRepo}
             onSelect={(commit, mode) => onSelectCommit('targetOnly', commit, mode)}
             onLoadMore={() => onLoadMore('targetOnly')}
             onFilterChange={(partial) => onFilterChange('targetOnly', partial)}
@@ -126,13 +135,14 @@ export function CompareView({
         <div style={styles.bottomPaneSlot}>
           <ComparePane
             pane={compareState.baseOnly}
-            title={t('Exists in {0} but not in {1}', compareState.baseRef, compareState.targetRef)}
-            emptyText={t('{0} contains all commits from {1}', compareState.targetRef, compareState.baseRef)}
+            title={t('Exists in {0} but not in {1}', baseLabel, targetLabel)}
+            emptyText={t('{0} contains all commits from {1}', targetLabel, baseLabel)}
             commits={baseCommits}
             selectedHashes={selectedHashes}
             primarySelectedHash={primarySelectedHash}
             repos={repos}
             currentBranchByRepo={currentBranchByRepo}
+            remoteNamesByRepo={remoteNamesByRepo}
             onSelect={(commit, mode) => onSelectCommit('baseOnly', commit, mode)}
             onLoadMore={() => onLoadMore('baseOnly')}
             onFilterChange={(partial) => onFilterChange('baseOnly', partial)}
@@ -152,6 +162,7 @@ function ComparePane({
   primarySelectedHash,
   repos,
   currentBranchByRepo,
+  remoteNamesByRepo,
   onSelect,
   onLoadMore,
   onFilterChange,
@@ -164,6 +175,7 @@ function ComparePane({
   primarySelectedHash: string | null;
   repos: RepoMeta[];
   currentBranchByRepo: Record<string, string>;
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>>;
   onSelect: (commit: LaidOutCommit, mode: CommitSelectionMode) => void;
   onLoadMore: () => void;
   onFilterChange: (partial: Partial<ComparePaneState>) => void;
@@ -232,6 +244,7 @@ function ComparePane({
             repos={repos}
             currentBranchByRepo={currentBranchByRepo}
             headHashByRepo={{}}
+            remoteNamesByRepo={remoteNamesByRepo}
             onSelect={onSelect}
             onLoadMore={onLoadMore}
             hasMore={pane.hasMore}

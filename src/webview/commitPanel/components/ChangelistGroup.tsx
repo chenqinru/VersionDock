@@ -7,11 +7,13 @@ import { FileTree } from './FileTree';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
+import { scopedKey } from '../../shared/scopedKey';
 import { branchColor, tagColor } from '../../shared/branchColors';
 
 export interface RepoFileGroup {
   repoId: string;
   repoName: string;
+  repoRootPath?: string;
   repoColor: string;
   repoStatus?: RepoStatus;
   files: FileStatus[];
@@ -24,7 +26,6 @@ export interface RepoFileGroup {
 interface Props {
   changelist: ChangelistData;
   repoGroups: RepoFileGroup[];
-  isFixed: boolean;
   multiRepo: boolean;
   singleRepo?: boolean;
   selectedFile: { repoId: string; path: string } | null;
@@ -50,13 +51,13 @@ interface Props {
 }
 
 export function ChangelistGroup({
-  changelist, repoGroups, isFixed, multiRepo, singleRepo,
+  changelist, repoGroups, multiRepo, singleRepo,
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
   onOpenFile, onRollback, onResolveMerge, onHeaderContextMenu, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, ctxFile,
 }: Props) {
-  const collapseKey = `cl:${changelist.id}`;
+  const collapseKey = scopedKey('changelist', changelist.id);
   const collapsed = isCollapsed(collapseKey);
   const allFiles = repoGroups.flatMap(g => g.files);
   const totalFiles = allFiles.length;
@@ -122,6 +123,7 @@ export function ChangelistGroup({
                 defaultCollapsed={group.files.length === 0}
                 repoId={group.repoId}
                 repoName={group.repoName}
+                repoRootPath={group.repoRootPath}
                 repoColor={group.repoColor}
                 repoStatus={group.repoStatus}
                 files={group.files}
@@ -165,6 +167,7 @@ export function ChangelistGroup({
 interface RepoSubGroupProps {
   repoId: string;
   repoName: string;
+  repoRootPath?: string;
   repoColor: string;
   repoStatus?: RepoStatus;
   files: FileStatus[];
@@ -199,13 +202,13 @@ interface RepoSubGroupProps {
 }
 
 function RepoSubGroup({
-  repoId, repoName, repoColor, repoStatus, files, multiRepo, singleRepo, isSubmodule, submodulePath, isWorktree, mainWorktreePath,
+  repoId, repoName, repoRootPath, repoColor, repoStatus, files, multiRepo, singleRepo, isSubmodule, submodulePath, isWorktree, mainWorktreePath,
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
   onOpenFile, onRollback, onResolveMerge, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, changelistId, ctxFile, isFirst = false, defaultCollapsed = false,
 }: RepoSubGroupProps) {
-  const collapseKey = `cl-repo:${changelistId ?? ''}:${repoId}`;
+  const collapseKey = scopedKey('changelist-repo', changelistId ?? '', repoId);
   // When defaultCollapsed, the key's presence means "user explicitly opened it"
   const collapsed = defaultCollapsed ? !isCollapsed(collapseKey) : isCollapsed(collapseKey);
   const totalFiles = files.length;
@@ -295,6 +298,8 @@ function RepoSubGroup({
       {files.length > 0 && (!multiRepo || singleRepo || !collapsed) && (
         <FileTree
           repoId={repoId}
+          repoName={repoName}
+          repoRootPath={repoRootPath}
           files={files}
           iconTheme={iconTheme}
           selectedFile={selectedFile}

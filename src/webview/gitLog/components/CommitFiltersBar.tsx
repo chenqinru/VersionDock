@@ -4,6 +4,7 @@ import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { formatAuthorIdentity } from './AuthorAvatar';
+import { branchRevisionRef, tagRevisionRef } from '../utils/refs';
 
 export interface AuthorOption {
   name: string;
@@ -12,13 +13,19 @@ export interface AuthorOption {
   count: number;
 }
 
+interface RevisionOption {
+  value: string;
+  label: string;
+  kind: 'branch' | 'tag';
+}
+
 interface Props {
   filters: CommitFilters;
   branches: BranchInfo[];
   tags: TagInfo[];
   repos: RepoMeta[];
   authorOptions: AuthorOption[];
-  onFilterChange: (key: keyof CommitFilters, value: string) => void;
+  onFilterChange: (key: Exclude<keyof CommitFilters, 'repoIds'>, value: string) => void;
   onRepoChange: (repoId: string | null) => void;
   onClear: () => void;
   onFetchAll: () => void;
@@ -40,8 +47,25 @@ const FILTER_INPUT_STYLE = `
 
 export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions, onFilterChange, onRepoChange, onClear, onFetchAll, repoNamesExpanded, onToggleRepoNames, onUndock, hideUndock, disableBranchFilter = false }: Props) {
   const localBranches = branches.filter(b => !b.isRemote);
-  const uniqueBranchNames = Array.from(new Set(localBranches.map(b => b.name))).sort();
-  const uniqueTagNames = Array.from(new Set(tags.map(t => t.name))).sort();
+  const repoKindById: Record<string, 'git' | 'svn'> = Object.fromEntries(
+    repos.map(repo => [repo.id, repo.kind ?? 'git']),
+  );
+  const branchOptions = Array.from(new Map(localBranches.map(branch => {
+    const option: RevisionOption = {
+      value: branchRevisionRef(branch, repoKindById[branch.repoId] ?? 'git'),
+      label: branch.name,
+      kind: 'branch',
+    };
+    return [option.value, option];
+  })).values()).sort((left, right) => left.label.localeCompare(right.label));
+  const tagOptions = Array.from(new Map(tags.map(tag => {
+    const option: RevisionOption = {
+      value: tagRevisionRef(tag.name, repoKindById[tag.repoId] ?? 'git'),
+      label: tag.name,
+      kind: 'tag',
+    };
+    return [option.value, option];
+  })).values()).sort((left, right) => left.label.localeCompare(right.label));
   const historyFileName = filters.path.split('/').pop() || filters.path;
   const historyLabel = filters.lineRange
     ? t('{0}:lines {1}-{2}', historyFileName, filters.lineRange.start, filters.lineRange.end)
@@ -79,8 +103,8 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
 
       <BranchTagPicker
         value={filters.branch}
-        branches={uniqueBranchNames}
-        tags={uniqueTagNames}
+        branches={branchOptions}
+        tags={tagOptions}
         onChange={v => onFilterChange('branch', v)}
         style={styles.filterGrow(0.75, 150)}
         disabled={disableBranchFilter}
@@ -343,8 +367,8 @@ function DebouncedInput({ value, placeholder, icon, onChange, width, style, debo
 
 function BranchTagPicker({ value, branches, tags, onChange, width, style, disabled = false }: {
   value: string;
-  branches: string[];
-  tags: string[];
+  branches: RevisionOption[];
+  tags: RevisionOption[];
   onChange: (v: string) => void;
   width?: number;
   style?: React.CSSProperties;
@@ -355,11 +379,12 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const q = query.toLowerCase();
-  const displayedBranches = q ? branches.filter(option => option.toLowerCase().includes(q)) : branches;
-  const displayedTags = q ? tags.filter(option => option.toLowerCase().includes(q)) : tags;
+  const displayedBranches = q ? branches.filter(option => option.label.toLowerCase().includes(q)) : branches;
+  const displayedTags = q ? tags.filter(option => option.label.toLowerCase().includes(q)) : tags;
   const isEmpty = displayedBranches.length === 0 && displayedTags.length === 0;
 
-  const isTag = value ? tags.includes(value) : false;
+  const active = [...branches, ...tags].find(option => option.value === value);
+  const isTag = active?.kind === 'tag';
   const buttonIcon = isTag ? 'tag' : 'git-branch';
 
   useEffect(() => { if (!open) setQuery(''); }, [open]);
@@ -377,12 +402,12 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
       <button
         style={{ ...styles.pickerBtn(!!value), width: width ?? '100%', ...(disabled ? styles.disabledPicker : {}) }}
         onClick={() => { if (!disabled) setOpen(current => !current); }}
-        title={disabled ? t('Branch filter is unavailable in compare mode') : (value || t('Filter by branch or tag'))}
+        title={disabled ? t('Branch filter is unavailable in compare mode') : (active?.label || value || t('Filter by branch or tag'))}
         disabled={disabled}
       >
         <Codicon name={buttonIcon} style={styles.fieldIcon} />
         <span style={value ? styles.pickerLabelActive : styles.pickerLabelPlaceholder}>
-          {value || t('Branch / Tag…')}
+          {active?.label || value || t('Branch / Tag…')}
         </span>
         <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', opacity: 0.5, flexShrink: 0 }} />
       </button>
@@ -411,29 +436,29 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
             {displayedBranches.length > 0 && (
               <div style={styles.dropdownGroupLabel}>{t('Branches')}</div>
             )}
-            {displayedBranches.map(name => (
+            {displayedBranches.map(option => (
               <div
-                key={`b:${name}`}
-                style={styles.dropdownItem(value === name)}
-                onClick={() => { onChange(name); setOpen(false); }}
+                key={`b:${option.value}`}
+                style={styles.dropdownItem(value === option.value)}
+                onClick={() => { onChange(option.value); setOpen(false); }}
               >
                 <Codicon name="git-branch" style={{ fontSize: '12px', opacity: 0.55, flexShrink: 0 }} />
-                <span style={styles.dropdownItemLabel}>{name}</span>
-                {value === name && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+                <span style={styles.dropdownItemLabel}>{option.label}</span>
+                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
               </div>
             ))}
             {displayedTags.length > 0 && (
               <div style={styles.dropdownGroupLabel}>{t('Tags')}</div>
             )}
-            {displayedTags.map(name => (
+            {displayedTags.map(option => (
               <div
-                key={`t:${name}`}
-                style={styles.dropdownItem(value === name)}
-                onClick={() => { onChange(name); setOpen(false); }}
+                key={`t:${option.value}`}
+                style={styles.dropdownItem(value === option.value)}
+                onClick={() => { onChange(option.value); setOpen(false); }}
               >
                 <Codicon name="tag" style={{ fontSize: '12px', opacity: 0.55, flexShrink: 0 }} />
-                <span style={styles.dropdownItemLabel}>{name}</span>
-                {value === name && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+                <span style={styles.dropdownItemLabel}>{option.label}</span>
+                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
               </div>
             ))}
             {isEmpty && (

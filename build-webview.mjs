@@ -43,9 +43,6 @@ function makeOptions(app) {
       '.woff2': 'dataurl',
       '.png': 'dataurl',
     },
-    // Monaco editor is large — use CDN loading via @monaco-editor/react default behaviour
-    // External monaco-editor so it loads from CDN (configured in main.tsx files)
-    // NOTE: In Phase 4, replace with bundled Monaco for offline support
   };
 }
 

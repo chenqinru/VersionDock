@@ -1,7 +1,8 @@
 import type { CommitNode, GraphLine } from '../../shared/types';
-import { anonymousLaneColor } from './refs';
-import { headColor, primaryBranchColor, currentPalette, branchPaletteIndex } from '../../shared/branchColors';
+import { anonymousLaneColor, groupRefs, type RefGroup } from './refs';
+import { headColor, primaryBranchColor, tagColor, currentPalette, branchPaletteIndex } from '../../shared/branchColors';
 import { isPrimaryBranch } from '../../shared/branchUtils';
+import { scopedKey } from '../../shared/scopedKey';
 
 export const LANE_WIDTH = 20;
 export const ROW_HEIGHT = 28;
@@ -14,48 +15,48 @@ export interface LaidOutCommit extends CommitNode {
   dotColor: string;
 }
 
-// Extract the branch name that "owns" a commit from its refs array.
+// Extract the ref that "owns" a commit from its refs array.
 // Priority: HEAD → local branch → remote branch → tag.
 // Returns null for commits with no refs (middle-of-branch commits).
-function primaryRefName(refs: string[]): string | null {
-  for (const r of refs) {
-    if (r.startsWith('HEAD -> ')) return r.slice('HEAD -> '.length);
-  }
-  for (const r of refs) {
-    if (!r.startsWith('HEAD') && !r.startsWith('tag: ') && !r.includes('/')) return r;
-  }
-  for (const r of refs) {
-    if (!r.startsWith('HEAD') && !r.startsWith('tag: ') && r.includes('/')) return r;
-  }
-  for (const r of refs) {
-    if (r.startsWith('tag: ')) return r.slice('tag: '.length);
-  }
-  return null;
+function primaryRef(refs: string[], vcsKind: 'git' | 'svn', remoteNames: readonly string[]): RefGroup | null {
+  const groups = groupRefs(refs, vcsKind, remoteNames);
+  const primary = groups.find(group => group.isHead && group.isLocal)
+    ?? groups.find(group => group.isLocal && !group.isTag)
+    ?? groups.find(group => group.isRemote && !group.isRemoteHead)
+    ?? groups.find(group => group.isTag)
+    ?? groups.find(group => group.isHead);
+  return primary ?? null;
 }
 
 // Returns true if this commit has a ref that is a primary branch (main/master/…).
-function hasPrimaryBranchRef(refs: string[]): boolean {
-  for (const r of refs) {
-    let name = r;
-    if (name.startsWith('HEAD -> ')) name = name.slice('HEAD -> '.length);
-    else if (name === 'HEAD' || name.startsWith('tag: ')) continue;
-    else if (name.includes('/')) name = name.slice(name.indexOf('/') + 1);
-    if (isPrimaryBranch(name)) return true;
-  }
-  return false;
+function hasPrimaryBranchRef(refs: string[], vcsKind: 'git' | 'svn', remoteNames: readonly string[]): boolean {
+  return groupRefs(refs, vcsKind, remoteNames).some(group =>
+    !group.isTag
+    && !group.isRemoteHead
+    && (group.isLocal || group.isRemote)
+    && isPrimaryBranch(group.label));
 }
 
-// Walk the first-parent chain from a starting commit, returning every hash.
+function commitKey(commit: Pick<CommitNode, 'repoId' | 'hash'>): string {
+  return scopedKey(commit.repoId, commit.hash);
+}
+
+function parentKey(commit: Pick<CommitNode, 'repoId'>, parentHash: string): string {
+  return scopedKey(commit.repoId, parentHash);
+}
+
+// Walk the first-parent chain from a starting commit, returning scoped keys.
 function firstParentChain(startIdx: number, commits: CommitNode[], hashIndex: Map<string, number>): Set<string> {
   const chain = new Set<string>();
   let idx = startIdx;
   while (idx >= 0 && idx < commits.length) {
-    const hash = commits[idx].hash;
-    if (chain.has(hash)) break; // cycle guard
-    chain.add(hash);
-    const p0 = commits[idx].parents[0];
+    const commit = commits[idx];
+    const key = commitKey(commit);
+    if (chain.has(key)) break; // cycle guard
+    chain.add(key);
+    const p0 = commit.parents[0];
     if (!p0) break;
-    idx = hashIndex.get(p0) ?? -1;
+    idx = hashIndex.get(parentKey(commit, p0)) ?? -1;
   }
   return chain;
 }
@@ -67,17 +68,19 @@ interface FirstParentIndex {
 }
 
 function buildFirstParentIndex(commits: CommitNode[]): FirstParentIndex {
-  const visibleHashes = new Set(commits.map(c => c.hash));
+  const visibleHashes = new Set(commits.map(commitKey));
   const childrenByParent = new Map<string, string[]>();
   const hasVisibleFirstParent = new Set<string>();
 
   for (const commit of commits) {
     const firstParent = commit.parents[0];
-    if (!firstParent || !visibleHashes.has(firstParent)) continue;
-    const children = childrenByParent.get(firstParent) ?? [];
-    children.push(commit.hash);
-    childrenByParent.set(firstParent, children);
-    hasVisibleFirstParent.add(commit.hash);
+    const childKey = commitKey(commit);
+    const firstParentKey = firstParent ? parentKey(commit, firstParent) : '';
+    if (!firstParent || !visibleHashes.has(firstParentKey)) continue;
+    const children = childrenByParent.get(firstParentKey) ?? [];
+    children.push(childKey);
+    childrenByParent.set(firstParentKey, children);
+    hasVisibleFirstParent.add(childKey);
   }
 
   const rootOf = new Map<string, string>();
@@ -131,10 +134,12 @@ function buildFirstParentIndex(commits: CommitNode[]): FirstParentIndex {
   }
 
   for (const commit of commits) {
-    if (!hasVisibleFirstParent.has(commit.hash)) visit(commit.hash);
+    const key = commitKey(commit);
+    if (!hasVisibleFirstParent.has(key)) visit(key);
   }
   for (const commit of commits) {
-    if ((state.get(commit.hash) ?? 0) === 0) visit(commit.hash);
+    const key = commitKey(commit);
+    if ((state.get(key) ?? 0) === 0) visit(key);
   }
 
   return { rootOf, tin, tout };
@@ -194,27 +199,36 @@ function pickPaletteIndex(preferred: number, usedIndices: Set<number>): number {
   return bestIdx;
 }
 
-export function assignLanes(commits: CommitNode[], _isFiltered = false): LaidOutCommit[] {
+export function assignLanes(
+  commits: CommitNode[],
+  _isFiltered = false,
+  repoKindById: Readonly<Record<string, 'git' | 'svn'>> = {},
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>> = {},
+): LaidOutCommit[] {
   // The log is rendered from a finite window: pagination, graphMaxCommits, or
   // filters can leave parent commits outside the current list. Keeping those
   // invisible parents reserved in laneOf makes occupied lanes impossible to
   // close, so the graph keeps allocating lanes to the right.
-  const visibleHashes = new Set(commits.map(c => c.hash));
+  const visibleHashes = new Set(commits.map(commitKey));
   commits = commits.map(c => ({
     ...c,
-    parents: c.parents.filter(p => visibleHashes.has(p)),
+    parents: c.parents.filter(parent => visibleHashes.has(parentKey(c, parent))),
   }));
 
-  // Build a hash→index lookup for chain walking.
+  // Build a repository-scoped hash→index lookup for chain walking.
   const hashIndex = new Map<string, number>();
-  for (let i = 0; i < commits.length; i++) hashIndex.set(commits[i].hash, i);
+  for (let i = 0; i < commits.length; i++) hashIndex.set(commitKey(commits[i]), i);
   const firstParentIndex = buildFirstParentIndex(commits);
 
   // Identify the set of hashes that belong to the primary branch's first-parent
   // chain. These commits will be forced onto lane 0 when they are first seen,
   // overriding nextFreeLane() which would otherwise give lane 0 to whoever
   // happens to appear first in the list (e.g. a feature branch at HEAD).
-  const primaryStartIdx = commits.findIndex(c => hasPrimaryBranchRef(c.refs));
+  const primaryStartIdx = commits.findIndex(c => hasPrimaryBranchRef(
+    c.refs,
+    repoKindById[c.repoId] ?? 'git',
+    remoteNamesByRepo[c.repoId] ?? [],
+  ));
   const primaryChain: Set<string> = primaryStartIdx >= 0
     ? firstParentChain(primaryStartIdx, commits, hashIndex)
     : new Set();
@@ -245,13 +259,13 @@ export function assignLanes(commits: CommitNode[], _isFiltered = false): LaidOut
   // distant from all currently occupied lanes' indices.
   // For named branches: preferred index comes from the branch name hash.
   // For anonymous lanes: preferred index is based on lane number.
-  function assignLaneColor(lane: number, refName: string | null, isHeadCommit: boolean): void {
+  function assignLaneColor(lane: number, ref: RefGroup | null, isHeadCommit: boolean): void {
     const palette = currentPalette();
 
     // Fixed colors for primary and HEAD — not from palette.
-    if (refName !== null) {
-      const norm = refName.replace(/^[^/]+\//, '');
-      if (isPrimaryBranch(norm)) {
+    if (ref !== null) {
+      const isBranch = (ref.isLocal || ref.isRemote) && !ref.isTag && !ref.isRemoteHead;
+      if (isBranch && isPrimaryBranch(ref.label)) {
         laneColorOf.set(lane, primaryBranchColor());
         // Use a virtual index outside palette range so it doesn't affect spacing.
         lanePaletteIdx.set(lane, -1);
@@ -262,10 +276,15 @@ export function assignLanes(commits: CommitNode[], _isFiltered = false): LaidOut
         lanePaletteIdx.set(lane, -2);
         return;
       }
+      if (ref.isTag) {
+        laneColorOf.set(lane, tagColor());
+        lanePaletteIdx.set(lane, -3);
+        return;
+      }
     }
 
-    const preferred = refName !== null
-      ? branchPaletteIndex(refName)
+    const preferred = ref !== null
+      ? branchPaletteIndex(ref.label)
       : lane % palette.length;
 
     // Exclude this lane's own current index so it can shift if needed.
@@ -370,25 +389,27 @@ export function assignLanes(commits: CommitNode[], _isFiltered = false): LaidOut
     let lane: number;
     let isStart: boolean;
 
-    if (laneOf.has(commit.hash)) {
+    const currentCommitKey = commitKey(commit);
+    if (laneOf.has(currentCommitKey)) {
       // This commit was already claimed by one of its children.
-      lane = laneOf.get(commit.hash)!;
+      lane = laneOf.get(currentCommitKey)!;
       isStart = false;
-      consumeLaneTarget(lane, commit.hash);
+      consumeLaneTarget(lane, currentCommitKey);
     } else {
       // New thread: pick lane 0 if this commit is on the primary chain and
       // lane 0 is free, otherwise pick the next available lane.
-      const wantPrimary = primaryChain.has(commit.hash);
+      const wantPrimary = primaryChain.has(currentCommitKey);
       lane = nextFreeLane(wantPrimary);
       isStart = true;
       occupied.add(lane);
     }
 
     // ── Assign / update branch name and color for this lane ──────────────────
-    const refName = primaryRefName(commit.refs);
+    const vcsKind = repoKindById[commit.repoId] ?? 'git';
+    const ref = primaryRef(commit.refs, vcsKind, remoteNamesByRepo[commit.repoId] ?? []);
     const isHeadCommit = commit.refs.some(r => r.startsWith('HEAD -> ') || r === 'HEAD');
-    if (isStart || refName !== null) {
-      assignLaneColor(lane, refName, isHeadCommit);
+    if (isStart || ref !== null) {
+      assignLaneColor(lane, ref, isHeadCommit);
     }
     const currentLaneColor = laneColorOf.get(lane) ?? anonymousLaneColor(lane);
 
@@ -400,32 +421,33 @@ export function assignLanes(commits: CommitNode[], _isFiltered = false): LaidOut
 
     for (let i = 0; i < commit.parents.length; i++) {
       const parentHash = commit.parents[i];
+      const targetParentKey = parentKey(commit, parentHash);
 
       if (i === 0) {
-        if (laneOf.has(parentHash)) {
+        if (laneOf.has(targetParentKey)) {
           // Parent already claimed by another child (diamond merge).
           // Our lane thread ends here.
-          parentLanes.push(laneOf.get(parentHash)!);
+          parentLanes.push(laneOf.get(targetParentKey)!);
           clearLane(lane);
         } else {
-          reserveLane(lane, parentHash);
+          reserveLane(lane, targetParentKey);
           parentLanes.push(lane);
         }
       } else {
         // Secondary (merge) parent.
-        if (laneOf.has(parentHash)) {
-          parentLanes.push(laneOf.get(parentHash)!);
+        if (laneOf.has(targetParentKey)) {
+          parentLanes.push(laneOf.get(targetParentKey)!);
         } else {
-          const reachableLane = findReachableLane(parentHash);
+          const reachableLane = findReachableLane(targetParentKey);
           if (reachableLane !== null) {
             parentLanes.push(reachableLane);
           } else {
             // Open a new lane for this merge parent. Prefer lane 0 if the parent
             // is on the primary chain and lane 0 is free.
-            const wantPrimary = primaryChain.has(parentHash);
+            const wantPrimary = primaryChain.has(targetParentKey);
             const newLane = nextFreeLane(wantPrimary);
             occupied.add(newLane);
-            reserveLane(newLane, parentHash);
+            reserveLane(newLane, targetParentKey);
             parentLanes.push(newLane);
             assignLaneColor(newLane, null, false);
           }

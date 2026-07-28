@@ -4,6 +4,8 @@ import { loadIconTheme, type IconThemeData } from '../utils/IconThemeService';
 import { getWebviewI18nPayload, t, type WebviewI18nPayload } from '../utils/l10n';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { toGitUri } from '../utils/resourceUri';
+import { assertNoSymlinkAncestors } from '../utils/repoPath';
+import { scopedKey } from '../utils/scopedKey';
 
 type CommitDetailFile = {
   repoId?: string;
@@ -211,6 +213,7 @@ export async function openCommitDetailPanel(
         );
         if (confirmed !== t('Revert')) return;
         if (msg.fileStatus === 'A') {
+          assertNoSymlinkAncestors(repo.rootPath, resolvedPath.absolutePath);
           await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { useTrash: false });
         } else {
           await repo.revertFileToParent(hash, resolvedPath.relativePath);
@@ -294,7 +297,7 @@ export async function openAggregatedCommitDetailPanel(
 
   const aggregatedMap = new Map<string, CommitDetailFile>();
   for (const file of [...fileEntries].reverse()) {
-    const key = `${file.repoId}:${file.path}`;
+    const key = scopedKey(file.repoId ?? '', file.path);
     const existing = aggregatedMap.get(key);
     const range = file.repoId ? rangeByRepo.get(file.repoId) : undefined;
     if (!existing) {

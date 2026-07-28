@@ -76,7 +76,10 @@ export class ProfileStatusBar implements vscode.Disposable {
       return;
     }
 
-    void this.refreshAsync(services[0].rootPath, version);
+    void this.refreshAsync(services[0].rootPath, version).catch(error => {
+      console.error('[VersionDock] Failed to refresh Git profile status:', error);
+      if (version === this.refreshVersion) this.renderNoProfile();
+    });
   }
 
   private async refreshAsync(repoPath: string, version = this.refreshVersion): Promise<void> {
@@ -208,7 +211,7 @@ export class ProfileStatusBar implements vscode.Disposable {
     const profiles = this.profileService.getProfiles();
     const activeId = this.profileService.getActiveProfileId();
 
-    type MenuItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type MenuItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const items: MenuItem[] = [];
 
     // ── Named profiles ────────────────────────────────────────────────────────
@@ -278,7 +281,7 @@ export class ProfileStatusBar implements vscode.Disposable {
       service.inspectRepositoryInfo(),
     ]);
 
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const account = status.username ?? (status.hasCachedCredentials ? t('Authenticated') : t('No account detected'));
     const source = this.getSvnAuthenticationSourceLabel(status.source);
     const items: ActionItem[] = [];
@@ -417,7 +420,7 @@ export class ProfileStatusBar implements vscode.Disposable {
     const activeId = this.profileService.getActiveProfileId();
     const isActive = activeId === id;
 
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const items: ActionItem[] = [
       { label: `$(arrow-left) ${t('Back')}`, action: () => this.showMenu() },
       sep() as unknown as ActionItem,
@@ -451,11 +454,11 @@ export class ProfileStatusBar implements vscode.Disposable {
 
   // ── Named profile action menu ─────────────────────────────────────────────────
 
-  private async showProfileActionMenu(profile: GitProfile, repoPath?: string): Promise<void> {
+  private async showProfileActionMenu(profile: GitProfile): Promise<void> {
     const activeId = this.profileService.getActiveProfileId();
     const isActive = profile.id === activeId;
 
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const items: ActionItem[] = [
       { label: `$(arrow-left) ${t('Back')}`, action: () => this.showMenu() },
       sep() as unknown as ActionItem,
@@ -626,8 +629,8 @@ export class ProfileStatusBar implements vscode.Disposable {
   }
 }
 
-function sep(label = ''): vscode.QuickPickItem {
-  return { label, kind: vscode.QuickPickItemKind.Separator } as vscode.QuickPickItem;
+function sep(label = ''): vscode.QuickPickItem & { action: () => void } {
+  return { label, kind: vscode.QuickPickItemKind.Separator, action: () => undefined };
 }
 
 function generateId(): string {

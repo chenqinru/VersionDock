@@ -4,6 +4,8 @@ import { getVsCodeApi } from '../shared/vscodeApi';
 import { Codicon } from '../shared/Codicon';
 import { FileIcon } from '../shared/FileIcon';
 import { t } from '../shared/i18n';
+import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
+import { scopedKey } from '../shared/scopedKey';
 import type { ConflictsToHostMsg, ConflictListFile, HostToConflictsMsg, IconThemeData } from '../../host/types/messages';
 
 function generateId() {
@@ -15,7 +17,7 @@ interface TreeDir { kind: 'dir'; name: string; path: string; children: TreeNode[
 interface TreeFile { kind: 'file'; file: ConflictListFile }
 
 function fileKey(file: Pick<ConflictListFile, 'repoId' | 'path'>): string {
-  return `${file.repoId}:${file.path}`;
+  return scopedKey(file.repoId, file.path);
 }
 
 const TREE_BASE_PAD = 6;
@@ -25,7 +27,9 @@ const TREE_FILE_SPACER = 14;
 function buildTree(files: ConflictListFile[]): TreeNode[] {
   const root: TreeDir = { kind: 'dir', name: '', path: '', children: [], count: 0 };
   for (const file of files) {
-    const repoPath = `repo:${file.repoId}`;
+    // Encode the repository id before composing directory keys. Without this,
+    // a nested repo root could collide with a parent repo directory path.
+    const repoPath = `repo:${encodeURIComponent(file.repoId)}`;
     let repoNode = root.children.find((item): item is TreeDir => item.kind === 'dir' && item.path === repoPath);
     if (!repoNode) {
       repoNode = { kind: 'dir', name: file.repoName, path: repoPath, children: [], count: 0, isRepoRoot: true, repoColor: file.repoColor };
@@ -149,7 +153,11 @@ function App() {
     return flattenTree(tree, collapsed);
   }, [collapsed, files, groupByDir, tree]);
 
-  const selectedFiles = files.filter(file => selectedKeys.includes(fileKey(file)));
+  const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const selectedFiles = useMemo(
+    () => files.filter(file => selectedKeySet.has(fileKey(file))),
+    [files, selectedKeySet],
+  );
   const hasSelection = selectedFiles.length > 0;
 
   const selectFile = useCallback((file: ConflictListFile, event: React.MouseEvent) => {
@@ -221,7 +229,7 @@ function App() {
                       node={node}
                       depth={0}
                       collapsed={collapsed}
-                      selectedKeys={selectedKeys}
+                      selectedKeys={selectedKeySet}
                       iconTheme={iconTheme}
                       onToggle={path => setCollapsed(prev => ({ ...prev, [path]: !prev[path] }))}
                       onSelect={selectFile}
@@ -229,7 +237,7 @@ function App() {
                     />
                   ))
                 : visibleFiles.map(file => (
-                    <FileRow key={fileKey(file)} file={file} depth={0} selected={selectedKeys.includes(fileKey(file))} iconTheme={iconTheme} onSelect={selectFile} onOpen={openMergeEditor} />
+                    <FileRow key={fileKey(file)} file={file} depth={0} selected={selectedKeySet.has(fileKey(file))} iconTheme={iconTheme} onSelect={selectFile} onOpen={openMergeEditor} />
                   ))}
             </div>
           </div>
@@ -248,14 +256,14 @@ function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, on
   node: TreeNode;
   depth: number;
   collapsed: Record<string, boolean>;
-  selectedKeys: string[];
+  selectedKeys: ReadonlySet<string>;
   iconTheme: IconThemeData | null;
   onToggle: (path: string) => void;
   onSelect: (file: ConflictListFile, event: React.MouseEvent) => void;
   onOpen: (file: ConflictListFile) => void;
 }) {
   if (node.kind === 'file') {
-    return <FileRow file={node.file} depth={depth} selected={selectedKeys.includes(fileKey(node.file))} iconTheme={iconTheme} onSelect={onSelect} onOpen={onOpen} />;
+    return <FileRow file={node.file} depth={depth} selected={selectedKeys.has(fileKey(node.file))} iconTheme={iconTheme} onSelect={onSelect} onOpen={onOpen} />;
   }
   const open = !collapsed[node.path];
   const rowStyle = node.isRepoRoot ? styles.repoRootRow : styles.dirRow;
@@ -349,4 +357,8 @@ const styles = {
   actionButton: (primary?: boolean, disabled?: boolean): React.CSSProperties => ({ padding: '5px 10px', border: '1px solid var(--vscode-button-border, transparent)', borderRadius: 3, background: primary ? 'var(--vscode-button-background)' : 'var(--vscode-button-secondaryBackground)', color: primary ? 'var(--vscode-button-foreground)' : 'var(--vscode-button-secondaryForeground)', opacity: disabled ? 0.45 : 1, cursor: disabled ? 'default' : 'pointer', fontSize: 12 }),
 };
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <WebviewErrorBoundary title={t('Conflicts view render failed')}>
+    <App />
+  </WebviewErrorBoundary>,
+);

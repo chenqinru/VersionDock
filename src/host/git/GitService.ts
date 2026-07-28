@@ -1,5 +1,6 @@
 import simpleGit, { SimpleGit } from 'simple-git';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import type {
   BranchInfo,
@@ -14,12 +15,12 @@ import type {
   SubmoduleEntry,
 } from '../types/git';
 import type { StashEntry, UnpushedCommit, SubtreePushStatus } from '../types/messages';
-import { parseDiff, buildMonacoContents, detectLanguage } from './DiffParser';
+import { parseDiff, detectLanguage } from './DiffParser';
 import { getVscodeRepository } from './VscodeGitApi';
 import { ForcePushMode, Status, RefType } from './git.d';
 import { t } from '../utils/l10n';
 import { BlameService, type BlameLine } from './BlameService';
-import { isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
+import { assertNoSymlinkAncestors, isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
 
 const STATUS_MAP: Record<string, GitFileStatus> = {
   M: 'modified', A: 'added', D: 'deleted',
@@ -28,6 +29,8 @@ const STATUS_MAP: Record<string, GitFileStatus> = {
 };
 
 const SUBTREE_CANDIDATE_SKIP_DIRS = new Set(['.git', '.hg', '.svn', 'node_modules', 'vendor', 'dist', 'build', 'out']);
+const MAX_INLINE_DIFF_FILE_BYTES = 8 * 1024 * 1024;
+const LOG_RECORD_FORMAT = '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%ai%x00%ci%x00%x00%s';
 
 export interface CommitMessageHistoryEntry {
   message: string;
@@ -57,7 +60,7 @@ function mapConflictSideStatuses(code: string): { currentStatus: ConflictSideSta
   }
 }
 
-function parseLogOutput(raw: string, repoId: string): CommitNode[] {
+function parseLogOutput(raw: string, repoId: string, refsByHash: ReadonlyMap<string, string[]> = new Map()): CommitNode[] {
   const commits: CommitNode[] = [];
   for (const line of raw.trim().split('\n')) {
     if (!line.trim()) continue;
@@ -74,7 +77,7 @@ function parseLogOutput(raw: string, repoId: string): CommitNode[] {
       authorDate,
       committerDate,
       parents: parentsRaw ? parentsRaw.split(' ').filter(Boolean) : [],
-      refs: refsRaw ? refsRaw.split(',').map(r => r.trim()).filter(Boolean) : [],
+      refs: refsByHash.get(hash) ?? (refsRaw ? refsRaw.split('\x1f').map(r => r.trim()).filter(Boolean) : []),
     });
   }
   return commits;
@@ -86,46 +89,48 @@ function mapDiffStatus(code: string): GitFileStatus {
   return STATUS_MAP[code.charAt(0)] ?? 'modified';
 }
 
-function parseNameStatusOutput(output: string): Array<{ path: string; oldPath?: string; status: GitFileStatus }> {
-  const files: Array<{ path: string; oldPath?: string; status: GitFileStatus }> = [];
-  for (const line of output.trim().split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    if (parts.length < 2) continue;
-    const code = parts[0];
+function parseNameStatusZOutput(output: string): Array<{ path: string; oldPath?: string; status: GitFileStatus; code: string }> {
+  const files: Array<{ path: string; oldPath?: string; status: GitFileStatus; code: string }> = [];
+  const fields = output.split('\0');
+  for (let index = 0; index < fields.length;) {
+    const code = fields[index++];
+    if (!code) continue;
     if (code.startsWith('R') || code.startsWith('C')) {
-      if (parts.length < 3) continue;
-      files.push({
-        oldPath: parts[1],
-        path: parts[2],
-        status: mapDiffStatus(code),
-      });
+      const oldPath = fields[index++];
+      const filePath = fields[index++];
+      if (oldPath && filePath) files.push({ oldPath, path: filePath, status: mapDiffStatus(code), code });
       continue;
     }
-    files.push({
-      path: parts[1],
-      status: mapDiffStatus(code),
-    });
+    const filePath = fields[index++];
+    if (filePath) files.push({ path: filePath, status: mapDiffStatus(code), code });
   }
   return files;
 }
 
-function parseNumStatOutput(output: string): Map<string, { added?: number; removed?: number }> {
+function parseNumStatZOutput(output: string): Map<string, { added?: number; removed?: number }> {
   const stats = new Map<string, { added?: number; removed?: number }>();
-  for (const line of output.trim().split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    if (parts.length < 3) continue;
-    const [addedRaw, removedRaw] = parts;
-    if (addedRaw === undefined || removedRaw === undefined) continue;
+  const fields = output.split('\0');
+  for (let index = 0; index < fields.length;) {
+    const record = fields[index++];
+    if (!record) continue;
+    const firstTab = record.indexOf('\t');
+    const secondTab = firstTab >= 0 ? record.indexOf('\t', firstTab + 1) : -1;
+    if (firstTab < 0 || secondTab < 0) continue;
+    const addedRaw = record.slice(0, firstTab);
+    const removedRaw = record.slice(firstTab + 1, secondTab);
+    let filePath = record.slice(secondTab + 1);
+    if (!filePath) {
+      // Rename/copy records put old and new paths in the next two NUL fields.
+      index += 1; // old path
+      filePath = fields[index++] ?? '';
+    }
+    if (!filePath) continue;
     const added = addedRaw === '-' ? 0 : Number(addedRaw);
     const removed = removedRaw === '-' ? 0 : Number(removedRaw);
-    const filePath = parts.at(-1);
-    if (!filePath) continue;
-    const prev = stats.get(filePath) ?? {};
+    const previous = stats.get(filePath) ?? {};
     stats.set(filePath, {
-      added: (prev.added ?? 0) + (Number.isFinite(added) ? added : 0) || undefined,
-      removed: (prev.removed ?? 0) + (Number.isFinite(removed) ? removed : 0) || undefined,
+      added: ((previous.added ?? 0) + (Number.isFinite(added) ? added : 0)) || undefined,
+      removed: ((previous.removed ?? 0) + (Number.isFinite(removed) ? removed : 0)) || undefined,
     });
   }
   return stats;
@@ -184,6 +189,36 @@ function parseAheadBehindTrack(track: string): { ahead: number; behind: number }
   };
 }
 
+function parseSubmoduleStatusLine(line: string): { flag: string; path: string } | undefined {
+  const match = line.match(/^([ +\-U])([0-9a-f]{40,64})\s+(.+)$/i);
+  if (!match) return undefined;
+  let submodulePath = match[3];
+  // The optional describe suffix is separated from the path by " (". Preserve
+  // spaces inside the path itself (the previous \S+ parser truncated them).
+  const descriptionIndex = submodulePath.lastIndexOf(' (');
+  if (descriptionIndex >= 0 && submodulePath.endsWith(')')) {
+    submodulePath = submodulePath.slice(0, descriptionIndex);
+  }
+  return submodulePath ? { flag: match[1], path: submodulePath } : undefined;
+}
+
+function isSameFsPath(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    const resolved = path.resolve(value).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
+}
+
+function gitErrorDetail(error: unknown): string {
+  const value = error as { stderr?: unknown; gitErrorCode?: unknown; message?: unknown } | undefined;
+  const stderr = typeof value?.stderr === 'string' ? value.stderr.trim() : '';
+  if (stderr) return stderr;
+  if (typeof value?.gitErrorCode === 'string' && value.gitErrorCode) return value.gitErrorCode;
+  if (typeof value?.message === 'string' && value.message) return value.message;
+  return 'Unknown error';
+}
+
 export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
   private git: SimpleGit;
@@ -196,11 +231,13 @@ export class GitService {
   }
 
   async getBlame(filePath: string): Promise<BlameLine[]> {
-    return this.blameService.getBlame(filePath, this.rootPath);
+    const resolved = resolvePathWithinRepo(this.rootPath, filePath, { allowAbsolute: true });
+    return this.blameService.getBlame(resolved.absolutePath, this.rootPath);
   }
 
   invalidateBlame(filePath: string): void {
-    this.blameService.invalidate(filePath);
+    const resolved = resolvePathWithinRepo(this.rootPath, filePath, { allowAbsolute: true });
+    this.blameService.invalidate(resolved.absolutePath);
   }
 
   setPendingDetachedTag(tagName: string | undefined): void {
@@ -223,16 +260,57 @@ export class GitService {
     return resolvePathWithinRepo(this.rootPath, filePath, { allowAbsolute: true }).relativePath;
   }
 
-  private async showStageFile(stage: 1 | 2 | 3, filePath: string): Promise<string> {
-    const relPath = this.normalizeRepoPath(filePath);
-    return this.git.show([`:${stage}:${relPath}`]);
+  /**
+   * `--` stops option parsing but Git still interprets pathspec magic such as
+   * `:(glob)`. Prefix concrete repository paths with `:(literal)` so a valid
+   * filename can never broaden a stage, restore, stash, or diff operation.
+   */
+  private literalPathspec(filePath: string): string {
+    return `:(literal)${this.normalizeRepoPath(filePath)}`;
   }
 
-  private async showStageFileOrEmpty(stage: 1 | 2 | 3, filePath: string): Promise<string> {
+  private literalPathspecs(filePaths: string[]): string[] {
+    return filePaths.map(filePath => this.literalPathspec(filePath));
+  }
+
+  private safeRevisionArg(ref: string): string {
+    const value = ref.trim();
+    if (!value || value.startsWith('-') || value.includes('\0')) {
+      throw new Error(`Invalid Git reference: ${ref}`);
+    }
+    return value;
+  }
+
+  private readWorkingTreeFile(filePath: string): { content: string; isBinary: boolean } | undefined {
+    const resolved = resolvePathWithinRepo(this.rootPath, filePath, { allowAbsolute: true });
+    assertNoSymlinkAncestors(this.rootPath, resolved.absolutePath);
     try {
-      return await this.showStageFile(stage, filePath);
+      const stat = fs.lstatSync(resolved.absolutePath);
+      if (stat.isDirectory()) return undefined;
+      const buffer = stat.isSymbolicLink()
+        ? fs.readlinkSync(resolved.absolutePath, { encoding: 'buffer' })
+        : stat.size > MAX_INLINE_DIFF_FILE_BYTES
+          ? undefined
+          : fs.readFileSync(resolved.absolutePath);
+      if (!buffer) return { content: '', isBinary: true };
+      const content = buffer.toString('utf8');
+      const isBinary = buffer.includes(0) || !Buffer.from(content, 'utf8').equals(buffer);
+      return { content: isBinary ? '' : content, isBinary };
     } catch {
-      return '';
+      return undefined;
+    }
+  }
+
+  private async showStageFileBuffer(stage: 1 | 2 | 3, filePath: string): Promise<Buffer> {
+    const relPath = this.normalizeRepoPath(filePath);
+    return this.git.showBuffer(`:${stage}:${relPath}`);
+  }
+
+  private async showStageFileBufferOrEmpty(stage: 1 | 2 | 3, filePath: string): Promise<Buffer> {
+    try {
+      return await this.showStageFileBuffer(stage, filePath);
+    } catch {
+      return Buffer.alloc(0);
     }
   }
 
@@ -456,7 +534,7 @@ export class GitService {
       // or in both simultaneously. Query their real staged/unstaged state via
       // simple-git porcelain and handle them separately.
       const submoduleRelPaths = await this.getSubmoduleRelativePaths();
-      let submodulePorcelainFiles: FileStatus[] = [];
+      const submodulePorcelainFiles: FileStatus[] = [];
       if (submoduleRelPaths.size > 0) {
         const porcelain = await this.git.status();
         for (const file of porcelain.files) {
@@ -656,6 +734,7 @@ export class GitService {
       ]);
       const head = vsRepo.state.HEAD;
       const branches: BranchInfo[] = [];
+      const configuredRemoteNames = vsRepo.state.remotes.map(remote => remote.name).sort((a, b) => b.length - a.length);
 
       const headIsOnBranch = head?.type === RefType.Head;
       for (const ref of localRefs.filter(r => r.type === RefType.Head)) {
@@ -679,7 +758,10 @@ export class GitService {
 
       for (const ref of remoteRefs.filter(r => r.type === RefType.RemoteHead)) {
         const name = ref.name ?? '';
-        const remoteName = name.split('/')[0];
+        if (name.endsWith('/HEAD')) continue;
+        const remoteName = configuredRemoteNames.find(remote => name.startsWith(`${remote}/`))
+          ?? ref.remote
+          ?? name.split('/')[0];
         branches.push({
           repoId: this.repoId,
           name,
@@ -706,12 +788,16 @@ export class GitService {
     } catch { /* ignore, fall back to short hashes */ }
     const result = await this.git.branch(['-avv', '--sort=-committerdate']);
     const branches: BranchInfo[] = [];
+    const configuredRemoteNames = (await this.getRemotes().catch(() => [] as string[])).sort((a, b) => b.length - a.length);
     for (const [name, branch] of Object.entries(result.branches)) {
       // Skip the detached HEAD pseudo-entry (e.g. "(HEAD detached at a9b68a1)")
       if (branch.current && name.startsWith('(HEAD detached')) continue;
       const isRemote = name.startsWith('remotes/');
       const cleanName = isRemote ? name.replace(/^remotes\//, '') : name;
-      const remoteName = isRemote ? cleanName.split('/')[0] : undefined;
+      if (isRemote && cleanName.endsWith('/HEAD')) continue;
+      const remoteName = isRemote
+        ? configuredRemoteNames.find(remote => cleanName.startsWith(`${remote}/`)) ?? cleanName.split('/')[0]
+        : undefined;
       let aheadBehind: { ahead: number; behind: number } | undefined;
       const full = branch.label?.match(/\[.+?: ahead (\d+), behind (\d+)\]/);
       const aheadOnly = branch.label?.match(/\[.+?: ahead (\d+)\]/);
@@ -790,7 +876,7 @@ export class GitService {
       'log',
       '--topo-order',
       `--max-count=${limit}`, `--skip=${skip}`,
-      '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%ai%x00%ci%x00%D%x00%s', '--decorate=full',
+      LOG_RECORD_FORMAT,
       '--date=iso-strict',
     ];
     const lineRangeFilterPath = opts?.filterPath;
@@ -802,15 +888,18 @@ export class GitService {
     if (opts?.filterDateTo) args.push(`--before=${opts.filterDateTo}`);
     if (lineRange) {
       args.push('-L', `${lineRange.start},${lineRange.end}:${lineRangeFilterPath}`);
-      args.push(opts?.filterBranch || 'HEAD');
+      args.push(this.safeRevisionArg(opts?.filterBranch || 'HEAD'));
     } else if (opts?.filterBranch) {
-      args.push(opts.filterBranch);
+      args.push(this.safeRevisionArg(opts.filterBranch));
     } else {
       args.push('--exclude=refs/stash', '--all');
     }
-    if (opts?.filterPath && !lineRange) args.push('--', opts.filterPath);
-    const raw = await this.git.raw(args);
-    const commits = parseLogOutput(raw, this.repoId);
+    if (opts?.filterPath && !lineRange) args.push('--', this.literalPathspec(opts.filterPath));
+    const [raw, refsByHash] = await Promise.all([
+      this.git.raw(args),
+      this.getDecoratedRefsByCommit(),
+    ]);
+    const commits = parseLogOutput(raw, this.repoId, refsByHash);
 
     // Mark unpushed commits: hashes ahead of the remote tracking branch.
     // 'all' means there is no upstream — every commit on this branch is local.
@@ -856,14 +945,16 @@ export class GitService {
       filterPath?: string;
     },
   ): Promise<CommitNode[]> {
+    const baseRef = this.safeRevisionArg(opts.baseRef);
+    const targetRef = this.safeRevisionArg(opts.targetRef);
     const range = opts.side === 'baseOnly'
-      ? `${opts.targetRef}..${opts.baseRef}`
-      : `${opts.baseRef}..${opts.targetRef}`;
+      ? `${targetRef}..${baseRef}`
+      : `${baseRef}..${targetRef}`;
     const args: string[] = [
       'log',
       `--max-count=${limit}`,
       `--skip=${skip}`,
-      '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%ai%x00%ci%x00%D%x00%s',
+      LOG_RECORD_FORMAT,
       '--date=iso-strict',
     ];
     if (opts.filterText) args.push(`--grep=${opts.filterText}`, '--regexp-ignore-case');
@@ -871,8 +962,55 @@ export class GitService {
     if (opts.filterDateFrom) args.push(`--after=${opts.filterDateFrom}`);
     if (opts.filterDateTo) args.push(`--before=${opts.filterDateTo}`);
     args.push(range);
-    if (opts.filterPath) args.push('--', opts.filterPath);
-    return parseLogOutput(await this.git.raw(args), this.repoId);
+    if (opts.filterPath) args.push('--', this.literalPathspec(opts.filterPath));
+    const [raw, refsByHash] = await Promise.all([
+      this.git.raw(args),
+      this.getDecoratedRefsByCommit(),
+    ]);
+    return parseLogOutput(raw, this.repoId, refsByHash);
+  }
+
+  /**
+   * Build decorations without relying on `%(decorate:separator=...)`, which is
+   * only interpreted by newer Git versions. Older Git releases can exit 0 while
+   * emitting that atom literally, and `%D` cannot represent refs containing a
+   * comma without ambiguity. Full refs also keep branch/tag names distinct.
+   */
+  private async getDecoratedRefsByCommit(): Promise<Map<string, string[]>> {
+    const [rawRefs, headHash] = await Promise.all([
+      this.git.raw([
+        'for-each-ref',
+        '--format=%(objectname)%00%(*objectname)%00%(refname)%00%(HEAD)',
+        'refs/heads/',
+        'refs/remotes/',
+        'refs/tags/',
+      ]).catch(() => ''),
+      this.git.raw(['rev-parse', '--verify', 'HEAD']).then(value => value.trim()).catch(() => ''),
+    ]);
+
+    const refsByHash = new Map<string, string[]>();
+    let attachedHead = false;
+    const addRef = (hash: string, ref: string) => {
+      if (!hash || !ref) return;
+      const refs = refsByHash.get(hash) ?? [];
+      if (!refs.includes(ref)) refs.push(ref);
+      refsByHash.set(hash, refs);
+    };
+
+    for (const line of rawRefs.split('\n')) {
+      if (!line) continue;
+      const [objectHash, peeledHash, refName, headMarker] = line.split('\0');
+      const commitHash = peeledHash || objectHash;
+      if (!commitHash || !refName) continue;
+      addRef(commitHash, refName);
+      if (headMarker?.trim() === '*') {
+        attachedHead = true;
+        addRef(commitHash, `HEAD -> ${refName}`);
+      }
+    }
+
+    if (!attachedHead && headHash) addRef(headHash, 'HEAD');
+    return refsByHash;
   }
 
   private async getUnpushedHashes(): Promise<Set<string> | 'all'> {
@@ -964,35 +1102,26 @@ export class GitService {
     const isMerge = parents.length >= 2;
 
     const baseArgs = isMerge
-      ? ['diff', '--name-status', '-M', parents[0], hash]
-      : ['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--name-status', hash];
+      ? ['diff', '--name-status', '-z', '-M', parents[0], hash]
+      : ['diff-tree', '--root', '--no-commit-id', '-r', '-z', '-M', '--name-status', hash];
     const numArgs = isMerge
-      ? ['diff', '--numstat', '-M', parents[0], hash]
-      : ['diff-tree', '--root', '--no-commit-id', '-r', '-M', '--numstat', hash];
+      ? ['diff', '--numstat', '-z', '-M', parents[0], hash]
+      : ['diff-tree', '--root', '--no-commit-id', '-r', '-z', '-M', '--numstat', hash];
 
     const [nameStatus, numStat] = await Promise.all([
       this.rawPathSafe(baseArgs),
       this.rawPathSafe(numArgs),
     ]);
-    const stats = new Map<string, { added: number; removed: number }>();
-    for (const line of numStat.trim().split('\n')) {
-      if (!line.trim()) continue;
-      const parts = line.split('\t');
-      if (parts.length < 3) continue;
-      const added = parseInt(parts[0], 10);
-      const removed = parseInt(parts[1], 10);
-      const path = parts[parts.length - 1];
-      if (!isNaN(added) && !isNaN(removed)) stats.set(path, { added, removed });
-    }
+    const stats = parseNumStatZOutput(numStat);
     const files: Array<{ path: string; status: string; added?: number; removed?: number }> = [];
-    for (const line of nameStatus.trim().split('\n')) {
-      if (!line.trim()) continue;
-      const parts = line.split('\t');
-      if (parts.length < 2) continue;
-      const path = parts[parts.length - 1];
-      const status = parts[0].replace(/\d+$/, '');
-      const s = stats.get(path);
-      files.push({ status, path, added: s?.added, removed: s?.removed });
+    for (const file of parseNameStatusZOutput(nameStatus)) {
+      const stat = stats.get(file.path);
+      files.push({
+        status: file.code.replace(/\d+$/, ''),
+        path: file.path,
+        added: stat?.added,
+        removed: stat?.removed,
+      });
     }
     return files;
   }
@@ -1001,16 +1130,35 @@ export class GitService {
     try {
       const relPath = this.normalizeRepoPath(filePath);
       const vsRepo = this.vsRepo();
-      const rawDiff = await this.rawPathSafe(['show', hash, '--', relPath, '--format=']);
-      const diffs = parseDiff(`diff --git a/${relPath} b/${relPath}\n${rawDiff}`, repoId);
+      const commitLine = (await this.git.raw(['rev-list', '--parents', '-n', '1', hash])).trim().split(/\s+/);
+      const parent = commitLine[1];
+      let candidatePaths = [relPath];
+      if (parent) {
+        // A path-limited `git show` sees a rename as delete+add because its
+        // counterpart is outside the pathspec. Resolve rename metadata from the
+        // cheap full name-status list, then request both sides of the pair.
+        const nameStatus = await this.rawPathSafe(['diff', '--name-status', '-z', '-M', parent, hash]);
+        const file = parseNameStatusZOutput(nameStatus).find(entry => entry.path === relPath || entry.oldPath === relPath);
+        if (file) candidatePaths = Array.from(new Set([file.oldPath, file.path].filter((value): value is string => Boolean(value))));
+      }
+      // Options must precede `--`; putting --format= after the path separator
+      // makes Git treat it as another filename and leaves commit headers in the
+      // payload.
+      const rawDiff = parent
+        ? await this.rawPathSafe(['diff', '--find-renames', parent, hash, '--', ...this.literalPathspecs(candidatePaths)])
+        : await this.rawPathSafe(['show', '--format=', hash, '--', this.literalPathspec(relPath)]);
+      const diffs = parseDiff(rawDiff, repoId);
       if (diffs.length === 0) return null;
-      const diff = diffs[0];
+      const diff = diffs.find(entry => entry.newPath === relPath || entry.oldPath === relPath) ?? diffs[0];
+      if (diff.isBinary) return diff;
+      const originalPath = this.normalizeRepoPath(diff.oldPath || relPath);
+      const modifiedPath = this.normalizeRepoPath(diff.newPath || relPath);
       if (vsRepo) {
-        diff.originalContent = await vsRepo.show(`${hash}~1`, relPath).catch(() => '');
-        diff.modifiedContent = await vsRepo.show(hash, relPath).catch(() => '');
+        diff.originalContent = await vsRepo.show(`${hash}~1`, originalPath).catch(() => '');
+        diff.modifiedContent = await vsRepo.show(hash, modifiedPath).catch(() => '');
       } else {
-        diff.originalContent = await this.git.raw(['show', `${hash}~1:${relPath}`]).catch(() => '');
-        diff.modifiedContent = await this.git.raw(['show', `${hash}:${relPath}`]).catch(() => '');
+        diff.originalContent = await this.git.raw(['show', `${hash}~1:${originalPath}`]).catch(() => '');
+        diff.modifiedContent = await this.git.raw(['show', `${hash}:${modifiedPath}`]).catch(() => '');
       }
       return diff;
     } catch { return null; }
@@ -1021,24 +1169,27 @@ export class GitService {
       const relPath = this.normalizeRepoPath(filePath);
       const vsRepo = this.vsRepo();
       const rawDiff = vsRepo
-        ? await vsRepo.diff(true)  // cached diff
-        : await this.rawPathSafe(['diff', '--staged', '--', relPath]);
-      // When using vsRepo.diff we get all staged — filter to this file
-      const filtered = vsRepo
-        ? rawDiff.split('\ndiff --git ').filter(chunk => chunk.includes(`b/${relPath}`)).map((c, i) => i === 0 ? c : 'diff --git ' + c).join('')
-        : rawDiff;
-      const diffs = parseDiff(filtered || rawDiff, repoId);
+        ? await vsRepo.diffIndexWithHEAD(relPath)
+        : await this.rawPathSafe(['diff', '--staged', '--', this.literalPathspec(relPath)]);
+      const diffs = parseDiff(rawDiff, repoId);
       if (diffs.length === 0) return null;
       const diff = diffs[0];
+      if (diff.isBinary) return diff;
+      const workingFile = this.readWorkingTreeFile(relPath);
+      if (workingFile?.isBinary) {
+        diff.isBinary = true;
+        diff.hunks = [];
+        return diff;
+      }
       if (vsRepo) {
         diff.originalContent = await vsRepo.show('HEAD', relPath).catch(() => '');
         diff.modifiedContent = await vsRepo.show('', relPath).catch(() => {
-          try { return fs.readFileSync(path.join(this.rootPath, relPath), 'utf8'); } catch { return ''; }
+          return workingFile?.content ?? '';
         });
       } else {
         diff.originalContent = await this.git.show([`HEAD:${relPath}`]).catch(() => '');
         diff.modifiedContent = await this.git.raw(['show', `:${relPath}`]).catch(() => {
-          try { return fs.readFileSync(path.join(this.rootPath, relPath), 'utf8'); } catch { return ''; }
+          return workingFile?.content ?? '';
         });
       }
       return diff;
@@ -1049,50 +1200,49 @@ export class GitService {
     try {
       const relPath = this.normalizeRepoPath(filePath);
       const vsRepo = this.vsRepo();
-      const rawDiff = vsRepo
-        ? await vsRepo.diffWithHEAD(relPath)
-        : await this.rawPathSafe(['diff', '--', relPath]);
+      // Repository.diffWithHEAD(path) is `git diff HEAD`: it also includes
+      // staged changes. The working-tree section must remain strictly unstaged,
+      // matching `git diff -- <path>` and the simple-git fallback.
+      const rawDiff = await this.rawPathSafe(['diff', '--', this.literalPathspec(relPath)]);
       if (!rawDiff) {
-        const content = fs.readFileSync(path.join(this.rootPath, relPath), 'utf8');
-        return { repoId, oldPath: relPath, newPath: relPath, isBinary: false, isNew: true, isDeleted: false, hunks: [], originalContent: '', modifiedContent: content, language: detectLanguage(relPath) };
+        const workingFile = this.readWorkingTreeFile(relPath);
+        if (!workingFile) return null;
+        return { repoId, oldPath: relPath, newPath: relPath, isBinary: workingFile.isBinary, isNew: true, isDeleted: false, hunks: [], originalContent: '', modifiedContent: workingFile.content, language: detectLanguage(relPath) };
       }
       const diffs = parseDiff(rawDiff, repoId);
       if (diffs.length === 0) return null;
       const diff = diffs[0];
+      if (diff.isBinary) return diff;
+      const workingFile = this.readWorkingTreeFile(relPath);
+      if (workingFile?.isBinary) {
+        diff.isBinary = true;
+        diff.hunks = [];
+        diff.originalContent = '';
+        diff.modifiedContent = '';
+        return diff;
+      }
+      // `git diff` compares index → working tree, so the left side must be the
+      // index version (not HEAD when the same file is both staged and modified).
       diff.originalContent = vsRepo
-        ? await vsRepo.show('HEAD', relPath).catch(() => '')
-        : await this.git.show([`HEAD:${relPath}`]).catch(() => '');
-      diff.modifiedContent = fs.readFileSync(path.join(this.rootPath, relPath), 'utf8');
+        ? await vsRepo.show('', relPath).catch(() => this.git.raw(['show', `:${relPath}`]).catch(() => ''))
+        : await this.git.raw(['show', `:${relPath}`]).catch(() => '');
+      diff.modifiedContent = workingFile?.content ?? '';
       return diff;
     } catch { return null; }
   }
 
   async getWorktreeDiffFiles(baseRef: string): Promise<FileStatus[]> {
-    const [headOutput, worktreeOutput, headNumStat, worktreeNumStat, untrackedOutput] = await Promise.all([
-      this.rawPathSafe(['diff', '--name-status', '-M', baseRef, 'HEAD', '--']),
-      this.rawPathSafe(['diff', '--name-status', '-M', baseRef, '--']),
-      this.rawPathSafe(['diff', '--numstat', '-M', baseRef, 'HEAD', '--']),
-      this.rawPathSafe(['diff', '--numstat', '-M', baseRef, '--']),
-      this.rawPathSafe(['ls-files', '--others', '--exclude-standard']).catch(() => ''),
+    const safeBaseRef = this.safeRevisionArg(baseRef);
+    const [worktreeOutput, worktreeNumStat, untrackedOutput] = await Promise.all([
+      this.rawPathSafe(['diff', '--name-status', '-z', '-M', safeBaseRef, '--']),
+      this.rawPathSafe(['diff', '--numstat', '-z', '-M', safeBaseRef, '--']),
+      this.rawPathSafe(['ls-files', '--others', '--exclude-standard', '-z']).catch(() => ''),
     ]);
 
-    const numStatMap = new Map<string, { added?: number; removed?: number }>();
-    for (const [filePath, stat] of parseNumStatOutput(headNumStat).entries()) {
-      numStatMap.set(filePath, stat);
-    }
-    for (const [filePath, stat] of parseNumStatOutput(worktreeNumStat).entries()) {
-      const prev = numStatMap.get(filePath);
-      numStatMap.set(filePath, {
-        added: ((prev?.added ?? 0) + (stat.added ?? 0)) || undefined,
-        removed: ((prev?.removed ?? 0) + (stat.removed ?? 0)) || undefined,
-      });
-    }
+    const numStatMap = parseNumStatZOutput(worktreeNumStat);
 
     const merged = new Map<string, FileStatus>();
-    for (const file of [
-      ...parseNameStatusOutput(headOutput),
-      ...parseNameStatusOutput(worktreeOutput),
-    ]) {
+    for (const file of parseNameStatusZOutput(worktreeOutput)) {
       const stats = numStatMap.get(file.path);
       merged.set(file.path, {
         repoId: this.repoId,
@@ -1107,8 +1257,7 @@ export class GitService {
       });
     }
 
-    for (const rawPath of untrackedOutput.trim().split('\n')) {
-      const filePath = rawPath.trim();
+    for (const filePath of untrackedOutput.split('\0')) {
       if (!filePath) continue;
       merged.set(filePath, {
         repoId: this.repoId,
@@ -1126,20 +1275,21 @@ export class GitService {
   async getWorktreeFileDiff(repoId: string, baseRef: string, filePath: string): Promise<FileDiff | null> {
     try {
       const relPath = this.normalizeRepoPath(filePath);
-      const rawDiff = await this.rawPathSafe(['diff', '--find-renames', baseRef, '--', relPath]);
+      const safeBaseRef = this.safeRevisionArg(baseRef);
+      const rawDiff = await this.rawPathSafe(['diff', '--find-renames', safeBaseRef, '--', this.literalPathspec(relPath)]);
       if (!rawDiff.trim()) {
-        const currentPath = path.join(this.rootPath, relPath);
-        if (!fs.existsSync(currentPath)) return null;
+        const workingFile = this.readWorkingTreeFile(relPath);
+        if (!workingFile) return null;
         return {
           repoId,
           oldPath: relPath,
           newPath: relPath,
-          isBinary: false,
+          isBinary: workingFile.isBinary,
           isNew: true,
           isDeleted: false,
           hunks: [],
           originalContent: '',
-          modifiedContent: fs.readFileSync(currentPath, 'utf8'),
+          modifiedContent: workingFile.content,
           language: detectLanguage(relPath),
         };
       }
@@ -1147,12 +1297,18 @@ export class GitService {
       const diffs = parseDiff(rawDiff, repoId);
       if (diffs.length === 0) return null;
       const diff = diffs[0];
+      if (diff.isBinary) return diff;
       const originalPath = this.normalizeRepoPath(diff.oldPath || relPath);
-      const currentPath = path.join(this.rootPath, this.normalizeRepoPath(diff.newPath || relPath));
-      diff.originalContent = await this.git.show([`${baseRef}:${originalPath}`]).catch(() => '');
-      diff.modifiedContent = fs.existsSync(currentPath)
-        ? fs.readFileSync(currentPath, 'utf8')
-        : '';
+      const workingFile = this.readWorkingTreeFile(diff.newPath || relPath);
+      diff.originalContent = await this.git.show([`${safeBaseRef}:${originalPath}`]).catch(() => '');
+      if (workingFile?.isBinary) {
+        diff.isBinary = true;
+        diff.hunks = [];
+        diff.originalContent = '';
+        diff.modifiedContent = '';
+        return diff;
+      }
+      diff.modifiedContent = workingFile?.content ?? '';
       return diff;
     } catch {
       return null;
@@ -1181,8 +1337,10 @@ export class GitService {
     const relPath = this.normalizeRepoPath(prefix);
     if (!relPath) return false;
     const absPath = path.join(this.rootPath, relPath);
+    assertNoSymlinkAncestors(this.rootPath, absPath);
     if (!fs.existsSync(absPath)) return true;
-    const stat = fs.statSync(absPath);
+    const stat = fs.lstatSync(absPath);
+    if (stat.isSymbolicLink()) return false;
     if (!stat.isDirectory()) return false;
     return fs.readdirSync(absPath).length === 0;
   }
@@ -1348,7 +1506,7 @@ export class GitService {
 
   async removeSubtree(prefix: string): Promise<string> {
     const relPath = this.normalizeRepoPath(prefix);
-    return this.rawPathSafe(['rm', '-r', '--', relPath]);
+    return this.rawPathSafe(['rm', '-r', '--', this.literalPathspec(relPath)]);
   }
 
   async stageFiles(paths: string[]): Promise<void> {
@@ -1365,16 +1523,13 @@ export class GitService {
       // Distinguish two cases that both show ' M' in the parent's porcelain:
       //   1. Submodule has a new commit (HEAD differs from parent's recorded pointer) → stageable (+prefix in submodule status)
       //   2. Submodule only has uncommitted working-tree changes, no new commit → NOT stageable (no prefix, or - for uninit)
-      const submoduleStatusRaw = await this.git.raw(['submodule', 'status', '--', ...gitlinkPaths]).catch(() => '');
+      const submoduleStatusRaw = await this.git.raw(['submodule', 'status', '--', ...this.literalPathspecs(gitlinkPaths)]).catch(() => '');
       // Each line: <prefix><sha> <path> (<describe>)
       // prefix: ' ' = matches parent index, '+' = different commit, '-' = uninitialised, 'U' = merge conflict
       const submoduleHasNewCommit = new Set<string>();
       for (const line of submoduleStatusRaw.split('\n')) {
-        const m = line.match(/^([+\- U])([0-9a-f]+)\s+(\S+)/);
-        if (!m) continue;
-        const prefix = m[1];
-        const relPath = m[3];
-        if (prefix === '+') submoduleHasNewCommit.add(relPath);
+        const parsed = parseSubmoduleStatusLine(line);
+        if (parsed?.flag === '+') submoduleHasNewCommit.add(parsed.path);
       }
       const notStageable = gitlinkPaths.filter(p => {
         const porcelain = submoduleHasNewCommit.has(p);
@@ -1387,20 +1542,20 @@ export class GitService {
           `Commit inside the submodule first, then stage the pointer here.`
         );
       }
-      await this.git.raw(['add', '--', ...gitlinkPaths]);
+      await this.git.raw(['add', '--', ...this.literalPathspecs(gitlinkPaths)]);
     }
     if (regularPaths.length > 0) {
       if (vsRepo) {
         await vsRepo.add(regularPaths.map(p => path.resolve(this.rootPath, p)));
       } else {
-        await this.git.add(regularPaths);
+        await this.git.raw(['add', '--', ...this.literalPathspecs(regularPaths)]);
       }
     }
   }
 
   async getConflictFiles(): Promise<string[]> {
-    const output = await this.rawPathSafe(['diff', '--name-only', '--diff-filter=U']);
-    return output.trim().split('\n').map(line => line.trim()).filter(Boolean);
+    const output = await this.rawPathSafe(['diff', '--name-only', '--diff-filter=U', '-z']);
+    return output.split('\0').filter(Boolean);
   }
 
   async getConflictFileStatuses(): Promise<Map<string, { currentStatus: ConflictSideStatus; incomingStatus: ConflictSideStatus }>> {
@@ -1412,7 +1567,7 @@ export class GitService {
       const y = entry[1];
       const sideStatuses = mapConflictSideStatuses(`${x}${y}`);
       if (!sideStatuses) continue;
-      const filePath = entry.slice(3).trim();
+      const filePath = entry.slice(3);
       if (!filePath) continue;
       statuses.set(filePath, sideStatuses);
     }
@@ -1422,11 +1577,17 @@ export class GitService {
   async getFileVersions(filePath: string): Promise<MergeFileVersions> {
     const relPath = this.normalizeRepoPath(filePath);
     try {
-      const [base, ours, theirs] = await Promise.all([
-        this.showStageFileOrEmpty(1, relPath),
-        this.showStageFileOrEmpty(2, relPath),
-        this.showStageFileOrEmpty(3, relPath),
+      const buffers = await Promise.all([
+        this.showStageFileBufferOrEmpty(1, relPath),
+        this.showStageFileBufferOrEmpty(2, relPath),
+        this.showStageFileBufferOrEmpty(3, relPath),
       ]);
+      const contents = buffers.map(buffer => buffer.toString('utf8'));
+      const isBinary = buffers.some((buffer, index) =>
+        buffer.includes(0) || !Buffer.from(contents[index], 'utf8').equals(buffer)
+      );
+      if (isBinary) throw new Error(t('Binary file — no diff available'));
+      const [base, ours, theirs] = contents;
       return { base, ours, theirs, language: detectLanguage(relPath) };
     } catch (e) {
       throw new Error(t('Unable to read three-way merge versions for {0}: {1}', relPath, String(e)));
@@ -1436,6 +1597,20 @@ export class GitService {
   async saveMergedContent(filePath: string, content: string): Promise<void> {
     const relPath = this.normalizeRepoPath(filePath);
     const absolutePath = path.join(this.rootPath, relPath);
+    assertNoSymlinkAncestors(this.rootPath, absolutePath, { includeTarget: true });
+    // Re-check at the host write boundary. The merge stages may have changed
+    // since the editor opened, and a stale/forged webview message must never
+    // rewrite a binary conflict or special working-tree node as UTF-8 text.
+    await this.getFileVersions(relPath);
+    const workingFile = this.readWorkingTreeFile(relPath);
+    if (workingFile?.isBinary) throw new Error(t('Binary file — no diff available'));
+    try {
+      if (fs.lstatSync(absolutePath).isDirectory()) {
+        throw new Error(t('Binary file — no diff available'));
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, content, 'utf8');
   }
@@ -1443,6 +1618,7 @@ export class GitService {
   async deleteMergedFile(filePath: string): Promise<void> {
     const relPath = this.normalizeRepoPath(filePath);
     const absolutePath = path.join(this.rootPath, relPath);
+    assertNoSymlinkAncestors(this.rootPath, absolutePath);
     if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
   }
 
@@ -1462,15 +1638,16 @@ export class GitService {
     const chosenStatus = side === 'ours' ? sideStatus?.currentStatus : sideStatus?.incomingStatus;
 
     if (chosenStatus === 'deleted') {
-      await this.git.raw(['rm', '-f', '--', relPath])
+      const pathspec = this.literalPathspec(relPath);
+      await this.git.raw(['rm', '-f', '--', pathspec])
         .catch(async () => {
           await this.deleteMergedFile(relPath);
-          await this.git.raw(['add', '-u', '--', relPath]);
+          await this.git.raw(['add', '-u', '--', pathspec]);
         });
       return;
     }
 
-    await this.git.raw(['checkout', side === 'ours' ? '--ours' : '--theirs', '--', relPath]);
+    await this.git.raw(['checkout', side === 'ours' ? '--ours' : '--theirs', '--', this.literalPathspec(relPath)]);
     await this.stageFiles([relPath]);
   }
 
@@ -1480,22 +1657,25 @@ export class GitService {
 
     if (submodulePaths.size > 0) {
       const subPaths = [...submodulePaths];
-      const submoduleStatusRaw = await this.git.raw(['submodule', 'status', '--', ...subPaths]).catch(() => '');
+      const submoduleStatusRaw = await this.git.raw(['submodule', 'status', '--', ...this.literalPathspecs(subPaths)]).catch(() => '');
       const submoduleHasNewCommit = new Set<string>();
       for (const line of submoduleStatusRaw.split('\n')) {
-        const m = line.match(/^([+\- U])([0-9a-f]+)\s+(\S+)/);
-        if (m && m[1] === '+') submoduleHasNewCommit.add(m[3]);
+        const parsed = parseSubmoduleStatusLine(line);
+        if (parsed?.flag === '+') submoduleHasNewCommit.add(parsed.path);
       }
-      const stageable = subPaths.filter(p => submoduleHasNewCommit.has(p));
-      const notStageable = subPaths.filter(p => !submoduleHasNewCommit.has(p) && submoduleStatusRaw.includes(p));
-      if (stageable.length > 0) await this.git.raw(['add', '--', ...stageable]);
-      if (notStageable.length > 0) {
-        const names = notStageable.map(p => path.basename(p)).join(', ');
-        throw new Error(
-          `Cannot stage ${names}: the submodule has uncommitted changes but no new commit. ` +
-          `Commit inside the submodule first, then stage the pointer here.`
-        );
-      }
+      // `git submodule status` lists clean submodules too. Only reject a dirty
+      // gitlink that Git reports in porcelain but whose checked-out commit did
+      // not move; otherwise every clean submodule made "Stage All" fail.
+      const changedSubmodules = new Set(
+        (await this.git.status()).files
+          .map(file => file.path)
+          .filter(filePath => submodulePaths.has(filePath))
+      );
+      const stageable = [...changedSubmodules].filter(p => submoduleHasNewCommit.has(p));
+      if (stageable.length > 0) await this.git.raw(['add', '--', ...this.literalPathspecs(stageable)]);
+      // Dirty-only submodules have no pointer update to add. Leave them in the
+      // unstaged list while still staging every regular/stageable change, which
+      // matches `git add` and VS Code's "Stage All Changes" behaviour.
     }
 
     if (vsRepo) {
@@ -1515,58 +1695,51 @@ export class GitService {
 
   async unstageFiles(paths: string[]): Promise<void> {
     const safePaths = paths.map(filePath => this.normalizeRepoPath(filePath));
-    const vsRepo = this.vsRepo();
-    // Always use simple-git for gitlink (submodule pointer) entries.
-    const submodulePaths = await this.getSubmoduleRelativePaths();
-    const [gitlinkPaths, regularPaths] = safePaths.reduce<[string[], string[]]>(
-      ([gl, reg], p) => submodulePaths.has(p) ? [[...gl, p], reg] : [gl, [...reg, p]],
-      [[], []]
-    );
-    if (gitlinkPaths.length > 0) {
-      await this.git.reset(['HEAD', '--', ...gitlinkPaths]);
+    if (safePaths.length === 0) return;
+    const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
+    if (hasHead) {
+      await this.git.raw(['reset', 'HEAD', '--', ...this.literalPathspecs(safePaths)]);
+      return;
     }
-    if (regularPaths.length > 0) {
-      if (vsRepo) {
-        await vsRepo.revert(regularPaths.map(p => path.resolve(this.rootPath, p)));
-      } else {
-        await this.git.reset(['HEAD', '--', ...regularPaths]);
-      }
-    }
+    // `git reset HEAD` is invalid on an unborn branch. Removing entries from
+    // the index preserves the working files and works for regular files and
+    // gitlinks alike.
+    await this.git.raw(['rm', '-r', '--cached', '--ignore-unmatch', '--', ...this.literalPathspecs(safePaths)]);
   }
 
   async unstageAll(): Promise<void> {
-    const vsRepo = this.vsRepo();
-    if (vsRepo) {
-      const staged = vsRepo.state.indexChanges.map(c => c.uri.fsPath);
-      if (staged.length) await vsRepo.revert(staged);
+    const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
+    if (hasHead) {
+      await this.git.raw(['reset', 'HEAD']);
       return;
     }
-    await this.git.reset(['HEAD']);
+    await this.git.raw(['rm', '-r', '--cached', '--ignore-unmatch', '--', '.']);
   }
 
   async discardFile(filePath: string): Promise<void> {
     const relPath = this.normalizeRepoPath(filePath);
     const absPath = path.join(this.rootPath, relPath);
+    assertNoSymlinkAncestors(this.rootPath, absPath);
 
     // Use git status --porcelain to reliably detect untracked (??) vs tracked files,
     // regardless of vsRepo API availability.
-    const status = await this.git.raw(['status', '--porcelain', '--', relPath]);
+    const pathspec = this.literalPathspec(relPath);
+    const status = await this.git.raw(['status', '--porcelain', '--', pathspec]);
     const isUntracked = status.trimStart().startsWith('??');
 
     if (isUntracked) {
-      const fs = require('fs') as typeof import('fs');
-      try { fs.unlinkSync(absPath); } catch { /* already gone */ }
+      fs.rmSync(absPath, { recursive: true, force: true });
       return;
     }
 
     // For tracked changes (modified, staged, deleted): restore both index and working tree.
-    await this.git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', relPath])
-      .catch(() => this.git.raw(['restore', '--staged', '--worktree', '--', relPath]))
-      .catch(() => this.git.checkout(['--', relPath]));
+    await this.git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', pathspec])
+      .catch(() => this.git.raw(['restore', '--staged', '--worktree', '--', pathspec]))
+      .catch(() => this.git.checkout(['--', pathspec]));
   }
 
   async commit(message: string, amend: boolean, credentials?: { gitName: string; gitEmail: string }, log?: (s: string) => void): Promise<string> {
-    log?.(`GitService.commit — credentials=${JSON.stringify(credentials)} amend=${amend}`);
+    log?.(`GitService.commit — credentials=${credentials ? 'provided' : 'default'} amend=${amend}`);
     if (credentials?.gitName && credentials?.gitEmail) {
       const flags = [
         '-c', `user.name=${credentials.gitName}`,
@@ -1574,7 +1747,7 @@ export class GitService {
         'commit', '-m', message,
         ...(amend ? ['--amend'] : []),
       ];
-      log?.(`GitService.commit — running git.raw with flags: ${JSON.stringify(flags)}`);
+      log?.('GitService.commit — running git commit with an explicit identity');
       await this.git.raw(flags);
       return '';
     }
@@ -1650,7 +1823,9 @@ export class GitService {
 
   async addRemote(name: string, url: string): Promise<void> {
     await this.git.addRemote(name, url);
-    this.vsRepo()?.fetch?.();
+    // Refresh VS Code's remote state without creating an unhandled rejection
+    // when the newly-added endpoint is offline or needs authentication.
+    void this.vsRepo()?.fetch?.().catch(() => undefined);
   }
 
   async removeRemote(name: string): Promise<void> {
@@ -1682,9 +1857,13 @@ export class GitService {
     const tracking = await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '');
     const hasUpstream = !!tracking.trim();
     const branchName = (await this.git.revparse(['--abbrev-ref', 'HEAD'])).trim();
-    // Derive remote from tracking branch (e.g. "upstream/main" → "upstream"), else first available remote.
-    const trackingRemote = tracking.trim().split('/')[0] || '';
-    const firstRemote = (await this.getRemotes().catch(() => []))[0] ?? 'origin';
+    // Match the longest configured prefix because Git permits remote names with
+    // slashes (for example, team/upstream/main).
+    const remoteNames = await this.getRemotes().catch(() => [] as string[]);
+    const remoteNamesByLength = [...remoteNames].sort((a, b) => b.length - a.length);
+    const trackingName = tracking.trim();
+    const trackingRemote = remoteNamesByLength.find(name => trackingName.startsWith(`${name}/`)) ?? '';
+    const firstRemote = remoteNames[0] ?? 'origin';
     const targetRemote = remote ?? (trackingRemote || firstRemote);
     const args = ['push'];
     if (!hasUpstream) args.push('--set-upstream', targetRemote, branchName);
@@ -1700,9 +1879,8 @@ export class GitService {
       try {
         await vsRepo.pull();
         return 'pulled';
-      } catch (e: any) {
-        const detail = e?.stderr?.trim() || e?.gitErrorCode || e?.message || 'Unknown error';
-        throw new Error(detail);
+      } catch (error: unknown) {
+        throw new Error(gitErrorDetail(error));
       }
     }
     const tracking = await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '');
@@ -1720,9 +1898,8 @@ export class GitService {
         await vsRepo.fetch();
         await vsRepo.rebase(`${upstream.remote}/${upstream.name}`);
         return 'pulled (rebase)';
-      } catch (e: any) {
-        const detail = e?.stderr?.trim() || e?.gitErrorCode || e?.message || 'Unknown error';
-        throw new Error(detail);
+      } catch (error: unknown) {
+        throw new Error(gitErrorDetail(error));
       }
     }
     const tracking = (await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '')).trim();
@@ -1745,13 +1922,23 @@ export class GitService {
         await vsRepo.createBranch(branchName, true, from);
         return;
       }
-      // Remote branch → create local tracking branch then checkout
-      const remoteMatch = branchName.match(/^([^/]+)\/(.+)$/);
-      if (remoteMatch) {
-        const [, , localName] = remoteMatch;
-        const locals = await vsRepo.getBranches({ remote: false });
-        const exists = locals.some(b => b.name === localName);
-        if (!exists) await vsRepo.createBranch(localName, false, branchName);
+      const locals = await vsRepo.getBranches({ remote: false });
+      // Local branch names commonly contain slashes (feature/foo). Check exact
+      // local refs before interpreting a slash as a remote/name separator.
+      if (locals.some(branch => branch.name === branchName)) {
+        await vsRepo.checkout(branchName);
+        return;
+      }
+      const remoteRefs = await vsRepo.getBranches({ remote: true });
+      const remoteRef = remoteRefs.find(branch => branch.type === RefType.RemoteHead && branch.name === branchName);
+      if (remoteRef) {
+        const remoteNames = vsRepo.state.remotes.map(remote => remote.name).sort((a, b) => b.length - a.length);
+        const remoteName = remoteNames.find(name => branchName.startsWith(`${name}/`));
+        const localName = remoteName ? branchName.slice(remoteName.length + 1) : branchName.slice(branchName.indexOf('/') + 1);
+        if (!localName) throw new Error(t('Cannot determine a local branch name for {0}.', branchName));
+        if (!locals.some(branch => branch.name === localName)) {
+          await vsRepo.createBranch(localName, false, branchName);
+        }
         await vsRepo.checkout(localName);
         return;
       }
@@ -1764,11 +1951,17 @@ export class GitService {
       else await this.git.checkoutLocalBranch(branchName);
       return;
     }
-    const remoteMatch = branchName.match(/^([^/]+)\/(.+)$/);
-    if (remoteMatch) {
-      const [, , localName] = remoteMatch;
-      const branches = await this.getBranches();
-      const localExists = branches.some(b => !b.isRemote && b.name === localName);
+    const branches = await this.getBranches();
+    if (branches.some(branch => !branch.isRemote && branch.name === branchName)) {
+      await this.git.checkout(branchName);
+      return;
+    }
+    if (branches.some(branch => branch.isRemote && branch.name === branchName)) {
+      const remoteNames = (await this.getRemotes()).sort((a, b) => b.length - a.length);
+      const remoteName = remoteNames.find(name => branchName.startsWith(`${name}/`));
+      const localName = remoteName ? branchName.slice(remoteName.length + 1) : branchName.slice(branchName.indexOf('/') + 1);
+      if (!localName) throw new Error(t('Cannot determine a local branch name for {0}.', branchName));
+      const localExists = branches.some(branch => !branch.isRemote && branch.name === localName);
       if (localExists) await this.git.checkout(localName);
       else await this.git.checkout(['-b', localName, '--track', branchName]);
       return;
@@ -1793,18 +1986,28 @@ export class GitService {
       // Stash uncommitted changes, retry merge, then restore stash.
       // If the merge produces conflicts the stash pop will also conflict —
       // the user resolves both sets in the normal conflict flow.
-      const stashRef = `WIP before merge of ${from}`;
-      await this.git.stash(['push', '-m', stashRef]);
+      const stashRef = `VersionDock WIP before merge of ${from} (${Date.now()})`;
+      const previousStash = (await this.git.raw(['rev-parse', '--verify', 'refs/stash']).catch(() => '')).trim();
+      await this.git.stash(['push', '--include-untracked', '-m', stashRef]);
+      const createdStash = (await this.git.raw(['rev-parse', '--verify', 'refs/stash']).catch(() => '')).trim();
+      if (!createdStash || createdStash === previousStash) throw e;
       try {
         await this.git.merge([from]);
       } catch (mergeErr: unknown) {
         // Merge failed (e.g. conflicts) — pop stash on top so the user
         // ends up with both the merge conflicts and their original changes.
-        await this.git.stash(['pop']).catch(() => {});
+        await this.restoreAutoStash(createdStash).catch(() => {});
         throw mergeErr;
       }
-      await this.git.stash(['pop']);
+      await this.restoreAutoStash(createdStash);
     }
+  }
+
+  private async restoreAutoStash(stashHash: string): Promise<void> {
+    await this.git.raw(['stash', 'apply', stashHash]);
+    const stashList = await this.git.raw(['stash', 'list', '--format=%gd%x00%H']).catch(() => '');
+    const matchingRef = stashList.split('\n').map(line => line.split('\0')).find(([, hash]) => hash === stashHash)?.[0];
+    if (matchingRef) await this.git.raw(['stash', 'drop', matchingRef]);
   }
 
   async rebase(onto: string): Promise<void> {
@@ -1856,19 +2059,19 @@ export class GitService {
   }
 
   async checkoutFileFromCommit(hash: string, filePath: string): Promise<void> {
-    await this.git.raw(['checkout', hash, '--', this.normalizeRepoPath(filePath)]);
+    await this.git.raw(['checkout', hash, '--', this.literalPathspec(filePath)]);
   }
 
   async revertFileToParent(hash: string, filePath: string): Promise<void> {
     // For added files, 'A' status: the file was created in this commit, so reverting
     // means deleting it from working tree by checking out from the empty tree.
     // For other statuses: restore the file to its state in the parent commit.
-    await this.git.raw(['checkout', `${hash}~1`, '--', this.normalizeRepoPath(filePath)]);
+    await this.git.raw(['checkout', `${hash}~1`, '--', this.literalPathspec(filePath)]);
   }
 
   async hasFileAtRef(ref: string, filePath: string): Promise<boolean> {
     try {
-      await this.git.raw(['cat-file', '-e', `${ref}:${this.normalizeRepoPath(filePath)}`]);
+      await this.git.raw(['cat-file', '-e', `${this.safeRevisionArg(ref)}:${this.normalizeRepoPath(filePath)}`]);
       return true;
     } catch {
       return false;
@@ -1954,7 +2157,11 @@ export class GitService {
   }
 
   async createTag(name: string, hash: string): Promise<void> {
-    await this.git.raw(['tag', name, hash]);
+    if (!name || name.startsWith('-') || name.includes('\0')) {
+      throw new Error(`Invalid Git tag name: ${name}`);
+    }
+    await this.git.raw(['check-ref-format', `refs/tags/${name}`]);
+    await this.git.raw(['tag', name, this.safeRevisionArg(hash)]);
   }
 
   async getTags(): Promise<Array<{ name: string; hash: string; date: string }>> {
@@ -2029,7 +2236,7 @@ export class GitService {
   }
 
   async deleteTag(name: string): Promise<void> {
-    await this.git.raw(['tag', '-d', name]);
+    await this.git.raw(['tag', '-d', '--', name]);
   }
 
   async pushTag(name: string, remote: string): Promise<void> {
@@ -2041,31 +2248,33 @@ export class GitService {
   }
 
   async checkoutTag(name: string): Promise<void> {
-    await this.git.raw(['checkout', name]);
+    await this.git.raw(['checkout', '--detach', `refs/tags/${name}`]);
     this._pendingDetachedTag = name;
   }
 
   async mergeTag(name: string): Promise<void> {
-    await this.git.raw(['merge', name]);
+    await this.git.raw(['merge', `refs/tags/${name}`]);
   }
 
   async getBranchesContaining(hash: string): Promise<{ local: string[]; remote: string[]; tags: string[] }> {
     const [localOut, remoteOut, tagOut] = await Promise.all([
-      this.git.raw(['branch', '--contains', hash, '--format=%(refname:short)']).catch(() => ''),
-      this.git.raw(['branch', '-r', '--contains', hash, '--format=%(refname:short)']).catch(() => ''),
+      this.git.raw(['branch', '--contains', hash, '--format=%(refname)']).catch(() => ''),
+      this.git.raw(['branch', '-r', '--contains', hash, '--format=%(refname)']).catch(() => ''),
       // --points-at: only tags directly on this commit, not ancestors.
       this.git.raw(['tag', '--points-at', hash]).catch(() => ''),
     ]);
     const parse = (out: string) => out.split('\n').map(b => b.trim()).filter(Boolean);
-    // Local branches must not contain a slash — anything with '/' is a remote ref
-    // that leaked into the local output on some git configurations.
-    // Exclude remote-leaked refs (contain '/') and the detached HEAD pseudo-entry "(HEAD detached at ...)".
-    const local = parse(localOut).filter(b => !b.includes('/') && !b.startsWith('('));
-    // Remote names come as "origin/foo" or "remotes/origin/foo" — normalise both.
-    // origin/HEAD is a symbolic alias, not a real branch — skip it here.
+    // Full ref names avoid Git's ambiguous `%(refname:short)` output when a
+    // branch and tag share a name, and preserve local feature/foo branches.
+    const local = parse(localOut)
+      .filter(ref => ref.startsWith('refs/heads/'))
+      .map(ref => ref.slice('refs/heads/'.length));
+    // Remote HEAD is a symbolic alias, not a branch. Parsing the full ref is
+    // also required because its short form may collapse to just "origin".
     const remote = parse(remoteOut)
-      .map(b => b.replace(/^remotes\//, ''))
-      .filter(b => !b.endsWith('/HEAD'));
+      .filter(ref => ref.startsWith('refs/remotes/'))
+      .map(ref => ref.slice('refs/remotes/'.length))
+      .filter(ref => !ref.endsWith('/HEAD'));
     const tags = parse(tagOut);
     return { local, remote, tags };
   }
@@ -2150,24 +2359,17 @@ export class GitService {
       // Get files for this stash entry
       const files: Array<{ path: string; status: string }> = [];
       try {
-        const fileRaw = await this.rawPathSafe(['stash', 'show', '--name-status', ref]);
-        for (const fileLine of fileRaw.trim().split('\n')) {
-          if (!fileLine.trim()) continue;
-          const fileParts = fileLine.split('\t');
-          if (fileParts.length < 2) continue;
-          const statusLetter = fileParts[0].trim();
-          const filePath = fileParts[fileParts.length - 1].trim();
-          const status = STATUS_MAP[statusLetter] ?? 'modified';
-          files.push({ path: filePath, status });
+        const fileRaw = await this.rawPathSafe(['stash', 'show', '--name-status', '-z', ref]);
+        for (const file of parseNameStatusZOutput(fileRaw)) {
+          files.push({ path: file.path, status: file.status });
         }
       } catch { /* stash might have no files */ }
 
       // Also include untracked files saved in stash^3 (created by `git stash -u`)
       try {
-        const untrackedRaw = await this.rawPathSafe(['ls-tree', '--name-only', `${ref}^3`]);
+        const untrackedRaw = await this.rawPathSafe(['ls-tree', '-r', '--name-only', '-z', `${ref}^3`]);
         const trackedPaths = new Set(files.map(f => f.path));
-        for (const f of untrackedRaw.trim().split('\n')) {
-          const filePath = f.trim();
+        for (const filePath of untrackedRaw.split('\0')) {
           if (filePath && !trackedPaths.has(filePath)) {
             files.push({ path: filePath, status: 'untracked' });
           }
@@ -2180,36 +2382,99 @@ export class GitService {
   }
 
   async stashShow(stashRef: string, filePath: string): Promise<string> {
-    return this.rawPathSafe(['stash', 'show', '-p', stashRef, '--', this.normalizeRepoPath(filePath)]).catch(() => '');
+    return this.rawPathSafe(['stash', 'show', '-p', stashRef, '--', this.literalPathspec(filePath)]).catch(() => '');
   }
 
   async stashPush(message: string, paths?: string[]): Promise<void> {
+    const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
+    if (!hasHead) {
+      // Native `git stash` cannot create its commit graph without an initial
+      // commit. Fail before touching the index; users can use Shelve for this
+      // unborn-branch case.
+      throw new Error('Cannot create a Git stash before the initial commit.');
+    }
     if (!paths || paths.length === 0) {
       await this.git.raw(['stash', 'push', '-u', '-m', message]);
       return;
     }
 
     // git builds the stash commit tree from the current index, so staged files
-    // outside the pathspec (especially new 'A' files) appear in the stash even
-    // though they weren't requested. Fix: temporarily unstage them, stash, re-stage.
-    const safePaths = paths.map(filePath => this.normalizeRepoPath(filePath));
+    // outside the pathspec appear in the stash even though they weren't
+    // requested. Save their exact index patch, temporarily reset those entries,
+    // then restore the patch to the index only. Re-running `git add` here would
+    // destroy the staged snapshot for files that were edited again after staging.
+    const requestedPaths = paths.map(filePath => this.normalizeRepoPath(filePath));
     const status = await this.git.status();
-    const pathSet = new Set(safePaths);
-    const addedOutside = status.files
-      .filter(f => f.index.trim() === 'A' && !pathSet.has(f.path))
-      .map(f => f.path);
+    const requestedPathSet = new Set(requestedPaths);
 
-    if (addedOutside.length > 0) {
-      await this.git.raw(['reset', 'HEAD', '--', ...addedOutside]).catch(() => {});
+    // Include both sides of a selected rename. A destination-only pathspec makes
+    // Git represent the source deletion as an unrelated index change.
+    const stashPaths = new Set(requestedPaths);
+    for (const file of status.files) {
+      if (!requestedPathSet.has(file.path) && (!file.from || !requestedPathSet.has(file.from))) continue;
+      stashPaths.add(file.path);
+      if (file.from) stashPaths.add(file.from);
+    }
+
+    const stagedOutside = Array.from(new Set(status.files.flatMap(file => {
+      const indexStatus = file.index.trim();
+      if (!indexStatus || indexStatus === '?' || indexStatus === 'U') return [];
+      const filePaths = [file.from, file.path].filter((value): value is string => Boolean(value));
+      return filePaths.some(filePath => stashPaths.has(filePath)) ? [] : filePaths;
+    })));
+
+    let tempDir: string | undefined;
+    let indexPatchPath: string | undefined;
+    let outsideIndexWasReset = false;
+    let indexWasRestored = false;
+    let primaryError: unknown;
+    let restoreError: unknown;
+
+    if (stagedOutside.length > 0) {
+      const indexPatch = await this.rawPathSafe([
+        'diff', '--cached', '--binary', '--full-index', '--',
+        ...this.literalPathspecs(stagedOutside),
+      ]);
+      if (!indexPatch.trim()) {
+        throw new Error('Cannot preserve the staged state outside the selected stash paths.');
+      }
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'versiondock-index-'));
+      indexPatchPath = path.join(tempDir, 'index.patch');
+      fs.writeFileSync(indexPatchPath, indexPatch, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     }
 
     try {
-      await this.git.raw(['stash', 'push', '-u', '-m', message, '--', ...safePaths]);
-    } finally {
-      if (addedOutside.length > 0) {
-        await this.git.add(addedOutside).catch(() => {});
+      if (indexPatchPath) {
+        await this.git.raw(['reset', 'HEAD', '--', ...this.literalPathspecs(stagedOutside)]);
+        outsideIndexWasReset = true;
+      }
+      await this.git.raw([
+        'stash', 'push', '-u', '-m', message, '--',
+        ...this.literalPathspecs(Array.from(stashPaths)),
+      ]);
+    } catch (error) {
+      primaryError = error;
+    }
+
+    if (outsideIndexWasReset && indexPatchPath) {
+      try {
+        await this.git.raw(['apply', '--cached', '--binary', '--whitespace=nowarn', indexPatchPath]);
+        indexWasRestored = true;
+      } catch (error) {
+        restoreError = error;
       }
     }
+    if (tempDir && (!outsideIndexWasReset || indexWasRestored)) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* temporary recovery file */ }
+    }
+
+    if (restoreError && indexPatchPath) {
+      const primaryDetail = primaryError ? ` The stash operation also failed: ${gitErrorDetail(primaryError)}.` : '';
+      throw new Error(
+        `Unable to restore the original staged state.${primaryDetail} The recovery patch was retained at ${indexPatchPath}: ${gitErrorDetail(restoreError)}`,
+      );
+    }
+    if (primaryError) throw primaryError;
   }
 
   async stashApply(stashRef: string): Promise<void> {
@@ -2217,9 +2482,7 @@ export class GitService {
   }
 
   async stashPop(stashRef = 'stash@{0}'): Promise<void> {
-    // git stash pop always pops stash@{0}, so we apply then drop
-    await this.git.raw(['stash', 'apply', stashRef]);
-    await this.git.raw(['stash', 'drop', stashRef]);
+    await this.git.raw(['stash', 'pop', stashRef]);
   }
 
   async stashDrop(stashRef: string): Promise<void> {
@@ -2271,7 +2534,7 @@ export class GitService {
       const raw = fs.readFileSync(gitmodulesPath, 'utf8');
       const paths = new Set<string>();
       for (const line of raw.split('\n')) {
-        const m = line.match(/^\s+path\s*=\s*(.+)/);
+        const m = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
         if (m) paths.add(m[1].trim());
       }
       return paths;
@@ -2308,13 +2571,13 @@ export class GitService {
     const statusMap = new Map<string, { initialized: boolean; headCommit: string; isDirty: boolean }>();
     for (const line of statusRaw.trim().split('\n')) {
       if (!line.trim()) continue;
-      const match = line.match(/^([ \-+U])([0-9a-f]{40})\s+(\S+)/);
-      if (!match) continue;
-      const [, flag, hash, subPath] = match;
-      statusMap.set(subPath, {
-        initialized: flag !== '-',
+      const parsed = parseSubmoduleStatusLine(line);
+      const hash = line.match(/^[ +\-U]([0-9a-f]{40,64})/i)?.[1];
+      if (!parsed || !hash) continue;
+      statusMap.set(parsed.path, {
+        initialized: parsed.flag !== '-',
         headCommit: hash.slice(0, 8),
-        isDirty: flag === '+',
+        isDirty: parsed.flag === '+',
       });
     }
 
@@ -2337,14 +2600,15 @@ export class GitService {
   }
 
   async initSubmodule(submodulePath: string): Promise<void> {
-    await this.git.raw(['submodule', 'init', '--', submodulePath]);
-    await this.git.raw(['submodule', 'update', '--', submodulePath]);
+    const pathspec = this.literalPathspec(submodulePath);
+    await this.git.raw(['submodule', 'init', '--', pathspec]);
+    await this.git.raw(['submodule', 'update', '--', pathspec]);
   }
 
   async deinitSubmodule(submodulePath: string, force = false): Promise<void> {
     const args = ['submodule', 'deinit'];
     if (force) args.push('--force');
-    args.push('--', submodulePath);
+    args.push('--', this.literalPathspec(submodulePath));
     await this.git.raw(args);
   }
 
@@ -2352,7 +2616,7 @@ export class GitService {
     const args = ['submodule', 'update'];
     if (init) args.push('--init');
     if (recursive) args.push('--recursive');
-    args.push('--', submodulePath);
+    args.push('--', this.literalPathspec(submodulePath));
     await this.git.raw(args);
   }
 
@@ -2495,9 +2759,10 @@ function parseWorktreePorcelain(raw: string, mainPath: string): WorktreeEntry[] 
       else if (line.startsWith('prunable'))  entry.isPrunable = true;
     }
     if (!entry.path) continue;
-    // The main worktree always has .git as a directory; linked worktrees have .git as a file.
-    const gitDir = path.join(entry.path, '.git');
-    entry.isMain = (() => { try { return fs.statSync(gitDir).isDirectory(); } catch { return false; } })();
+    // Compare against the service root instead of inferring ownership from the
+    // shape of .git. Separate-git-dir and bare repositories do not have a .git
+    // directory but are still the main worktree/repository.
+    entry.isMain = isSameFsPath(entry.path, mainPath);
     entry.isBare = entry.isBare ?? false;
     entry.isDetached = entry.isDetached ?? false;
     entry.isInWorkspace = false;

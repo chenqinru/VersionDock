@@ -56,7 +56,10 @@ async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void>
 async function maybeNotifyUnpushedCommits(manager: WorkspaceVcsManager, commitPanel: CommitPanelProvider): Promise<void> {
   if (!vscode.workspace.getConfiguration('versiondock').get<boolean>('notifyOnUnpushedCommits', true)) return;
 
-  const metas = manager.getRepoMetas();
+  // SVN commits are sent directly to the server and do not have a Git-style
+  // "unpushed" state. Avoid invoking the inherited Git implementation for SVN
+  // working copies during startup refresh.
+  const metas = manager.getRepoMetas().filter(m => m.kind !== 'svn');
   const countResults = await Promise.allSettled(
     metas.map(async m => {
       const repo = manager.getRepo(m.id);
@@ -180,11 +183,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // DEV ONLY: uncomment to reset the quickpick flag
   //context.globalState.update('hasShownViewModeQuickpick', false);
-  await showViewModeQuickpick(context.globalState);
 
   const shelveDocProvider = new ShelveDocumentProvider();
   context.subscriptions.push(
-    vscode.workspace.registerTextDocumentContentProvider(ShelveDocumentProvider.scheme, shelveDocProvider)
+    vscode.workspace.registerTextDocumentContentProvider(ShelveDocumentProvider.scheme, shelveDocProvider),
+    shelveDocProvider,
   );
 
   const badge = new BadgeController();
@@ -208,9 +211,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   logPanel.setCommitPanel(commitPanel);
   logPanel.setUndockedPanel(undockedPanel);
 
-  // Apply saved hidden repos to badge immediately (before webview opens)
+  // Apply saved hidden repos immediately, before either webview opens.
   const savedHidden = manager.normalizeRepoIds(context.workspaceState.get<string[]>('versiondock.hiddenRepoIds', []));
-  if (savedHidden.length > 0) badge.setHiddenRepoIds(savedHidden);
+  if (savedHidden.length > 0) {
+    badge.setHiddenRepoIds(savedHidden);
+    logPanel.notifyHiddenReposChanged(savedHidden);
+  }
 
   const branchStatusBar = new BranchStatusBar(manager, () => {
     vscode.commands.executeCommand('versiondock.commitPanel.focus');
@@ -235,6 +241,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     manager,
     badge,
+    commitPanel,
     logPanel,
     mergeEditor,
     conflictsPanel,
@@ -246,6 +253,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   registerCommands(context, commitPanel, logPanel, mergeEditor, conflictsPanel, branchStatusBar, annotationController, profileStatusBar, manager);
+  // The first-run preference prompt must not block extension activation. Until
+  // activation resolves, contributed commands and views are unavailable.
+  void showViewModeQuickpick(context.globalState).catch(error => {
+    console.error('[VersionDock] Failed to show the view-mode picker:', error);
+  });
   void runStartupRefresh(manager, badge, commitPanel, context.globalState);
 }
 

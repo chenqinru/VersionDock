@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ChangelistData, FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../../shared/types';
 import type { IconThemeData } from '../../../host/types/messages';
+import { scopedKey } from '../../shared/scopedKey';
 
 export type ViewMode = 'flat' | 'tree';
 
@@ -133,26 +134,16 @@ export const useCommitStore = create<CommitState>((set, get) => ({
     const prevFiles = get().fileSelections;
     const prevSeen = get().seenFiles;
     const prevCollapsed = get().collapsedKeys;
-    const { changelists, changesViewMode } = get();
+    const { changesViewMode } = get();
     const repoSelections: Record<string, boolean> = {};
     const fileSelections: FileSelections = {};
     const seenFiles: Record<string, Set<string>> = {};
     const collapsedKeys = new Set(prevCollapsed);
 
-    // Build a lookup of which changelist each file belongs to (only in changelists mode)
-    const fileChangelistId = new Map<string, string>(); // `${repoId}::${path}` → changelistId
-    if (changesViewMode === 'changelists') {
-      for (const cl of changelists) {
-        for (const [repoId, paths] of Object.entries(cl.fileAssignments)) {
-          for (const p of paths) fileChangelistId.set(`${repoId}::${p}`, cl.id);
-        }
-      }
-    }
-
     for (const r of status.repos) {
+      const repoCollapseKey = scopedKey('repo', r.repoId);
       repoSelections[r.repoId] = prev[r.repoId] ?? true;
       const currentPaths = allFilePaths(r);
-      const untrackedPaths = new Set(r.unstagedFiles.filter(f => f.status === 'untracked').map(f => f.path));
       const prevSelectedSet = prevFiles[r.repoId];
       const prevSeenSet = prevSeen[r.repoId];
       const savedSelection = !prevSeenSet && (changesViewMode === 'simplified' || changesViewMode === 'changelists') ? loadPersistedSelection(changesViewMode, r.repoId) : null;
@@ -178,12 +169,12 @@ export const useCommitStore = create<CommitState>((set, get) => ({
 
       // Auto-collapse repos with no changes; auto-expand only when changes appear on a previously empty repo
       if (!(r.repoId in prev)) {
-        if (currentPaths.length === 0) collapsedKeys.add(r.repoId);
+        if (currentPaths.length === 0) collapsedKeys.add(repoCollapseKey);
       } else {
-        const wasCollapsed = prevCollapsed.has(r.repoId);
+        const wasCollapsed = prevCollapsed.has(repoCollapseKey);
         const prevHadFiles = (prevSeen[r.repoId]?.size ?? 0) > 0;
         if (wasCollapsed && currentPaths.length > 0 && !prevHadFiles) {
-          collapsedKeys.delete(r.repoId);
+          collapsedKeys.delete(repoCollapseKey);
         }
       }
     }
@@ -337,16 +328,27 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   }),
   expandAll: () => set({ collapsedKeys: new Set() }),
   collapseAll: () => {
-    const { status } = get();
+    const { status, changesViewMode, changelists } = get();
     const keys = new Set<string>();
+    if (changesViewMode === 'vscode') {
+      keys.add('vscode-section:staged');
+      keys.add('vscode-section:unstaged');
+      set({ collapsedKeys: keys });
+      return;
+    }
+    if (changesViewMode === 'changelists') {
+      for (const changelist of changelists) keys.add(scopedKey('changelist', changelist.id));
+      set({ collapsedKeys: keys });
+      return;
+    }
     for (const r of status?.repos ?? []) {
-      keys.add(r.repoId);
+      keys.add(scopedKey('repo', r.repoId));
       // Add all dir paths from staged + unstaged files
       const allPaths = [...r.stagedFiles, ...r.unstagedFiles].map(f => f.path);
       for (const p of allPaths) {
         const parts = p.split('/');
         for (let i = 1; i < parts.length; i++) {
-          keys.add(`${r.repoId}:${parts.slice(0, i).join('/')}`);
+          keys.add(scopedKey('tree-dir', r.repoId, parts.slice(0, i).join('/')));
         }
       }
     }

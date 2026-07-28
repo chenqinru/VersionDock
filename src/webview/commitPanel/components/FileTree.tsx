@@ -1,14 +1,16 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { FileStatus, GitFileStatus } from '../../shared/types';
 import type { ViewMode } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
 import { t } from '../../shared/i18n';
-import { baseNameFromPath } from '../../shared/pathUtils';
+import { scopedKey } from '../../shared/scopedKey';
 
 interface Props {
   repoId: string;
+  repoName: string;
+  repoRootPath?: string;
   files: FileStatus[];
   iconTheme?: IconThemeData | null;
   selectedFile: { repoId: string; path: string } | null;
@@ -49,13 +51,14 @@ const ICON_SIZE = 16;
 
 // ── Tree data structure ────────────────────────────────────────────────────
 
-interface TreeDir { kind: 'dir'; name: string; path: string; children: TreeNode[] }
+interface TreeDir { kind: 'dir'; name: string; path: string; children: TreeNode[]; files: FileStatus[] }
 interface TreeFile { kind: 'file'; name: string; file: FileStatus }
 type TreeNode = TreeDir | TreeFile;
 
 function buildTree(files: FileStatus[]): TreeNode[] {
-  const root: TreeDir = { kind: 'dir', name: '', path: '', children: [] };
+  const root: TreeDir = { kind: 'dir', name: '', path: '', children: [], files: [] };
   for (const file of files) {
+    root.files.push(file);
     if (file.path === '.') {
       root.children.push({ kind: 'file', name: '.', file });
       continue;
@@ -67,9 +70,10 @@ function buildTree(files: FileStatus[]): TreeNode[] {
       const dirPath = parts.slice(0, i + 1).join('/');
       let child = node.children.find((c): c is TreeDir => c.kind === 'dir' && c.name === part);
       if (!child) {
-        child = { kind: 'dir', name: part, path: dirPath, children: [] };
+        child = { kind: 'dir', name: part, path: dirPath, children: [], files: [] };
         node.children.push(child);
       }
+      child.files.push(file);
       node = child;
     }
     node.children.push({ kind: 'file', name: parts[parts.length - 1], file });
@@ -90,19 +94,11 @@ function collapseSingleChildDirs(nodes: TreeNode[]): TreeNode[] {
         name: `${node.name}/${only.name}`,
         path: only.path,
         children: only.children,
+        files: node.files,
       };
     }
     return { ...node, children };
   });
-}
-
-function collectFiles(node: TreeDir): FileStatus[] {
-  const result: FileStatus[] = [];
-  for (const child of node.children) {
-    if (child.kind === 'file') result.push(child.file);
-    else result.push(...collectFiles(child));
-  }
-  return result;
 }
 
 // ── Checkbox ───────────────────────────────────────────────────────────────
@@ -135,7 +131,7 @@ const LEVEL_PAD = 20;  // indent per depth level
 // ── Shared sub-props type ──────────────────────────────────────────────────
 
 type SharedProps = Pick<Props,
-  'repoId' | 'selectedFile' | 'ctxFile' | 'onSelect' | 'onToggleFile' | 'onSetFiles' |
+  'repoId' | 'repoName' | 'repoRootPath' | 'selectedFile' | 'ctxFile' | 'onSelect' | 'onToggleFile' | 'onSetFiles' |
   'isFileSelected' | 'isCollapsed' | 'toggleCollapsed' | 'onContextMenu' |
   'onFolderContextMenu' | 'onOpenFile' | 'onRollback' | 'onResolveMerge' | 'iconTheme' |
   'activeFolderPath'
@@ -145,9 +141,9 @@ type SharedProps = Pick<Props,
 
 function TreeDirNode({ node, depth, ...shared }: { node: TreeDir; depth: number } & SharedProps) {
   const { repoId, isCollapsed, toggleCollapsed, isFileSelected, onSetFiles, onRollback, onFolderContextMenu, iconTheme, basePad, activeFolderPath } = shared;
-  const collapseKey = `${repoId}:${node.path}`;
+  const collapseKey = scopedKey('tree-dir', repoId, node.path);
   const open = !isCollapsed(collapseKey);
-  const allFiles = collectFiles(node);
+  const allFiles = node.files;
   const selectedCount = allFiles.filter(f => isFileSelected(repoId, f.path)).length;
   const allSelected = selectedCount === allFiles.length;
   const someSelected = selectedCount > 0 && !allSelected;
@@ -187,10 +183,10 @@ function TreeDirNode({ node, depth, ...shared }: { node: TreeDir; depth: number 
           <span style={styles.dirCount}>{allFiles.length}</span>
         </div>
       </div>
-      {open && node.children.map((child, i) =>
+      {open && node.children.map((child) =>
         child.kind === 'dir'
-          ? <TreeDirNode key={i} node={child} depth={depth + 1} {...shared} />
-          : <FileRow key={i} file={child.file} depth={depth + 1} {...shared} />
+          ? <TreeDirNode key={child.path} node={child} depth={depth + 1} {...shared} />
+          : <FileRow key={child.file.path} file={child.file} depth={depth + 1} {...shared} />
       )}
     </div>
   );
@@ -199,16 +195,16 @@ function TreeDirNode({ node, depth, ...shared }: { node: TreeDir; depth: number 
 // ── Single file row ────────────────────────────────────────────────────────
 
 function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: number } & SharedProps) {
-  const { repoId, selectedFile, ctxFile, onSelect, onToggleFile, isFileSelected, onContextMenu, onOpenFile, onRollback, onResolveMerge, iconTheme, basePad } = shared;
+  const { repoId, repoName, repoRootPath, selectedFile, ctxFile, onSelect, onToggleFile, isFileSelected, onContextMenu, onOpenFile, onRollback, onResolveMerge, iconTheme, basePad } = shared;
   const isSelected = selectedFile?.repoId === file.repoId && selectedFile.path === file.path;
   const isCtxActive = !isSelected && ctxFile?.repoId === file.repoId && ctxFile.path === file.path;
   const checked = isFileSelected(repoId, file.path);
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
   const letter = STATUS_LETTERS[file.status] ?? 'M';
   const isRepoRootChange = file.path === '.';
-  const fileName = isRepoRootChange ? baseNameFromPath(repoId) ?? repoId : (file.path.split('/').pop() ?? file.path);
+  const fileName = isRepoRootChange ? repoName : (file.path.split('/').pop() ?? file.path);
   const dir = isRepoRootChange
-    ? repoId
+    ? repoRootPath ?? repoName
     : (() => { const p = file.path.split('/'); return p.length > 1 ? p.slice(0, -1).join('/') : ''; })();
   const [hovered, setHovered] = useState(false);
 
@@ -278,19 +274,19 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
 
 // ── Public component ───────────────────────────────────────────────────────
 
-export function FileTree({ repoId, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath }: Props) {
+export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath }: Props) {
+  const nodes = useMemo(() => viewMode === 'tree' ? buildTree(files) : [], [files, viewMode]);
   if (files.length === 0) return null;
 
-  const shared: SharedProps = { repoId, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, basePad, activeFolderPath };
+  const shared: SharedProps = { repoId, repoName, repoRootPath, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, basePad, activeFolderPath };
 
   if (viewMode === 'tree') {
-    const nodes = buildTree(files);
     return (
       <div style={styles.container}>
-        {nodes.map((node, i) =>
+        {nodes.map((node) =>
           node.kind === 'dir'
-            ? <TreeDirNode key={i} node={node} depth={0} {...shared} />
-            : <FileRow key={i} file={node.file} depth={0} {...shared} />
+            ? <TreeDirNode key={node.path} node={node} depth={0} {...shared} />
+            : <FileRow key={node.file.path} file={node.file} depth={0} {...shared} />
         )}
       </div>
     );

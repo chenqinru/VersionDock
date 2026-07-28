@@ -99,6 +99,7 @@ export type CommitPanelTab = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree'
 
 export type HostToCommitMsg =
   | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; hasWorkspaceFolder?: boolean }
+  | { type: 'COMMIT_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'COMMIT_DIFF_RESULT'; requestId: string; diff: FileDiff | null; error?: string }
   | { type: 'COMMIT_WORKTREE_DIFF_STARTED'; repoId: string; repoName: string; repoColor: string; baseRef: string; currentRef: string; files: FileStatus[] }
   | { type: 'COMMIT_WORKTREE_DIFF_FILES_RESULT'; requestId: string; repoId: string; baseRef: string; currentRef: string; files: FileStatus[]; error?: string }
@@ -122,6 +123,7 @@ export type HostToCommitMsg =
   | { type: 'PUSH_EDIT_MSG_RESULT'; requestId: string; ok: boolean; error?: string }
   | { type: 'COMMIT_SET_MESSAGE'; message: string; requestId?: string }
   | { type: 'COMMIT_SET_ACTIVE_TAB'; tab: CommitPanelTab }
+  | { type: 'COMMIT_TRIGGER_ACTION'; andPush: boolean }
   | { type: 'CHANGELISTS_UPDATE'; changelists: ChangelistData[]; viewMode: 'simplified' | 'changelists' | 'vscode' }
   | { type: 'SUBMODULE_OP_RESULT'; requestId: string; parentRepoId: string; submodulePath: string; op: 'init' | 'deinit' | 'update'; ok: boolean; error?: string }
   | { type: 'SUBMODULE_PUSH_RESULT'; requestId: string; repoId: string; ok: boolean; error?: string }
@@ -158,7 +160,6 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote: string }
   | { type: 'COMMIT_DISCARD_FILE'; requestId: string; repoId: string; path: string }
   | { type: 'COMMIT_DISCARD_FILES'; requestId: string; files: Array<{ repoId: string; path: string }> }
-  | { type: 'COMMIT_DISCARD_ALL'; requestId: string; repoId: string }
   | { type: 'COMMIT_OPEN_DIFF'; repoId: string; filePath: string; staged: boolean }
   | { type: 'COMMIT_SHOW_DIFF_TAB'; repoId: string; filePath: string }
   | { type: 'COMMIT_OPEN_FILE'; repoId: string; filePath: string }
@@ -293,7 +294,7 @@ export type HostToLogMsg =
 // ─── Git Log: WebView → Host ─────────────────────────────────────────────────
 
 export type LogToHostMsg =
-  | { type: 'LOG_REQUEST_COMMITS'; repoIds: string[]; limit: number; skip: number; generation?: number; requestId?: string; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }
+  | { type: 'LOG_REQUEST_COMMITS'; repoIds: string[] | null; limit: number; skip: number; generation?: number; requestId?: string; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }
   | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[] }
   | { type: 'LOG_REQUEST_FILE_DIFF'; requestId: string; repoId: string; hash: string; filePath: string }
   | { type: 'LOG_OPEN_FILE_DIFF'; repoId: string; hash: string; filePath: string; fileStatus?: string; lineRange?: LineRange }
@@ -307,7 +308,6 @@ export type LogToHostMsg =
   | { type: 'LOG_PUSH'; requestId: string; repoId: string; remote?: string; force?: boolean }
   | { type: 'LOG_MERGE'; requestId: string; repoId: string; from: string }
   | { type: 'LOG_REBASE'; requestId: string; repoId: string; onto: string }
-  | { type: 'LOG_COMPARE'; requestId: string; repoId: string; refA: string; refB: string }
   | { type: 'LOG_COMPARE_WITH_CURRENT'; branches: Array<{ repoId: string; branchName: string }> }
   | { type: 'LOG_SHOW_WORKTREE_DIFF'; branches: Array<{ repoId: string; branchName: string }> }
   | { type: 'LOG_REQUEST_COMPARE_COMMITS'; requestId: string; repoId: string; baseRef: string; targetRef: string; side: CompareSide; limit: number; skip: number; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string }

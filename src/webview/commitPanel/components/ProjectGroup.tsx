@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FileStatus, RepoStatus } from '../../shared/types';
 import type { ViewMode } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
@@ -8,10 +8,12 @@ import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { branchColor, tagColor } from '../../shared/branchColors';
 import { mergeRepoFiles } from '../utils/mergeRepoFiles';
+import { scopedKey } from '../../shared/scopedKey';
 
 interface Props {
   repoStatus: RepoStatus;
   repoName: string;
+  repoRootPath?: string;
   repoColor: string;
   showVcsBadge: boolean;
   isFirst?: boolean;
@@ -42,7 +44,7 @@ interface Props {
 }
 
 export function ProjectGroup({
-  repoStatus, repoName, repoColor, showVcsBadge, isFirst = false,
+  repoStatus, repoName, repoRootPath, repoColor, showVcsBadge, isFirst = false,
   isSubmodule, submodulePath, isWorktree, mainWorktreePath, kind,
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
@@ -50,12 +52,17 @@ export function ProjectGroup({
   onBranchClick, onRepoContextMenu, onOpenAllChanges, iconTheme, activeFolderPath, ctxFile,
 }: Props) {
   const repoId = repoStatus.repoId;
-  const collapsed = isCollapsed(repoId);
+  const repoCollapseKey = scopedKey('repo', repoId);
+  const collapsed = isCollapsed(repoCollapseKey);
   const branchClr = repoStatus.branch.detachedTag
     ? tagColor()
     : branchColor(repoStatus.branch.name, true);
+  const { stagedFiles, unstagedFiles } = repoStatus;
 
-  const allFiles = mergeRepoFiles(repoStatus);
+  const allFiles = useMemo(
+    () => mergeRepoFiles({ stagedFiles, unstagedFiles }),
+    [stagedFiles, unstagedFiles],
+  );
 
   const totalFiles = allFiles.length;
   const selectedCount = allFiles.filter(f => isFileSelected(repoId, f.path)).length;
@@ -92,7 +99,7 @@ export function ProjectGroup({
           title={totalFiles > 0 ? t('Select all files in this repo') : undefined}
         />
 
-        <div style={styles.headerMain} onClick={() => toggleCollapsed(repoId)}>
+        <div style={styles.headerMain} onClick={() => toggleCollapsed(repoCollapseKey)}>
           <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
           <span style={styles.dot(repoColor)} />
           <span style={styles.name}>
@@ -146,6 +153,8 @@ export function ProjectGroup({
           {allFiles.length > 0 ? (
             <FileTree
               repoId={repoId}
+              repoName={repoName}
+              repoRootPath={repoRootPath}
               files={allFiles}
               iconTheme={iconTheme}
               selectedFile={selectedFile}

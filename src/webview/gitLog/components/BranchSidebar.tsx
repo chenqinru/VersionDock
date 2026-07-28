@@ -1,9 +1,10 @@
-import React, { useState, useRef, useLayoutEffect, useEffect, forwardRef } from 'react';
+import React, { useState, useRef, useLayoutEffect, forwardRef } from 'react';
 import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { isPrimaryBranch } from '../../shared/branchUtils';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
+import { branchRevisionRef } from '../utils/refs';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
@@ -14,9 +15,10 @@ interface Props {
   tags: TagInfo[];
   filter: string;
   selectedBranchFilter: string;
+  selectedBranchRepoIds: readonly string[] | null;
   selectedRepoId: string | null;
   onFilterChange: (v: string) => void;
-  onBranchFilterSelect: (branchName: string) => void;
+  onBranchFilterSelect: (branchName: string, repoIds: string[]) => void;
   onRepoFilterSelect: (repoId: string) => void;
   onCheckout: (repoIds: string[], branchName: string) => void;
   onMerge: (repoId: string, from: string) => void;
@@ -41,10 +43,16 @@ function stripRemotePrefix(name: string): string {
 }
 
 function getBranchBaseName(branch: BranchInfo): string {
-  return branch.isRemote ? stripRemotePrefix(branch.name) : branch.name;
+  if (!branch.isRemote) return branch.name;
+  const prefix = branch.remoteName ? `${branch.remoteName}/` : '';
+  return prefix && branch.name.startsWith(prefix)
+    ? branch.name.slice(prefix.length)
+    : stripRemotePrefix(branch.name);
 }
 
 interface MergedBranch {
+  key: string;
+  vcsKind: 'git' | 'svn';
   baseName: string;
   isPrimary: boolean;
   isHead: boolean;
@@ -52,17 +60,21 @@ interface MergedBranch {
   repoIds: string[];
 }
 
-function buildMergedBranches(branches: BranchInfo[]): MergedBranch[] {
+function buildMergedBranches(branches: BranchInfo[], repoKindMap: Record<string, 'git' | 'svn'>): MergedBranch[] {
   const map = new Map<string, MergedBranch>();
   for (const b of branches) {
     const baseName = getBranchBaseName(b);
-    const existing = map.get(baseName);
+    const vcsKind = repoKindMap[b.repoId] ?? 'git';
+    const key = `${vcsKind}:${baseName}`;
+    const existing = map.get(key);
     if (existing) {
       existing.instances.push(b);
       if (!existing.repoIds.includes(b.repoId)) existing.repoIds.push(b.repoId);
       if (b.isHead) existing.isHead = true;
     } else {
-      map.set(baseName, {
+      map.set(key, {
+        key,
+        vcsKind,
         baseName,
         isPrimary: isPrimaryBranch(baseName),
         isHead: b.isHead,
@@ -83,18 +95,22 @@ function sortMerged(list: MergedBranch[]): MergedBranch[] {
 }
 
 interface MergedTag {
+  key: string;
+  vcsKind: 'git' | 'svn';
   name: string;
   repoIds: string[];
 }
 
-function buildMergedTags(tags: TagInfo[]): MergedTag[] {
+function buildMergedTags(tags: TagInfo[], repoKindMap: Record<string, 'git' | 'svn'>): MergedTag[] {
   const map = new Map<string, MergedTag>();
   for (const t of tags) {
-    const existing = map.get(t.name);
+    const vcsKind = repoKindMap[t.repoId] ?? 'git';
+    const key = `${vcsKind}:${t.name}`;
+    const existing = map.get(key);
     if (existing) {
       if (!existing.repoIds.includes(t.repoId)) existing.repoIds.push(t.repoId);
     } else {
-      map.set(t.name, { name: t.name, repoIds: [t.repoId] });
+      map.set(key, { key, vcsKind, name: t.name, repoIds: [t.repoId] });
     }
   }
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -102,7 +118,7 @@ function buildMergedTags(tags: TagInfo[]): MergedTag[] {
 
 export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSidebar({
   repos, branches, tags, filter, selectedBranchFilter, onFilterChange, onBranchFilterSelect,
-  selectedRepoId, onRepoFilterSelect,
+  selectedBranchRepoIds, selectedRepoId, onRepoFilterSelect,
   onCheckout, onMerge, onRebase, onCompareWithCurrent, onShowWorktreeDiff, onDelete, onFetchRepo: _onFetchRepo, onPull, onPush,
   onCheckoutTag, onMergeTag, onPushTag, onDeleteTag, onCollapse,
 }, ref) {
@@ -119,15 +135,23 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
     });
   }
 
+  const repoColorMap = Object.fromEntries(repos.map(r => [r.id, r.color]));
+  const repoKindMap: Record<string, 'git' | 'svn'> = Object.fromEntries(
+    repos.map(r => [r.id, r.kind ?? 'git']),
+  );
+
   const filtered = filter
     ? branches.filter(b => b.name.toLowerCase().includes(filter.toLowerCase()))
     : branches;
 
   // Exclude detached HEAD pseudo-branch from Local list — it shows up as a tag row instead
-  const localMerged = sortMerged(buildMergedBranches(filtered.filter(b => !b.isRemote && b.name !== 'HEAD')));
+  const localMerged = sortMerged(buildMergedBranches(
+    filtered.filter(b => !b.isRemote && b.name !== 'HEAD'),
+    repoKindMap,
+  ));
 
   // Group remote branches by remote name (e.g. "origin", "upstream"), sorted alphabetically
-  const remoteBranches = filtered.filter(b => b.isRemote && stripRemotePrefix(b.name) !== 'HEAD');
+  const remoteBranches = filtered.filter(b => b.isRemote && getBranchBaseName(b) !== 'HEAD');
   const remoteGroupsMap = new Map<string, BranchInfo[]>();
   for (const b of remoteBranches) {
     const rName = b.remoteName ?? b.name.split('/')[0] ?? 'remote';
@@ -136,17 +160,20 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   }
   const remoteGroups: { name: string; merged: MergedBranch[] }[] = Array.from(remoteGroupsMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, bs]) => ({ name, merged: sortMerged(buildMergedBranches(bs)) }));
+    .map(([name, bs]) => ({ name, merged: sortMerged(buildMergedBranches(bs, repoKindMap)) }));
 
   // Active detached tag name(s) — shown as "current" in the Tags section
-  const activeDetachedTags = new Set(branches.filter(b => b.detachedTag).map(b => b.detachedTag!));
-
-  const mergedTags = buildMergedTags(
-    filter ? tags.filter(t => t.name.toLowerCase().includes(filter.toLowerCase())) : tags
+  const activeDetachedTags = new Set(
+    branches
+      .filter(b => b.detachedTag)
+      .map(b => `${repoKindMap[b.repoId] ?? 'git'}:${b.detachedTag!}`),
   );
 
-  const repoColorMap = Object.fromEntries(repos.map(r => [r.id, r.color]));
-  const repoKindMap = Object.fromEntries(repos.map(r => [r.id, r.kind ?? 'git']));
+  const mergedTags = buildMergedTags(
+    filter ? tags.filter(t => t.name.toLowerCase().includes(filter.toLowerCase())) : tags,
+    repoKindMap,
+  );
+
   const multiRepo = repos.length > 1;
   const showVcsBadges = repos.some(repo => repo.kind === 'svn')
     && repos.some(repo => repo.kind !== 'svn');
@@ -155,8 +182,16 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
     return merged.instances.find(i => i.isHead) ?? merged.instances[0];
   }
 
-  function isSvnOnly(repoIds: string[]): boolean {
-    return repoIds.length > 0 && repoIds.every(repoId => repoKindMap[repoId] === 'svn');
+  function revisionRef(merged: MergedBranch): string {
+    return branchRevisionRef(primaryInstance(merged), merged.vcsKind);
+  }
+
+  function isSelectedBranchScope(merged: MergedBranch, branchName: string): boolean {
+    if (selectedBranchFilter !== branchName) return false;
+    if (!selectedBranchRepoIds) return true;
+    if (selectedBranchRepoIds.length !== merged.repoIds.length) return false;
+    const selected = new Set(selectedBranchRepoIds);
+    return merged.repoIds.every(repoId => selected.has(repoId));
   }
 
   return (
@@ -245,21 +280,22 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
       </div>
       {!collapsed.has('local') && localMerged.map(m => (
         <BranchRow
-          key={m.baseName}
+          key={m.key}
           merged={m}
           repoColorMap={repoColorMap}
           multiRepo={multiRepo}
-          isSvn={isSvnOnly(m.repoIds)}
-          isClickSelected={activeItem === `branch:local:${m.baseName}`}
-          isFilterSelected={selectedBranchFilter === m.baseName}
-          isCtxActive={contextMenu?.merged.baseName === m.baseName}
-          onClick={() => setActiveItem(`branch:local:${m.baseName}`)}
+          isSvn={m.vcsKind === 'svn'}
+          showVcsBadge={showVcsBadges}
+          isClickSelected={activeItem === `branch:local:${m.key}`}
+          isFilterSelected={isSelectedBranchScope(m, revisionRef(m))}
+          isCtxActive={contextMenu?.merged.key === m.key}
+          onClick={() => setActiveItem(`branch:local:${m.key}`)}
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
             setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
           }}
-          onDoubleClick={() => onBranchFilterSelect(m.baseName)}
+          onDoubleClick={() => onBranchFilterSelect(revisionRef(m), m.repoIds)}
         />
       ))}
 
@@ -274,25 +310,29 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
               <span style={styles.sectionLabel}>{name.charAt(0).toUpperCase() + name.slice(1)}</span>
               <span style={styles.count}>{merged.length}</span>
             </div>
-            {!collapsed.has(sectionKey) && merged.map(m => (
-              <BranchRow
-                key={m.baseName}
-                merged={m}
-                repoColorMap={repoColorMap}
-                multiRepo={multiRepo}
-                isSvn={isSvnOnly(m.repoIds)}
-                isClickSelected={activeItem === `branch:${sectionKey}:${m.baseName}`}
-                isFilterSelected={selectedBranchFilter === m.baseName}
-                isCtxActive={contextMenu?.merged.baseName === m.baseName}
-                onClick={() => setActiveItem(`branch:${sectionKey}:${m.baseName}`)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
-                }}
-                onDoubleClick={() => onBranchFilterSelect(m.baseName)}
-              />
-            ))}
+            {!collapsed.has(sectionKey) && merged.map(m => {
+              const fullName = revisionRef(m);
+              return (
+                <BranchRow
+                  key={m.key}
+                  merged={m}
+                  repoColorMap={repoColorMap}
+                  multiRepo={multiRepo}
+                  isSvn={m.vcsKind === 'svn'}
+                  showVcsBadge={showVcsBadges}
+                  isClickSelected={activeItem === `branch:${sectionKey}:${m.key}`}
+                  isFilterSelected={isSelectedBranchScope(m, fullName)}
+                  isCtxActive={contextMenu?.merged.key === m.key}
+                  onClick={() => setActiveItem(`branch:${sectionKey}:${m.key}`)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
+                  }}
+                  onDoubleClick={() => onBranchFilterSelect(fullName, m.repoIds)}
+                />
+              );
+            })}
           </React.Fragment>
         );
       })}
@@ -308,14 +348,16 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
           </div>
           {!collapsed.has('tags') && mergedTags.map(mt => (
             <TagRow
-              key={mt.name}
+              key={mt.key}
               mergedTag={mt}
               repoColorMap={repoColorMap}
               multiRepo={multiRepo}
-              isActive={activeDetachedTags.has(mt.name)}
-              isClickSelected={activeItem === `tag:${mt.name}`}
-              isCtxActive={tagContextMenu?.mergedTag.name === mt.name}
-              onClick={() => setActiveItem(`tag:${mt.name}`)}
+              isSvn={mt.vcsKind === 'svn'}
+              showVcsBadge={showVcsBadges}
+              isActive={activeDetachedTags.has(mt.key)}
+              isClickSelected={activeItem === `tag:${mt.key}`}
+              isCtxActive={tagContextMenu?.mergedTag.key === mt.key}
+              onClick={() => setActiveItem(`tag:${mt.key}`)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -329,27 +371,34 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
       {/* Branch context menu */}
       {contextMenu && (() => {
         const inst = primaryInstance(contextMenu.merged);
-        const isSvn = isSvnOnly(contextMenu.merged.repoIds);
+        const isSvn = contextMenu.merged.vcsKind === 'svn';
         return (
           <ContextMenu
             merged={contextMenu.merged}
             x={contextMenu.x}
             y={contextMenu.y}
             isSvn={isSvn}
-            canDelete={!contextMenu.merged.isHead}
+            isRemote={inst.isRemote}
+            canDelete={!contextMenu.merged.isHead && !inst.isRemote}
             canCompare={!contextMenu.merged.isHead}
             onClose={() => setContextMenu(null)}
             onCheckout={() => { onCheckout(contextMenu.merged.repoIds, inst.name); setContextMenu(null); }}
             onCompareWithCurrent={() => {
-              onCompareWithCurrent(contextMenu.merged.instances.map(item => ({ repoId: item.repoId, branchName: item.name })));
+              onCompareWithCurrent(contextMenu.merged.instances.map(item => ({
+                repoId: item.repoId,
+                branchName: branchRevisionRef(item, contextMenu.merged.vcsKind),
+              })));
               setContextMenu(null);
             }}
             onShowWorktreeDiff={() => {
-              onShowWorktreeDiff(contextMenu.merged.instances.map(item => ({ repoId: item.repoId, branchName: item.name })));
+              onShowWorktreeDiff(contextMenu.merged.instances.map(item => ({
+                repoId: item.repoId,
+                branchName: branchRevisionRef(item, contextMenu.merged.vcsKind),
+              })));
               setContextMenu(null);
             }}
-            onMerge={() => { onMerge(inst.repoId, inst.name); setContextMenu(null); }}
-            onRebase={() => { onRebase(inst.repoId, inst.name); setContextMenu(null); }}
+            onMerge={() => { onMerge(inst.repoId, branchRevisionRef(inst, contextMenu.merged.vcsKind)); setContextMenu(null); }}
+            onRebase={() => { onRebase(inst.repoId, branchRevisionRef(inst, contextMenu.merged.vcsKind)); setContextMenu(null); }}
             onDelete={() => { onDelete(contextMenu.merged.repoIds, inst.name); setContextMenu(null); }}
             onPull={() => { onPull(inst.repoId, inst.isRemote ? undefined : inst.name); setContextMenu(null); }}
             onPush={() => { onPush(inst.repoId); setContextMenu(null); }}
@@ -363,8 +412,8 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
           mergedTag={tagContextMenu.mergedTag}
           x={tagContextMenu.x}
           y={tagContextMenu.y}
-          isSvn={isSvnOnly(tagContextMenu.mergedTag.repoIds)}
-          canDelete={!activeDetachedTags.has(tagContextMenu.mergedTag.name)}
+          isSvn={tagContextMenu.mergedTag.vcsKind === 'svn'}
+          canDelete={!activeDetachedTags.has(tagContextMenu.mergedTag.key)}
           onClose={() => setTagContextMenu(null)}
           onCheckout={() => { onCheckoutTag(tagContextMenu.mergedTag.repoIds, tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
           onMerge={() => { onMergeTag(tagContextMenu.mergedTag.repoIds, tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
@@ -376,11 +425,12 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   );
 });
 
-function BranchRow({ merged, repoColorMap, multiRepo, isSvn, isClickSelected, isFilterSelected, isCtxActive, onClick, onContextMenu, onDoubleClick }: {
+function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isClickSelected, isFilterSelected, isCtxActive, onClick, onContextMenu, onDoubleClick }: {
   merged: MergedBranch;
   repoColorMap: Record<string, string>;
   multiRepo: boolean;
   isSvn: boolean;
+  showVcsBadge: boolean;
   isClickSelected: boolean;
   isFilterSelected: boolean;
   isCtxActive: boolean;
@@ -419,6 +469,12 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, isClickSelected, is
 
       <span style={styles.branchName(isHead, isPrimary)}>{baseName}</span>
 
+      {showVcsBadge && (
+        <span style={styles.vcsBadge(isSvn ? 'svn' : 'git')}>
+          {isSvn ? 'SVN' : 'GIT'}
+        </span>
+      )}
+
       {isHead && (
         <span style={styles.headBadge} title={t('current branch')}>
           HEAD
@@ -443,10 +499,12 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, isClickSelected, is
   );
 }
 
-function TagRow({ mergedTag, repoColorMap, multiRepo, isActive, isClickSelected, isCtxActive, onClick, onContextMenu }: {
+function TagRow({ mergedTag, repoColorMap, multiRepo, isSvn, showVcsBadge, isActive, isClickSelected, isCtxActive, onClick, onContextMenu }: {
   mergedTag: MergedTag;
   repoColorMap: Record<string, string>;
   multiRepo: boolean;
+  isSvn: boolean;
+  showVcsBadge: boolean;
   isActive: boolean;
   isClickSelected: boolean;
   isCtxActive: boolean;
@@ -460,10 +518,18 @@ function TagRow({ mergedTag, repoColorMap, multiRepo, isActive, isClickSelected,
       style={styles.branchRow(false, isClickSelected, hovered, isCtxActive)}
       className="versiondock-sidebar-row"
       data-selected={isClickSelected}
+      role="button"
+      tabIndex={0}
+      aria-pressed={isClickSelected}
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={onContextMenu}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onClick();
+      }}
       title={`${t('Tag: {0}', mergedTag.name)}${isActive ? ` (${t('current')})` : ''}\n${t('Right-click for actions')}`}
     >
       <Codicon
@@ -477,6 +543,11 @@ function TagRow({ mergedTag, repoColorMap, multiRepo, isActive, isClickSelected,
         }}
       />
       <span style={styles.branchName(isActive, false)}>{mergedTag.name}</span>
+      {showVcsBadge && (
+        <span style={styles.vcsBadge(isSvn ? 'svn' : 'git')}>
+          {isSvn ? 'SVN' : 'GIT'}
+        </span>
+      )}
       {multiRepo && (
         <span style={styles.dotGroup}>
           {mergedTag.repoIds.map(id => (
@@ -498,8 +569,8 @@ function useClampedPosition(x: number, y: number) {
     const vh = window.innerHeight;
     const left = rect.right > vw ? Math.max(0, x - (rect.right - vw) - 4) : x;
     const top = rect.bottom > vh ? Math.max(0, y - (rect.bottom - vh) - 4) : y;
-    if (left !== x || top !== y) setPos({ left, top });
-  }, []);
+    setPos({ left, top });
+  }, [x, y]);
   return { ref, pos };
 }
 
@@ -539,7 +610,17 @@ const INTERACTION_STYLE = `
 function MenuItemRow({ item }: { item: MenuItem }) {
   if ('sep' in item) return <div style={styles.separator} />;
   return (
-    <div style={styles.menuItem(item.danger)} onClick={item.action}>
+    <div
+      role="menuitem"
+      tabIndex={0}
+      style={styles.menuItem(item.danger)}
+      onClick={item.action}
+      onKeyDown={event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        item.action();
+      }}
+    >
       <Codicon name={item.icon} style={styles.menuIcon} />
       {item.label}
     </div>
@@ -572,17 +653,18 @@ function TagContextMenu({ mergedTag, x, y, isSvn, canDelete, onClose, onCheckout
   return (
     <>
       <div style={styles.backdrop} onClick={onClose} />
-      <div ref={ref} style={styles.contextMenu(pos.left, pos.top)}>
+      <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)}>
         {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
       </div>
     </>
   );
 }
 
-function ContextMenu({ merged, x, y, isSvn, canDelete, canCompare, onClose, onCheckout, onCompareWithCurrent, onShowWorktreeDiff, onMerge, onRebase, onDelete, onPull, onPush }: {
+function ContextMenu({ merged, x, y, isSvn, isRemote, canDelete, canCompare, onClose, onCheckout, onCompareWithCurrent, onShowWorktreeDiff, onMerge, onRebase, onDelete, onPull, onPush }: {
   merged: MergedBranch;
   x: number; y: number;
   isSvn: boolean;
+  isRemote: boolean;
   canDelete: boolean;
   canCompare: boolean;
   onClose: () => void;
@@ -607,16 +689,18 @@ function ContextMenu({ merged, x, y, isSvn, canDelete, canCompare, onClose, onCh
     ] : []),
     { icon: 'git-merge', label: isSvn ? t('Merge into working copy') : t('Merge into current'), action: onMerge },
     ...(!isSvn ? [{ icon: 'repo-forked', label: t("Rebase onto '{0}'", merged.baseName), action: onRebase }] satisfies MenuItem[] : []),
-    { sep: true },
-    { icon: 'cloud-download', label: isSvn ? t('Update') : t('Pull'), action: onPull },
-    ...(!isSvn ? [{ icon: 'cloud-upload', label: t('Push...'), action: onPush }] satisfies MenuItem[] : []),
+    ...(!isRemote ? [
+      { sep: true as const },
+      { icon: 'cloud-download', label: isSvn ? t('Update') : t('Pull'), action: onPull },
+      ...(!isSvn ? [{ icon: 'cloud-upload', label: t('Push...'), action: onPush }] satisfies MenuItem[] : []),
+    ] : []),
     ...(canDelete ? [{ sep: true as const }, { icon: 'trash', label: isSvn ? t('Delete SVN branch') : t('Delete branch'), action: onDelete, danger: true }] : []),
   ];
 
   return (
     <>
       <div style={styles.backdrop} onClick={onClose} />
-      <div ref={ref} style={styles.contextMenu(pos.left, pos.top)}>
+      <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)}>
         {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
       </div>
     </>

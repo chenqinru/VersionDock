@@ -15,6 +15,9 @@ window.addEventListener = function(
   if (type !== 'message' || !listener) {
     return originalAdd(type, listener, options as boolean | undefined);
   }
+  // Match native addEventListener semantics: adding the same listener twice
+  // for the same message channel must not create duplicate subscriptions.
+  if (wrappedHandlers.has(listener as object)) return;
   const handler = typeof listener === 'function'
     ? listener
     : (event: Event) => listener.handleEvent(event);
@@ -35,8 +38,9 @@ window.removeEventListener = function(
   if (!handler) return;
   wrappedHandlers.delete(listener as object);
   const removeFrom = (handlers: Array<(event: MessageEvent) => void>) => {
-    const index = handlers.indexOf(handler);
-    if (index >= 0) handlers.splice(index, 1);
+    for (let index = handlers.length - 1; index >= 0; index -= 1) {
+      if (handlers[index] === handler) handlers.splice(index, 1);
+    }
   };
   removeFrom(logHandlers);
   removeFrom(commitHandlers);

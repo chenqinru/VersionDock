@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { LogCommitPathEntry, LogToHostMsg, HostToLogMsg } from '../types/messages';
@@ -13,6 +14,8 @@ import { openEditMessageEditor } from './EditMessageEditorPanel';
 import { formatRepoLabel } from '../utils/repoLabels';
 import { toGitUri } from '../utils/resourceUri';
 import type { SvnService } from '../svn/SvnService';
+import { assertNoSymlinkAncestors } from '../utils/repoPath';
+import { scopedKey } from '../utils/scopedKey';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -27,9 +30,13 @@ type DeleteTagChoice = 'local' | 'remote' | 'both' | null;
 type HistoryFilter = { repoId: string; filePath: string; lineRange?: LineRange };
 type ChangesResource = [vscode.Uri, vscode.Uri, vscode.Uri];
 
-async function confirmDeleteTag(tagName: string, title: string): Promise<DeleteTagChoice> {
+function formatRevisionRefLabel(ref: string): string {
+  return ref.replace(/^refs\/(?:heads|remotes|tags)\//, '');
+}
+
+async function confirmDeleteTag(title: string): Promise<DeleteTagChoice> {
   const pick = await vscode.window.showWarningMessage(
-    t('Delete tag "{0}"?', tagName),
+    title,
     { modal: true },
     t('Delete Local'),
     t('Delete on Remote'),
@@ -86,10 +93,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private disposables: vscode.Disposable[] = [];
   private readonly managerListeners: vscode.Disposable[] = [];
   private refreshDebounce: ReturnType<typeof setTimeout> | null = null;
+  private managerSyncGeneration = 0;
+  private readonly tagSyncGenerations = new Map<string, number>();
   private commitPanel?: CommitPanelProvider;
   private undockedPanel?: UndockedPanelProvider;
-  private activeReplyTarget: 'sidebar' | 'undocked' = 'sidebar';
-  private readonly replyTargetByRequestId = new Map<string, 'sidebar' | 'undocked'>();
+  private readonly replyTarget = new AsyncLocalStorage<'sidebar' | 'undocked'>();
   private readonly svnDiffOpenTasks = new Map<string, Promise<void>>();
   private pendingHistoryFilter?: HistoryFilter;
   private hiddenRepoIds: string[] = [];
@@ -106,14 +114,24 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   handleUndockedMessage(msg: LogToHostMsg, _provider: UndockedPanelProvider): void {
     if (msg.type === 'LOG_UNDOCK') return;
-    this.activeReplyTarget = 'undocked';
-    this.handleMessage(msg, 'undocked').finally(() => { this.activeReplyTarget = 'sidebar'; });
+    void this.replyTarget.run('undocked', () => this.handleMessage(msg)).catch(error => {
+      console.error('[VersionDock] Undocked log-panel message failed:', error);
+    });
   }
 
   notifyHiddenReposChanged(hiddenRepoIds: string[]): void {
     this.hiddenRepoIds = hiddenRepoIds;
-    this.getFilteredBranches().then(branches => {
-      this.post({ type: 'LOG_INIT_DATA', repos: this.getVisibleRepos(), branches });
+    for (const [repoId, generation] of this.tagSyncGenerations) {
+      this.tagSyncGenerations.set(repoId, generation + 1);
+    }
+    const generation = ++this.managerSyncGeneration;
+    const repos = this.getVisibleRepos();
+    void this.getFilteredBranches(repos).then(branches => {
+      if (generation !== this.managerSyncGeneration) return;
+      this.post({ type: 'LOG_INIT_DATA', repos, branches });
+      this.post({ type: 'LOG_REFRESH' });
+    }).catch(error => {
+      console.error('[VersionDock] Failed to apply hidden repositories to Git Log:', error);
     });
   }
 
@@ -125,25 +143,29 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     // Register manager listeners here so they fire even when the panel has never been opened.
     // this.post() silently drops messages when the webview is not yet resolved — that's fine,
     // because resolveWebviewView performs an explicit initial sync when the panel first opens.
+    const syncManagerState = async () => {
+        const generation = ++this.managerSyncGeneration;
+        const repos = this.getVisibleRepos();
+        const branches = await this.getFilteredBranches(repos);
+        if (generation !== this.managerSyncGeneration) return;
+        this.post({ type: 'LOG_INIT_DATA', repos, branches });
+        if (this.refreshDebounce) clearTimeout(this.refreshDebounce);
+        this.refreshDebounce = setTimeout(() => this.post({ type: 'LOG_REFRESH' }), 300);
+    };
+    const scheduleManagerSync = () => {
+      void syncManagerState().catch(error => {
+        console.error('[VersionDock] Failed to synchronize Git Log repositories:', error);
+      });
+    };
     this.managerListeners.push(
-      this.manager.onBranchChange(async () => {
-        const repos = this.getVisibleRepos();
-        const branches = await this.getFilteredBranches();
-        this.post({ type: 'LOG_INIT_DATA', repos, branches });
-        if (this.refreshDebounce) clearTimeout(this.refreshDebounce);
-        this.refreshDebounce = setTimeout(() => this.post({ type: 'LOG_REFRESH' }), 300);
-      }),
-      this.manager.onReposChange(async () => {
-        const repos = this.getVisibleRepos();
-        const branches = await this.getFilteredBranches();
-        this.post({ type: 'LOG_INIT_DATA', repos, branches });
-        if (this.refreshDebounce) clearTimeout(this.refreshDebounce);
-        this.refreshDebounce = setTimeout(() => this.post({ type: 'LOG_REFRESH' }), 300);
-      })
+      this.manager.onBranchChange(scheduleManagerSync),
+      this.manager.onReposChange(scheduleManagerSync),
     );
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.disposables.forEach(disposable => disposable.dispose());
+    this.disposables = [];
     this.view = webviewView;
 
     webviewView.webview.options = {
@@ -163,7 +185,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     );
 
     webviewView.webview.onDidReceiveMessage(
-      (msg: LogToHostMsg) => this.handleMessage(msg, 'sidebar'),
+      (msg: LogToHostMsg) => {
+        void this.replyTarget.run('sidebar', () => this.handleMessage(msg)).catch(error => {
+          console.error('[VersionDock] Sidebar log-panel message failed:', error);
+        });
+      },
       null,
       this.disposables
     );
@@ -172,35 +198,41 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       vscode.workspace.onDidChangeConfiguration(e => {
         if (e.affectsConfiguration('workbench.iconTheme') || e.affectsConfiguration('workbench.colorTheme')) {
           if (this.view) {
-            loadIconTheme(this.view.webview).then(iconTheme => {
+            void loadIconTheme(this.view.webview).then(iconTheme => {
               this.post({ type: 'LOG_ICON_THEME_UPDATE', iconTheme });
-            });
+            }).catch(() => { /* icon theme optional */ });
           }
         }
       })
     );
 
-    webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible && this.pendingFilterRepoId !== null) {
-        const repoId = this.pendingFilterRepoId;
-        const branch = this.pendingFilterBranch;
-        this.pendingFilterRepoId = null;
-        this.pendingFilterBranch = null;
-        // Small delay to let the webview finish its initial LOG_REQUEST_COMMITS round-trip
-        setTimeout(() => this.post({ type: 'LOG_FILTER_BY_REPO', repoId, branch }), 150);
-      }
-    });
+    this.disposables.push(
+      webviewView.onDidChangeVisibility(() => {
+        if (webviewView.visible && this.pendingFilterRepoId !== null) {
+          const repoId = this.pendingFilterRepoId;
+          const branch = this.pendingFilterBranch;
+          this.pendingFilterRepoId = null;
+          this.pendingFilterBranch = null;
+          // Small delay to let the webview finish its initial LOG_REQUEST_COMMITS round-trip
+          setTimeout(() => this.post({ type: 'LOG_FILTER_BY_REPO', repoId, branch }), 150);
+        }
+      })
+    );
 
-    webviewView.onDidDispose(() => {
-      this.view = undefined;
-      this.disposables.forEach(d => d.dispose());
-      this.disposables = [];
-    });
+    this.disposables.push(
+      webviewView.onDidDispose(() => {
+        if (this.view !== webviewView) return;
+        this.view = undefined;
+        const disposables = this.disposables;
+        this.disposables = [];
+        disposables.forEach(disposable => disposable.dispose());
+      })
+    );
   }
 
   /** Focus/reveal the Git Log panel in the bottom bar. */
-  focus(): void {
-    vscode.commands.executeCommand(`${GitLogPanelProvider.viewType}.focus`);
+  focus(): Thenable<void> {
+    return vscode.commands.executeCommand(`${GitLogPanelProvider.viewType}.focus`);
   }
 
   async showFileHistoryForFile(filePath: string, lineRange?: LineRange): Promise<void> {
@@ -226,12 +258,22 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /** Focus the panel and filter the log to a specific repository (and optionally branch). */
-  focusRepo(repoId: string, branch?: string): void {
+  focusRepo(repoId: string, branch?: string, target: 'sidebar' | 'undocked' = 'sidebar'): void {
+    const repo = this.manager.getRepo(repoId);
+    const filterBranch = branch && repo?.kind === 'git' && !branch.startsWith('refs/')
+      ? `refs/heads/${branch}`
+      : branch;
+    if (target === 'undocked') {
+      this.replyTarget.run('undocked', () => {
+        this.post({ type: 'LOG_FILTER_BY_REPO', repoId, branch: filterBranch });
+      });
+      return;
+    }
     this.pendingFilterRepoId = repoId;
-    this.pendingFilterBranch = branch ?? null;
+    this.pendingFilterBranch = filterBranch ?? null;
     this.focus();
     if (this.view?.visible) {
-      this.post({ type: 'LOG_FILTER_BY_REPO', repoId, branch });
+      this.post({ type: 'LOG_FILTER_BY_REPO', repoId, branch: filterBranch });
       this.pendingFilterRepoId = null;
       this.pendingFilterBranch = null;
     }
@@ -247,22 +289,18 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const m = msg as typeof msg & { hasWorkspaceFolder?: boolean };
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
     }
-    const requestId = 'requestId' in msg ? msg.requestId : undefined;
-    const replyTarget = requestId ? this.replyTargetByRequestId.get(requestId) : undefined;
-    const target = replyTarget ?? this.activeReplyTarget;
-    if (requestId && replyTarget) this.replyTargetByRequestId.delete(requestId);
-
-    if (target === 'undocked') {
+    const broadcast = msg.type === 'LOG_INIT_DATA'
+      || msg.type === 'LOG_ICON_THEME_UPDATE'
+      || msg.type === 'LOG_REFRESH'
+      || msg.type === 'LOG_REFS_UPDATE'
+      || msg.type === 'LOG_TAGS_UPDATE';
+    if (this.replyTarget.getStore() === 'undocked') {
       this.undockedPanel?.postToLog(msg);
+      if (broadcast) this.view?.webview.postMessage(msg);
       return;
     }
     this.view?.webview.postMessage(msg);
-    if (
-      msg.type === 'LOG_INIT_DATA'
-      || msg.type === 'LOG_REFRESH'
-      || msg.type === 'LOG_REFS_UPDATE'
-      || msg.type === 'LOG_TAGS_UPDATE'
-    ) {
+    if (broadcast) {
       this.undockedPanel?.postToLog(msg);
     }
   }
@@ -285,12 +323,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const meta = metas.find(item => item.id === branch.repoId);
       return {
         label: meta ? formatRepoLabel(meta) : branch.repoId,
-        description: branch.branchName,
+        description: formatRevisionRefLabel(branch.branchName),
         branch,
       };
     });
     const picked = await vscode.window.showQuickPick(items, {
-      title: t('Choose a repository for "{0}"', branches[0].branchName.replace(/^[^/]+\//, '')),
+      title: t('Choose a repository for "{0}"', formatRevisionRefLabel(branches[0].branchName)),
       matchOnDescription: true,
     });
     return picked?.branch ?? null;
@@ -334,8 +372,14 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   ): Promise<void> {
     const relativePath = repo.resolveRepoPath(filePath).relativePath;
     const lineRange = options?.lineRange;
-    const rangeKey = lineRange ? `${lineRange.start}-${lineRange.end}` : '';
-    const taskKey = `${repo.repoId}:${hash}:${relativePath}:${options?.fileStatus ?? ''}:${rangeKey}`;
+    const taskKey = scopedKey(
+      repo.repoId,
+      hash,
+      relativePath,
+      options?.fileStatus ?? '',
+      String(lineRange?.start ?? ''),
+      String(lineRange?.end ?? ''),
+    );
     const existingTask = this.svnDiffOpenTasks.get(taskKey);
     if (existingTask) {
       await existingTask;
@@ -347,6 +391,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       // Fetching both revision contents directly avoids a redundant `svn diff` round trip;
       // SvnService also caches and coalesces these immutable `svn cat` requests.
       const contents = await repo.getRevisionFileContents(hash, relativePath, options?.fileStatus);
+      if (contents.isBinary) {
+        vscode.window.showInformationMessage(t('Binary file — no diff available'));
+        return;
+      }
       const normalizedStatus = (options?.fileStatus ?? '').toUpperCase();
       if (!contents.originalContent && !contents.modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
         vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
@@ -389,7 +437,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     loadContents: (
       file: { path: string; status?: string },
       relativePath: string,
-    ) => Promise<{ originalContent: string; modifiedContent: string }>,
+    ) => Promise<{ originalContent: string; modifiedContent: string; isBinary?: boolean }>,
   ): Promise<ChangesResource[]> {
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const eligibleFiles = files.filter(file => file.status?.toUpperCase() !== 'U');
@@ -402,6 +450,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const resolvedPath = repo.resolveRepoPath(file.path);
           const relativePath = resolvedPath.relativePath;
           const contents = await loadContents(file, relativePath);
+          if (contents.isBinary) return null;
           const normalizedStatus = (file.status ?? '').toUpperCase();
           if (!contents.originalContent && !contents.modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
             return null;
@@ -448,6 +497,25 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  private async deleteWorkingPath(
+    repo: import('../git/GitService').GitService,
+    filePath: string,
+  ): Promise<void> {
+    const resolvedPath = repo.resolveRepoPath(filePath);
+    assertNoSymlinkAncestors(repo.rootPath, resolvedPath.absolutePath);
+    const uri = vscode.Uri.file(resolvedPath.absolutePath);
+    let stat: vscode.FileStat;
+    try {
+      stat = await vscode.workspace.fs.stat(uri);
+    } catch (error) {
+      if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') return;
+      throw error;
+    }
+    const isDirectory = (stat.type & vscode.FileType.Directory) !== 0
+      && (stat.type & vscode.FileType.SymbolicLink) === 0;
+    await vscode.workspace.fs.delete(uri, { recursive: isDirectory, useTrash: false });
+  }
+
   private async applyCommitPathEntries(
     repo: import('../git/GitService').GitService,
     entries: LogCommitPathEntry[],
@@ -457,7 +525,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const resolvedPath = repo.resolveRepoPath(entry.path);
       if (direction === 'apply') {
         if (entry.status === 'D') {
-          await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { useTrash: false }).catch(() => undefined);
+          await this.deleteWorkingPath(repo, resolvedPath.relativePath);
           continue;
         }
         await repo.checkoutFileFromCommit(entry.hash, resolvedPath.relativePath);
@@ -465,7 +533,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       if (entry.status === 'A') {
-        await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { useTrash: false }).catch(() => undefined);
+        await this.deleteWorkingPath(repo, resolvedPath.relativePath);
         continue;
       }
       await repo.revertFileToParent(entry.hash, resolvedPath.relativePath);
@@ -480,16 +548,26 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return this.getNonWorktreeRepos().filter(m => !this.hiddenRepoIds.includes(m.id));
   }
 
-  private async getFilteredBranches() {
-    const ids = new Set(this.getNonWorktreeRepos().map(r => r.id));
+  private async getFilteredBranches(repos = this.getVisibleRepos()) {
+    const ids = new Set(repos.map(r => r.id));
     const all = await this.manager.getAllBranches();
     return all.filter(b => ids.has(b.repoId));
   }
 
-  private async handleMessage(msg: LogToHostMsg, replyTarget: 'sidebar' | 'undocked' = 'sidebar'): Promise<void> {
-    const requestId = 'requestId' in msg ? msg.requestId : undefined;
-    if (requestId) this.replyTargetByRequestId.set(requestId, replyTarget);
+  private async refreshTags(
+    repoId: string,
+    repo = this.manager.getRepo(repoId),
+  ): Promise<void> {
+    if (!repo) return;
+    const generation = (this.tagSyncGenerations.get(repoId) ?? 0) + 1;
+    this.tagSyncGenerations.set(repoId, generation);
+    const rawTags = await repo.getTags();
+    if (this.tagSyncGenerations.get(repoId) !== generation) return;
+    if (!this.getVisibleRepos().some(visible => visible.id === repoId)) return;
+    this.post({ type: 'LOG_TAGS_UPDATE', repoId, tags: rawTags.map(tag => ({ ...tag, repoId })) });
+  }
 
+  private async handleMessage(msg: LogToHostMsg): Promise<void> {
     switch (msg.type) {
       case 'LOG_REQUEST_COMMITS': {
         const maxCommits = vscode.workspace.getConfiguration('versiondock').get<number>('graphMaxCommits', 1000);
@@ -500,24 +578,45 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const limit = Math.min(msg.limit, maxCommits - msg.skip);
 
         const repos = this.getVisibleRepos();
-        const [branches, iconTheme] = await Promise.all([
-          this.getFilteredBranches(),
-          this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
-        ]);
-        this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
+        const metadataGeneration = this.managerSyncGeneration;
+        // Metadata changes on a fresh load/filter (skip=0), not while fetching
+        // later commit pages. Avoid repeating branch/tag CLI calls and theme
+        // parsing on every scroll batch.
+        if (msg.skip === 0) {
+          const [branches, iconTheme] = await Promise.all([
+            this.getFilteredBranches(repos),
+            this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
+          ]);
+          if (metadataGeneration === this.managerSyncGeneration) {
+            this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
 
-        // Send tags for all repos
-        for (const meta of repos) {
-          const repo = this.manager.getRepo(meta.id);
-          if (!repo) continue;
-          repo.getTags().then(rawTags => {
-            this.post({ type: 'LOG_TAGS_UPDATE', repoId: meta.id, tags: rawTags.map(t => ({ ...t, repoId: meta.id })) });
-          }).catch(() => {});
+            // Send tags for all visible repos without blocking the commit batch.
+            for (const meta of repos) {
+              void this.refreshTags(meta.id).catch(() => {});
+            }
+          }
         }
 
-        const logRepoIds = msg.repoIds.length > 0
-          ? msg.repoIds.filter(id => !this.manager.getRepoMetas().find(m => m.id === id)?.isWorktree && !this.hiddenRepoIds.includes(id))
-          : this.getVisibleRepos().map(r => r.id);
+        const visibleRepoIds = new Set(repos.map(repo => repo.id));
+        const logRepoIds = msg.repoIds === null
+          ? repos.map(repo => repo.id)
+          : msg.repoIds.filter(id => visibleRepoIds.has(id));
+        // WorkspaceGitManager treats an empty id list as "all repositories".
+        // At this boundary, however, empty means that the requested/visible set
+        // is genuinely empty; passing it through would leak hidden, removed, or
+        // worktree commits back into the log.
+        if (logRepoIds.length === 0) {
+          this.post({
+            type: 'LOG_COMMITS_BATCH',
+            commits: [],
+            isLast: true,
+            batchIndex: 0,
+            generation: msg.generation,
+            requestId: msg.requestId,
+          });
+          this.flushPendingHistoryFilter();
+          break;
+        }
         const commits = await this.manager.getInterleavedLog(logRepoIds, limit, msg.skip, {
           filterText: msg.filterText,
           filterAuthor: msg.filterAuthor,
@@ -690,7 +789,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const resolvedPath = repo.resolveRepoPath(msg.filePath);
           if (msg.fileStatus === 'A') {
             // File was added in this commit — reverting means deleting it from the working tree
-            await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { useTrash: false });
+            await this.deleteWorkingPath(repo, resolvedPath.relativePath);
           } else {
             await repo.revertFileToParent(msg.hash, resolvedPath.relativePath);
           }
@@ -705,7 +804,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_APPLY_COMMIT_PATHS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const uniqueEntries = Array.from(new Map(msg.entries.map(entry => [`${entry.repoId}:${entry.hash}:${entry.path}`, entry])).values());
+        const uniqueEntries = Array.from(new Map(msg.entries.map(entry => [scopedKey(entry.repoId, entry.hash, entry.path), entry])).values());
         if (uniqueEntries.length === 0) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
           return;
@@ -736,7 +835,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_RESTORE_COMMIT_PATHS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const uniqueEntries = Array.from(new Map(msg.entries.map(entry => [`${entry.repoId}:${entry.hash}:${entry.path}`, entry])).values());
+        const uniqueEntries = Array.from(new Map(msg.entries.map(entry => [scopedKey(entry.repoId, entry.hash, entry.path), entry])).values());
         if (uniqueEntries.length === 0) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
           return;
@@ -878,16 +977,22 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
           if (errMsg.includes('CONFLICT')) {
-            repo.getCurrentBranch().then(current => {
+            const requestedTarget = this.replyTarget.getStore() ?? 'sidebar';
+            const commitTarget = requestedTarget === 'undocked' && this.undockedPanel?.hasCommitPane()
+              ? 'undocked'
+              : 'sidebar';
+            void repo.getCurrentBranch().then(current => {
               const mergeMsg = `Merge branch '${msg.from}' into '${current.name}'`;
-              this.commitPanel?.prefillCommitMessage(mergeMsg);
+              this.commitPanel?.prefillCommitMessage(mergeMsg, commitTarget);
             }).catch(() => {});
-            vscode.window.showWarningMessage(
-              t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.'),
-              t('Open Commit Panel')
-            ).then(choice => {
-              if (choice) vscode.commands.executeCommand('versiondock.commitPanel.focus');
-            });
+            const warning = t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
+            if (commitTarget === 'undocked') {
+              void vscode.window.showWarningMessage(warning);
+            } else {
+              void vscode.window.showWarningMessage(warning, t('Open Commit Panel')).then(choice => {
+                if (choice) void this.commitPanel?.focus();
+              });
+            }
           }
         }
         break;
@@ -913,8 +1018,16 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (!repo || !meta) break;
         try {
           const current = await repo.getCurrentBranch();
-          const baseRef = current.detachedTag ?? current.detachedHash ?? current.name;
-          this.focus();
+          const baseRef = repo.kind === 'svn'
+            ? (current.detachedTag ?? current.detachedHash ?? current.name)
+            : current.detachedTag
+              ? `refs/tags/${current.detachedTag}`
+              : (current.detachedHash ?? (current.fullName.startsWith('refs/heads/')
+                  ? current.fullName
+                  : `refs/heads/${current.name}`));
+          if (this.replyTarget.getStore() !== 'undocked') {
+            void this.focus();
+          }
           this.post({
             type: 'LOG_COMPARE_STARTED',
             repoId: target.repoId,
@@ -932,7 +1045,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const target = await this.pickBranchTarget(msg.branches);
         if (!target) break;
         try {
-          await this.commitPanel?.startWorktreeDiff(target.repoId, target.branchName);
+          await this.commitPanel?.startWorktreeDiff(
+            target.repoId,
+            target.branchName,
+            this.replyTarget.getStore() ?? 'sidebar',
+          );
         } catch (e: unknown) {
           vscode.window.showErrorMessage(t('VersionDock: Cannot open worktree diff: {0}', String(e)));
         }
@@ -941,7 +1058,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'LOG_REQUEST_COMPARE_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) {
+        const visible = this.getVisibleRepos().some(meta => meta.id === msg.repoId);
+        if (!repo || !visible) {
           this.post({
             type: 'LOG_COMPARE_COMMITS_RESULT',
             requestId: msg.requestId,
@@ -1450,8 +1568,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await repo.createTag(tagName.trim(), msg.hash);
-          const rawTags = await repo.getTags();
-          this.post({ type: 'LOG_TAGS_UPDATE', repoId: msg.repoId, tags: rawTags.map(t => ({ ...t, repoId: msg.repoId })) });
+          await this.refreshTags(msg.repoId, repo);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
@@ -1474,9 +1591,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
         try {
-          const rawTags = await repo.getTags();
-          const tags = rawTags.map(t => ({ ...t, repoId: msg.repoId }));
-          this.post({ type: 'LOG_TAGS_UPDATE', repoId: msg.repoId, tags });
+          await this.refreshTags(msg.repoId, repo);
         } catch { /* ignore */ }
         break;
       }
@@ -1505,8 +1620,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
         try {
           await repo.deleteTag(msg.tagName);
-          const rawTags = await repo.getTags();
-          this.post({ type: 'LOG_TAGS_UPDATE', repoId: msg.repoId, tags: rawTags.map(t => ({ ...t, repoId: msg.repoId })) });
+          await this.refreshTags(msg.repoId, repo);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
@@ -1564,8 +1678,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           if (!repo) continue;
           try {
             await deleteTagWithRemoteOption(repo, msg.tagName, choice);
-            const rawTags = await repo.getTags();
-            this.post({ type: 'LOG_TAGS_UPDATE', repoId, tags: rawTags.map(t => ({ ...t, repoId })) });
+            await this.refreshTags(repoId, repo);
           } catch (e: unknown) {
             const meta = this.getNonWorktreeRepos().find(m => m.id === repoId);
             errors.push(`${meta?.name ?? repoId}: ${String(e)}`);
@@ -1934,8 +2047,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       if (!newName) return;
       try {
         await repo.createTag(newName.trim(), hash);
-        const rawTags = await repo.getTags();
-        this.post({ type: 'LOG_TAGS_UPDATE', repoId, tags: rawTags.map(t => ({ ...t, repoId })) });
+        await this.refreshTags(repoId, repo);
         this.post({ type: 'LOG_REFRESH' });
       } catch (e: unknown) {
         vscode.window.showErrorMessage(t('VersionDock: Create tag failed: {0}', String(e)));
@@ -1968,12 +2080,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       {
         label: `$(trash) ${t('Delete "{0}"', tagName)}`,
         action: async () => {
-          const choice = await confirmDeleteTag(tagName, t('Delete tag "{0}"?', tagName));
+          const choice = await confirmDeleteTag(t('Delete tag "{0}"?', tagName));
           if (!choice) return;
           try {
             await deleteTagWithRemoteOption(repo, tagName, choice);
-            const rawTags = await repo.getTags();
-            this.post({ type: 'LOG_TAGS_UPDATE', repoId, tags: rawTags.map(t => ({ ...t, repoId })) });
+            await this.refreshTags(repoId, repo);
             this.post({ type: 'LOG_REFRESH' });
             vscode.window.showInformationMessage(t('VersionDock: Deleted tag "{0}".', tagName));
           } catch (e: unknown) {

@@ -100,10 +100,17 @@ export function currentPalette(): readonly string[] {
   return isDarkTheme() ? PALETTE_DARK : PALETTE_LIGHT;
 }
 
-// Normalize a branch name: strip remote prefix so origin/foo → foo.
+// Normalize only unambiguous full refs. Short names containing a slash may be
+// local branches (feature/foo), so stripping their first segment corrupts both
+// primary-branch detection and the stable color assignment.
 export function normalizeBranchName(name: string): string {
-  const slash = name.indexOf('/');
-  return slash >= 0 ? name.slice(slash + 1) : name;
+  if (name.startsWith('refs/heads/')) return name.slice('refs/heads/'.length);
+  if (name.startsWith('refs/remotes/')) {
+    const remoteRef = name.slice('refs/remotes/'.length);
+    const slash = remoteRef.indexOf('/');
+    return slash >= 0 ? remoteRef.slice(slash + 1) : remoteRef;
+  }
+  return name;
 }
 
 export function branchPaletteIndex(name: string): number {

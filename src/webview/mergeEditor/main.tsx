@@ -10,6 +10,7 @@ import {
 } from './components/ThreeWayLayout';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { FileIcon } from '../shared/FileIcon';
+import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
 import type { HostToMergeMsg, IconThemeData, MergeToHostMsg } from '../../host/types/messages';
 import { t } from '../shared/i18n';
 import type { MergeConflictFile } from '../shared/types';
@@ -48,22 +49,23 @@ function App() {
     const handler = (event: MessageEvent<HostToMergeMsg>) => {
       const msg = event.data;
       if (!msg?.type) return;
+      const state = useMergeStore.getState();
       switch (msg.type) {
         case 'MERGE_FILE_LOADED':
-          store.setFile(msg.file);
-          store.setResultContent(msg.file.content);
+          state.setFile(msg.file);
+          state.setResultContent(msg.file.content);
           if (msg.iconTheme !== undefined) setIconTheme(msg.iconTheme ?? null);
           if (msg.file.baseContent === undefined || msg.file.oursContent === undefined || msg.file.theirsContent === undefined) {
-            store.setError(t('Unable to load three-way versions. Result pane is still available.'));
+            state.setError(t('Unable to load three-way versions. Result pane is still available.'));
           }
           break;
         case 'MERGE_FILE_VERSIONS_LOADED':
-          if (msg.error) store.setError(msg.error);
+          if (msg.error) state.setError(msg.error);
           break;
         case 'MERGE_SAVE_RESULT':
-          store.setSaving(false);
-          if (msg.ok) store.setSavedOk(true);
-          else store.setError(msg.error ?? t('Save failed'));
+          state.setSaving(false);
+          if (msg.ok) state.setSavedOk(true);
+          else state.setError(msg.error ?? t('Save failed'));
           break;
       }
     };
@@ -72,19 +74,20 @@ function App() {
   }, []);
 
   const saveResolved = useCallback(() => {
-    if (store.resultContent.includes('<<<<<<<') || store.resultContent.includes('>>>>>>>')) {
-      store.setError(t('Resolve all conflict markers before saving.'));
+    const state = useMergeStore.getState();
+    if (state.resultContent.includes('<<<<<<<') || state.resultContent.includes('>>>>>>>')) {
+      state.setError(t('Resolve all conflict markers before saving.'));
       return;
     }
-    if (!store.file) return;
-    store.setSaving(true);
+    if (!state.file) return;
+    state.setSaving(true);
     send({
       type: 'MERGE_SAVE_FILE',
       requestId: generateId(),
-      resolvedContent: store.resultContent,
-      deleteFile: shouldDeleteResolvedFile(store.file, store.resultContent, store.resolutions),
+      resolvedContent: state.resultContent,
+      deleteFile: shouldDeleteResolvedFile(state.file, state.resultContent, state.resolutions),
     });
-  }, [send, store.file, store.resolutions, store.resultContent]);
+  }, [send]);
 
   const unresolvedConflictIndexes = useMemo(() => {
     if (!store.file) return [];
@@ -264,4 +267,8 @@ const styles = {
   applyButton: { padding: '5px 14px', border: '1px solid var(--vscode-button-border, transparent)', borderRadius: 3, background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)', cursor: 'pointer' },
 };
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <WebviewErrorBoundary title={t('Merge Editor render failed')}>
+    <App />
+  </WebviewErrorBoundary>,
+);

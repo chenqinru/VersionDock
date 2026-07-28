@@ -107,7 +107,7 @@ interface FileIconProps {
 export function FileIcon({ name, isFolder = false, isOpen = false, theme, size = 14, style }: FileIconProps) {
   useEffect(() => {
     if (theme) ensureFontInjected(theme);
-  }, [theme?.fontId]);
+  }, [theme]);
 
   const base: React.CSSProperties = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...style };
 

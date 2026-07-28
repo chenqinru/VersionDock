@@ -7,15 +7,48 @@ import * as vscode from 'vscode';
  */
 export class ShelveDocumentProvider implements vscode.TextDocumentContentProvider {
   static readonly scheme = 'versiondock-shelf';
+  private static readonly maxStoredDocuments = 128;
+  private static readonly maxStoredCharacters = 32 * 1024 * 1024;
 
   private readonly _onDidChange = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidChange = this._onDidChange.event;
 
   private readonly store = new Map<string, string>();
+  private storedCharacters = 0;
 
   set(uri: vscode.Uri, content: string): void {
-    this.store.set(uri.toString(), content);
+    const key = uri.toString();
+    const previous = this.store.get(key);
+    if (previous !== undefined) {
+      this.storedCharacters -= previous.length;
+      this.store.delete(key);
+    }
+    this.store.set(key, content);
+    this.storedCharacters += content.length;
+    this.pruneClosedDocuments(key);
     this._onDidChange.fire(uri);
+  }
+
+  private pruneClosedDocuments(currentKey: string): void {
+    if (
+      this.store.size <= ShelveDocumentProvider.maxStoredDocuments
+      && this.storedCharacters <= ShelveDocumentProvider.maxStoredCharacters
+    ) return;
+
+    const openDocuments = new Set(
+      vscode.workspace.textDocuments
+        .filter(document => document.uri.scheme === ShelveDocumentProvider.scheme)
+        .map(document => document.uri.toString()),
+    );
+    for (const [key, content] of this.store) {
+      if (
+        this.store.size <= ShelveDocumentProvider.maxStoredDocuments
+        && this.storedCharacters <= ShelveDocumentProvider.maxStoredCharacters
+      ) break;
+      if (key === currentKey || openDocuments.has(key)) continue;
+      this.store.delete(key);
+      this.storedCharacters -= content.length;
+    }
   }
 
   provideTextDocumentContent(uri: vscode.Uri): string {
@@ -39,6 +72,8 @@ export class ShelveDocumentProvider implements vscode.TextDocumentContentProvide
   }
 
   dispose(): void {
+    this.store.clear();
+    this.storedCharacters = 0;
     this._onDidChange.dispose();
   }
 }

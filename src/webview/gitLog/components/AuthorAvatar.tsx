@@ -17,7 +17,7 @@ function githubAvatarUrl(email: string, size: number): string | null {
   if (!email.toLowerCase().endsWith('@users.noreply.github.com')) return null;
   const local = email.split('@')[0] ?? '';
   const username = local.includes('+') ? local.split('+')[1] : local;
-  return username ? `https://avatars.githubusercontent.com/${username}?size=${size * 2}` : null;
+  return username ? `https://avatars.githubusercontent.com/${encodeURIComponent(username)}?size=${size * 2}` : null;
 }
 
 function avatarColor(email: string): string {
@@ -47,6 +47,16 @@ function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
   return new Promise(resolve => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
+    let settled = false;
+    const finish = (blank: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      img.onload = null;
+      img.onerror = null;
+      resolve(blank);
+    };
+    const timeout = window.setTimeout(() => finish(true), 8000);
 
     img.onload = () => {
       try {
@@ -54,7 +64,7 @@ function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
         canvas.width = sampleSize;
         canvas.height = sampleSize;
         const ctx = canvas.getContext('2d');
-        if (!ctx) { resolve(false); return; }
+        if (!ctx) { finish(false); return; }
         ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
         const { data } = ctx.getImageData(0, 0, sampleSize, sampleSize);
         const unique = new Set<number>();
@@ -64,14 +74,14 @@ function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
           const b = Math.round((data[i+2]!) / 16);
           unique.add((r << 8) | (g << 4) | b);
         }
-        resolve(unique.size <= 3);
+        finish(unique.size <= 3);
       } catch {
         // Canvas tainted (CORS) — assume not blank
-        resolve(false);
+        finish(false);
       }
     };
 
-    img.onerror = () => resolve(true); // 404 or network error → treat as blank
+    img.onerror = () => finish(true); // 404 or network error → treat as blank
     img.src = url;
   });
 }
@@ -88,6 +98,28 @@ async function resolveAvatarUrl(email: string, size: number): Promise<string | n
   return blank ? null : gravatar;
 }
 
+const AVATAR_CACHE_LIMIT = 256;
+const avatarPromiseCache = new Map<string, Promise<string | null>>();
+
+function cachedAvatarUrl(email: string, size: number): Promise<string | null> {
+  const key = `${email.trim().toLowerCase()}\0${size}`;
+  const cached = avatarPromiseCache.get(key);
+  if (cached) {
+    // Refresh insertion order so frequently visible authors stay cached.
+    avatarPromiseCache.delete(key);
+    avatarPromiseCache.set(key, cached);
+    return cached;
+  }
+
+  const pending = resolveAvatarUrl(email, size).catch(() => null);
+  avatarPromiseCache.set(key, pending);
+  if (avatarPromiseCache.size > AVATAR_CACHE_LIMIT) {
+    const oldest = avatarPromiseCache.keys().next().value as string | undefined;
+    if (oldest) avatarPromiseCache.delete(oldest);
+  }
+  return pending;
+}
+
 export function AuthorAvatar({ authorName, authorEmail, size = 20 }: Props) {
   const [url, setUrl] = useState<string | null | 'loading'>('loading');
   const authorTitle = formatAuthorIdentity(authorName, authorEmail);
@@ -101,7 +133,7 @@ export function AuthorAvatar({ authorName, authorEmail, size = 20 }: Props) {
       setUrl(null);
       return () => { cancelled = true; };
     }
-    resolveAvatarUrl(authorEmail, size).then(resolved => {
+    cachedAvatarUrl(authorEmail, size).then(resolved => {
       if (!cancelled) setUrl(resolved);
     });
     return () => { cancelled = true; };

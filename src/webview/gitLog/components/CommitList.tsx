@@ -14,6 +14,7 @@ import { AuthorAvatar, formatAuthorIdentity } from './AuthorAvatar';
 import { formatDateTime } from '../../shared/dateUtils';
 import { t } from '../../shared/i18n';
 import { getCommitKey, type CommitSelectionMode } from '../store/logStore';
+import { scopedKey } from '../../shared/scopedKey';
 
 interface Props {
   commits: LaidOutCommit[];
@@ -22,6 +23,7 @@ interface Props {
   repos: RepoMeta[];
   currentBranchByRepo: Record<string, string>;
   headHashByRepo: Record<string, string>;
+  remoteNamesByRepo?: Readonly<Record<string, readonly string[]>>;
   onSelect: (commit: LaidOutCommit, mode: CommitSelectionMode) => void;
   onLoadMore: () => void;
   hasMore: boolean;
@@ -107,7 +109,7 @@ function CommitSkeleton() {
 
 const SKELETON_MIN_MS = 400;
 
-export function CommitList({ commits, selectedHashes, primarySelectedHash, repos, currentBranchByRepo, headHashByRepo, onSelect, onLoadMore, hasMore, storeHasMore, loading, backgroundLoading, expandedRepoIds, onToggleRepoName, scrollToHash, onScrolledToHash }: Props) {
+export function CommitList({ commits, selectedHashes, primarySelectedHash, repos, currentBranchByRepo, headHashByRepo, remoteNamesByRepo = {}, onSelect, onLoadMore, hasMore, storeHasMore, loading, backgroundLoading, expandedRepoIds, onToggleRepoName, scrollToHash, onScrolledToHash }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   // Start as true — skeleton is always shown until commits arrive (handles first load correctly)
   const [showSkeleton, setShowSkeleton] = useState(true);
@@ -166,6 +168,13 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     (parentRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
     containerRefCb(el);
   }, [containerRefCb]);
+
+  useEffect(() => () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (closePopoverTimerRef.current) clearTimeout(closePopoverTimerRef.current);
+    containerRoRef.current?.disconnect();
+    containerRoRef.current = null;
+  }, []);
 
   const repoMeta = useMemo(() => {
     const map: Record<string, RepoMeta> = {};
@@ -254,7 +263,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     }
     // Commit not yet in the loaded list — keep fetching batches until found or exhausted
     if (hasMore && !loading) onLoadMore();
-  }, [scrollToHash, commits, hasMore, loading]);
+  }, [commits, hasMore, loading, onLoadMore, onScrolledToHash, onSelect, scrollToHash, virtualizer]);
 
   const anyExpanded = expandedRepos.size > 0;
   const labelColWidth = multiRepo ? (anyExpanded ? REPO_LABEL_WIDTH_EXPANDED : REPO_LABEL_WIDTH + 2) : 0;
@@ -338,10 +347,11 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
           const commitKey = getCommitKey(commit.repoId, commit.hash);
           const isSelected = commitKey === primarySelectedHash;
           const isMultiSelected = selectedHashSet.has(commitKey) && !isSelected;
+          const repoKind = repoMeta[commit.repoId]?.kind ?? 'git';
 
           return (
             <div
-              key={`${commit.repoId}:${commit.hash}`}
+              key={scopedKey(commit.repoId, commit.hash)}
               style={styles.row(vrow.start, isSelected, isMultiSelected, hoveredIndex === vrow.index, !isSelected && getCommitKey(contextMenu?.commit.repoId ?? '', contextMenu?.commit.hash ?? '') === commitKey)}
               className="versiondock-commit-row"
               data-selected={isSelected || isMultiSelected}
@@ -356,7 +366,9 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                 const mouseX = e.clientX;
                 hoverTimerRef.current = setTimeout(() => {
                   const rect = rowEl.getBoundingClientRect();
-                  const listRect = parentRef.current!.getBoundingClientRect();
+                  const parent = parentRef.current;
+                  if (!parent) return;
+                  const listRect = parent.getBoundingClientRect();
                   setPopover({ commit, rowTop: rect.top, listRect, mouseX });
                 }, 1000);
               }}
@@ -401,12 +413,13 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
               />
 
               {commit.refs.length > 0 && (() => {
-                const allGroups = mergeLocalRemote(groupRefs(commit.refs));
-                const headGroup = allGroups.find(g => g.isHead && !g.isDetached);
-                const remoteHeadGroup = allGroups.find(g => g.isRemoteHead);
+                const allGroups = mergeLocalRemote(groupRefs(commit.refs, repoKind, remoteNamesByRepo[commit.repoId] ?? []));
+                const headGroup = allGroups.find(g => g.isHead && !g.isDetached && !g.isSvnRevision);
+                const remoteHeadGroups = allGroups.filter(g => g.isRemoteHead);
+                const remoteHeadGroup = remoteHeadGroups.length === 1 ? remoteHeadGroups[0] : undefined;
                 const headAndRemoteHead = headGroup && remoteHeadGroup;
                 // All groups shown as branch badges; remoteHead excluded when merged into HEAD badge
-                const otherGroups = allGroups.filter(g => !(headAndRemoteHead && g.isRemoteHead));
+                const otherGroups = allGroups.filter(g => !(headAndRemoteHead && g.key === remoteHeadGroup.key));
                 const refsSpace = containerWidth - labelColWidth - 340;
                 const MAX = refsSpace < 80 ? 0 : refsSpace < 170 ? 1 : 2;
                 const visible = otherGroups.slice(0, MAX);
@@ -509,6 +522,8 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
         {popover && (
           <CommitPopover
             commit={popover.commit}
+            repoKind={repoMeta[popover.commit.repoId]?.kind ?? 'git'}
+            remoteNames={remoteNamesByRepo[popover.commit.repoId] ?? []}
             rowTop={popover.rowTop}
             listRect={popover.listRect}
             mouseX={popover.mouseX}
@@ -525,6 +540,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
             y={contextMenu.y}
             multiSelected={contextMenu.multiSelected}
             repoKind={repoMeta[contextMenu.commit.repoId]?.kind ?? 'git'}
+            remoteNames={remoteNamesByRepo[contextMenu.commit.repoId] ?? []}
             allCommits={commits}
             currentBranchByRepo={currentBranchByRepo}
             headHashByRepo={headHashByRepo}
@@ -571,8 +587,10 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   );
 }
 
-function CommitPopover({ commit, rowTop, listRect, mouseX, onClose, popoverHoveredRef, closePopoverTimerRef }: {
+function CommitPopover({ commit, repoKind, remoteNames, rowTop, listRect, mouseX, onClose, popoverHoveredRef, closePopoverTimerRef }: {
   commit: LaidOutCommit;
+  repoKind: 'git' | 'svn';
+  remoteNames: readonly string[];
   rowTop: number;
   listRect: DOMRect;
   mouseX: number;
@@ -601,7 +619,7 @@ function CommitPopover({ commit, rowTop, listRect, mouseX, onClose, popoverHover
     window.addEventListener('message', handler);
     getVsCodeApi().postMessage({ type: 'LOG_REQUEST_COMMIT_FILES', requestId: reqId, repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg);
     return () => window.removeEventListener('message', handler);
-  }, [commit.hash]);
+  }, [commit.hash, commit.repoId]);
 
   // Once stats arrive and the element is in the DOM (invisible), measure and position it
   useLayoutEffect(() => {
@@ -625,12 +643,12 @@ function CommitPopover({ commit, rowTop, listRect, mouseX, onClose, popoverHover
   }, [onClose]);
 
   // Reset hover flag on unmount
-  useEffect(() => () => { popoverHoveredRef.current = false; }, []);
+  useEffect(() => () => { popoverHoveredRef.current = false; }, [popoverHoveredRef]);
 
   // Don't render at all until stats are fetched
   if (!stats) return null;
 
-  const refGroups = mergeLocalRemote(groupRefs(commit.refs));
+  const refGroups = mergeLocalRemote(groupRefs(commit.refs, repoKind, remoteNames));
 
   // Render invisible for measurement on first paint, visible once pos is computed
   const visible = pos !== null;
@@ -680,10 +698,13 @@ function CommitPopover({ commit, rowTop, listRect, mouseX, onClose, popoverHover
 
       {/* Ref badges */}
       {refGroups.length > 0 && (() => {
-        const popoverHeadGroup = refGroups.find(g => g.isHead && !g.isDetached);
-        const popoverRemoteHeadGroup = refGroups.find(g => g.isRemoteHead);
+        const popoverHeadGroup = refGroups.find(g => g.isHead && !g.isDetached && !g.isSvnRevision);
+        const popoverRemoteHeadGroups = refGroups.filter(g => g.isRemoteHead);
+        const popoverRemoteHeadGroup = popoverRemoteHeadGroups.length === 1 ? popoverRemoteHeadGroups[0] : undefined;
         const headAndRemoteHead = popoverHeadGroup && popoverRemoteHeadGroup;
-        const displayGroups = headAndRemoteHead ? refGroups.filter(g => !g.isRemoteHead) : refGroups;
+        const displayGroups = headAndRemoteHead
+          ? refGroups.filter(g => g.key !== popoverRemoteHeadGroup.key)
+          : refGroups;
         const hc = headColor();
         return (
           <div style={popoverStyles.refs}>
@@ -819,12 +840,13 @@ const popoverStyles = {
   } as React.CSSProperties,
 };
 
-function CommitContextMenu({ commit, x, y, multiSelected, repoKind, allCommits, currentBranchByRepo, headHashByRepo, onClose, onSquash }: {
+function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames, allCommits, currentBranchByRepo, headHashByRepo, onClose, onSquash }: {
   commit: LaidOutCommit;
   x: number;
   y: number;
   multiSelected: LaidOutCommit[];
   repoKind: 'git' | 'svn';
+  remoteNames: readonly string[];
   allCommits: LaidOutCommit[];
   currentBranchByRepo: Record<string, string>;
   headHashByRepo: Record<string, string>;
@@ -832,27 +854,20 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, allCommits, 
   onSquash: (selected: LaidOutCommit[]) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Tags from commit refs (format "tag: <name>")
-  const tagsFromRefs = commit.refs
-    .filter(r => r.startsWith('tag: '))
-    .map(r => r.replace('tag: ', ''));
-
-  // Local branch names from commit refs (exclude tags, HEAD marker, remote refs)
-  const localBranchesFromRefs = commit.refs
-    .filter(r => !r.startsWith('tag: ') && r !== 'HEAD' && !r.includes('/'))
-    .map(r => r.startsWith('HEAD -> ') ? r.slice('HEAD -> '.length) : r);
-  // Remote-only branch names (origin/branchname → branchname), used as fallback
-  const remoteBranchesFromRefs = commit.refs
-    .filter(r => r.includes('/') && !r.startsWith('tag: '))
-    .map(r => r.slice(r.indexOf('/') + 1));
-  const branchesFromRefs = localBranchesFromRefs.length > 0 ? localBranchesFromRefs : remoteBranchesFromRefs;
-  const primaryBranch = branchesFromRefs[0] ?? null;
-
-  useEffect(() => {
-    window.addEventListener('blur', onClose);
-    return () => window.removeEventListener('blur', onClose);
-  }, [onClose]);
+  const isSvn = repoKind === 'svn';
+  const commitRefGroups = groupRefs(commit.refs, repoKind, remoteNames);
+  const tagsFromRefs = commitRefGroups.filter(group => group.isTag).map(group => group.label);
+  const localBranchGroups = commitRefGroups.filter(group => group.isLocal && !group.isTag && !group.isDetached);
+  const remoteBranchGroups = commitRefGroups.filter(group => group.isRemote && !group.isRemoteHead && !group.isTag);
+  const primaryLocalGroup = localBranchGroups.find(group => group.isHead) ?? localBranchGroups[0];
+  const primaryRemoteGroup = remoteBranchGroups[0];
+  // SVN uses HEAD/BASE as revision markers rather than branch refs. Only the
+  // current HEAD revision can safely offer the working-copy branch as a target.
+  const checkoutTarget = isSvn
+    ? commit.refs.includes('HEAD') ? currentBranchByRepo[commit.repoId] ?? null : null
+    : primaryLocalGroup?.label
+      ?? (primaryRemoteGroup ? `${primaryRemoteGroup.remoteName}/${primaryRemoteGroup.label}` : null);
+  const branchOptionsTarget = isSvn ? checkoutTarget : primaryLocalGroup?.label ?? null;
 
   // Clamp menu position so it stays within the viewport (useLayoutEffect avoids flash)
   const [menuPos, setMenuPos] = useState({ left: x, top: y });
@@ -864,7 +879,8 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, allCommits, 
     const left = rect.right > vw ? Math.max(0, x - (rect.right - vw) - 4) : x;
     const top = rect.bottom > vh ? Math.max(0, y - (rect.bottom - vh) - 4) : y;
     if (left !== x || top !== y) setMenuPos({ left, top });
-  }, []);
+    else setMenuPos({ left: x, top: y });
+  }, [x, y]);
 
   useEffect(() => {
     const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -910,7 +926,6 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, allCommits, 
 
   const repoId = isMulti ? multiSelected[0].repoId : commit.repoId;
   const oldestHash = sortedOldestFirst[0]?.hash ?? commit.hash;
-  const isSvn = repoKind === 'svn';
 
   if (isMulti) {
     return (
@@ -992,8 +1007,8 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, allCommits, 
           </div>
         )}
         <div style={ctxStyles.separator} />
-        {primaryBranch ? (
-          <div style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHECKOUT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, branchName: primaryBranch })}>
+        {checkoutTarget ? (
+          <div style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHECKOUT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, branchName: checkoutTarget })}>
             <Codicon name="arrow-right" style={ctxStyles.icon} />
             <span>{t('Checkout...')}</span>
           </div>
@@ -1003,8 +1018,8 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, allCommits, 
             <span>{isSvn ? t('Update to Revision') : t('Checkout Revision')}</span>
           </div>
         )}
-        {primaryBranch && (
-          <div style={ctxStyles.item} onClick={() => send({ type: 'LOG_SHOW_BRANCH_OPTIONS', repoId: commit.repoId, branchName: primaryBranch })}>
+        {branchOptionsTarget && (
+          <div style={ctxStyles.item} onClick={() => send({ type: 'LOG_SHOW_BRANCH_OPTIONS', repoId: commit.repoId, branchName: branchOptionsTarget })}>
             <Codicon name="git-branch" style={ctxStyles.icon} />
             <span>{t('Branch options...')}</span>
           </div>
@@ -1125,27 +1140,41 @@ const ctxStyles = {
 
 function mergeLocalRemote(groups: RefGroup[]): RefGroup[] {
   const merged: RefGroup[] = [];
-  const seen = new Map<string, RefGroup>();
+  const branchesByLabel = new Map<string, RefGroup[]>();
   for (const g of groups) {
-    if (!g.isTag && !g.isRemoteHead && !g.isDetached && seen.has(g.label)) {
-      const existing = seen.get(g.label)!;
-      const combined: RefGroup = { ...existing, isLocal: existing.isLocal || g.isLocal, isRemote: existing.isRemote || g.isRemote, remoteName: existing.remoteName || g.remoteName };
-      seen.set(g.label, combined);
-      const idx = merged.findIndex(x => x.key === existing.key);
-      if (idx >= 0) merged[idx] = combined;
-    } else {
-      seen.set(g.label, g);
+    if (g.isTag || g.isRemoteHead || g.isDetached || g.isSvnRevision) {
       merged.push(g);
+      continue;
+    }
+    const bucket = branchesByLabel.get(g.label) ?? [];
+    bucket.push(g);
+    branchesByLabel.set(g.label, bucket);
+  }
+  for (const bucket of branchesByLabel.values()) {
+    const locals = bucket.filter(group => group.isLocal);
+    const remotes = bucket.filter(group => group.isRemote);
+    // Keep the compact combined badge for the common one-local/one-remote
+    // case. With multiple remotes, preserve every source instead of silently
+    // collapsing all of them into whichever remote happened to be parsed first.
+    if (locals.length === 1 && remotes.length === 1) {
+      merged.push({
+        ...locals[0],
+        isRemote: true,
+        remoteName: remotes[0].remoteName,
+      });
+    } else {
+      merged.push(...bucket);
     }
   }
   // Order: detached HEAD, local branches, remote branches, tags, origin/HEAD last
   merged.sort((a, b) => {
     const rank = (g: RefGroup): number => {
+      if (g.isSvnRevision) return g.label === 'HEAD' ? 0 : 1;
       if (g.isDetached) return 0;
-      if (g.isRemoteHead) return 4;
-      if (g.isTag) return 3;
-      if (g.isRemote) return 2;
-      return 1; // local (including isHead branch)
+      if (g.isRemoteHead) return 5;
+      if (g.isTag) return 4;
+      if (g.isRemote) return 3;
+      return 2; // local (including isHead branch)
     };
     const ra = rank(a), rb = rank(b);
     if (ra !== rb) return ra - rb;
@@ -1166,6 +1195,7 @@ function remoteLabel(group: RefGroup): string {
 }
 
 function formatRefLabel(group: RefGroup): string {
+  if (group.isSvnRevision) return group.label;
   if (group.isRemoteHead) return `${group.remoteName || t('remote')}/HEAD`;
   if (group.isLocal && group.isRemote) return t('{0} & {1}', group.remoteName || t('remote'), group.label);
   if (group.isRemote) return remoteLabel(group);
@@ -1180,6 +1210,9 @@ function headBadgeTitle(group: RefGroup, remoteHeadGroup?: RefGroup): string {
 }
 
 function badgeTitle(group: RefGroup): string {
+  if (group.isSvnRevision) {
+    return group.label === 'HEAD' ? t('SVN repository HEAD revision') : t('SVN working copy BASE revision');
+  }
   if (group.isRemoteHead) return t('Remote HEAD ({0})', `${group.remoteName || t('remote')}/HEAD`);
   if (group.isDetached && group.isHead) return t('HEAD (detached)');
   if (group.isTag) return group.isDetached ? t('Tag: {0} (HEAD)', group.label) : t('Tag: {0}', group.label);
@@ -1189,6 +1222,7 @@ function badgeTitle(group: RefGroup): string {
 }
 
 function badgeColor(group: RefGroup): string {
+  if (group.isSvnRevision && group.label === 'HEAD') return headColor();
   if (group.isRemoteHead || (group.isHead && group.isDetached)) return headColor();
   if (group.isTag) return tagColor();
   // Never use headColor() for branch badges — that color is reserved for the explicit HEAD badge
@@ -1197,6 +1231,7 @@ function badgeColor(group: RefGroup): string {
 
 function RefBadgeIcon({ group }: { group: RefGroup }) {
   const s: React.CSSProperties = { fontSize: '11px', flexShrink: 0, lineHeight: 1 };
+  if (group.isSvnRevision) return <Codicon name="versions" style={s} />;
   if (group.isRemoteHead) return <Codicon name="milestone" style={s} />;
   if (group.isDetached && group.isHead) return <Codicon name="warning" style={s} />;
   if (group.isTag) return <Codicon name="tag" style={s} />;

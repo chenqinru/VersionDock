@@ -213,12 +213,17 @@ function normalizeThemeJson(value: unknown): RawThemeJson {
     include: typeof value.include === 'string' ? value.include : undefined,
     colors: readStringMap(value.colors),
     tokenColors: readTokenColors(value.tokenColors),
-    settings: readTokenColors(value.settings),
+    settings: readThemeRules(value.settings),
   };
 }
 
 function readTokenColors(value: unknown): RawThemeRule[] | string | undefined {
   if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return undefined;
+  return value.filter(isThemeRule);
+}
+
+function readThemeRules(value: unknown): RawThemeRule[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter(isThemeRule);
 }

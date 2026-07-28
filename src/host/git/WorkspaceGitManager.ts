@@ -25,9 +25,22 @@ type ResolveServiceOptions = {
   notFoundMessage?: string;
 };
 
+function gitErrorDetail(error: unknown): string {
+  const value = error as { stderr?: unknown; gitErrorCode?: unknown; message?: unknown } | undefined;
+  const stderr = typeof value?.stderr === 'string' ? value.stderr.trim() : '';
+  if (stderr) return stderr;
+  if (typeof value?.gitErrorCode === 'string' && value.gitErrorCode) return value.gitErrorCode;
+  if (typeof value?.message === 'string' && value.message) return value.message;
+  return 'Unknown error';
+}
+
 export type { WorktreeEntry };
 
 const FALLBACK_SCAN_MAX_DEPTH = 4;
+// SVN discovery historically scanned four levels independently of the Git
+// repository-scan preference. Preserve that behaviour: the public setting and
+// its documentation currently apply to Git repositories only.
+const SVN_REPOSITORY_SCAN_MAX_DEPTH = FALLBACK_SCAN_MAX_DEPTH;
 const FALLBACK_SCAN_SKIP_DIRS = new Set([
   '.git',
   '.hg',
@@ -55,12 +68,19 @@ function buildRepoId(rootPath: string, kind: RepoKind): string {
   return `${path.normalize(rootPath)}::${kind}`;
 }
 
-function findNestedRepoPaths(rootPath: string, maxDepth = FALLBACK_SCAN_MAX_DEPTH): string[] {
+type RepositoryScanIgnore = (candidatePath: string) => boolean;
+
+function findNestedRepoPaths(
+  rootPath: string,
+  maxDepth = FALLBACK_SCAN_MAX_DEPTH,
+  isIgnored: RepositoryScanIgnore = () => false,
+): string[] {
   const discovered: string[] = [];
   const visited = new Set<string>();
 
   const walk = (currentPath: string, depth: number): void => {
     if (depth > maxDepth || visited.has(currentPath)) return;
+    if (depth > 0 && isIgnored(currentPath)) return;
     visited.add(currentPath);
 
     const gitPath = path.join(currentPath, '.git');
@@ -86,12 +106,17 @@ function findNestedRepoPaths(rootPath: string, maxDepth = FALLBACK_SCAN_MAX_DEPT
   return discovered;
 }
 
-function findNestedSvnRepoPaths(rootPath: string, maxDepth = FALLBACK_SCAN_MAX_DEPTH): string[] {
+function findNestedSvnRepoPaths(
+  rootPath: string,
+  maxDepth = FALLBACK_SCAN_MAX_DEPTH,
+  isIgnored: RepositoryScanIgnore = () => false,
+): string[] {
   const discovered: string[] = [];
   const visited = new Set<string>();
 
   const walk = (currentPath: string, depth: number): void => {
     if (depth > maxDepth || visited.has(currentPath)) return;
+    if (depth > 0 && isIgnored(currentPath)) return;
     visited.add(currentPath);
 
     const svnPath = path.join(currentPath, '.svn');
@@ -139,6 +164,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private prevCommits = new Map<string, string>();    // repoId → commit hash
   private prevUntracked = new Map<string, Set<string>>(); // repoId → known untracked paths
   private initialStatusDone = false;
+  private repositoryGeneration = 0;
+  private refreshInFlight = false;
+  private refreshPending = false;
+  private disposed = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.globalListeners.push(
@@ -324,6 +353,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private reinitialize(): void {
+    this.repositoryGeneration++;
     this.disposeWatchers();
     this.repos.clear();
     this.repoMetas.clear();
@@ -361,7 +391,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const repositoryScanMaxDepth = this.getRepositoryScanMaxDepth();
     if (repositoryScanMaxDepth > 0) {
       for (const folder of folders) {
-        for (const repoPath of findNestedRepoPaths(folder.uri.fsPath, repositoryScanMaxDepth)) {
+        for (const repoPath of findNestedRepoPaths(
+          folder.uri.fsPath,
+          repositoryScanMaxDepth,
+          candidatePath => this.isRepositoryScanIgnored(candidatePath, folder.uri.fsPath),
+        )) {
           const depth = this.repositoryScanDepth(folder.uri.fsPath, repoPath);
           if (depth < 0 || depth > repositoryScanMaxDepth) continue;
           if (this.isRepositoryScanIgnored(repoPath, folder.uri.fsPath)) continue;
@@ -384,7 +418,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
     });
 
     for (const folder of folders) {
-      for (const repoPath of findNestedSvnRepoPaths(folder.uri.fsPath)) {
+      for (const repoPath of findNestedSvnRepoPaths(
+        folder.uri.fsPath,
+        SVN_REPOSITORY_SCAN_MAX_DEPTH,
+        candidatePath => this.isRepositoryScanIgnored(candidatePath, folder.uri.fsPath),
+      )) {
         const meta = this.buildSvnRepoMeta(repoPath, colorIdx.value++, folders, customColors);
         if (this.repos.has(meta.id)) continue;
         this.repoMetas.set(meta.id, meta);
@@ -593,13 +631,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
     // Parse submodule paths from .gitmodules
     const subPaths: string[] = [];
-    let pendingPath = '';
     for (const line of raw.split('\n')) {
-      if (line.match(/^\[submodule/)) { pendingPath = ''; continue; }
-      const kvMatch = line.match(/^\s+path\s*=\s*(.+)/);
-      if (kvMatch) pendingPath = kvMatch[1].trim();
-      const urlMatch = line.match(/^\s+url\s*=\s*(.+)/);
-      if (urlMatch && pendingPath) { subPaths.push(pendingPath); pendingPath = ''; }
+      const kvMatch = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
+      if (kvMatch) subPaths.push(kvMatch[1].trim());
     }
 
     for (const subRelPath of subPaths) {
@@ -717,17 +751,41 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private scheduleRefresh(): void {
+    if (this.disposed) return;
     if (this.refreshDebounce) clearTimeout(this.refreshDebounce);
     this.refreshDebounce = setTimeout(() => {
       this.refreshDebounce = null;
-      void this.refreshStatuses().catch(error => {
+      this.refreshPending = true;
+      void this.drainRefreshQueue().catch(error => {
         console.error('[VersionDock] Failed to refresh repository status:', error);
       });
     }, 300);
   }
 
+  private async drainRefreshQueue(): Promise<void> {
+    if (this.refreshInFlight || this.disposed) return;
+    this.refreshInFlight = true;
+    try {
+      do {
+        this.refreshPending = false;
+        await this.refreshStatuses();
+      } while (this.refreshPending && !this.disposed);
+    } finally {
+      this.refreshInFlight = false;
+      if (this.refreshPending && !this.disposed) {
+        void this.drainRefreshQueue().catch(error => {
+          console.error('[VersionDock] Failed to refresh repository status:', error);
+        });
+      }
+    }
+  }
+
   private async refreshStatuses(): Promise<void> {
+    const generation = this.repositoryGeneration;
     const status = await this.getAllStatusesFresh();
+    // Repository discovery can be rebuilt while Git/SVN commands are still in
+    // flight. Never publish results produced by services from the old repo set.
+    if (this.disposed || generation !== this.repositoryGeneration) return;
     this.detectNewUntrackedFiles(status);
     this.statusListeners.forEach(l => l(status));
   }
@@ -809,6 +867,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private scheduleBranchRefresh(): void {
     if (this.branchDebounce) clearTimeout(this.branchDebounce);
     this.branchDebounce = setTimeout(() => {
+      this.branchDebounce = null;
       this.branchListeners.forEach(l => l());
     }, 400);
   }
@@ -1003,7 +1062,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     let raw = '';
     try { raw = fs.readFileSync(gitmodulesPath, 'utf8'); } catch { return result; }
     for (const line of raw.split('\n')) {
-      const kvMatch = line.match(/^\s+path\s*=\s*(.+)/);
+      const kvMatch = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
       if (kvMatch) result.add(kvMatch[1].trim().split(path.sep).join('/'));
     }
     return result;
@@ -1051,9 +1110,12 @@ export class WorkspaceGitManager implements vscode.Disposable {
         // git status reports nested repo directories as the directory itself
         // (e.g. "deep/nested-repo/"), so absolutePath IS the nested repo root —
         // we must check it first, then its ancestors.
-        const repoRoot = r.repoId;
+        // repoId includes the VCS kind suffix ("<root>::git" / "::svn").
+        // Path traversal must use the real filesystem root from metadata.
+        const repoRoot = this.repoMetas.get(r.repoId)?.rootPath;
+        if (!repoRoot) return false;
         let dir = f.absolutePath;
-        while (dir.startsWith(repoRoot + path.sep)) {
+        while (dir !== repoRoot && isWithinPath(repoRoot, dir)) {
           if (fs.existsSync(path.join(dir, '.git'))) return true;
           dir = path.dirname(dir);
         }
@@ -1196,9 +1258,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
       try {
         const message = rebase ? await r.pullRebase() : await r.pull();
         results.push({ repoId: r.repoId, ok: true, message });
-      } catch (e: any) {
-        const detail = e?.stderr?.trim() || e?.gitErrorCode || e?.message || 'Unknown error';
-        results.push({ repoId: r.repoId, ok: false, message: detail });
+      } catch (error: unknown) {
+        results.push({ repoId: r.repoId, ok: false, message: gitErrorDetail(error) });
       }
     }
     return results;
@@ -1208,19 +1269,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.gitInitWatchers.forEach(d => d.dispose());
     this.gitInitWatchers = [];
 
-    const maxDepth = this.getRepositoryScanMaxDepth();
+    const gitMaxDepth = this.getRepositoryScanMaxDepth();
 
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      // At depth 0 only the workspace root can become a repo; if it already is
-      // one, its normal repo watcher is enough. At depth > 0, still watch known
-      // roots so newly cloned/git-init'ed child repositories are detected.
-      if (maxDepth === 0 && this.repos.has(buildRepoId(folder.uri.fsPath, 'git'))) continue;
-
-      const w = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(folder.uri, maxDepth > 0 ? '**/.git' : '.git')
-      );
-      const onGitCreated = (gitUri: vscode.Uri) => {
-        const repoPath = path.dirname(gitUri.fsPath);
+      const onMetadataCreated = (maxDepth: number) => (metadataUri: vscode.Uri) => {
+        const repoPath = path.dirname(metadataUri.fsPath);
         const depth = this.repositoryScanDepth(folder.uri.fsPath, repoPath);
         if (depth < 0 || depth > maxDepth) return;
         if (this.isRepositoryScanIgnored(repoPath, folder.uri.fsPath)) return;
@@ -1228,12 +1281,29 @@ export class WorkspaceGitManager implements vscode.Disposable {
         this.setupGitInitWatchers();
         this.scheduleRefresh();
       };
-      w.onDidCreate(onGitCreated);
-      this.gitInitWatchers.push(w);
+
+      // At depth 0 only the workspace root can become a repo. Keep Git and SVN
+      // watchers independent so a same-path mixed working copy can gain either
+      // VCS after the workspace has already opened.
+      if (gitMaxDepth > 0 || !this.repos.has(buildRepoId(folder.uri.fsPath, 'git'))) {
+        const gitWatcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(folder.uri, gitMaxDepth > 0 ? '**/.git' : '.git')
+        );
+        gitWatcher.onDidCreate(onMetadataCreated(gitMaxDepth));
+        this.gitInitWatchers.push(gitWatcher);
+      }
+      const svnWatcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(folder.uri, '**/.svn')
+      );
+      svnWatcher.onDidCreate(onMetadataCreated(SVN_REPOSITORY_SCAN_MAX_DEPTH));
+      this.gitInitWatchers.push(svnWatcher);
     }
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.repositoryGeneration++;
+    this.refreshPending = false;
     this.disposeWatchers();
     if (this.autoRefreshTimer) {
       clearInterval(this.autoRefreshTimer);

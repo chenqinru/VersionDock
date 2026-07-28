@@ -91,22 +91,6 @@ const REPO_CONTEXT_ITEMS: ContextMenuEntry[] = [
   { id: 'refresh',      label: t('Refresh'),              icon: 'refresh' },
 ];
 
-const REPO_CONTEXT_ITEMS_CHANGELISTS: ContextMenuEntry[] = [
-  { id: 'rollback',     label: t('Rollback'),             icon: 'discard' },
-  { id: 'shelve',       label: t('Shelve Changes'),        icon: 'archive' },
-  { id: 'stash',        label: t('Stash Changes'),         icon: 'save' },
-  { separator: true },
-  { id: 'add-to-git',   label: t('Add to Git'),            icon: 'add' },
-  { id: 'move-to-cl',   label: t('Move to Changelist…'),  icon: 'list-unordered' },
-  { separator: true },
-  { id: 'manage-repo',  label: t('Manage Repository'),     icon: 'git-branch' },
-  { id: 'view-git-log', label: t('View Git Log'),          icon: 'git-commit' },
-  { separator: true },
-  { id: 'hide-repo',    label: t('Hide Repository'),       icon: 'eye-closed' },
-  { separator: true },
-  { id: 'refresh',      label: t('Refresh'),               icon: 'refresh' },
-];
-
 const VSCODE_FILE_STAGED_ITEMS: ContextMenuEntry[] = [
   { id: 'unstage',         label: t('Unstage'),              icon: 'remove' },
   { separator: true },
@@ -301,6 +285,10 @@ function changedPaths(repoStatus: Pick<FileStatus, 'path'>[] | undefined): strin
 export function CommitApp() {
   const store = useCommitStore();
   const pendingRef = useRef<Map<string, (msg: HostToCommitMsg) => void>>(new Map());
+  const commitActionRef = useRef<(andPush: boolean) => void>(() => {});
+  // Renders that return an empty/loading state must not retain a previously
+  // mounted commit action with stale repository metadata.
+  commitActionRef.current = () => {};
 
   // ── Tab ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabId>('changes');
@@ -336,6 +324,7 @@ export function CommitApp() {
 
   // ── Hidden repositories ───────────────────────────────────────────────────
   const [hiddenRepoIds, setHiddenRepoIds] = useState<string[]>([]);
+  const hiddenRepoIdsRef = useRef<Set<string>>(new Set());
 
   // ── Submodule detached HEAD warnings ─────────────────────────────────────
   // repoId → headCommit — shown as dismissable banner above the file tree
@@ -356,7 +345,7 @@ export function CommitApp() {
       return next;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [(store.status?.repos ?? []).map(r => r.repoId).join(',')]);
+  }, [(store.status?.repos ?? []).map(r => r.repoId).join('\0')]);
 
   const toggleVscodeRepoSelection = (repoId: string) => {
     setVscodeSelectedRepos(prev => {
@@ -470,11 +459,11 @@ export function CommitApp() {
 
   const notifyError = useCallback((message: string) => {
     send({ type: 'NOTIFY_ERROR', message } satisfies CommitToHostMsg);
-  }, []);
+  }, [send]);
 
   const notifyInfo = useCallback((message: string) => {
     send({ type: 'NOTIFY_INFO', message } satisfies CommitToHostMsg);
-  }, []);
+  }, [send]);
 
   useEffect(() => {
     send({ type: 'COMMIT_ACTIVE_TAB_CHANGED', tab: activeTab });
@@ -485,6 +474,16 @@ export function CommitApp() {
     const handler = (event: MessageEvent<HostToCommitMsg>) => {
       const msg = event.data;
       if (!msg?.type) return;
+
+      const requestVisibleGitPushData = () => {
+        const freshState = useCommitStore.getState();
+        const metaById = new Map(freshState.repoMetas.map(meta => [meta.id, meta]));
+        for (const repo of freshState.status?.repos ?? []) {
+          if (hiddenRepoIdsRef.current.has(repo.repoId)) continue;
+          if (metaById.get(repo.repoId)?.kind === 'svn') continue;
+          requestUnpushedCommits(repo.repoId);
+        }
+      };
 
       if ('requestId' in msg && msg.requestId && pendingRef.current.has(msg.requestId as string)) {
         const resolve = pendingRef.current.get(msg.requestId as string)!;
@@ -514,6 +513,9 @@ export function CommitApp() {
               prevCounts.set(repo.repoId, (repo.unstagedFiles ?? []).length);
             }
           }
+          break;
+        case 'COMMIT_ICON_THEME_UPDATE':
+          useCommitStore.setState({ iconTheme: msg.iconTheme });
           break;
         case 'CHANGELISTS_UPDATE':
           store.setChangelists(msg.changelists, msg.viewMode);
@@ -587,11 +589,15 @@ export function CommitApp() {
           break;
         case 'COMMIT_SET_ACTIVE_TAB':
           setActiveTab(msg.tab);
+          if (msg.tab === 'push') requestVisibleGitPushData();
           if (msg.tab === 'subtree') {
             setSubtreeLoading(true);
             setSubtreeError(null);
             send({ type: 'SUBTREE_REQUEST_LIST' });
           }
+          break;
+        case 'COMMIT_TRIGGER_ACTION':
+          commitActionRef.current(msg.andPush);
           break;
         case 'SHELVE_LIST_RESULT':
           setShelveLoading(prev => ({ ...prev, [msg.repoId]: false }));
@@ -715,12 +721,13 @@ export function CommitApp() {
           break;
 
         case 'COMMIT_HIDDEN_REPOS_UPDATE':
+          hiddenRepoIdsRef.current = new Set(msg.hiddenRepoIds);
           setHiddenRepoIds(msg.hiddenRepoIds);
           break;
 
         case 'COMMIT_SWITCH_TAB':
           setActiveTab(msg.tab);
-          if (msg.tab === 'push') repos.forEach(r => requestUnpushedCommits(r.repoId));
+          if (msg.tab === 'push') requestVisibleGitPushData();
           break;
       }
     };
@@ -923,10 +930,6 @@ export function CommitApp() {
     });
   }, [send]);
 
-  const requestWorktreeDiffFiles = useCallback((repoId: string, baseRef: string) => {
-    send({ type: 'COMMIT_REQUEST_WORKTREE_DIFF_FILES', requestId: generateId(), repoId, baseRef });
-  }, [send]);
-
   const selectWorktreeDiffFile = useCallback((file: FileStatus) => {
     store.selectWorktreeDiffFile(file);
     send({
@@ -998,17 +1001,17 @@ export function CommitApp() {
   // Keep unpushed-commit counts fresh for repos without upstream so the Push tab badge
   // shows the correct number even before the tab is opened. Upstream repos are live via aheadBehind.ahead.
   // Full refresh on every status update is intentionally avoided to prevent visual noise.
-  const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream).map(r => r.repoId).join(',');
+  const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream).map(r => r.repoId).join('\0');
   useEffect(() => {
     if (!noUpstreamKey) return;
-    noUpstreamKey.split(',').forEach(id => requestUnpushedCommits(id));
-  }, [noUpstreamKey]);
+    noUpstreamKey.split('\0').forEach(id => requestUnpushedCommits(id));
+  }, [noUpstreamKey, requestUnpushedCommits]);
 
-  const gitRepoKey = gitRepos.map(repo => repo.repoId).join(',');
+  const gitRepoKey = gitRepos.map(repo => repo.repoId).join('\0');
   useEffect(() => {
     if (!gitRepoKey) return;
     const bootstrappedRepoIds = tabCountBootstrappedRepoIdsRef.current;
-    for (const repoId of gitRepoKey.split(',')) {
+    for (const repoId of gitRepoKey.split('\0')) {
       if (bootstrappedRepoIds.has(repoId)) continue;
       bootstrappedRepoIds.add(repoId);
       requestShelveList(repoId);
@@ -1095,7 +1098,7 @@ export function CommitApp() {
         requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' });
         break;
     }
-  }, [activeTab, ctxMenu, openDiff, doStash, requestCommitStatus, send]);
+  }, [activeTab, confirmShelve, ctxMenu, openDiff, doStash, requestCommitStatus, send]);
 
   const handleFolderContextMenuSelect = useCallback((id: string) => {
     const ctx = folderCtxMenu;
@@ -1132,7 +1135,7 @@ export function CommitApp() {
         requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' });
         break;
     }
-  }, [activeTab, folderCtxMenu, doStash, requestCommitStatus, send]);
+  }, [activeTab, confirmShelve, folderCtxMenu, doStash, requestCommitStatus, send]);
 
   const handleRepoContextMenuSelect = useCallback((id: string) => {
     const ctx = repoCtxMenu;
@@ -1223,7 +1226,7 @@ export function CommitApp() {
         requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' });
         break;
     }
-  }, [activeTab, clHeaderCtxMenu, requestCommitStatus, send, store.changelists]);
+  }, [activeTab, clHeaderCtxMenu, repos, requestCommitStatus, send, store.changelists]);
 
   // ── Push actions ──────────────────────────────────────────────────────────
 
@@ -1313,7 +1316,7 @@ export function CommitApp() {
     activeGenerateRequestIdRef.current = requestId;
     setGeneratingMessage(true);
     send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, targets: buildGenerateMessageTargets() });
-  }, [buildGenerateMessageTargets, generatingMessage, send, store]);
+  }, [buildGenerateMessageTargets, generatingMessage, send]);
 
   const stopAutopilot = useCallback(() => {
     const requestId = activeGenerateRequestIdRef.current;
@@ -1375,9 +1378,9 @@ export function CommitApp() {
   // ── Commit action ─────────────────────────────────────────────────────────
 
   const doCommit = (andPush: boolean) => {
-    if (!store.commitMessage.trim()) return;
     // Read fresh state at commit time to avoid stale closure values
     const freshState = useCommitStore.getState();
+    if (!freshState.commitMessage.trim()) return;
     const currentRepos = freshState.status?.repos ?? [];
 
     // In vscode mode, commit only what's already staged — no stage/unstage manipulation
@@ -1440,6 +1443,7 @@ export function CommitApp() {
     pendingCommitMessagesRef.current.set(requestId, freshState.commitMessage.trim());
     getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush } satisfies CommitToHostMsg);
   };
+  commitActionRef.current = doCommit;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1806,6 +1810,7 @@ export function CommitApp() {
                       isFirst={idx === 0}
                       repoStatus={repoStatus}
                       repoName={repoName}
+                      repoRootPath={meta?.rootPath}
                       repoColor={repoColor}
                       showVcsBadge={showVcsBadges}
                       isSubmodule={meta?.isSubmodule}
@@ -1993,7 +1998,6 @@ export function CommitApp() {
                   onApply={handleStashApply}
                   onPop={handleStashPop}
                   onDrop={handleStashDrop}
-                  onRequestList={requestStashList}
                   onOpenFileDiff={handleStashShowFileDiff}
                   expandAll={stashExpandAll}
                 />

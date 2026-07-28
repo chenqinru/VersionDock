@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { FileStatus, RepoMeta, RepoStatus } from '../../shared/types';
 import type { ViewMode } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
@@ -8,6 +8,7 @@ import { SingleRepoHeader } from './ProjectGroup';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { branchColor, tagColor } from '../../shared/branchColors';
+import { scopedKey } from '../../shared/scopedKey';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ interface Props {
 // ── Tree helpers (same logic as FileTree) ─────────────────────────────────
 
 type TreeFile = { kind: 'file'; file: FileStatus };
-type TreeDir  = { kind: 'dir'; name: string; path: string; children: TreeNode[] };
+type TreeDir  = { kind: 'dir'; name: string; path: string; children: TreeNode[]; files: FileStatus[] };
 type TreeNode = TreeFile | TreeDir;
 
 function buildTree(files: FileStatus[]): TreeNode[] {
@@ -55,7 +56,8 @@ function buildTree(files: FileStatus[]): TreeNode[] {
       const name = parts[i];
       const dirPath = parts.slice(0, i + 1).join('/');
       let dir = nodes.find((n): n is TreeDir => n.kind === 'dir' && n.name === name);
-      if (!dir) { dir = { kind: 'dir', name, path: dirPath, children: [] }; nodes.push(dir); }
+      if (!dir) { dir = { kind: 'dir', name, path: dirPath, children: [], files: [] }; nodes.push(dir); }
+      dir.files.push(file);
       nodes = dir.children;
     }
     nodes.push({ kind: 'file', file });
@@ -69,19 +71,10 @@ function collapseSingleChildDirs(nodes: TreeNode[]): TreeNode[] {
     const children = collapseSingleChildDirs(node.children);
     if (children.length === 1 && children[0].kind === 'dir') {
       const only = children[0] as TreeDir;
-      return { kind: 'dir' as const, name: `${node.name}/${only.name}`, path: only.path, children: only.children };
+      return { kind: 'dir' as const, name: `${node.name}/${only.name}`, path: only.path, children: only.children, files: node.files };
     }
     return { ...node, children };
   });
-}
-
-function collectFiles(node: TreeDir): FileStatus[] {
-  const result: FileStatus[] = [];
-  for (const child of node.children) {
-    if (child.kind === 'file') result.push(child.file);
-    else result.push(...collectFiles(child));
-  }
-  return result;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -221,9 +214,9 @@ interface DirNodeProps {
 }
 
 function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, onSelect, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, onStageFolder, onUnstageFolder, kind }: DirNodeProps) {
-  const collapseKey = `vscode-${staged ? 'staged' : 'unstaged'}-${repoId}:${node.path}`;
+  const collapseKey = scopedKey('vscode-dir', staged ? 'staged' : 'unstaged', repoId, node.path);
   const open = !isCollapsed(collapseKey);
-  const allFiles = collectFiles(node);
+  const allFiles = node.files;
   const [hovered, setHovered] = useState(false);
   const ctxActive = activeFolderPath === node.path;
   const isSvn = kind === 'svn';
@@ -273,10 +266,10 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
           <span style={dirCountStyle}>{allFiles.length}</span>
         </div>
       </div>
-      {open && node.children.map((child, i) =>
+      {open && node.children.map((child) =>
         child.kind === 'dir'
-          ? <VscodeDirNode key={i} node={child} {...childProps} />
-          : <VscodeFileRow key={i} file={child.file} depth={depth + 1} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelect} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
+          ? <VscodeDirNode key={child.path} node={child} {...childProps} />
+          : <VscodeFileRow key={child.file.path} file={child.file} depth={depth + 1} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelect} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
       )}
     </div>
   );
@@ -322,7 +315,7 @@ interface RepoSubGroupProps {
 
 function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewMode, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStageFiles, onUnstageFiles, onRepoContextMenu, onBranchClick, onOpenChanges, isFirst = false, repoSelected, onToggleRepoSelection, singleRepo, isSubmodule, submodulePath, isWorktree, mainWorktreePath, kind, showVcsBadge }: RepoSubGroupProps) {
   const repoId = repoStatus.repoId;
-  const collapseKey = `vscode-repo-${staged ? 'staged' : 'unstaged'}:${repoId}`;
+  const collapseKey = scopedKey('vscode-repo', staged ? 'staged' : 'unstaged', repoId);
   const isEmpty = files.length === 0;
   // Empty repos default to collapsed; key presence means "explicitly opened"
   const collapsed = isEmpty ? !isCollapsed(collapseKey) : isCollapsed(collapseKey);
@@ -335,18 +328,18 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   const onUnstage = (file: FileStatus) => onUnstageFiles([file.path]);
   const onStageFolder   = (fs: FileStatus[]) => onStageFiles(fs.map(f => f.path));
   const onUnstageFolder = (fs: FileStatus[]) => onUnstageFiles(fs.map(f => f.path));
+  const treeNodes = useMemo(() => viewMode === 'tree' ? buildTree(files) : [], [files, viewMode]);
 
   const renderFiles = () => {
     if (viewMode === 'tree') {
-      const nodes = buildTree(files);
-      return nodes.map((node, i) =>
+      return treeNodes.map((node) =>
         node.kind === 'dir'
-          ? <VscodeDirNode key={i} node={node} depth={0} staged={staged} repoId={repoId} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} isCollapsed={isCollapsed} toggleCollapsed={toggleCollapsed} activeFolderPath={activeFolderPath} onSelect={onSelectFile} onContextMenu={onContextMenu} onFolderContextMenu={(e, fp, fs) => onFolderContextMenu(e, repoId, fp, fs)} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} onStageFolder={onStageFolder} onUnstageFolder={onUnstageFolder} kind={kind} />
-          : <VscodeFileRow key={i} file={node.file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
+          ? <VscodeDirNode key={node.path} node={node} depth={0} staged={staged} repoId={repoId} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} isCollapsed={isCollapsed} toggleCollapsed={toggleCollapsed} activeFolderPath={activeFolderPath} onSelect={onSelectFile} onContextMenu={onContextMenu} onFolderContextMenu={(e, fp, fs) => onFolderContextMenu(e, repoId, fp, fs)} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} onStageFolder={onStageFolder} onUnstageFolder={onUnstageFolder} kind={kind} />
+          : <VscodeFileRow key={node.file.path} file={node.file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
       );
     }
-    return files.map((file, i) =>
-      <VscodeFileRow key={i} file={file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
+    return files.map((file) =>
+      <VscodeFileRow key={file.path} file={file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
     );
   };
 
@@ -567,7 +560,7 @@ export function VscodeView({
           count={totalStaged}
           collapsed={stagedCollapsed}
           onToggle={() => toggleCollapsed(STAGED_COLLAPSE_KEY)}
-          onContextMenu={e => {/* no-op for now */}}
+          onContextMenu={() => {}}
           actionIcon={totalStaged > 0 && gitRepos.length > 0 ? 'remove' : undefined}
           actionTitle={totalStaged > 0 && gitRepos.length > 0 ? t('Unstage All') : undefined}
           onAction={totalStaged > 0 && gitRepos.length > 0 ? () => gitRepos.forEach(r => onUnstageAll(r.repoId)) : undefined}
@@ -625,7 +618,7 @@ export function VscodeView({
         count={totalUnstaged}
         collapsed={unstagedCollapsed}
         onToggle={() => toggleCollapsed(UNSTAGED_COLLAPSE_KEY)}
-        onContextMenu={e => {/* no-op */}}
+        onContextMenu={() => {}}
         actionIcon={totalUnstaged > 0 ? 'add' : undefined}
         actionTitle={totalUnstaged > 0 ? (allReposAreSvn ? t('Add to SVN') : t('Stage All')) : undefined}
         onAction={

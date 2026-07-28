@@ -7,6 +7,7 @@ import { ChangelistGroup } from './ChangelistGroup';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { SingleRepoHeader } from './ProjectGroup';
 import { mergeRepoFiles } from '../utils/mergeRepoFiles';
+import { scopedKey } from '../../shared/scopedKey';
 
 interface Props {
   changelists: ChangelistData[];
@@ -45,13 +46,13 @@ export function ChangelistView({
   const fileToChangelist = new Map<string, string>();
   for (const cl of changelists) {
     for (const [repoId, paths] of Object.entries(cl.fileAssignments)) {
-      for (const p of paths) fileToChangelist.set(`${repoId}::${p}`, cl.id);
+      for (const p of paths) fileToChangelist.set(scopedKey(repoId, p), cl.id);
     }
   }
 
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
   const singleRepo = repos.length === 1;
-  const multiRepo = repos.length >= 1;
+  const multiRepo = repos.length > 1;
 
   // For each changelist, compute which files (from the live git status) belong to it
   const changelistFiles = new Map<string, Map<string, FileStatus[]>>(); // clId → repoId → files
@@ -71,7 +72,7 @@ export function ChangelistView({
 
     // All other files: merge staged + unstaged into a stable path-sorted list.
     for (const file of mergeRepoFiles(r, { includeUntracked: false })) {
-      const key = `${r.repoId}::${file.path}`;
+      const key = scopedKey(r.repoId, file.path);
       const clId = fileToChangelist.get(key) ?? CHANGELIST_DEFAULT_ID;
 
       const clMap = changelistFiles.get(clId);
@@ -119,6 +120,7 @@ export function ChangelistView({
           return {
             repoId,
             repoName: meta?.name ?? baseNameFromPath(repoId) ?? repoId,
+            repoRootPath: meta?.rootPath,
             repoColor: meta?.color ?? '#4ec9b0',
             repoStatus,
             files,
@@ -155,14 +157,11 @@ export function ChangelistView({
               .map(r => buildGroup(r.repoId, clMap.get(r.repoId) ?? []))
           : repoGroups;
 
-        const isFixed = cl.id === CHANGELIST_DEFAULT_ID || cl.id === CHANGELIST_UNVERSIONED_ID;
-
         return (
           <ChangelistGroup
             key={cl.id}
             changelist={cl}
             repoGroups={allRepoGroups}
-            isFixed={isFixed}
             multiRepo={multiRepo}
             singleRepo={singleRepo}
             selectedFile={selectedFile}

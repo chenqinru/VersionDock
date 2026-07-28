@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { ChangelistData, RepoStatus } from '../types/git';
 import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../types/git';
+import { scopedKey } from '../utils/scopedKey';
 
 interface ChangelistsJson {
   changelists: ChangelistData[];
@@ -66,7 +67,13 @@ export class ChangelistService {
       if (!this.isChangelistMode) return;
       const dir = path.dirname(this.globalFilePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(this.globalFilePath, JSON.stringify({ changelists: this.changelists }, null, 2), 'utf8');
+      const tempPath = `${this.globalFilePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+      try {
+        fs.writeFileSync(tempPath, JSON.stringify({ changelists: this.changelists }, null, 2), 'utf8');
+        fs.renameSync(tempPath, this.globalFilePath);
+      } finally {
+        try { fs.unlinkSync(tempPath); } catch { /* renamed or never created */ }
+      }
     } catch {
       // Non-critical — silently fail
     }
@@ -125,7 +132,7 @@ export class ChangelistService {
     for (const cl of this.changelists) {
       if (cl.id === CHANGELIST_UNVERSIONED_ID) continue;
       for (const [repoId, paths] of Object.entries(cl.fileAssignments)) {
-        for (const p of paths) assigned.set(`${repoId}::${p}`, cl.id);
+        for (const p of paths) assigned.set(scopedKey(repoId, p), cl.id);
       }
     }
 
@@ -144,10 +151,10 @@ export class ChangelistService {
     for (const r of repos) {
       const repoId = r.repoId;
       for (const filePath of trackedFiles.get(repoId) ?? []) {
-        if (assigned.has(`${repoId}::${filePath}`)) continue;
+        if (assigned.has(scopedKey(repoId, filePath))) continue;
         if (!defaultCl.fileAssignments[repoId]) defaultCl.fileAssignments[repoId] = [];
         defaultCl.fileAssignments[repoId].push(filePath);
-        assigned.set(`${repoId}::${filePath}`, CHANGELIST_DEFAULT_ID);
+        assigned.set(scopedKey(repoId, filePath), CHANGELIST_DEFAULT_ID);
       }
     }
 
@@ -189,8 +196,10 @@ export class ChangelistService {
     // Move files back to default changelist
     const defaultCl = this.changelists.find(c => c.id === CHANGELIST_DEFAULT_ID)!;
     for (const [repoId, paths] of Object.entries(cl.fileAssignments)) {
-      if (!defaultCl.fileAssignments[repoId]) defaultCl.fileAssignments[repoId] = [];
-      defaultCl.fileAssignments[repoId].push(...paths);
+      defaultCl.fileAssignments[repoId] = Array.from(new Set([
+        ...(defaultCl.fileAssignments[repoId] ?? []),
+        ...paths,
+      ]));
     }
 
     this.changelists = this.changelists.filter(c => c.id !== id);

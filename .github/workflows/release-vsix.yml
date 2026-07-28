@@ -83,10 +83,13 @@ jobs:
         run: npm ci
 
       - name: Typecheck host
-        run: npm run typecheck
+        run: npm run typecheck:host
 
       - name: Typecheck webviews
         run: npm run typecheck:webview
+
+      - name: Lint
+        run: npm run lint
 
       - name: Read package version
         id: package

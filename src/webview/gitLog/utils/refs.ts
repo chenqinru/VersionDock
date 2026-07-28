@@ -1,5 +1,5 @@
-import { isPrimaryBranch } from '../../shared/branchUtils';
 import { currentPalette as _currentPalette } from '../../shared/branchColors';
+import type { BranchInfo } from '../../shared/types';
 export {
   primaryBranchColor,
   headColor,
@@ -21,11 +21,42 @@ export interface RefGroup {
   isTag: boolean;
   isDetached: boolean;   // HEAD is detached (on this tag or commit)
   isRemoteHead: boolean; // this is <remote>/HEAD (symbolic remote pointer)
+  isSvnRevision?: boolean; // SVN HEAD/BASE revision marker, not a Git ref
+}
+
+export function splitRemoteRefName(
+  refName: string,
+  remoteNames: readonly string[] = [],
+): { remoteName: string; name: string } | null {
+  const shortName = refName.startsWith('refs/remotes/')
+    ? refName.slice('refs/remotes/'.length)
+    : refName;
+  const configuredRemoteNames = Array.from(new Set(remoteNames.filter(Boolean))).sort((a, b) => b.length - a.length);
+  const configuredRemote = configuredRemoteNames.find(remote => shortName.startsWith(`${remote}/`));
+  const slash = shortName.indexOf('/');
+  if (!configuredRemote && slash < 0) return null;
+  const remoteName = configuredRemote ?? shortName.slice(0, slash);
+  return { remoteName, name: shortName.slice(remoteName.length + 1) };
+}
+
+export function branchRevisionRef(branch: BranchInfo, vcsKind: 'git' | 'svn'): string {
+  if (vcsKind === 'git') {
+    if (branch.fullName.startsWith('refs/')) return branch.fullName;
+    return branch.isRemote ? `refs/remotes/${branch.name}` : `refs/heads/${branch.name}`;
+  }
+  if (branch.name === 'trunk' || branch.name.startsWith('branches/') || branch.name.startsWith('tags/')) {
+    return branch.name;
+  }
+  return `branches/${branch.name}`;
+}
+
+export function tagRevisionRef(tagName: string, vcsKind: 'git' | 'svn'): string {
+  return vcsKind === 'git' ? `refs/tags/${tagName}` : `tags/${tagName}`;
 }
 
 // Normalize a single raw ref token from %D --decorate=full output.
 // Returns null if the token should be ignored.
-function normalizeRef(raw: string): { kind: 'head-pointer'; branch: string }
+function normalizeRef(raw: string, configuredRemoteNames: readonly string[]): { kind: 'head-pointer'; branch: string }
   | { kind: 'detached-head' }
   | { kind: 'local'; name: string }
   | { kind: 'remote'; remoteName: string; name: string }
@@ -42,12 +73,8 @@ function normalizeRef(raw: string): { kind: 'head-pointer'; branch: string }
   if (raw.startsWith('refs/heads/')) return { kind: 'local', name: raw.slice('refs/heads/'.length) };
   // Full-form: refs/remotes/<remote>/<name>  OR  refs/remotes/<remote>/HEAD
   if (raw.startsWith('refs/remotes/')) {
-    const rest = raw.slice('refs/remotes/'.length);
-    const slash = rest.indexOf('/');
-    if (slash < 0) return null;
-    const remoteName = rest.slice(0, slash);
-    const name = rest.slice(slash + 1);
-    return { kind: 'remote', remoteName, name };
+    const remote = splitRemoteRefName(raw, configuredRemoteNames);
+    return remote ? { kind: 'remote', ...remote } : null;
   }
   // Full-form tag: refs/tags/<name>  OR  tag: <name>
   if (raw.startsWith('refs/tags/')) return { kind: 'tag', name: raw.slice('refs/tags/'.length) };
@@ -60,22 +87,44 @@ function normalizeRef(raw: string): { kind: 'head-pointer'; branch: string }
   // Without a full prefix we can't tell, so treat it as a remote ref — this was
   // the old behaviour and is correct for the common case where locals rarely have slashes.
   if (raw.includes('/')) {
-    const slash = raw.indexOf('/');
-    return { kind: 'remote', remoteName: raw.slice(0, slash), name: raw.slice(slash + 1) };
+    const remote = splitRemoteRefName(raw, configuredRemoteNames);
+    return remote ? { kind: 'remote', ...remote } : null;
   }
   return { kind: 'local', name: raw };
 }
 
-export function groupRefs(refs: string[]): RefGroup[] {
-  const remotes = new Map<string, string>(); // branchName → remoteName
+export function groupRefs(
+  refs: string[],
+  vcsKind: 'git' | 'svn' = 'git',
+  remoteNames: readonly string[] = [],
+): RefGroup[] {
+  if (vcsKind === 'svn') {
+    return Array.from(new Set(refs))
+      .filter(ref => ref === 'HEAD' || ref === 'BASE')
+      .map(ref => ({
+        key: `svn:${ref}`,
+        label: ref,
+        remoteName: '',
+        isHead: ref === 'HEAD',
+        isLocal: false,
+        isRemote: false,
+        isTag: false,
+        isDetached: false,
+        isRemoteHead: false,
+        isSvnRevision: true,
+      }));
+  }
+
+  const configuredRemoteNames = Array.from(new Set(remoteNames.filter(Boolean))).sort((a, b) => b.length - a.length);
+  const remotes = new Map<string, { remoteName: string; name: string }>();
   const locals = new Set<string>();
   const tags: string[] = [];
   let headBranch: string | null = null;
   let isDetached = false;
-  let remoteHeadRemoteName: string | null = null;
+  const remoteHeadRemoteNames = new Set<string>();
 
   for (const ref of refs) {
-    const parsed = normalizeRef(ref);
+    const parsed = normalizeRef(ref, configuredRemoteNames);
     if (!parsed) continue;
     switch (parsed.kind) {
       case 'head-pointer':
@@ -90,10 +139,12 @@ export function groupRefs(refs: string[]): RefGroup[] {
         break;
       case 'remote':
         if (parsed.name.toUpperCase() === 'HEAD') {
-          remoteHeadRemoteName = parsed.remoteName;
+          remoteHeadRemoteNames.add(parsed.remoteName);
         } else {
-          // Last remote wins if multiple remotes track the same branch name — shouldn't happen in practice.
-          remotes.set(parsed.name, parsed.remoteName);
+          remotes.set(`${parsed.remoteName}\0${parsed.name}`, {
+            remoteName: parsed.remoteName,
+            name: parsed.name,
+          });
         }
         break;
       case 'tag':
@@ -104,9 +155,6 @@ export function groupRefs(refs: string[]): RefGroup[] {
 
   // HEAD is detached only when there is no HEAD -> branch pointer
   if (headBranch !== null) isDetached = false;
-
-  const tagSet = new Set(tags);
-  for (const t of tagSet) locals.delete(t);
 
   const groups: RefGroup[] = [];
 
@@ -126,7 +174,7 @@ export function groupRefs(refs: string[]): RefGroup[] {
   }
 
   // <remote>/HEAD symbolic pointer
-  if (remoteHeadRemoteName !== null) {
+  for (const remoteHeadRemoteName of remoteHeadRemoteNames) {
     groups.push({
       key: `${remoteHeadRemoteName}/HEAD`,
       label: 'HEAD',
@@ -141,8 +189,6 @@ export function groupRefs(refs: string[]): RefGroup[] {
   }
 
   for (const local of locals) {
-    const remoteEntry = remotes.get(local);
-    const synced = remoteEntry !== undefined;
     groups.push({
       key: local,
       label: local,
@@ -154,25 +200,11 @@ export function groupRefs(refs: string[]): RefGroup[] {
       isDetached: false,
       isRemoteHead: false,
     });
-    if (synced) {
-      groups.push({
-        key: `remote:${local}`,
-        label: local,
-        remoteName: remoteEntry,
-        isHead: false,
-        isLocal: false,
-        isRemote: true,
-        isTag: false,
-        isDetached: false,
-        isRemoteHead: false,
-      });
-      remotes.delete(local);
-    }
   }
 
-  for (const [name, remoteName] of remotes) {
+  for (const { name, remoteName } of remotes.values()) {
     groups.push({
-      key: `remote:${name}`,
+      key: `remote:${remoteName}:${name}`,
       label: name,
       remoteName,
       isHead: false,

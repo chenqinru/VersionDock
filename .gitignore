@@ -7,3 +7,4 @@ MEMORY.md
 .vscode/settings.json
 .idea/
 .vscode/versiondock-changelists.json
+*.tsbuildinfo

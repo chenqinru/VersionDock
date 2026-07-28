@@ -7,6 +7,7 @@ import type { MergeToHostMsg, HostToMergeMsg } from '../types/messages';
 import type { MergeConflictFile, MergeFileVersions } from '../types/git';
 import { t } from '../utils/l10n';
 import { loadIconTheme } from '../utils/IconThemeService';
+import { scopedKey } from '../utils/scopedKey';
 
 export class MergeEditorProvider implements vscode.Disposable {
   private panels = new Map<string, vscode.WebviewPanel>();
@@ -27,7 +28,7 @@ export class MergeEditorProvider implements vscode.Disposable {
       return;
     }
 
-    const panelKey = `${resolved.repoId}:${resolved.relativePath}`;
+    const panelKey = scopedKey(resolved.repoId, resolved.relativePath);
     if (this.panels.has(panelKey)) {
       this.panels.get(panelKey)!.reveal();
       return;

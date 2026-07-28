@@ -40,6 +40,7 @@ export class BranchStatusBar implements vscode.Disposable {
   private totalBehind = 0;
   private totalConflicts = 0;
   private conflictRepoCount = 0;
+  private refreshVersion = 0;
 
   constructor(
     private readonly manager: WorkspaceGitManager,
@@ -53,20 +54,39 @@ export class BranchStatusBar implements vscode.Disposable {
     this.statusBarItem.tooltip = t('VersionDock: Git/SVN Menu');
     this.statusBarItem.show();
 
-    this.statusDisposable = this.manager.onStatusChange(status => this.refresh(status));
+    this.statusDisposable = this.manager.onStatusChange(status => {
+      void this.refresh(status).catch(error => {
+        console.error('[VersionDock] Failed to refresh branch status:', error);
+      });
+    });
     // Also refresh on branch change: the status change fires at 300ms and may catch
     // a transient HEAD state during checkout. The branch change fires at 400ms when
     // the VS Code Git API state is stable, ensuring the status bar corrects itself.
-    this.branchDisposable = this.manager.onBranchChange(() => this.manager.getAllStatusesFresh().then(s => this.refresh(s)));
+    this.branchDisposable = this.manager.onBranchChange(() => this.refreshFromManager());
     this.configDisposable = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('versiondock.suppressDivergedBranchWarning')) {
-        this.refresh();
+        void this.refresh().catch(error => {
+          console.error('[VersionDock] Failed to apply branch-status configuration:', error);
+        });
       }
     });
-    this.manager.getAllStatusesFresh().then(s => this.refresh(s));
+    this.refreshFromManager();
   }
 
-  async refresh(preloadedStatus?: import('../types/git').WorkspaceStatus): Promise<void> {
+  private refreshFromManager(): void {
+    const version = ++this.refreshVersion;
+    void this.manager.getAllStatusesFresh()
+      .then(status => this.refresh(status, version))
+      .catch(error => {
+        console.error('[VersionDock] Failed to load branch status:', error);
+      });
+  }
+
+  async refresh(
+    preloadedStatus?: import('../types/git').WorkspaceStatus,
+    version = ++this.refreshVersion,
+  ): Promise<void> {
+    if (version !== this.refreshVersion) return;
     const allMetas = this.manager.getRepoMetas();
     const hasGitRepo = allMetas.some(meta => meta.kind !== 'svn');
     const hasSvnRepo = allMetas.some(meta => meta.kind === 'svn');
@@ -78,10 +98,15 @@ export class BranchStatusBar implements vscode.Disposable {
     if (allMetas.length === 0) {
       this.statusBarItem.text = `$(git-branch) ${t('No repo')}`;
       this.statusBarItem.backgroundColor = undefined;
+      this.statusBarItem.color = undefined;
       this.hasBehind = false;
+      this.hasUnpushed = false;
+      this.hasNoUpstream = false;
       this.branchesDiverged = false;
       this.hasUncommitted = false;
       this.hasConflicts = false;
+      this.totalAhead = 0;
+      this.totalBehind = 0;
       this.totalConflicts = 0;
       this.conflictRepoCount = 0;
       return;
@@ -96,6 +121,7 @@ export class BranchStatusBar implements vscode.Disposable {
         return repo ? repo.getCurrentBranch() : null;
       })),
     ]);
+    if (version !== this.refreshVersion) return;
 
     type BranchInfo = Awaited<ReturnType<NonNullable<ReturnType<WorkspaceGitManager['getRepo']>>['getCurrentBranch']>>;
 
@@ -113,6 +139,7 @@ export class BranchStatusBar implements vscode.Disposable {
     // Use effective name: detachedTag, detachedHash, or branch name.
     // Diverged-branch warnings are Git-only; SVN branches are URL/layout based.
     const gitMetaIds = new Set(metas.filter(m => m.kind !== 'svn').map(m => m.id));
+    const gitBranches = branches.filter(branch => gitMetaIds.has(branch.repoId));
     const effectiveNames = [...new Set(branches.map(b => b.detachedTag ?? b.detachedHash ?? b.name))];
     const gitEffectiveNames = [...new Set(branches
       .filter(b => gitMetaIds.has(b.repoId))
@@ -121,8 +148,8 @@ export class BranchStatusBar implements vscode.Disposable {
     this.totalBehind = branches.reduce((sum, b) => sum + (b.aheadBehind?.behind ?? 0), 0);
     this.totalAhead = branches.reduce((sum, b) => sum + (b.aheadBehind?.ahead ?? 0), 0);
     this.hasBehind = this.totalBehind > 0;
-    this.hasUnpushed = branches.some(b => !b.upstream || (b.aheadBehind?.ahead ?? 0) > 0);
-    this.hasNoUpstream = branches.some(b => !b.upstream);
+    this.hasUnpushed = gitBranches.some(b => !b.upstream || (b.aheadBehind?.ahead ?? 0) > 0);
+    this.hasNoUpstream = gitBranches.some(b => !b.upstream);
     this.hasUncommitted = statusResult.repos.some(
       r => r.stagedFiles.length > 0 || r.unstagedFiles.length > 0
     );
@@ -220,7 +247,7 @@ export class BranchStatusBar implements vscode.Disposable {
       if (meta) { await this.showRepoBranchMenu(meta, { showBack: false }); return; }
     }
 
-    type MenuItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type MenuItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     const items: MenuItem[] = [];
 
@@ -608,7 +635,7 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async appendCommonBranches(
-    items: Array<vscode.QuickPickItem & { action: () => Promise<void> | void }>,
+    items: Array<vscode.QuickPickItem & { action: () => Thenable<void> | void }>,
     metas: RepoMeta[]
   ): Promise<void> {
     const perRepo = await Promise.allSettled(
@@ -676,7 +703,7 @@ export class BranchStatusBar implements vscode.Disposable {
         items.push({
           label: `${icon} ${name}`,
           description: isCurrentSomewhere ? t('current') : '',
-          action: () => this.showCommonBranchActionMenu(name, metas, isCurrentSomewhere, headLabel),
+          action: () => this.showCommonBranchActionMenu(name, metas, isCurrentSomewhere, headLabel, false),
         });
       }
     }
@@ -688,18 +715,17 @@ export class BranchStatusBar implements vscode.Disposable {
         action: async () => {},
       } as unknown as typeof items[0]);
       for (const fullName of commonRemote) {
-        const baseName = fullName.includes('/') ? fullName.slice(fullName.indexOf('/') + 1) : fullName;
         items.push({
           label: `$(cloud) ${fullName}`,
           description: '',
-          action: () => this.showCommonBranchActionMenu(baseName, metas, false, headLabel),
+          action: () => this.showCommonBranchActionMenu(fullName, metas, false, headLabel, true),
         });
       }
     }
   }
 
   private async appendCommonTags(
-    items: Array<vscode.QuickPickItem & { action: () => Promise<void> | void }>,
+    items: Array<vscode.QuickPickItem & { action: () => Thenable<void> | void }>,
     metas: RepoMeta[]
   ): Promise<void> {
     // Fetch tags and current branch for all repos in parallel
@@ -773,7 +799,7 @@ export class BranchStatusBar implements vscode.Disposable {
     tagName: string,
     metas: RepoMeta[],
   ): Promise<void> {
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     // Get current branch names for label
     const currentBranchNames = await Promise.allSettled(
@@ -920,8 +946,9 @@ export class BranchStatusBar implements vscode.Disposable {
     metas: RepoMeta[],
     isCurrent: boolean,
     currentBranchName: string,
+    isRemote: boolean,
   ): Promise<void> {
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     const items: ActionItem[] = [
       {
@@ -938,7 +965,7 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(add) ${t("New branch from '{0}'…", branchName)}`,
         action: () => this.newBranchFrom(branchName, metas),
       },
-      {
+      ...(!isRemote ? [{
         label: `$(cloud-download) ${t('Update (Pull)')}`,
         description: t('Pull {0} in all repos', branchName),
         action: () => this.pullBranchAllRepos(branchName, metas),
@@ -946,7 +973,7 @@ export class BranchStatusBar implements vscode.Disposable {
       {
         label: `$(edit) ${t('Rename…')}`,
         action: () => this.renameBranchAllRepos(branchName, metas),
-      },
+      }] satisfies ActionItem[] : []),
     ];
 
     if (!isCurrent) {
@@ -967,13 +994,15 @@ export class BranchStatusBar implements vscode.Disposable {
       );
     }
 
-    items.push(
-      { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
-      {
-        label: `$(trash) ${t('Delete…')}`,
-        action: () => this.deleteBranchAllRepos(branchName, metas),
-      },
-    );
+    if (!isRemote) {
+      items.push(
+        { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
+        {
+          label: `$(trash) ${t('Delete…')}`,
+          action: () => this.deleteBranchAllRepos(branchName, metas),
+        },
+      );
+    }
 
     const pick = await vscode.window.showQuickPick(items, {
       title: t('{0}', branchName),
@@ -1245,7 +1274,7 @@ export class BranchStatusBar implements vscode.Disposable {
     const effectiveBranchName = currentBranch.detachedTag ?? currentBranch.detachedHash ?? currentBranch.name;
     const isDetached = !!currentBranch.detachedTag || !!currentBranch.detachedHash || currentBranch.name === 'HEAD';
 
-    type BranchItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type BranchItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     const items: BranchItem[] = [
       {
@@ -1290,7 +1319,11 @@ export class BranchStatusBar implements vscode.Disposable {
       }),
       { label: t('REMOTE'), kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
       ...remote.map(b => {
-        const primary = isPrimaryBranch(b.name);
+        const remotePrefix = b.remoteName ? `${b.remoteName}/` : '';
+        const branchName = remotePrefix && b.name.startsWith(remotePrefix)
+          ? b.name.slice(remotePrefix.length)
+          : b.name.slice(b.name.indexOf('/') + 1);
+        const primary = isPrimaryBranch(branchName);
         const icon = primary ? '$(star)' : '$(cloud)';
         return {
           label: `${icon} ${b.name}`,
@@ -1359,7 +1392,7 @@ export class BranchStatusBar implements vscode.Disposable {
     ]);
     const hasConflicts = (status?.conflictCount ?? 0) > 0
       || [...(status?.unstagedFiles ?? []), ...(status?.stagedFiles ?? [])].some(file => file.status === 'conflicted');
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const items: ActionItem[] = [
       ...(options.showBack === false ? [] : [
         { label: `$(arrow-left) ${t('Back')}`, action: () => this.showMenu() },
@@ -1454,7 +1487,7 @@ export class BranchStatusBar implements vscode.Disposable {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
 
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     const remotes = await repo.getRemotes().catch(() => [] as string[]);
     const pushItems: ActionItem[] = remotes.map(r => ({
@@ -1558,7 +1591,7 @@ export class BranchStatusBar implements vscode.Disposable {
     hasUnpushed: boolean,
     currentBranchName: string,
   ): Promise<void> {
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const repo = this.manager.getRepo(meta.id);
     const operationState = repo ? await repo.getMergeRebaseState() : null;
 
@@ -1588,17 +1621,17 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(add) ${t("New branch from '{0}'…", branchName)}`,
         action: () => this.newBranchFromSingleRepo(branchName, meta),
       },
-      {
+      ...(!isRemote ? [{
         label: `$(cloud-download) ${t('Update (Pull)')}`,
         action: () => this.pullSingleRepo(meta, (!isCurrent && !isRemote) ? branchName : undefined),
       },
       {
         label: `$(edit) ${t('Rename…')}`,
         action: () => this.renameBranchSingleRepo(branchName, meta),
-      },
+      }] satisfies ActionItem[] : []),
     ];
 
-    if (hasUnpushed) {
+    if (hasUnpushed && !isRemote) {
       items.push({
         label: `$(cloud-upload) ${t('Push')}`,
         action: () => this.pushSingleRepo(meta),
@@ -1620,12 +1653,16 @@ export class BranchStatusBar implements vscode.Disposable {
           label: `$(git-merge) ${t("Merge '{0}' into '{1}'", branchName, currentBranchName)}`,
           action: () => this.mergeSingleRepo(branchName, meta),
         },
-        { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
-        {
-          label: `$(trash) ${t('Delete…')}`,
-          action: () => this.deleteSingleRepo(branchName, meta),
-        },
       );
+      if (!isRemote) {
+        items.push(
+          { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
+          {
+            label: `$(trash) ${t('Delete…')}`,
+            action: () => this.deleteSingleRepo(branchName, meta),
+          },
+        );
+      }
     }
 
     if (isRemote) {
@@ -1788,10 +1825,7 @@ export class BranchStatusBar implements vscode.Disposable {
         const repo = this.manager.getRepo(m.id);
         if (!repo) return { meta: m, hasBranch: false };
         const branches = await repo.getBranches();
-        const found = branches.find(b => {
-          const name = b.isRemote ? b.name.replace(/^[^/]+\//, '') : b.name;
-          return name === branchName;
-        });
+        const found = branches.find(branch => branch.name === branchName);
         return { meta: m, hasBranch: !!found, isRemote: found?.isRemote ?? false, fullName: found?.name };
       })
     );
@@ -1978,9 +2012,13 @@ export class BranchStatusBar implements vscode.Disposable {
   private async pullRemoteIntoCurrentSingleRepo(remoteBranch: string, meta: RepoMeta, useRebase: boolean): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
-    const parts = remoteBranch.split('/');
-    const remote = parts[0];
-    const branch = parts.slice(1).join('/');
+    const remotes = (await repo.getRemotes().catch(() => [] as string[])).sort((a, b) => b.length - a.length);
+    const remote = remotes.find(name => remoteBranch.startsWith(`${name}/`)) ?? '';
+    const branch = remote ? remoteBranch.slice(remote.length + 1) : '';
+    if (!remote || !branch) {
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: cannot determine the remote branch for "{1}".', meta.name, remoteBranch));
+      return;
+    }
     try {
       await repo.pullFromRemote(remote, branch, useRebase);
       vscode.window.showInformationMessage(
@@ -2239,7 +2277,7 @@ export class BranchStatusBar implements vscode.Disposable {
 
     const remotes = await repo.getRemotesWithUrls();
 
-    type RemoteItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type RemoteItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     const items: RemoteItem[] = [
       {
@@ -2277,7 +2315,7 @@ export class BranchStatusBar implements vscode.Disposable {
     remote: { name: string; fetchUrl: string; pushUrl: string },
     meta: RepoMeta
   ): Promise<void> {
-    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
 
     const items: ActionItem[] = [
       {

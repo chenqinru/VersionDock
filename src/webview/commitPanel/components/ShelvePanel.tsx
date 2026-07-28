@@ -269,7 +269,7 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
       {expanded && (
         <div style={rowStyle.fileList}>
           {viewMode === 'tree' && treeNodes
-            ? treeNodes.map((node, i) =>
+            ? treeNodes.map(node =>
                 node.kind === 'dir'
                   ? <TreeDirNode key={node.path} node={node} depth={0} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
                   : <FileRow key={node.file.path} file={node.file} repoId={repoId} entry={entry} depth={0} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
@@ -330,7 +330,7 @@ const rowStyle = {
 // ── Public component ──────────────────────────────────────────────────────────
 
 export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveFile, onDrop, onRequestList, onOpenFileDiff }: Props) {
-  useEffect(() => { onRequestList(repoId); }, [repoId]);
+  useEffect(() => { onRequestList(repoId); }, [onRequestList, repoId]);
 
   return (
     <div style={css.root}>

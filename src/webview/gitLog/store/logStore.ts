@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { BranchInfo, CommitNode, FileDiff, LineRange, RepoMeta, TagInfo } from '../../shared/types';
 import type { CompareSide, IconThemeData } from '../../../host/types/messages';
+import { scopedKey } from '../../shared/scopedKey';
 
 export type { CompareSide };
 
@@ -11,6 +12,7 @@ export interface CommitFilters {
   dateFrom: string;
   dateTo: string;
   repoId: string | null;
+  repoIds: string[] | null;
   path: string;
   lineRange?: LineRange;
 }
@@ -111,13 +113,16 @@ const defaultCommitFilters: CommitFilters = {
   dateFrom: '',
   dateTo: '',
   repoId: null,
+  repoIds: null,
   path: '',
   lineRange: undefined,
 };
 
 function commitKey(repoId: string, hash: string): string {
-  return `${repoId}:${hash}`;
+  return scopedKey(repoId, hash);
 }
+
+const MAX_COMMIT_FILE_CACHE_ENTRIES = 200;
 
 function findCommitIndex(commits: CommitNode[], key: string): number {
   return commits.findIndex(commit => commitKey(commit.repoId, commit.hash) === key);
@@ -179,11 +184,59 @@ export const useLogStore = create<LogState>((set, get) => ({
   replaceCommitsOnNextBatch: false,
   compareState: null,
 
-  setRepos: (repos, hasWorkspaceFolder) => set({ repos, initialized: true, ...(hasWorkspaceFolder !== undefined ? { hasWorkspaceFolder } : {}) }),
+  setRepos: (repos, hasWorkspaceFolder) => set(state => {
+    const repoIds = new Set(repos.map(repo => repo.id));
+    const visibleCommits = state.commits.filter(commit => repoIds.has(commit.repoId));
+    const availableCommitKeys = new Set(visibleCommits.map(commit => commitKey(commit.repoId, commit.hash)));
+    const selectedCommitHashes = state.selectedCommitHashes.filter(key => availableCommitKeys.has(key));
+    const primarySelectedHash = selectedCommitHashes.includes(state.primarySelectedHash ?? '')
+      ? state.primarySelectedHash
+      : (selectedCommitHashes[0] ?? null);
+    let commitFilters = state.commitFilters;
+    if (commitFilters.repoId && !repoIds.has(commitFilters.repoId)) {
+      commitFilters = { ...commitFilters, repoId: null };
+    }
+    if (commitFilters.repoIds !== null) {
+      const scopedRepoIds = commitFilters.repoIds.filter(repoId => repoIds.has(repoId));
+      commitFilters = scopedRepoIds.length > 0
+        ? { ...commitFilters, repoIds: scopedRepoIds }
+        : { ...commitFilters, branch: '', repoIds: null };
+    }
+    const compareRemoved = !!state.compareState && !repoIds.has(state.compareState.repoId);
+    return {
+      repos,
+      tags: state.tags.filter(tag => repoIds.has(tag.repoId)),
+      commits: visibleCommits,
+      commitFilters,
+      ...(compareRemoved ? {
+        mode: 'log' as const,
+        compareState: null,
+        selectedCommitHashes: [],
+        primarySelectedHash: null,
+        selectionAnchorHash: null,
+        selectedFile: null,
+        currentDiff: null,
+      } : state.mode === 'compare' ? {
+        selectedFile: state.selectedFile && repoIds.has(state.selectedFile.repoId) ? state.selectedFile : null,
+      } : {
+        selectedCommitHashes,
+        primarySelectedHash,
+        selectionAnchorHash: selectedCommitHashes.includes(state.selectionAnchorHash ?? '')
+          ? state.selectionAnchorHash
+          : primarySelectedHash,
+        selectedFile: state.selectedFile && repoIds.has(state.selectedFile.repoId) ? state.selectedFile : null,
+        currentDiff: primarySelectedHash === state.primarySelectedHash ? state.currentDiff : null,
+      }),
+      initialized: true,
+      ...(hasWorkspaceFolder !== undefined ? { hasWorkspaceFolder } : {}),
+    };
+  }),
   setBranches: (branches) => set({ branches }),
-  updateTags: (repoId, tags) => set(s => ({
-    tags: [...s.tags.filter(t => t.repoId !== repoId), ...tags],
-  })),
+  updateTags: (repoId, tags) => set(s => (
+    s.repos.some(repo => repo.id === repoId)
+      ? { tags: [...s.tags.filter(t => t.repoId !== repoId), ...tags] }
+      : {}
+  )),
   setIconTheme: (iconTheme) => set({ iconTheme }),
   appendCommits: (commits, isLast) => set(s => {
     const replacing = s.replaceCommitsOnNextBatch;
@@ -248,6 +301,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     commitFilters: {
       ...get().commitFilters,
       branch: '',
+      repoIds: null,
     },
     selectedCommitHashes: [],
     primarySelectedHash: null,
@@ -346,16 +400,22 @@ export const useLogStore = create<LogState>((set, get) => ({
       currentDiff: selectionChanged ? null : s.currentDiff,
     };
   }),
-  setCommitFiles: (repoId, hash, files) => set(s => ({
-    commitFilesByKey: {
-      ...s.commitFilesByKey,
-      [commitKey(repoId, hash)]: files,
-    },
-    loadingFilesByKey: {
-      ...s.loadingFilesByKey,
-      [commitKey(repoId, hash)]: false,
-    },
-  })),
+  setCommitFiles: (repoId, hash, files) => set(s => {
+    const key = commitKey(repoId, hash);
+    // Reinsert hits at the end so plain object insertion order acts as a small
+    // LRU. Commit file lists can be large and otherwise grow for the lifetime
+    // of a retained webview as users browse history.
+    const commitFilesByKey = { ...s.commitFilesByKey };
+    delete commitFilesByKey[key];
+    commitFilesByKey[key] = files;
+    const loadingFilesByKey = { ...s.loadingFilesByKey, [key]: false };
+    const keys = Object.keys(commitFilesByKey);
+    for (let index = 0; index < keys.length - MAX_COMMIT_FILE_CACHE_ENTRIES; index += 1) {
+      delete commitFilesByKey[keys[index]];
+      delete loadingFilesByKey[keys[index]];
+    }
+    return { commitFilesByKey, loadingFilesByKey };
+  }),
   setLoadingFiles: (repoId, hash, value) => set(s => ({
     loadingFilesByKey: {
       ...s.loadingFilesByKey,
@@ -370,9 +430,11 @@ export const useLogStore = create<LogState>((set, get) => ({
   setFilterRepoId: (id) => set({ filterRepoId: id }),
   setBranchFilter: (filter) => set({ branchFilter: filter }),
   setCommitFilters: (filters) => set(s => ({ commitFilters: { ...s.commitFilters, ...filters } })),
-  updateBranches: (repoId, branches) => set(s => ({
-    branches: [...s.branches.filter(b => b.repoId !== repoId), ...branches],
-  })),
+  updateBranches: (repoId, branches) => set(s => (
+    s.repos.some(repo => repo.id === repoId)
+      ? { branches: [...s.branches.filter(b => b.repoId !== repoId), ...branches] }
+      : {}
+  )),
   setError: (err) => set({ error: err }),
   setPendingScrollHash: (hash) => set({ pendingScrollHash: hash }),
   clearSelection: () => set({
