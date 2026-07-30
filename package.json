@@ -168,6 +168,36 @@
         "icon": "$(git-commit)"
       },
       {
+        "command": "versiondock.openGitGhostText",
+        "title": "%commands.openGitGhostText.title%",
+        "icon": "$(symbol-text)"
+      },
+      {
+        "command": "versiondock.closeGitGhostText",
+        "title": "%commands.closeGitGhostText.title%",
+        "icon": "$(symbol-text)"
+      },
+      {
+        "command": "versiondock.openSvnAnnotations",
+        "title": "%commands.openSvnAnnotations.title%",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "versiondock.closeSvnAnnotations",
+        "title": "%commands.closeSvnAnnotations.title%",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "versiondock.openSvnGhostText",
+        "title": "%commands.openSvnGhostText.title%",
+        "icon": "$(symbol-text)"
+      },
+      {
+        "command": "versiondock.closeSvnGhostText",
+        "title": "%commands.closeSvnGhostText.title%",
+        "icon": "$(symbol-text)"
+      },
+      {
         "command": "versiondock.navigateToAnnotationCommit",
         "title": "%commands.navigateToAnnotationCommit.title%"
       },
@@ -349,11 +379,35 @@
         },
         {
           "command": "versiondock.openGitAnnotations",
-          "when": "resourceScheme == file && config.versiondock.gitAnnotations.enabled"
+          "when": "resourceScheme == file && versiondock.blameVcs == git && !versiondock.annotationsVisible"
         },
         {
           "command": "versiondock.closeGitAnnotations",
-          "when": "resourceScheme == file && versiondock.annotationsVisible"
+          "when": "resourceScheme == file && versiondock.blameVcs == git && versiondock.annotationsVisible"
+        },
+        {
+          "command": "versiondock.openGitGhostText",
+          "when": "resourceScheme == file && versiondock.blameVcs == git && !versiondock.ghostTextEnabledForFile"
+        },
+        {
+          "command": "versiondock.closeGitGhostText",
+          "when": "resourceScheme == file && versiondock.blameVcs == git && versiondock.ghostTextEnabledForFile"
+        },
+        {
+          "command": "versiondock.openSvnAnnotations",
+          "when": "resourceScheme == file && versiondock.blameVcs == svn && !versiondock.annotationsVisible"
+        },
+        {
+          "command": "versiondock.closeSvnAnnotations",
+          "when": "resourceScheme == file && versiondock.blameVcs == svn && versiondock.annotationsVisible"
+        },
+        {
+          "command": "versiondock.openSvnGhostText",
+          "when": "resourceScheme == file && versiondock.blameVcs == svn && !versiondock.ghostTextEnabledForFile"
+        },
+        {
+          "command": "versiondock.closeSvnGhostText",
+          "when": "resourceScheme == file && versiondock.blameVcs == svn && versiondock.ghostTextEnabledForFile"
         },
         {
           "command": "versiondock.navigateToAnnotationCommit",
@@ -363,12 +417,22 @@
       "editor/lineNumber/context": [
         {
           "command": "versiondock.openGitAnnotations",
-          "when": "resourceScheme == file && config.versiondock.gitAnnotations.enabled && !versiondock.annotationsVisible",
+          "when": "resourceScheme == file && versiondock.blameVcs == git && !versiondock.annotationsVisible",
           "group": "versiondock@1"
         },
         {
           "command": "versiondock.closeGitAnnotations",
-          "when": "resourceScheme == file && versiondock.annotationsVisible",
+          "when": "resourceScheme == file && versiondock.blameVcs == git && versiondock.annotationsVisible",
+          "group": "versiondock@1"
+        },
+        {
+          "command": "versiondock.openSvnAnnotations",
+          "when": "resourceScheme == file && versiondock.blameVcs == svn && !versiondock.annotationsVisible",
+          "group": "versiondock@1"
+        },
+        {
+          "command": "versiondock.closeSvnAnnotations",
+          "when": "resourceScheme == file && versiondock.blameVcs == svn && versiondock.annotationsVisible",
           "group": "versiondock@1"
         }
       ],
@@ -389,13 +453,43 @@
       "versiondock.context.editor": [
         {
           "command": "versiondock.openGitAnnotations",
-          "when": "config.versiondock.gitAnnotations.enabled && !versiondock.annotationsVisible",
-          "group": "navigation@2"
+          "when": "versiondock.blameVcs == git && !versiondock.annotationsVisible",
+          "group": "annotations@1"
         },
         {
           "command": "versiondock.closeGitAnnotations",
-          "when": "versiondock.annotationsVisible",
-          "group": "navigation@2"
+          "when": "versiondock.blameVcs == git && versiondock.annotationsVisible",
+          "group": "annotations@1"
+        },
+        {
+          "command": "versiondock.openGitGhostText",
+          "when": "versiondock.blameVcs == git && !versiondock.ghostTextEnabledForFile",
+          "group": "annotations@2"
+        },
+        {
+          "command": "versiondock.closeGitGhostText",
+          "when": "versiondock.blameVcs == git && versiondock.ghostTextEnabledForFile",
+          "group": "annotations@2"
+        },
+        {
+          "command": "versiondock.openSvnAnnotations",
+          "when": "versiondock.blameVcs == svn && !versiondock.annotationsVisible",
+          "group": "annotations@1"
+        },
+        {
+          "command": "versiondock.closeSvnAnnotations",
+          "when": "versiondock.blameVcs == svn && versiondock.annotationsVisible",
+          "group": "annotations@1"
+        },
+        {
+          "command": "versiondock.openSvnGhostText",
+          "when": "versiondock.blameVcs == svn && !versiondock.ghostTextEnabledForFile",
+          "group": "annotations@2"
+        },
+        {
+          "command": "versiondock.closeSvnGhostText",
+          "when": "versiondock.blameVcs == svn && versiondock.ghostTextEnabledForFile",
+          "group": "annotations@2"
         },
         {
           "command": "versiondock.showFileHistory",

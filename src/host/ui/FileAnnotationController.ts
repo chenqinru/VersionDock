@@ -5,7 +5,9 @@ import { GitLogPanelProvider } from '../panels/GitLogPanelProvider';
 import { t } from '../utils/l10n';
 
 const GHOST_MAX_SUMMARY_LEN = 72;
-const CONTEXT_KEY = 'versiondock.annotationsVisible';
+const ANNOTATIONS_CONTEXT_KEY = 'versiondock.annotationsVisible';
+const GHOST_TEXT_CONTEXT_KEY = 'versiondock.ghostTextEnabledForFile';
+const BLAME_VCS_CONTEXT_KEY = 'versiondock.blameVcs';
 const CONFIG_SECTION = 'versiondock';
 const GIT_ANNOTATIONS_ENABLED = 'gitAnnotations.enabled';
 const GIT_GHOST_TEXT_ENABLED = 'gitGhostText.enabled';
@@ -88,8 +90,11 @@ export class FileAnnotationController implements vscode.Disposable {
   private readonly codeLensLines = new Map<string, Set<number>>();
   // Tracks the last rendered blame per URI, with line numbers adjusted for unsaved edits.
   private readonly adjustedBlame = new Map<string, { lines: BlameLine[]; repoId: string }>();
-  private readonly annotationRepoIds = new Map<string, string>();
+  private readonly blameRepoIds = new Map<string, string>();
+  private readonly explicitBlameRepoUris = new Set<string>();
+  private readonly manuallyOpenedUris = new Set<string>();
   private readonly manuallyClosedUris = new Set<string>();
+  private readonly ghostTextOverrides = new Map<string, boolean>();
   private readonly annotationTypes = new Map<string, vscode.TextEditorDecorationType>();
   private readonly editorAnnotationTypeKeys = new Map<string, Set<string>>();
   private readonly disposables: vscode.Disposable[] = [];
@@ -118,7 +123,7 @@ export class FileAnnotationController implements vscode.Disposable {
         if (!editor) return;
         this.maybeAutoOpenAnnotations(editor);
         this.updateGhostText(editor);
-        this.updateContextKey(editor);
+        this.updateContextKeys(editor);
         if (this.annotatedUris.has(editor.document.uri.toString())) {
           this.applyBlameDecorations(editor);
         }
@@ -173,33 +178,34 @@ export class FileAnnotationController implements vscode.Disposable {
         const ghostTextChanged = e.affectsConfiguration(`${CONFIG_SECTION}.${GIT_GHOST_TEXT_ENABLED}`);
 
         if (annotationsChanged) {
-          if (this.areGitAnnotationsEnabled()) {
-            this.manuallyClosedUris.clear();
-            this.autoOpenVisibleAnnotations();
-          } else {
-            this.disableAllAnnotations();
-          }
+          this.syncVisibleAnnotations();
         }
 
         if (ghostTextChanged) {
           for (const editor of vscode.window.visibleTextEditors) {
-            if (this.isGitGhostTextEnabled()) this.updateGhostText(editor);
+            if (this.isGhostTextEnabledForEditor(editor)) this.updateGhostText(editor);
             else editor.setDecorations(this.ghostType, []);
+            this.updateContextKeys(editor);
           }
         }
       }),
 
-      this.manager.onReposChange(() => this.autoOpenVisibleAnnotations()),
+      this.manager.onReposChange(() => {
+        this.autoOpenVisibleAnnotations();
+        const editor = vscode.window.activeTextEditor;
+        if (editor) this.updateContextKeys(editor);
+      }),
     );
 
-    setTimeout(() => this.autoOpenVisibleAnnotations(), 0);
+    setTimeout(() => {
+      this.autoOpenVisibleAnnotations();
+      const editor = vscode.window.activeTextEditor;
+      if (editor) this.updateContextKeys(editor);
+    }, 0);
   }
 
   async openAnnotations(editor: vscode.TextEditor): Promise<void> {
-    if (!this.areGitAnnotationsEnabled()) {
-      this.closeAnnotations(editor, false);
-      return;
-    }
+    if (editor.document.uri.scheme !== 'file') return;
 
     const repo = await this.manager.resolveServiceForFile(editor.document.uri.fsPath, 'prompt', {
       title: t('Select Git or SVN Repository'),
@@ -208,22 +214,27 @@ export class FileAnnotationController implements vscode.Disposable {
     });
     if (!repo) return;
 
-    this.annotationRepoIds.set(editor.document.uri.toString(), repo.repoId);
-    this.manuallyClosedUris.delete(editor.document.uri.toString());
-    this.annotatedUris.add(editor.document.uri.toString());
+    const uriStr = editor.document.uri.toString();
+    this.blameRepoIds.set(uriStr, repo.repoId);
+    this.explicitBlameRepoUris.add(uriStr);
+    this.manuallyOpenedUris.add(uriStr);
+    this.manuallyClosedUris.delete(uriStr);
+    this.annotatedUris.add(uriStr);
+    this.updateContextKeys(editor);
     await this.applyBlameDecorations(editor);
-    this.updateContextKey(editor);
   }
 
   closeAnnotations(editor: vscode.TextEditor, manual = true): void {
     const uriStr = editor.document.uri.toString();
-    if (manual) this.manuallyClosedUris.add(uriStr);
+    if (manual) {
+      this.manuallyOpenedUris.delete(uriStr);
+      this.manuallyClosedUris.add(uriStr);
+    }
     this.annotatedUris.delete(uriStr);
     this.adjustedBlame.delete(uriStr);
-    this.annotationRepoIds.delete(uriStr);
     this.codeLensLines.delete(uriStr);
     this.clearAnnotationDecorations(editor);
-    this.updateContextKey(editor);
+    this.updateContextKeys(editor);
   }
 
   private clearAnnotationDecorations(editor: vscode.TextEditor): void {
@@ -238,14 +249,10 @@ export class FileAnnotationController implements vscode.Disposable {
     }
   }
 
-  private disableAllAnnotations(): void {
-    this.annotatedUris.clear();
-    this.adjustedBlame.clear();
-    this.codeLensLines.clear();
-    this.manuallyClosedUris.clear();
+  private syncVisibleAnnotations(): void {
     for (const editor of vscode.window.visibleTextEditors) {
-      this.clearAnnotationDecorations(editor);
-      this.updateContextKey(editor);
+      if (this.areAnnotationsEnabledForEditor(editor)) this.maybeAutoOpenAnnotations(editor);
+      else this.closeAnnotations(editor, false);
     }
   }
 
@@ -256,25 +263,51 @@ export class FileAnnotationController implements vscode.Disposable {
   }
 
   private maybeAutoOpenAnnotations(editor: vscode.TextEditor): void {
-    if (!this.areGitAnnotationsEnabled()) return;
     if (editor.document.uri.scheme !== 'file') return;
     const uriStr = editor.document.uri.toString();
-    if (this.annotatedUris.has(uriStr) || this.manuallyClosedUris.has(uriStr)) return;
+    if (!this.areAnnotationsEnabledForEditor(editor) || this.annotatedUris.has(uriStr)) return;
     const repo = this.manager.getServiceForFile(editor.document.uri.fsPath);
     if (!repo) return;
 
-    this.annotationRepoIds.set(uriStr, repo.repoId);
+    this.blameRepoIds.set(uriStr, repo.repoId);
     this.annotatedUris.add(uriStr);
     void this.applyBlameDecorations(editor);
-    this.updateContextKey(editor);
+    this.updateContextKeys(editor);
   }
 
   navigateToCommit(hash: string, repoId: string): void {
     this.logPanel.selectCommit(hash, repoId);
   }
 
+  async openGhostText(editor: vscode.TextEditor): Promise<void> {
+    if (editor.document.uri.scheme !== 'file') return;
+    const uriStr = editor.document.uri.toString();
+    const selectedRepoId = this.blameRepoIds.get(uriStr);
+    if (!this.explicitBlameRepoUris.has(uriStr) || !selectedRepoId || !this.manager.getRepo(selectedRepoId)) {
+      const repo = await this.manager.resolveServiceForFile(editor.document.uri.fsPath, 'prompt', {
+        title: t('Select Git or SVN Repository'),
+        placeHolder: t('Select which repository annotations to show…'),
+        notFoundMessage: t('The selected file is not inside a Git or SVN repository.'),
+      });
+      if (!repo) return;
+      this.blameRepoIds.set(uriStr, repo.repoId);
+      this.explicitBlameRepoUris.add(uriStr);
+      if (this.annotatedUris.has(uriStr)) await this.applyBlameDecorations(editor);
+    }
+    this.ghostTextOverrides.set(uriStr, true);
+    this.updateContextKeys(editor);
+    this.updateGhostText(editor);
+  }
+
+  closeGhostText(editor: vscode.TextEditor): void {
+    const uriStr = editor.document.uri.toString();
+    this.ghostTextOverrides.set(uriStr, false);
+    editor.setDecorations(this.ghostType, []);
+    this.updateContextKeys(editor);
+  }
+
   updateGhostText(editor: vscode.TextEditor): void {
-    if (!this.isGitGhostTextEnabled()) {
+    if (!this.isGhostTextEnabledForEditor(editor)) {
       editor.setDecorations(this.ghostType, []);
       return;
     }
@@ -286,7 +319,7 @@ export class FileAnnotationController implements vscode.Disposable {
 
     const filePath = editor.document.uri.fsPath;
     const uriStr = editor.document.uri.toString();
-    const repoId = this.annotationRepoIds.get(uriStr);
+    const repoId = this.blameRepoIds.get(uriStr);
     const repo = repoId ? this.manager.getRepo(repoId) : this.manager.getServiceForFile(filePath);
     if (!repo) {
       editor.setDecorations(this.ghostType, []);
@@ -296,7 +329,7 @@ export class FileAnnotationController implements vscode.Disposable {
     const cursor = editor.selection.active;
 
     repo.getBlame(filePath).then(blameLines => {
-      if (!this.isGitGhostTextEnabled()) {
+      if (!this.isGhostTextEnabledForEditor(editor)) {
         editor.setDecorations(this.ghostType, []);
         return;
       }
@@ -324,7 +357,7 @@ export class FileAnnotationController implements vscode.Disposable {
   }
 
   private async applyBlameDecorations(editor: vscode.TextEditor): Promise<void> {
-    if (!this.areGitAnnotationsEnabled()) {
+    if (!this.areAnnotationsEnabledForEditor(editor)) {
       this.closeAnnotations(editor, false);
       return;
     }
@@ -333,7 +366,7 @@ export class FileAnnotationController implements vscode.Disposable {
 
     const filePath = editor.document.uri.fsPath;
     const uriStr = editor.document.uri.toString();
-    const repoId = this.annotationRepoIds.get(uriStr);
+    const repoId = this.blameRepoIds.get(uriStr);
     const repo = repoId ? this.manager.getRepo(repoId) : this.manager.getServiceForFile(filePath);
     if (!repo) return;
 
@@ -344,7 +377,7 @@ export class FileAnnotationController implements vscode.Disposable {
       ]);
       const displayBlameLines = blameLines.length > 0 ? blameLines : this.uncommittedBlameForDocument(editor.document);
       if (!this.annotatedUris.has(uriStr)) return;
-      this.annotationRepoIds.set(uriStr, repo.repoId);
+      this.blameRepoIds.set(uriStr, repo.repoId);
       this.codeLensLines.set(uriStr, codeLensLines);
       this.adjustedBlame.set(uriStr, { lines: [...displayBlameLines], repoId: repo.repoId });
       this.renderBlame(editor, displayBlameLines, repo.repoId);
@@ -479,8 +512,8 @@ export class FileAnnotationController implements vscode.Disposable {
 
   private renderBlame(editor: vscode.TextEditor, blameLines: BlameLine[], repoId: string): void {
     const uriStr = editor.document.uri.toString();
-    if (!this.areGitAnnotationsEnabled()) {
-      this.closeAnnotations(editor);
+    if (!this.areAnnotationsEnabledForEditor(editor)) {
+      this.closeAnnotations(editor, false);
       return;
     }
     if (!this.annotatedUris.has(uriStr)) return;
@@ -565,11 +598,41 @@ export class FileAnnotationController implements vscode.Disposable {
       .get<boolean>(GIT_GHOST_TEXT_ENABLED, true);
   }
 
-  private updateContextKey(editor: vscode.TextEditor): void {
-    vscode.commands.executeCommand(
+  private areAnnotationsEnabledForEditor(editor: vscode.TextEditor): boolean {
+    const uriStr = editor.document.uri.toString();
+    if (this.manuallyOpenedUris.has(uriStr)) return true;
+    if (this.manuallyClosedUris.has(uriStr)) return false;
+    return this.areGitAnnotationsEnabled();
+  }
+
+  private isGhostTextEnabledForEditor(editor: vscode.TextEditor): boolean {
+    return this.ghostTextOverrides.get(editor.document.uri.toString()) ?? this.isGitGhostTextEnabled();
+  }
+
+  private updateContextKeys(editor: vscode.TextEditor): void {
+    if (vscode.window.activeTextEditor !== editor) return;
+    const uriStr = editor.document.uri.toString();
+    const selectedRepoId = this.blameRepoIds.get(uriStr);
+    const selectedRepo = selectedRepoId ? this.manager.getRepo(selectedRepoId) : undefined;
+    const repo = selectedRepo ?? (
+      editor.document.uri.scheme === 'file'
+        ? this.manager.getServiceForFile(editor.document.uri.fsPath)
+        : undefined
+    );
+    void vscode.commands.executeCommand(
       'setContext',
-      CONTEXT_KEY,
-      this.areGitAnnotationsEnabled() && this.annotatedUris.has(editor.document.uri.toString()),
+      ANNOTATIONS_CONTEXT_KEY,
+      this.annotatedUris.has(uriStr),
+    );
+    void vscode.commands.executeCommand(
+      'setContext',
+      GHOST_TEXT_CONTEXT_KEY,
+      this.isGhostTextEnabledForEditor(editor),
+    );
+    void vscode.commands.executeCommand(
+      'setContext',
+      BLAME_VCS_CONTEXT_KEY,
+      repo?.kind ?? '',
     );
   }
 

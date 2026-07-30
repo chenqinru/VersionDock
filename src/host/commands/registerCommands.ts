@@ -145,6 +145,36 @@ export function registerCommands(
       if (editor) annotationController.closeAnnotations(editor);
     }),
 
+    vscode.commands.registerCommand('versiondock.openGitGhostText', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor) await annotationController.openGhostText(editor);
+    }),
+
+    vscode.commands.registerCommand('versiondock.closeGitGhostText', () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor) annotationController.closeGhostText(editor);
+    }),
+
+    vscode.commands.registerCommand('versiondock.openSvnAnnotations', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor) await annotationController.openAnnotations(editor);
+    }),
+
+    vscode.commands.registerCommand('versiondock.closeSvnAnnotations', () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor) annotationController.closeAnnotations(editor);
+    }),
+
+    vscode.commands.registerCommand('versiondock.openSvnGhostText', async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor) await annotationController.openGhostText(editor);
+    }),
+
+    vscode.commands.registerCommand('versiondock.closeSvnGhostText', () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor) annotationController.closeGhostText(editor);
+    }),
+
     vscode.commands.registerCommand('versiondock.navigateToAnnotationCommit', (hash: string, repoId: string) => {
       annotationController.navigateToCommit(hash, repoId);
     }),
