@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import simpleGit from 'simple-git';
+import type { VersionDockLogger } from '../utils/Logger';
 
 export interface GitProfile {
   id: string;
@@ -24,15 +25,11 @@ export const GLOBAL_PROFILE_ID = '__global__';
 export class GitProfileService implements vscode.Disposable {
   private _onProfileChange = new vscode.EventEmitter<void>();
   readonly onProfileChange = this._onProfileChange.event;
-  private log: vscode.OutputChannel | undefined;
 
-  constructor(private readonly context: vscode.ExtensionContext, log?: vscode.OutputChannel) {
-    this.log = log;
-  }
-
-  trace(msg: string): void {
-    this.log?.appendLine(`[${new Date().toISOString()}] ${msg}`);
-  }
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly logger: VersionDockLogger,
+  ) {}
 
   // ── Profiles ─────────────────────────────────────────────────────────────────
 
@@ -66,7 +63,7 @@ export class GitProfileService implements vscode.Disposable {
 
   getActiveProfileId(): string {
     const id = this.context.workspaceState.get<string>(ACTIVE_KEY, '');
-    this.trace(`getActiveProfileId → "${id}"`);
+    this.logger.trace('Identity', 'Read active Git identity selection', { configured: Boolean(id) });
     return id;
   }
 
@@ -80,10 +77,11 @@ export class GitProfileService implements vscode.Disposable {
   }
 
   async setActiveProfile(id: string): Promise<void> {
-    this.trace(`setActiveProfile → "${id}"`);
+    const profileKind = id === LOCAL_PROFILE_ID ? 'local' : id === GLOBAL_PROFILE_ID ? 'global' : 'custom';
+    this.logger.info('Identity', 'Updating active Git identity selection', { profileKind });
     await this.context.workspaceState.update(ACTIVE_KEY, id);
     const verify = this.context.workspaceState.get<string>(ACTIVE_KEY, '');
-    this.trace(`setActiveProfile verify read-back → "${verify}"`);
+    this.logger.debug('Identity', 'Active Git identity selection updated', { persisted: verify === id, profileKind });
     this._onProfileChange.fire();
   }
 
@@ -136,7 +134,10 @@ export class GitProfileService implements vscode.Disposable {
   // Returns undefined only when nothing is configured anywhere.
 
   async getEffectiveProfile(repoPath: string): Promise<EffectiveProfile | undefined> {
-    this.trace(`getEffectiveProfile — profiles: ${JSON.stringify(this.getProfiles().map(p => p.id + ':' + p.name))}`);
+    this.logger.trace('Identity', 'Resolving effective Git identity', {
+      customProfileCount: this.getProfiles().length,
+      repoPath,
+    });
 
     // 1. Explicit active for this workspace
     const activeId = this.getActiveProfileId();
@@ -149,14 +150,14 @@ export class GitProfileService implements vscode.Disposable {
         if (creds) return { profile: { ...this.makeGlobalPlaceholder(), ...creds }, source: 'active' };
       } else {
         const profile = this.getProfiles().find(p => p.id === activeId);
-        this.trace(`getEffectiveProfile — active named profile found: ${profile ? profile.name : 'NOT FOUND'}`);
+        this.logger.debug('Identity', 'Resolved custom Git identity selection', { found: Boolean(profile) });
         if (profile) {
-          this.trace(`getEffectiveProfile — returning source=active gitName="${profile.gitName}" gitEmail="${profile.gitEmail}"`);
+          this.logger.debug('Identity', 'Using active custom Git identity');
           return { profile, source: 'active' };
         }
       }
       // Active id is stale (profile was deleted) — fall through
-      this.trace(`getEffectiveProfile — active id "${activeId}" not resolved, falling through`);
+      this.logger.warn('Identity', 'Active Git identity selection is stale; falling back to Git configuration');
     }
 
     // 2. Local .git/config

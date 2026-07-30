@@ -5,6 +5,7 @@ import type { CommitToHostMsg, HostToCommitMsg, HostToLogMsg, LogToHostMsg } fro
 import type { CommitPanelProvider } from './CommitPanelProvider';
 import type { GitLogPanelProvider } from './GitLogPanelProvider';
 import { loadIconTheme } from '../utils/IconThemeService';
+import type { VersionDockLogger } from '../utils/Logger';
 
 type UndockedToHostMsg = CommitToHostMsg | LogToHostMsg;
 
@@ -30,6 +31,7 @@ export class UndockedPanelProvider implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly commitPanel: CommitPanelProvider,
     private readonly logPanel: GitLogPanelProvider,
+    private readonly logger: VersionDockLogger,
   ) {}
 
   hasCommitPane(): boolean {
@@ -174,7 +176,7 @@ export class UndockedPanelProvider implements vscode.Disposable {
         msg: { type: 'LOG_ICON_THEME_UPDATE', iconTheme },
       } satisfies HostToUndockedMsg);
     }).catch(error => {
-      console.error('[VersionDock] Failed to load icon theme for undocked panel:', error);
+      this.logger.error('UndockedPanel', 'Failed to load icon theme', error);
     });
   }
 

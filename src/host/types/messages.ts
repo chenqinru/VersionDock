@@ -140,6 +140,7 @@ export type HostToCommitMsg =
 // ─── Commit Panel: WebView → Host ────────────────────────────────────────────
 
 export type CommitToHostMsg =
+  | { type: 'COMMIT_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'COMMIT_REQUEST_STATUS'; refreshSubtrees?: boolean }
   | { type: 'COMMIT_ACTIVE_TAB_CHANGED'; tab: CommitPanelTab }
   | { type: 'COMMIT_REQUEST_DIFF'; requestId: string; repoId: string; filePath: string; staged: boolean }
@@ -372,6 +373,7 @@ export type HostToMergeMsg =
 
 export type MergeToHostMsg =
   | { type: 'MERGE_READY' }
+  | { type: 'MERGE_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'MERGE_REQUEST_FILE_VERSIONS'; requestId: string }
   | { type: 'MERGE_SAVE_FILE'; requestId: string; resolvedContent: string; deleteFile?: boolean }
   | { type: 'MERGE_ACCEPT_OURS'; requestId: string }
@@ -399,6 +401,7 @@ export type HostToConflictsMsg =
 
 export type ConflictsToHostMsg =
   | { type: 'CONFLICTS_REQUEST_DATA' }
+  | { type: 'CONFLICTS_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'CONFLICTS_OPEN_MERGE_EDITOR'; repoId: string; filePath: string }
   | { type: 'CONFLICTS_ACCEPT_OURS'; requestId: string; files: Array<{ repoId: string; path: string }> }
   | { type: 'CONFLICTS_ACCEPT_THEIRS'; requestId: string; files: Array<{ repoId: string; path: string }> };

@@ -14,6 +14,7 @@ import {
   type AbortOperationTarget,
 } from '../utils/abortOperation';
 import { formatRepoLabel } from '../utils/repoLabels';
+import type { VersionDockLogger } from '../utils/Logger';
 
 type SvnIgnoreRepo = {
   addIgnoreEntry(entryPath: string): Promise<{ entry: string; directoryPath: string; alreadyExists: boolean }>;
@@ -44,7 +45,8 @@ export class BranchStatusBar implements vscode.Disposable {
 
   constructor(
     private readonly manager: WorkspaceGitManager,
-    private readonly commitPanelReveal: () => void
+    private readonly commitPanelReveal: () => void,
+    private readonly logger: VersionDockLogger,
   ) {
     this.statusBarItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
@@ -56,7 +58,7 @@ export class BranchStatusBar implements vscode.Disposable {
 
     this.statusDisposable = this.manager.onStatusChange(status => {
       void this.refresh(status).catch(error => {
-        console.error('[VersionDock] Failed to refresh branch status:', error);
+        this.logger.error('BranchStatus', 'Failed to refresh status', error);
       });
     });
     // Also refresh on branch change: the status change fires at 300ms and may catch
@@ -66,7 +68,7 @@ export class BranchStatusBar implements vscode.Disposable {
     this.configDisposable = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('versiondock.suppressDivergedBranchWarning')) {
         void this.refresh().catch(error => {
-          console.error('[VersionDock] Failed to apply branch-status configuration:', error);
+          this.logger.error('BranchStatus', 'Failed to apply configuration', error);
         });
       }
     });
@@ -78,7 +80,7 @@ export class BranchStatusBar implements vscode.Disposable {
     void this.manager.getAllStatusesFresh()
       .then(status => this.refresh(status, version))
       .catch(error => {
-        console.error('[VersionDock] Failed to load branch status:', error);
+        this.logger.error('BranchStatus', 'Failed to load status', error);
       });
   }
 

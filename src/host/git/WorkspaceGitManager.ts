@@ -9,6 +9,7 @@ import type { BranchInfo, CommitNode, LineRange, RepoMeta, WorkspaceStatus } fro
 import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
+import type { VersionDockLogger } from '../utils/Logger';
 
 const MAX_SUBMODULE_DEPTH = 5;
 const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
@@ -169,7 +170,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private refreshPending = false;
   private disposed = false;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly logger: VersionDockLogger,
+  ) {
     this.globalListeners.push(
       // Workspace folder changes → rebuild everything and push fresh status to listeners
       vscode.workspace.onDidChangeWorkspaceFolders(() => { this.reinitialize(); this.scheduleRefresh(); }),
@@ -432,6 +436,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
     }
 
     this.applyNestedRepoMetadata();
+    const metas = Array.from(this.repoMetas.values());
+    this.logger.debug('Repositories', 'Repository discovery completed', {
+      repositoryCount: metas.length,
+      gitRepositoryCount: metas.filter(meta => meta.kind !== 'svn').length,
+      svnRepositoryCount: metas.filter(meta => meta.kind === 'svn').length,
+      generation: this.repositoryGeneration,
+    });
     // Notify listeners that the set of known repos has changed (e.g. submodule added/removed)
     this.reposListeners.forEach(l => l());
   }
@@ -757,7 +768,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.refreshDebounce = null;
       this.refreshPending = true;
       void this.drainRefreshQueue().catch(error => {
-        console.error('[VersionDock] Failed to refresh repository status:', error);
+        this.logger.error('Repositories', 'Failed to refresh repository status', error);
       });
     }, 300);
   }
@@ -774,7 +785,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.refreshInFlight = false;
       if (this.refreshPending && !this.disposed) {
         void this.drainRefreshQueue().catch(error => {
-          console.error('[VersionDock] Failed to refresh repository status:', error);
+          this.logger.error('Repositories', 'Failed to refresh repository status', error);
         });
       }
     }
@@ -1240,19 +1251,30 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   async fetchAll(): Promise<void> {
+    const startedAt = Date.now();
     const repos = Array.from(this.repos.entries());
+    this.logger.info('Git', 'Fetching all repositories', { repositoryCount: repos.length });
     const results = await Promise.allSettled(repos.map(([, repo]) => repo.fetchAll()));
+    let failedCount = 0;
     results.forEach((result, index) => {
       if (result.status === 'fulfilled') return;
+      failedCount += 1;
       const [repoId] = repos[index];
       const meta = this.repoMetas.get(repoId);
       const repoName = meta?.name ?? repoId;
-      console.error(`[VersionDock] Fetch failed for ${repoName} (${repoId}):`, result.reason);
+      this.logger.error('Git', 'Fetch failed', result.reason, { repoId, repoName });
+    });
+    this.logger.info('Git', 'Fetch all completed', {
+      repositoryCount: repos.length,
+      failedCount,
+      durationMs: Date.now() - startedAt,
     });
   }
 
   async pullAll(rebase = false): Promise<Array<{ repoId: string; ok: boolean; message: string }>> {
+    const startedAt = Date.now();
     const repos = Array.from(this.repos.values());
+    this.logger.info('VCS', 'Pulling all repositories', { repositoryCount: repos.length, rebase });
     const results: Array<{ repoId: string; ok: boolean; message: string }> = [];
     for (const r of repos) {
       try {
@@ -1262,6 +1284,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
         results.push({ repoId: r.repoId, ok: false, message: gitErrorDetail(error) });
       }
     }
+    this.logger.info('VCS', 'Pull all completed', {
+      repositoryCount: repos.length,
+      failedCount: results.filter(result => !result.ok).length,
+      durationMs: Date.now() - startedAt,
+    });
     return results;
   }
 

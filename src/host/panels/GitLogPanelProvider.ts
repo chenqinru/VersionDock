@@ -16,6 +16,7 @@ import { toGitUri } from '../utils/resourceUri';
 import type { SvnService } from '../svn/SvnService';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
+import type { VersionDockLogger } from '../utils/Logger';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -115,7 +116,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   handleUndockedMessage(msg: LogToHostMsg, _provider: UndockedPanelProvider): void {
     if (msg.type === 'LOG_UNDOCK') return;
     void this.replyTarget.run('undocked', () => this.handleMessage(msg)).catch(error => {
-      console.error('[VersionDock] Undocked log-panel message failed:', error);
+      this.logger.error('GitLog', 'Undocked panel message failed', error, { messageType: msg.type });
     });
   }
 
@@ -131,14 +132,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.post({ type: 'LOG_INIT_DATA', repos, branches });
       this.post({ type: 'LOG_REFRESH' });
     }).catch(error => {
-      console.error('[VersionDock] Failed to apply hidden repositories to Git Log:', error);
+      this.logger.error('GitLog', 'Failed to apply hidden repositories', error);
     });
   }
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
-    private readonly shelveDocProvider: ShelveDocumentProvider
+    private readonly shelveDocProvider: ShelveDocumentProvider,
+    private readonly logger: VersionDockLogger,
   ) {
     // Register manager listeners here so they fire even when the panel has never been opened.
     // this.post() silently drops messages when the webview is not yet resolved — that's fine,
@@ -154,7 +156,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     };
     const scheduleManagerSync = () => {
       void syncManagerState().catch(error => {
-        console.error('[VersionDock] Failed to synchronize Git Log repositories:', error);
+        this.logger.error('GitLog', 'Failed to synchronize repositories', error);
       });
     };
     this.managerListeners.push(
@@ -187,7 +189,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     webviewView.webview.onDidReceiveMessage(
       (msg: LogToHostMsg) => {
         void this.replyTarget.run('sidebar', () => this.handleMessage(msg)).catch(error => {
-          console.error('[VersionDock] Sidebar log-panel message failed:', error);
+          this.logger.error('GitLog', 'Sidebar message failed', error, { messageType: msg.type });
         });
       },
       null,
@@ -637,7 +639,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'LOG_WEBVIEW_ERROR': {
-        console.error('[VersionDock Git Log webview]', msg.message, msg.stack ?? '', msg.componentStack ?? '');
+        this.logger.error('GitLogWebview', msg.message, msg.stack, { componentStack: msg.componentStack });
         vscode.window.showErrorMessage(t('VersionDock Log error: {0}', msg.message));
         break;
       }

@@ -407,7 +407,17 @@ const styles = {
 };
 
 createRoot(document.getElementById('root')!).render(
-  <WebviewErrorBoundary title={t('Merge Editor render failed')}>
+  <WebviewErrorBoundary
+    title={t('Merge Editor render failed')}
+    onError={(error, componentStack) => {
+      getVsCodeApi().postMessage({
+        type: 'MERGE_WEBVIEW_ERROR',
+        message: error.message,
+        stack: error.stack,
+        componentStack,
+      } satisfies MergeToHostMsg);
+    }}
+  >
     <App />
   </WebviewErrorBoundary>,
 );

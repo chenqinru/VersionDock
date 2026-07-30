@@ -13,6 +13,7 @@ import { FileAnnotationController } from './ui/FileAnnotationController';
 import { GitProfileService } from './git/GitProfileService';
 import { ProfileStatusBar } from './ui/ProfileStatusBar';
 import { t } from './utils/l10n';
+import { VersionDockLogger } from './utils/Logger';
 
 async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void> {
   const SHOWN_KEY = 'hasShownViewModeQuickpick';
@@ -164,22 +165,40 @@ async function runStartupRefresh(
   badge: BadgeController,
   commitPanel: CommitPanelProvider,
   globalState: vscode.Memento,
+  logger: VersionDockLogger,
 ): Promise<void> {
+  const startedAt = Date.now();
+  const fetchOnStartup = vscode.workspace.getConfiguration('versiondock').get<boolean>('fetchOnStartup', false);
+  logger.info('Startup', 'Refreshing repository state', {
+    repositoryCount: manager.getRepoMetas().length,
+    fetchOnStartup,
+  });
   try {
-    const fetchOnStartup = vscode.workspace.getConfiguration('versiondock').get<boolean>('fetchOnStartup', false);
     if (fetchOnStartup) await manager.fetchAll();
 
     const status = await manager.getAllStatusesFresh();
     badge.update(status);
     await maybeNotifyIncomingCommits(manager, globalState);
     await maybeNotifyUnpushedCommits(manager, commitPanel);
+    logger.info('Startup', 'Repository refresh completed', {
+      repositoryCount: status.repos.length,
+      durationMs: Date.now() - startedAt,
+    });
   } catch (error) {
-    console.error('[VersionDock] Startup refresh failed:', error);
+    logger.error('Startup', 'Repository refresh failed', error, {
+      durationMs: Date.now() - startedAt,
+    });
   }
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const manager = new WorkspaceVcsManager(context);
+  const logger = new VersionDockLogger();
+  context.subscriptions.push(logger);
+  logger.info('Extension', 'Activating', {
+    workspaceFolderCount: vscode.workspace.workspaceFolders?.length ?? 0,
+  });
+
+  const manager = new WorkspaceVcsManager(context, logger);
 
   // DEV ONLY: uncomment to reset the quickpick flag
   //context.globalState.update('hasShownViewModeQuickpick', false);
@@ -193,17 +212,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const badge = new BadgeController();
   badge.startLoading();
 
-  const log = vscode.window.createOutputChannel(t('VersionDock Profiles'));
-  context.subscriptions.push(log);
+  const profileService = new GitProfileService(context, logger);
 
-  const profileService = new GitProfileService(context, log);
+  const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, undefined, profileService, context.globalState, context.workspaceState, logger);
 
-  const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, undefined, profileService, context.globalState, context.workspaceState);
-
-  const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider);
-  const mergeEditor = new MergeEditorProvider(context.extensionUri, manager);
-  const conflictsPanel = new ConflictsPanelProvider(context.extensionUri, manager, mergeEditor);
-  const undockedPanel = new UndockedPanelProvider(context.extensionUri, commitPanel, logPanel);
+  const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, logger);
+  const mergeEditor = new MergeEditorProvider(context.extensionUri, manager, logger);
+  const conflictsPanel = new ConflictsPanelProvider(context.extensionUri, manager, mergeEditor, logger);
+  const undockedPanel = new UndockedPanelProvider(context.extensionUri, commitPanel, logPanel, logger);
   commitPanel.setMergeEditorProvider(mergeEditor);
   commitPanel.setLogProvider(logPanel);
   commitPanel.setBadgeController(badge);
@@ -220,9 +236,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const branchStatusBar = new BranchStatusBar(manager, () => {
     vscode.commands.executeCommand('versiondock.commitPanel.focus');
-  });
+  }, logger);
 
-  const profileStatusBar = new ProfileStatusBar(profileService, manager);
+  const profileStatusBar = new ProfileStatusBar(profileService, manager, logger);
 
   const annotationController = new FileAnnotationController(manager, logPanel);
 
@@ -256,9 +272,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // The first-run preference prompt must not block extension activation. Until
   // activation resolves, contributed commands and views are unavailable.
   void showViewModeQuickpick(context.globalState).catch(error => {
-    console.error('[VersionDock] Failed to show the view-mode picker:', error);
+    logger.error('Extension', 'Failed to show the view-mode picker', error);
   });
-  void runStartupRefresh(manager, badge, commitPanel, context.globalState);
+  const metas = manager.getRepoMetas();
+  logger.info('Extension', 'Activated', {
+    repositoryCount: metas.length,
+    gitRepositoryCount: metas.filter(meta => meta.kind !== 'svn').length,
+    svnRepositoryCount: metas.filter(meta => meta.kind === 'svn').length,
+  });
+  void runStartupRefresh(manager, badge, commitPanel, context.globalState, logger);
 }
 
 export function deactivate(): void {}

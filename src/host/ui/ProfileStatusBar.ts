@@ -7,6 +7,7 @@ import { SvnService, type SvnAuthenticationStatus } from '../svn/SvnService';
 import type { RepoMeta } from '../types/git';
 import { t } from '../utils/l10n';
 import { formatRepoLabel } from '../utils/repoLabels';
+import type { VersionDockLogger } from '../utils/Logger';
 
 export class ProfileStatusBar implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
@@ -16,6 +17,7 @@ export class ProfileStatusBar implements vscode.Disposable {
   constructor(
     private readonly profileService: GitProfileService,
     private readonly manager?: WorkspaceGitManager,
+    private readonly logger?: VersionDockLogger,
   ) {
     this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
     this.statusBarItem.command = 'versiondock.manageProfiles';
@@ -77,7 +79,7 @@ export class ProfileStatusBar implements vscode.Disposable {
     }
 
     void this.refreshAsync(services[0].rootPath, version).catch(error => {
-      console.error('[VersionDock] Failed to refresh Git profile status:', error);
+      this.logger?.error('IdentityStatus', 'Failed to refresh Git identity status', error);
       if (version === this.refreshVersion) this.renderNoProfile();
     });
   }

@@ -8,6 +8,8 @@ import { ResizeHandle } from '../shared/ResizeHandle';
 import { useResize } from '../shared/useResize';
 import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
 import { t } from '../shared/i18n';
+import { getVsCodeApi } from '../shared/vscodeApi';
+import type { CommitToHostMsg, LogToHostMsg } from '../../host/types/messages';
 
 declare const window: Window & { __INITIAL_CONFIG__?: { showCommit?: boolean } };
 
@@ -20,7 +22,17 @@ function UndockedApp() {
       {showCommit && (
         <>
           <div ref={commitRef} style={styles.commitPane}>
-            <WebviewErrorBoundary title={t('Commit panel render failed')}>
+            <WebviewErrorBoundary
+              title={t('Commit panel render failed')}
+              onError={(error, componentStack) => {
+                getVsCodeApi().postMessage({
+                  type: 'COMMIT_WEBVIEW_ERROR',
+                  message: error.message,
+                  stack: error.stack,
+                  componentStack,
+                } satisfies CommitToHostMsg);
+              }}
+            >
               <CommitApp />
             </WebviewErrorBoundary>
           </div>
@@ -28,7 +40,17 @@ function UndockedApp() {
         </>
       )}
       <div style={styles.logPane}>
-        <WebviewErrorBoundary title={t('Git Log render failed')}>
+        <WebviewErrorBoundary
+          title={t('Git Log render failed')}
+          onError={(error, componentStack) => {
+            getVsCodeApi().postMessage({
+              type: 'LOG_WEBVIEW_ERROR',
+              message: error.message,
+              stack: error.stack,
+              componentStack,
+            } satisfies LogToHostMsg);
+          }}
+        >
           <GitLogApp />
         </WebviewErrorBoundary>
       </div>

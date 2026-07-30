@@ -8,6 +8,7 @@ import type { MergeConflictFile, MergeFileVersions } from '../types/git';
 import { t } from '../utils/l10n';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { scopedKey } from '../utils/scopedKey';
+import type { VersionDockLogger } from '../utils/Logger';
 
 interface ResolvedMergeFileContext {
   repoId: string;
@@ -26,11 +27,13 @@ export class MergeEditorProvider implements vscode.Disposable {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly manager: WorkspaceGitManager
+    private readonly manager: WorkspaceGitManager,
+    private readonly logger: VersionDockLogger,
   ) {}
 
   openForFile(filePath: string, repoId?: string, relativePath?: string): void {
     void this.openForFileResolved(filePath, repoId, relativePath).catch(error => {
+      this.logger.error('MergeEditor', 'Failed to open conflict file', error, { repoId, relativePath });
       vscode.window.showErrorMessage(t('VersionDock: {0}', error instanceof Error ? error.message : String(error)));
     });
   }
@@ -38,11 +41,16 @@ export class MergeEditorProvider implements vscode.Disposable {
   private async openForFileResolved(filePath: string, repoId?: string, relativePath?: string): Promise<void> {
     const resolved = await this.resolveFileContext(filePath, repoId, relativePath);
     if (!resolved) {
+      this.logger.debug('MergeEditor', 'Conflict file open was cancelled or no repository was resolved');
       return;
     }
 
     const panelKey = scopedKey(resolved.repoId, resolved.relativePath);
     if (this.panels.has(panelKey)) {
+      this.logger.debug('MergeEditor', 'Revealing existing editor', {
+        repoId: resolved.repoId,
+        relativePath: resolved.relativePath,
+      });
       this.panels.get(panelKey)!.reveal();
       return;
     }
@@ -65,6 +73,11 @@ export class MergeEditorProvider implements vscode.Disposable {
 
     // Start loading immediately, but only deliver the result after the webview
     // has installed its message listener and explicitly announced readiness.
+    const loadStartedAt = Date.now();
+    this.logger.info('MergeEditor', 'Opening conflict file', {
+      repoId: resolved.repoId,
+      relativePath: resolved.relativePath,
+    });
     const initialFilePromise = this.loadInitialFile(resolved);
     const postInitialFile = async () => {
       try {
@@ -76,13 +89,29 @@ export class MergeEditorProvider implements vscode.Disposable {
           iconTheme,
         } satisfies HostToMergeMsg);
         if (result.versionsError) {
+          this.logger.warn('MergeEditor', 'Three-way versions unavailable; using parsed conflict markers', {
+            repoId: resolved.repoId,
+            relativePath: resolved.relativePath,
+          });
           await panel.webview.postMessage({
             type: 'MERGE_FILE_VERSIONS_LOADED',
             requestId: 'initial',
             error: result.versionsError,
           } satisfies HostToMergeMsg);
         }
+        this.logger.info('MergeEditor', 'Conflict file loaded', {
+          repoId: resolved.repoId,
+          relativePath: resolved.relativePath,
+          conflictCount: result.file.conflicts.length,
+          usedMarkerFallback: Boolean(result.versionsError),
+          durationMs: Date.now() - loadStartedAt,
+        });
       } catch (error) {
+        this.logger.error('MergeEditor', 'Failed to load conflict file', error, {
+          repoId: resolved.repoId,
+          relativePath: resolved.relativePath,
+          durationMs: Date.now() - loadStartedAt,
+        });
         await panel.webview.postMessage({
           type: 'MERGE_FILE_LOAD_FAILED',
           error: error instanceof Error ? error.message : String(error),
@@ -92,13 +121,24 @@ export class MergeEditorProvider implements vscode.Disposable {
 
     panel.webview.onDidReceiveMessage((msg: MergeToHostMsg) => {
       if (msg.type === 'MERGE_READY') {
+        this.logger.debug('MergeEditor', 'Webview ready', {
+          repoId: resolved.repoId,
+          relativePath: resolved.relativePath,
+          durationMs: Date.now() - loadStartedAt,
+        });
         void postInitialFile();
         return;
       }
       void this.handleMessage(msg, resolved.repoId, resolved.relativePath, resolved.absolutePath, panelKey, panel.webview);
     });
 
-    panel.onDidDispose(() => this.panels.delete(panelKey));
+    panel.onDidDispose(() => {
+      this.panels.delete(panelKey);
+      this.logger.debug('MergeEditor', 'Editor closed', {
+        repoId: resolved.repoId,
+        relativePath: resolved.relativePath,
+      });
+    });
     this.panels.set(panelKey, panel);
 
     // Register the host listener before assigning HTML so a very fast webview
@@ -242,17 +282,33 @@ export class MergeEditorProvider implements vscode.Disposable {
     const post = (m: HostToMergeMsg) => webview.postMessage(m);
 
     switch (msg.type) {
+      case 'MERGE_WEBVIEW_ERROR': {
+        this.logger.error('MergeEditorWebview', msg.message, msg.stack, {
+          componentStack: msg.componentStack,
+          repoId,
+          relativePath,
+        });
+        break;
+      }
+
       case 'MERGE_REQUEST_FILE_VERSIONS': {
         try {
           const versions = await this.loadVersions(repoId, relativePath);
           post({ type: 'MERGE_FILE_VERSIONS_LOADED', requestId: msg.requestId, versions });
         } catch (e: unknown) {
+          this.logger.warn('MergeEditor', 'Failed to refresh three-way versions', {
+            repoId,
+            relativePath,
+            requestId: msg.requestId,
+            error: e instanceof Error ? e.message : String(e),
+          });
           post({ type: 'MERGE_FILE_VERSIONS_LOADED', requestId: msg.requestId, error: String(e) });
         }
         break;
       }
 
       case 'MERGE_SAVE_FILE': {
+        const startedAt = Date.now();
         try {
           const repo = this.manager.getRepo(repoId);
           if (!repo) throw new Error(t('Repo not found'));
@@ -260,11 +316,23 @@ export class MergeEditorProvider implements vscode.Disposable {
           else await repo.saveMergedContent(relativePath, msg.resolvedContent);
           await repo.stageFiles([relativePath]);
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: true });
+          this.logger.info('MergeEditor', 'Resolved file saved and staged', {
+            repoId,
+            relativePath,
+            deleted: Boolean(msg.deleteFile),
+            durationMs: Date.now() - startedAt,
+          });
           vscode.window.showInformationMessage(t('VersionDock: File resolved and staged: {0}', path.basename(relativePath)));
           await this.refreshCommitPanel();
           vscode.commands.executeCommand('versiondock.commitPanel.focus');
           this.closePanel(panelKey);
         } catch (e: unknown) {
+          this.logger.error('MergeEditor', 'Failed to save resolved file', e, {
+            repoId,
+            relativePath,
+            deleted: Boolean(msg.deleteFile),
+            durationMs: Date.now() - startedAt,
+          });
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
         break;
@@ -272,16 +340,30 @@ export class MergeEditorProvider implements vscode.Disposable {
 
       case 'MERGE_ACCEPT_OURS':
       case 'MERGE_ACCEPT_THEIRS': {
+        const startedAt = Date.now();
+        const strategy = msg.type === 'MERGE_ACCEPT_OURS' ? 'current' : 'incoming';
         try {
           const repo = this.manager.getRepo(repoId);
           if (!repo) throw new Error(t('Repo not found'));
           if (msg.type === 'MERGE_ACCEPT_OURS') await repo.acceptOurs(relativePath);
           else await repo.acceptTheirs(relativePath);
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: true });
+          this.logger.info('MergeEditor', 'Conflict side accepted', {
+            repoId,
+            relativePath,
+            strategy,
+            durationMs: Date.now() - startedAt,
+          });
           await this.refreshCommitPanel();
           vscode.commands.executeCommand('versiondock.commitPanel.focus');
           this.closePanel(panelKey);
         } catch (e: unknown) {
+          this.logger.error('MergeEditor', 'Failed to accept conflict side', e, {
+            repoId,
+            relativePath,
+            strategy,
+            durationMs: Date.now() - startedAt,
+          });
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
         break;

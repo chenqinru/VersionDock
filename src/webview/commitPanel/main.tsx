@@ -2483,6 +2483,14 @@ const css = {
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: string | null }> {
   state = { error: null };
   static getDerivedStateFromError(e: Error) { return { error: e.message + '\n' + e.stack }; }
+  componentDidCatch(error: Error, info: React.ErrorInfo): void {
+    getVsCodeApi().postMessage({
+      type: 'COMMIT_WEBVIEW_ERROR',
+      message: error.message,
+      stack: error.stack,
+      componentStack: info.componentStack ?? undefined,
+    } satisfies CommitToHostMsg);
+  }
   render() {
     if (this.state.error) return (
       <div style={{ padding: 16, color: 'red', fontFamily: 'monospace', fontSize: 11, whiteSpace: 'pre-wrap', userSelect: 'text' }}>

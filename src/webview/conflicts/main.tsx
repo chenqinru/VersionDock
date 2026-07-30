@@ -368,7 +368,17 @@ const styles = {
 };
 
 createRoot(document.getElementById('root')!).render(
-  <WebviewErrorBoundary title={t('Conflicts view render failed')}>
+  <WebviewErrorBoundary
+    title={t('Conflicts view render failed')}
+    onError={(error, componentStack) => {
+      getVsCodeApi().postMessage({
+        type: 'CONFLICTS_WEBVIEW_ERROR',
+        message: error.message,
+        stack: error.stack,
+        componentStack,
+      } satisfies ConflictsToHostMsg);
+    }}
+  >
     <App />
   </WebviewErrorBoundary>,
 );

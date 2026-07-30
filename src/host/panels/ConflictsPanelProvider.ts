@@ -6,6 +6,7 @@ import { loadIconTheme } from '../utils/IconThemeService';
 import type { ConflictsToHostMsg, ConflictListFile, HostToConflictsMsg } from '../types/messages';
 import type { MergeEditorProvider } from './MergeEditorProvider';
 import { t } from '../utils/l10n';
+import type { VersionDockLogger } from '../utils/Logger';
 
 export class ConflictsPanelProvider implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
@@ -15,12 +16,13 @@ export class ConflictsPanelProvider implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
     private readonly mergeEditorProvider: MergeEditorProvider,
+    private readonly logger: VersionDockLogger,
   ) {}
 
   open(): void {
     if (this.panel) {
       this.panel.reveal();
-      void this.refresh();
+      void this.refresh().catch(error => this.logger.error('ConflictsPanel', 'Failed to refresh panel', error));
       return;
     }
 
@@ -42,20 +44,27 @@ export class ConflictsPanelProvider implements vscode.Disposable {
     panel.webview.html = getWebviewHtml(panel.webview, this.extensionUri, 'conflicts', t('Conflicts'));
     const configWatcher = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('workbench.iconTheme') || e.affectsConfiguration('workbench.colorTheme')) {
-        void this.refresh();
+        void this.refresh().catch(error => this.logger.error('ConflictsPanel', 'Failed to refresh theme data', error));
       }
     });
-    panel.webview.onDidReceiveMessage((msg: ConflictsToHostMsg) => this.handleMessage(msg));
+    panel.webview.onDidReceiveMessage((msg: ConflictsToHostMsg) => {
+      void this.handleMessage(msg).catch(error => {
+        this.logger.error('ConflictsPanel', 'Webview message failed', error, { messageType: msg.type });
+      });
+    });
     panel.onDidDispose(() => {
       configWatcher.dispose();
       this.panel = undefined;
+      this.logger.debug('ConflictsPanel', 'Panel closed');
     });
     this.panel = panel;
-    void this.refresh();
+    this.logger.info('ConflictsPanel', 'Panel opened');
+    void this.refresh().catch(error => this.logger.error('ConflictsPanel', 'Failed to initialize panel', error));
   }
 
   async refresh(): Promise<void> {
     if (!this.panel) return;
+    const startedAt = Date.now();
     const [status, states, iconTheme] = await Promise.all([
       this.manager.getAllStatusesFresh(),
       Promise.all(this.manager.getRepoMetas().map(async meta => {
@@ -94,6 +103,11 @@ export class ConflictsPanelProvider implements vscode.Disposable {
       operationLabel: states.some(state => state === 'rebase') ? t('Rebase in progress') : t('Merge in progress'),
       iconTheme,
     });
+    this.logger.debug('ConflictsPanel', 'Conflict data refreshed', {
+      repositoryCount: status.repos.length,
+      conflictFileCount: files.length,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   private post(msg: HostToConflictsMsg): void {
@@ -102,6 +116,9 @@ export class ConflictsPanelProvider implements vscode.Disposable {
 
   private async handleMessage(msg: ConflictsToHostMsg): Promise<void> {
     switch (msg.type) {
+      case 'CONFLICTS_WEBVIEW_ERROR':
+        this.logger.error('ConflictsWebview', msg.message, msg.stack, { componentStack: msg.componentStack });
+        break;
       case 'CONFLICTS_REQUEST_DATA':
         await this.refresh();
         break;
@@ -114,6 +131,8 @@ export class ConflictsPanelProvider implements vscode.Disposable {
       }
       case 'CONFLICTS_ACCEPT_OURS':
       case 'CONFLICTS_ACCEPT_THEIRS': {
+        const startedAt = Date.now();
+        const strategy = msg.type === 'CONFLICTS_ACCEPT_OURS' ? 'current' : 'incoming';
         try {
           for (const file of msg.files) {
             const repo = this.manager.getRepo(file.repoId);
@@ -123,9 +142,19 @@ export class ConflictsPanelProvider implements vscode.Disposable {
             else await repo.acceptTheirs(relativePath);
           }
           this.post({ type: 'CONFLICTS_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.logger.info('ConflictsPanel', 'Conflict files accepted', {
+            strategy,
+            fileCount: msg.files.length,
+            durationMs: Date.now() - startedAt,
+          });
           await this.refresh();
           await vscode.commands.executeCommand('versiondock.refreshCommitPanel');
         } catch (e: unknown) {
+          this.logger.error('ConflictsPanel', 'Failed to accept conflict files', e, {
+            strategy,
+            fileCount: msg.files.length,
+            durationMs: Date.now() - startedAt,
+          });
           this.post({ type: 'CONFLICTS_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
         break;
