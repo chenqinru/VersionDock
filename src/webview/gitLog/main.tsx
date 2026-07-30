@@ -202,9 +202,6 @@ export function GitLogApp() {
         case 'LOG_FILTER_BY_REPO':
           filterRepoRef.current(msg.repoId, msg.branch ?? null);
           break;
-        case 'LOG_BRANCH_OP_RESULT':
-          if (!msg.ok && msg.error) store.setError(msg.error);
-          break;
         case 'LOG_REMOTES_RESULT':
           break;
         default:

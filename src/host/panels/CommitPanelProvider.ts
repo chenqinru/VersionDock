@@ -2469,7 +2469,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const results = await this.manager.pullAll();
             const failed = results.filter(r => !r.ok);
             if (failed.length > 0) {
-              vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) failed', failed.length));
+              const failedDescription = failed.map(result => {
+                const name = this.manager.getRepoMeta(result.repoId)?.name ?? result.repoId;
+                return `${name}: ${result.message}`;
+              }).join('; ');
+              vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) failed: {1}', failed.length, failedDescription));
             }
           }
         );

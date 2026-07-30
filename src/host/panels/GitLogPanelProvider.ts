@@ -284,6 +284,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.post({ type: 'LOG_REFRESH' });
   }
 
+  private showOperationError(error: unknown): void {
+    const message = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, '');
+    void vscode.window.showErrorMessage(t('VersionDock: {0}', message));
+  }
+
   private post(msg: HostToLogMsg): void {
     if (msg.type === 'LOG_INIT_DATA') {
       const m = msg as typeof msg & { hasWorkspaceFolder?: boolean };
@@ -876,6 +881,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.showOperationError(e);
         }
         break;
       }
@@ -892,6 +898,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'LOG_REFRESH' });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+              this.showOperationError(e);
             }
           }
         );
@@ -910,6 +917,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'LOG_REFRESH' });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+              this.showOperationError(e);
             }
           }
         );
@@ -971,6 +979,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
               } catch (e2: unknown) {
                 this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });
+                this.showOperationError(e2);
               }
             }
             break;
@@ -993,6 +1002,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 if (choice) void this.commitPanel?.focus();
               });
             }
+          } else {
+            this.showOperationError(e);
           }
         }
         break;
@@ -1006,6 +1017,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.showOperationError(e);
         }
         break;
       }
@@ -1119,6 +1131,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.showOperationError(e);
         }
         break;
       }
@@ -1204,6 +1217,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.showOperationError(e);
         }
         break;
       }
@@ -1902,6 +1916,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.showOperationError(e);
         }
         break;
       }

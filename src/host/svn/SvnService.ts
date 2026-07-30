@@ -1927,6 +1927,7 @@ export class SvnService extends GitService {
   }
 
   async pull(): Promise<string> {
+    await this.assertPullAllowed();
     const output = await this.svn(['update']);
     this.localRevisionGeneration++;
     this.localRevisionFloor = undefined;
@@ -1995,6 +1996,7 @@ export class SvnService extends GitService {
   }
 
   async checkout(branchName: string, createNew?: boolean, from?: string): Promise<void> {
+    await this.assertCheckoutAllowed();
     if (createNew) {
       await this.createBranch(branchName, from);
       await this.checkout(branchName);
@@ -2022,6 +2024,7 @@ export class SvnService extends GitService {
   }
 
   async checkoutForce(branchName: string): Promise<void> {
+    await this.assertCheckoutAllowed();
     const statuses = await this.parseSvnStatus();
     const addedPaths = statuses.filter(file => file.svnItem === 'added').map(file => file.path);
     await this.svn(['revert', '--depth', 'infinity', '--', '.']);
@@ -2059,6 +2062,7 @@ export class SvnService extends GitService {
   }
 
   async deleteBranch(branchName: string): Promise<void> {
+    await this.assertBranchOperationAllowed();
     const name = this.normalizeRefName(branchName, 'branches');
     await this.svn(['delete', this.repositoryRefTarget(name, 'branches'), '-m', `Delete branch ${name}`]);
     this.clearIncomingStateCache();
@@ -2129,6 +2133,7 @@ export class SvnService extends GitService {
   }
 
   async merge(from: string): Promise<void> {
+    await this.assertBranchOperationAllowed();
     const target = this.repositoryRefTarget(from, from.startsWith('tags/') ? 'tags' : 'branches');
     await this.mergeSource(target);
   }

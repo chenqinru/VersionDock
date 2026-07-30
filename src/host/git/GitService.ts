@@ -438,6 +438,27 @@ export class GitService {
     return { repoId: this.repoId, branch: freshBranchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount, operationState };
   }
 
+  protected async assertPullAllowed(): Promise<void> {
+    const status = await this.getStatusFresh();
+    if (status.conflictCount > 0 || status.operationState) {
+      throw new Error(t('Cannot pull while conflicts are unresolved or another version-control operation is in progress. Resolve the conflicts and complete or abort the current operation first.'));
+    }
+  }
+
+  protected async assertCheckoutAllowed(): Promise<void> {
+    const status = await this.getStatusFresh();
+    if (status.conflictCount > 0 || status.operationState) {
+      throw new Error(t('Cannot switch branches while conflicts are unresolved or another version-control operation is in progress. Resolve the conflicts and complete or abort the current operation first.'));
+    }
+  }
+
+  protected async assertBranchOperationAllowed(): Promise<void> {
+    const status = await this.getStatusFresh();
+    if (status.conflictCount > 0 || status.operationState) {
+      throw new Error(t('Cannot perform branch operations while conflicts are unresolved or another version-control operation is in progress. Resolve the conflicts and complete or abort the current operation first.'));
+    }
+  }
+
   private async getShortHash(): Promise<string | undefined> {
     try {
       return (await this.git.raw(['rev-parse', '--short', 'HEAD'])).trim() || undefined;
@@ -856,6 +877,8 @@ export class GitService {
     if (!branchName || currentBranch === branchName) {
       return this.pull();
     }
+
+    await this.assertPullAllowed();
 
     const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
     if (!tracking?.upstreamRemote || !tracking.upstreamRemoteRef) {
@@ -1388,6 +1411,7 @@ export class GitService {
   }
 
   async pullSubtree(prefix: string, repository: string, ref: string, squash: boolean, message?: string): Promise<string> {
+    await this.assertPullAllowed();
     const args = ['subtree', 'pull', this.subtreePrefixArg(prefix)];
     if (squash) args.push('--squash');
     if (message?.trim()) args.push('-m', message.trim());
@@ -1849,6 +1873,7 @@ export class GitService {
   }
 
   async push(force = false, remote?: string): Promise<void> {
+    await this.assertBranchOperationAllowed();
     const vsRepo = this.vsRepo();
     // Only use VS Code API when it actually knows the remotes for this repo.
     // If remotes are empty VS Code would push to an unknown remote (exit 128).
@@ -1881,6 +1906,7 @@ export class GitService {
   }
 
   async pull(): Promise<string> {
+    await this.assertPullAllowed();
     const vsRepo = this.vsRepo();
     if (vsRepo && vsRepo.state.remotes.length > 0) {
       if (!vsRepo.state.HEAD?.upstream) return 'No remote tracking branch — skipped';
@@ -1898,6 +1924,7 @@ export class GitService {
   }
 
   async pullRebase(): Promise<string> {
+    await this.assertPullAllowed();
     const vsRepo = this.vsRepo();
     if (vsRepo && vsRepo.state.remotes.length > 0) {
       if (!vsRepo.state.HEAD?.upstream) return 'No remote tracking branch — skipped';
@@ -1923,6 +1950,7 @@ export class GitService {
   }
 
   async checkout(branchName: string, createNew?: boolean, from?: string): Promise<void> {
+    await this.assertCheckoutAllowed();
     this._pendingDetachedTag = undefined;
     const vsRepo = this.vsRepo();
     if (vsRepo) {
@@ -1984,6 +2012,7 @@ export class GitService {
   }
 
   async merge(from: string): Promise<void> {
+    await this.assertBranchOperationAllowed();
     try {
       await this.git.merge([from]);
     } catch (e: unknown) {
@@ -2019,18 +2048,21 @@ export class GitService {
   }
 
   async rebase(onto: string): Promise<void> {
+    await this.assertBranchOperationAllowed();
     const vsRepo = this.vsRepo();
     if (vsRepo) { await vsRepo.rebase(onto); return; }
     await this.git.rebase([onto]);
   }
 
   async deleteBranch(branchName: string, force: boolean): Promise<void> {
+    await this.assertBranchOperationAllowed();
     const vsRepo = this.vsRepo();
     if (vsRepo) { await vsRepo.deleteBranch(branchName, force); return; }
     await this.git.deleteLocalBranch(branchName, force);
   }
 
   async checkoutForce(branchName: string): Promise<void> {
+    await this.assertCheckoutAllowed();
     // VS Code API has no force checkout — use simple-git
     await this.git.checkout(['-f', branchName]);
   }
@@ -2041,6 +2073,7 @@ export class GitService {
   }
 
   async pullFromRemote(remote: string, branch: string, rebase: boolean): Promise<void> {
+    await this.assertPullAllowed();
     // VS Code API pull() doesn't accept remote/branch args — use simple-git
     const args = rebase ? ['pull', '--rebase', remote, branch] : ['pull', remote, branch];
     await this.git.raw(args);
@@ -2256,6 +2289,7 @@ export class GitService {
   }
 
   async checkoutTag(name: string): Promise<void> {
+    await this.assertCheckoutAllowed();
     await this.git.raw(['checkout', '--detach', `refs/tags/${name}`]);
     this._pendingDetachedTag = name;
   }
@@ -2523,6 +2557,7 @@ export class GitService {
   }
 
   async pullSubmodule(rebase = false): Promise<string> {
+    await this.assertPullAllowed();
     const status = await this.git.status();
     if (status.detached) {
       // In detached HEAD: fetch then checkout the latest commit on the tracked ref.
