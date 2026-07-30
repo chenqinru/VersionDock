@@ -3,6 +3,7 @@ import type { WorktreeEntry } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
+import { branchColor, headColor } from '../../shared/branchColors';
 
 interface RepoWorktrees {
   repoId: string;
@@ -70,6 +71,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
   const branchLabel = entry.isDetached
     ? entry.head ? entry.head.slice(0, 8) : t('detached HEAD')
     : entry.branchShort || entry.branch;
+  const branchClr = entry.isDetached ? headColor() : branchColor(branchLabel);
 
   return (
     <div style={row.root}>
@@ -94,9 +96,9 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
             )}
           </span>
           <span style={row.meta}>
-            <span style={row.branch}>
-              <Codicon name={entry.isDetached ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', marginRight: '3px', opacity: 0.6 }} />
-              {branchLabel}
+            <span style={row.branch(branchClr)} title={branchLabel}>
+              <Codicon name={entry.isDetached ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', opacity: 0.8, flexShrink: 0 }} />
+              <span style={row.branchName}>{branchLabel}</span>
             </span>
             {entry.isPrunable && (
               <span style={row.prunableBadge}>{t('prunable')}</span>
@@ -107,6 +109,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
           <div style={row.actions}>
             {!entry.isInWorkspace && (
               <button
+                data-action-btn=""
                 style={row.btn}
                 title={t('Add Folder to Workspace')}
                 onClick={e => { e.stopPropagation(); onAddToWorkspace(entry.path); }}
@@ -116,6 +119,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
             )}
             {entry.isInWorkspace && (
               <button
+                data-action-btn=""
                 style={row.btn}
                 title={t('Reveal in Explorer')}
                 onClick={e => { e.stopPropagation(); onOpenInExplorer(repoId, entry.path); }}
@@ -124,6 +128,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
               </button>
             )}
             <button
+              data-action-btn=""
               style={row.btn}
               title={t('Open in New Window')}
               onClick={e => { e.stopPropagation(); onOpenInNewWindow(entry.path); }}
@@ -132,6 +137,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
             </button>
             {entry.isLocked ? (
               <button
+                data-action-btn=""
                 style={row.btn}
                 title={t('Unlock worktree')}
                 onClick={e => { e.stopPropagation(); onUnlock(repoId, entry.path); }}
@@ -140,6 +146,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
               </button>
             ) : (
               <button
+                data-action-btn=""
                 style={row.btn}
                 title={t('Lock worktree')}
                 onClick={e => { e.stopPropagation(); onLock(repoId, entry.path); }}
@@ -148,6 +155,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
               </button>
             )}
             <button
+              data-action-btn=""
               style={{ ...row.btn, color: 'var(--vscode-errorForeground)' }}
               title={t('Remove worktree')}
               onClick={e => { e.stopPropagation(); onDelete(repoId, entry.path, false); }}
@@ -206,6 +214,7 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '2px' }}>
             {hasPrunable && (
               <button
+                data-action-btn=""
                 style={css.headerBtn}
                 title={t('Prune stale worktrees')}
                 onClick={() => onPrune(repo.repoId)}
@@ -215,6 +224,7 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
             )}
             {!repo.isLinkedWorktree && (
               <button
+                data-action-btn=""
                 style={css.headerBtn}
                 title={t('Add worktree')}
                 onClick={() => onRequestCreate(repo.repoId)}
@@ -246,13 +256,13 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
       {!multiRepo && (hasPrunable || !repo.isLinkedWorktree) && (
         <div style={css.singleRepoActions}>
           {hasPrunable && (
-            <button style={css.actionBtn} onClick={() => onPrune(repo.repoId)}>
+            <button data-secondary-action-btn="" style={css.actionBtn} onClick={() => onPrune(repo.repoId)}>
               <Codicon name="git-compare" style={{ marginRight: '4px', fontSize: '12px' }} />
               {t('Prune stale')}
             </button>
           )}
           {!repo.isLinkedWorktree && (
-            <button style={css.actionBtn} onClick={() => onRequestCreate(repo.repoId)}>
+            <button data-secondary-action-btn="" style={css.actionBtn} onClick={() => onRequestCreate(repo.repoId)}>
               <Codicon name="add" style={{ marginRight: '4px', fontSize: '12px' }} />
               {t('New Worktree')}
             </button>
@@ -364,10 +374,13 @@ const row = {
     fontWeight: 'normal', letterSpacing: '0.03em', opacity: 0.85,
   } as React.CSSProperties,
   meta: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '1px' } as React.CSSProperties,
-  branch: {
-    fontSize: '10px', opacity: 0.55, display: 'flex', alignItems: 'center',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-  } as React.CSSProperties,
+  branch: (color: string): React.CSSProperties => ({
+    fontSize: '10px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px',
+    background: `${color}33`, color, border: `1px solid ${color}88`,
+    borderRadius: '3px', padding: '1px 5px', flexShrink: 1,
+    overflow: 'hidden', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '160px',
+  }),
+  branchName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   prunableBadge: {
     fontSize: '9px', padding: '0 4px', borderRadius: '3px', flexShrink: 0,
     background: 'var(--vscode-inputValidation-warningBackground)',

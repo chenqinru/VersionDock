@@ -7,7 +7,7 @@ import { FileIcon } from '../../shared/FileIcon';
 import { SingleRepoHeader } from './ProjectGroup';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
-import { branchColor, tagColor } from '../../shared/branchColors';
+import { branchInfoColor } from '../../shared/branchColors';
 import { scopedKey } from '../../shared/scopedKey';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
             </button>
           )}
           {!isSubmodule && (
-            <button style={actionBtnStyle} title={t('Open file')}
+            <button data-action-btn="" style={actionBtnStyle} title={t('Open file')}
               onClick={e => { e.stopPropagation(); onOpenFile(file); }}>
               <Codicon name="go-to-file" />
             </button>
@@ -319,7 +319,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   const isEmpty = files.length === 0;
   // Empty repos default to collapsed; key presence means "explicitly opened"
   const collapsed = isEmpty ? !isCollapsed(collapseKey) : isCollapsed(collapseKey);
-  const branchClr = repoStatus.branch.detachedTag ? tagColor() : branchColor(repoStatus.branch.name, true);
+  const branchClr = branchInfoColor(repoStatus.branch);
   const [hovered, setHovered] = useState(false);
   const isSvn = kind === 'svn';
   const canAddToSvn = isSvn && !staged && files.some(file => file.status === 'untracked');
@@ -381,6 +381,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
               </span>
             )}
             <span
+              data-branch-switch-badge=""
               style={branchBadgeStyle(branchClr)}
               onClick={e => { e.stopPropagation(); onBranchClick(repoId); }}
               title={repoStatus.branch.detachedTag ? t('Tag: {0} (detached HEAD)', repoStatus.branch.detachedTag) : repoStatus.branch.detachedHash ? t('Detached HEAD at {0}', repoStatus.branch.detachedHash) : repoStatus.branch.name}

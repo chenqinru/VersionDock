@@ -6,7 +6,7 @@ import { FileTree } from './FileTree';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
-import { branchColor, tagColor } from '../../shared/branchColors';
+import { branchInfoColor } from '../../shared/branchColors';
 import { mergeRepoFiles } from '../utils/mergeRepoFiles';
 import { scopedKey } from '../../shared/scopedKey';
 
@@ -54,9 +54,7 @@ export function ProjectGroup({
   const repoId = repoStatus.repoId;
   const repoCollapseKey = scopedKey('repo', repoId);
   const collapsed = isCollapsed(repoCollapseKey);
-  const branchClr = repoStatus.branch.detachedTag
-    ? tagColor()
-    : branchColor(repoStatus.branch.name, true);
+  const branchClr = branchInfoColor(repoStatus.branch);
   const { stagedFiles, unstagedFiles } = repoStatus;
 
   const allFiles = useMemo(
@@ -119,6 +117,7 @@ export function ProjectGroup({
             </span>
           )}
           <span
+            data-branch-switch-badge=""
             style={styles.branchBadge(branchClr)}
             onClick={(e) => { e.stopPropagation(); onBranchClick(repoId); }}
             title={repoStatus.branch.detachedTag
@@ -199,9 +198,7 @@ interface SingleRepoHeaderProps {
 
 export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule, submodulePath, isWorktree, mainWorktreePath, onBranchClick, onRepoContextMenu, onOpenAllChanges, hideOpenChanges }: SingleRepoHeaderProps) {
   const repoId = repoStatus.repoId;
-  const branchClr = repoStatus.branch.detachedTag
-    ? tagColor()
-    : branchColor(repoStatus.branch.name, true);
+  const branchClr = branchInfoColor(repoStatus.branch);
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -222,6 +219,7 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
           </span>
         )}
         <span
+          data-branch-switch-badge=""
           style={styles.branchBadge(branchClr)}
           onClick={e => { e.stopPropagation(); onBranchClick(repoId); }}
           title={repoStatus.branch.detachedTag

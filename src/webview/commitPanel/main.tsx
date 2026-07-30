@@ -20,6 +20,7 @@ import type { FileStatus } from '../shared/types';
 import { t } from '../shared/i18n';
 import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../shared/types';
 import { baseNameFromPath } from '../shared/pathUtils';
+import { branchInfoColor } from '../shared/branchColors';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -395,7 +396,43 @@ export function CommitApp() {
     if (document.getElementById(id)) return;
     const s = document.createElement('style');
     s.id = id;
-    s.textContent = `[data-action-btn]:hover { background: var(--vscode-toolbar-hoverBackground) !important; opacity: 1 !important; }`;
+    s.textContent = `
+      [data-action-btn]:not(:disabled):hover {
+        background: var(--vscode-toolbar-hoverBackground) !important;
+        opacity: 1 !important;
+      }
+      [data-secondary-action-btn]:not(:disabled):hover {
+        background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground)) !important;
+        opacity: 1 !important;
+      }
+      [data-primary-action-btn]:not(:disabled):hover {
+        background: var(--vscode-button-hoverBackground, var(--vscode-toolbar-hoverBackground)) !important;
+        opacity: 1 !important;
+      }
+      [data-danger-action-btn]:not(:disabled):hover {
+        background: color-mix(in srgb, var(--vscode-errorForeground) 86%, white) !important;
+        opacity: 1 !important;
+      }
+      [data-branch-switch-badge] {
+        transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+      }
+      [data-branch-switch-badge]:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.12);
+        box-shadow: 0 2px 7px color-mix(in srgb, currentColor 28%, transparent);
+      }
+      [data-branch-switch-badge]:active {
+        transform: translateY(0);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        [data-branch-switch-badge] {
+          transition: none;
+        }
+        [data-branch-switch-badge]:hover {
+          transform: none;
+        }
+      }
+    `;
     document.head.appendChild(s);
   }, []);
 
@@ -1386,8 +1423,8 @@ export function CommitApp() {
             {t('You have not yet opened a folder.')}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '200px' }}>
-            <button style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_OPEN_FOLDER' } as CommitToHostMsg)}>{t('Open Folder')}</button>
-            <button style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_CLONE_REPO' } as CommitToHostMsg)}>{t('Clone Repository')}</button>
+            <button data-primary-action-btn="" style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_OPEN_FOLDER' } as CommitToHostMsg)}>{t('Open Folder')}</button>
+            <button data-primary-action-btn="" style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_CLONE_REPO' } as CommitToHostMsg)}>{t('Clone Repository')}</button>
           </div>
         </div>
       );
@@ -1399,6 +1436,7 @@ export function CommitApp() {
             {t("The folder currently open doesn't have a Git repository. You can initialize a repository which will enable source control features powered by Git.")}
           </div>
           <button
+            data-primary-action-btn=""
             style={css.initRepoBtn}
             onClick={() => send({ type: 'COMMIT_INIT_REPO' } as CommitToHostMsg)}
           >
@@ -1507,11 +1545,11 @@ export function CommitApp() {
       {/* ── Toolbar ── */}
       <div style={css.toolbar}>
         <div style={css.toolbarLeft}>
-          <button style={css.iconBtn} title={t('Refresh')} onClick={() => requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' })}>
+          <button data-action-btn="" style={css.iconBtn} title={t('Refresh')} onClick={() => requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' })}>
             <Codicon name="refresh" />
           </button>
           {activeTab === 'changes' && (<>
-            <button style={css.iconBtn} title={t('Rollback')} onClick={() => {
+            <button data-action-btn="" style={css.iconBtn} title={t('Rollback')} onClick={() => {
               const allFiles: Array<{ repoId: string; path: string }> = [];
               for (const r of repos) {
                 const seen = new Set<string>();
@@ -1523,14 +1561,14 @@ export function CommitApp() {
             }}>
               <Codicon name="discard" />
             </button>
-            <button style={css.iconBtn} title={t('Expand all')} onClick={() => store.expandAll()}>
+            <button data-action-btn="" style={css.iconBtn} title={t('Expand all')} onClick={() => store.expandAll()}>
               <Codicon name="expand-all" />
             </button>
-            <button style={css.iconBtn} title={t('Collapse all')} onClick={() => store.collapseAll()}>
+            <button data-action-btn="" style={css.iconBtn} title={t('Collapse all')} onClick={() => store.collapseAll()}>
               <Codicon name="collapse-all" />
             </button>
             <div ref={viewMenuRef} style={{ position: 'relative' }}>
-              <button style={css.iconBtn} title={t('View options')} onClick={() => setViewMenuOpen(o => !o)}>
+              <button data-action-btn="" style={css.iconBtn} title={t('View options')} onClick={() => setViewMenuOpen(o => !o)}>
                 <Codicon name="eye" />
               </button>
               {viewMenuOpen && (
@@ -1554,20 +1592,20 @@ export function CommitApp() {
             </div>
           </>)}
           {activeTab === 'shelf' && (<>
-            <button style={css.iconBtn} title={t('Expand all')} onClick={() => {
+            <button data-action-btn="" style={css.iconBtn} title={t('Expand all')} onClick={() => {
               const keys = Object.entries(shelveMap)
                 .flatMap(([repoId, shelves]) => getShelveExpansionKeys(repoId, shelves));
               store.shelveExpandAll(keys);
             }}>
               <Codicon name="expand-all" />
             </button>
-            <button style={css.iconBtn} title={t('Collapse all')} onClick={() => {
+            <button data-action-btn="" style={css.iconBtn} title={t('Collapse all')} onClick={() => {
               store.shelveCollapseAll();
             }}>
               <Codicon name="collapse-all" />
             </button>
             <div ref={shelveViewMenuRef} style={{ position: 'relative' }}>
-              <button style={css.iconBtn} title={t('View options')} onClick={() => setShelveViewMenuOpen(o => !o)}>
+              <button data-action-btn="" style={css.iconBtn} title={t('View options')} onClick={() => setShelveViewMenuOpen(o => !o)}>
                 <Codicon name="eye" />
               </button>
               {shelveViewMenuOpen && (
@@ -1591,12 +1629,12 @@ export function CommitApp() {
             </div>
           </>)}
           {activeTab === 'stash' && (<>
-            <button style={css.iconBtn} title={t('Expand all')} onClick={() => {
+            <button data-action-btn="" style={css.iconBtn} title={t('Expand all')} onClick={() => {
               setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: true }));
             }}>
               <Codicon name="expand-all" />
             </button>
-            <button style={css.iconBtn} title={t('Collapse all')} onClick={() => {
+            <button data-action-btn="" style={css.iconBtn} title={t('Collapse all')} onClick={() => {
               setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: false }));
             }}>
               <Codicon name="collapse-all" />
@@ -1604,6 +1642,7 @@ export function CommitApp() {
           </>)}
           {hiddenRepoIds.length > 0 && (
             <button
+              data-action-btn=""
               style={{ ...css.iconBtn, position: 'relative' }}
               title={hiddenRepoIds.length === 1
                 ? t('{0} hidden repository — click to manage', hiddenRepoIds.length)
@@ -1663,6 +1702,7 @@ export function CommitApp() {
               const count = tabCounts[tab];
               return (
                 <button
+                  data-action-btn=""
                   key={tab}
                   style={css.tab(activeTab === tab)}
                   title={`${label} (${count})`}
@@ -1699,7 +1739,7 @@ export function CommitApp() {
         <div style={css.notificationBar}>
           <Codicon name="warning" style={{ flexShrink: 0, fontSize: '13px' }} />
           <span style={css.notificationText}>{store.error}</span>
-          <button style={css.notificationClose} onClick={() => store.setError(null)} title={t('Dismiss')}>
+          <button data-action-btn="" style={css.notificationClose} onClick={() => store.setError(null)} title={t('Dismiss')}>
             <Codicon name="close" />
           </button>
         </div>
@@ -1807,6 +1847,7 @@ export function CommitApp() {
                           {t('{0} is in detached HEAD ({1}). Checkout a branch to commit.', repoName, detachedCommit)}
                         </span>
                         <button
+                          data-secondary-action-btn=""
                           style={css.detachedBannerBtn}
                           onClick={() => send({ type: 'COMMIT_SHOW_BRANCH_MENU', repoId })}
                           title={t('Checkout or create a branch')}
@@ -1814,6 +1855,7 @@ export function CommitApp() {
                           {t('Checkout branch')}
                         </button>
                         <button
+                          data-action-btn=""
                           style={{ ...css.detachedBannerBtn, background: 'transparent', opacity: 0.5 }}
                           onClick={() => setDetachedWarnings(prev => { const n = { ...prev }; delete n[repoId]; return n; })}
                           title={t('Dismiss')}
@@ -1882,6 +1924,7 @@ export function CommitApp() {
                 }}
               />
               <button
+                data-primary-action-btn=""
                 style={css.shelvePromptOk}
                 onClick={() => confirmShelve(shelvePrompt.repoId, shelvePromptName, shelvePrompt.paths)}
                 disabled={!shelvePromptName.trim()}
@@ -1889,7 +1932,7 @@ export function CommitApp() {
               >
                 <Codicon name="check" />
               </button>
-              <button style={css.shelvePromptCancel} onClick={() => setShelvePrompt(null)} title={t('Cancel')}>
+              <button data-action-btn="" style={css.shelvePromptCancel} onClick={() => setShelvePrompt(null)} title={t('Cancel')}>
                 <Codicon name="close" />
               </button>
             </div>
@@ -1969,6 +2012,7 @@ export function CommitApp() {
                   repoName={repoName}
                   repoColor={repoColor}
                   worktreeBranch={worktreeBranch}
+                  worktreeBranchColor={meta?.isWorktree ? branchInfoColor(repoStatus.branch) : undefined}
                   mainRepoName={mainRepoName}
                   multiRepo={multiRepo}
                   shelves={shelveMap[repoId] ?? []}
@@ -2005,6 +2049,7 @@ export function CommitApp() {
                   repoName={repoName}
                   repoColor={repoColor}
                   worktreeBranch={worktreeBranch}
+                  worktreeBranchColor={meta?.isWorktree ? branchInfoColor(repoStatus.branch) : undefined}
                   mainRepoName={mainRepoName}
                   multiRepo={multiRepo}
                   stashes={stashMap[repoId] ?? []}

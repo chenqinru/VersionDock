@@ -1,4 +1,5 @@
 import { isPrimaryBranch } from './branchUtils';
+import type { BranchInfo } from './types';
 
 export const HEAD_COLOR_DARK  = '#c9a84c';
 export const HEAD_COLOR_LIGHT = '#8a6914';
@@ -129,4 +130,10 @@ export function branchColor(name: string, isHead = false): string {
   if (isPrimaryBranch(normalized)) return primaryBranchColor();
   if (isHead) return headColor();
   return currentPalette()[branchPaletteIndex(normalized)];
+}
+
+export function branchInfoColor(branch: Pick<BranchInfo, 'name' | 'detachedTag' | 'detachedHash'>): string {
+  if (branch.detachedTag) return tagColor();
+  if (branch.detachedHash) return headColor();
+  return branchColor(branch.name);
 }

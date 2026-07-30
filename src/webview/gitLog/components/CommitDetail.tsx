@@ -46,6 +46,9 @@ const INTERACTION_STYLE = `
 .versiondock-detail-icon-row:hover {
   background: var(--vscode-toolbar-hoverBackground) !important;
 }
+[data-context-menu-item]:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)) !important;
+}
 `;
 
 function clampInfoSectionHeight(height: number, containerHeight: number): number {
@@ -271,7 +274,7 @@ function ContextMenu({ state, onShowDiff, onEditSource, onRevert, onCherryPick, 
   return (
     <div ref={menuRef} style={menuStyles.container(position?.x ?? state.x, position?.y ?? state.y)} onContextMenu={e => e.preventDefault()}>
       {items.map(item => (
-        <div key={item.label} style={menuStyles.item} onClick={() => { item.action(); onClose(); }}>
+        <div data-context-menu-item="" key={item.label} style={menuStyles.item} onClick={() => { item.action(); onClose(); }}>
           <Codicon name={item.icon} style={menuStyles.icon} />
           <span>{item.label}</span>
         </div>
@@ -1130,7 +1133,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                               title={badgeTitle(group)}
                             >
                               <RefBadgeIcon group={group} />
-                              {formatRefLabel(group)}
+                              <span style={styles.refBadgeLabel}>{formatRefLabel(group)}</span>
                             </span>
                           );
                         })}
@@ -1291,7 +1294,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                   return (
                     <span key={key} style={styles.refBadge(color, (group.isHead || group.isDetached) && !group.isRemoteHead)} title={badgeTitle(group)}>
                       <RefBadgeIcon group={group} />
-                      {formatRefLabel(group)}
+                      <span style={styles.refBadgeLabel}>{formatRefLabel(group)}</span>
                     </span>
                   );
                 }
@@ -1300,7 +1303,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                   return (
                     <span key={key} style={styles.refBadge(color)} title={t('Tag: {0}', badge.name)}>
                       <Codicon name="tag" style={{ fontSize: '11px', flexShrink: 0, lineHeight: 1 }} />
-                      {badge.name}
+                      <span style={styles.refBadgeLabel}>{badge.name}</span>
                     </span>
                   );
                 }
@@ -1311,7 +1314,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 return (
                   <span key={key} style={styles.refBadge(color)} title={isRemote ? t('Remote branch: {0}', label) : t('Branch: {0}', label)}>
                     <Codicon name={isRemote ? 'cloud' : 'git-branch'} style={{ fontSize: '11px', flexShrink: 0, lineHeight: 1 }} />
-                    {label}
+                    <span style={styles.refBadgeLabel}>{label}</span>
                   </span>
                 );
               }
@@ -1816,14 +1819,19 @@ const styles = {
     background: `${color}33`,
     color,
     border: `1px solid ${color}88`,
-    maxWidth: '200px',
+    maxWidth: '160px',
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
     flexShrink: 0,
     boxSizing: 'border-box' as const,
     fontWeight: isHead ? 700 : 500,
   }),
+  refBadgeLabel: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+  } as React.CSSProperties,
   mergeSection: {
     marginTop: '6px',
     borderTop: '1px solid var(--vscode-panel-border)',

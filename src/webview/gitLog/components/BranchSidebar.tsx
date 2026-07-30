@@ -605,12 +605,16 @@ const INTERACTION_STYLE = `
   background: var(--vscode-toolbar-hoverBackground) !important;
   opacity: 1 !important;
 }
+[data-context-menu-item]:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)) !important;
+}
 `;
 
 function MenuItemRow({ item }: { item: MenuItem }) {
   if ('sep' in item) return <div style={styles.separator} />;
   return (
     <div
+      data-context-menu-item=""
       role="menuitem"
       tabIndex={0}
       style={styles.menuItem(item.danger)}

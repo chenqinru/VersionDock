@@ -364,12 +364,14 @@ export type LogToHostMsg =
 
 export type HostToMergeMsg =
   | { type: 'MERGE_FILE_LOADED'; file: MergeConflictFile; iconTheme?: IconThemeData }
+  | { type: 'MERGE_FILE_LOAD_FAILED'; error: string }
   | { type: 'MERGE_FILE_VERSIONS_LOADED'; requestId: string; versions?: { base: string; ours: string; theirs: string; language: string }; error?: string }
   | { type: 'MERGE_SAVE_RESULT'; requestId: string; ok: boolean; error?: string };
 
 // ─── Merge Editor: WebView → Host ────────────────────────────────────────────
 
 export type MergeToHostMsg =
+  | { type: 'MERGE_READY' }
   | { type: 'MERGE_REQUEST_FILE_VERSIONS'; requestId: string }
   | { type: 'MERGE_SAVE_FILE'; requestId: string; resolvedContent: string; deleteFile?: boolean }
   | { type: 'MERGE_ACCEPT_OURS'; requestId: string }

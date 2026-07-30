@@ -31,6 +31,13 @@ interface Props {
   onClose: () => void;
 }
 
+const INTERACTION_STYLE = `
+[data-compare-close-btn]:hover {
+  background: var(--vscode-toolbar-hoverBackground) !important;
+  opacity: 1 !important;
+}
+`;
+
 function formatRefLabel(ref: string): string {
   return ref.replace(/^refs\/(?:heads|remotes|tags)\//, '');
 }
@@ -107,6 +114,7 @@ export function CompareView({
 
   return (
     <div style={styles.container}>
+      <style>{INTERACTION_STYLE}</style>
       <div style={styles.header}>
         <span style={styles.headerLabel}>{t('Compare')}</span>
         <span style={styles.headerRepoBadge} title={compareState.repoName}>
@@ -114,7 +122,7 @@ export function CompareView({
           <span style={styles.headerRepoName}>{compareState.repoName}</span>
         </span>
         <span style={styles.headerTitle}>{t('{0} vs {1}', baseLabel, targetLabel)}</span>
-        <button style={styles.closeButton} onClick={onClose} title={t('Close Compare')}>
+        <button data-compare-close-btn="" style={styles.closeButton} onClick={onClose} title={t('Close Compare')}>
           <Codicon name="close" style={{ fontSize: '14px' }} />
         </button>
       </div>
@@ -332,6 +340,7 @@ const styles = {
     background: 'transparent',
     color: 'var(--vscode-foreground)',
     cursor: 'pointer',
+    borderRadius: '3px',
     marginLeft: 'auto',
     flexShrink: 0,
   } as React.CSSProperties,

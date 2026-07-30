@@ -4,7 +4,7 @@ import type { RepoStatus, RepoMeta } from '../../shared/types';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
-import { branchColor, tagColor } from '../../shared/branchColors';
+import { branchInfoColor } from '../../shared/branchColors';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 
@@ -382,6 +382,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
         <div style={styles.commitActions(hovered || expanded || selected)}>
           {isHead && (
             <button
+              data-action-btn=""
               style={styles.actionBtn}
               title={t('Undo this commit (keeps changes as unstaged)')}
               onClick={event => { event.stopPropagation(); onUndoCommit(repoId); }}
@@ -390,6 +391,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
             </button>
           )}
           <button
+            data-action-btn=""
             style={styles.actionBtn}
             title={t('Open in Log')}
             onClick={event => { event.stopPropagation(); onOpenInLog(commit.hash, repoId); }}
@@ -453,6 +455,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
         <div style={styles.filesHeaderActions}>
           <div style={styles.expandBtns}>
             <button
+              data-action-btn=""
               type="button"
               style={styles.toolbarButton(false, !canToggleFolders)}
               title={t('Expand all')}
@@ -465,6 +468,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
               <Codicon name="expand-all" style={{ fontSize: '13px' }} />
             </button>
             <button
+              data-action-btn=""
               type="button"
               style={styles.toolbarButton(false, !canToggleFolders)}
               title={t('Collapse all')}
@@ -476,6 +480,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
           </div>
           <div style={styles.viewToggle}>
             <button
+              data-action-btn=""
               type="button"
               style={styles.toolbarButton(viewMode === 'tree', false)}
               title={t('Tree view')}
@@ -484,6 +489,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
               <Codicon name="list-tree" style={{ fontSize: '13px' }} />
             </button>
             <button
+              data-action-btn=""
               type="button"
               style={styles.toolbarButton(viewMode === 'flat', false)}
               title={t('Flat list')}
@@ -662,7 +668,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   const mainRepoName = baseNameFromPath(repoMeta?.mainWorktreePath);
   const repoName = worktreeBranch ? (mainRepoName ?? rawName) : rawName;
   const branchLabel = repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name;
-  const branchClr = repoStatus.branch.detachedTag ? tagColor() : branchColor(repoStatus.branch.name, true);
+  const branchClr = branchInfoColor(repoStatus.branch);
   const repoColor = repoMeta?.color ?? '#4ec9b0';
   const ahead = repoStatus.branch.aheadBehind?.ahead ?? 0;
   const behind = repoStatus.branch.aheadBehind?.behind ?? 0;
@@ -1060,7 +1066,7 @@ export function PushTab(props: Props) {
           />
         </div>
         <div style={css.footer}>
-          <button style={css.pushBtn(canPush)} disabled={!canPush} onClick={() => onPush(solo.repoId)}>
+          <button data-primary-action-btn="" style={css.pushBtn(canPush)} disabled={!canPush} onClick={() => onPush(solo.repoId)}>
             <Codicon name="cloud-upload" style={{ marginRight: '6px' }} />
             {pushButtonLabel([solo])}
           </button>
@@ -1123,7 +1129,7 @@ export function PushTab(props: Props) {
               const ahead = repo.branch.aheadBehind?.ahead ?? 0;
               return (
                 <span key={repo.repoId} style={css.pill(color)}>
-                  <button style={css.pillRemove(color)} title={t('Remove {0}', displayName)} onClick={() => toggleRepo(repo.repoId)}>
+                  <button data-action-btn="" style={css.pillRemove(color)} title={t('Remove {0}', displayName)} onClick={() => toggleRepo(repo.repoId)}>
                     <Codicon name="close" style={{ fontSize: '10px' }} />
                   </button>
                   {displayName}
@@ -1138,7 +1144,7 @@ export function PushTab(props: Props) {
             })}
           </div>
         )}
-        <button style={css.pushBtn(canPush)} disabled={!canPush} onClick={handlePush}>
+        <button data-primary-action-btn="" style={css.pushBtn(canPush)} disabled={!canPush} onClick={handlePush}>
           <Codicon name="cloud-upload" style={{ marginRight: '6px' }} />
           {pushButtonLabel(pushableChecked)}
         </button>

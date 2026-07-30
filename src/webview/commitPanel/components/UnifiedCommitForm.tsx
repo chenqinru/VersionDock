@@ -398,6 +398,7 @@ export function UnifiedCommitForm({
               return (
                 <span key={r.repoId} style={styles.targetPill(color)}>
                   <button
+                    data-action-btn=""
                     style={styles.pillRemove(color)}
                     title={t('Remove {0} from commit', displayName)}
                     onClick={() => onDeselectRepo(r.repoId)}

@@ -8,7 +8,7 @@ import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { scopedKey } from '../../shared/scopedKey';
-import { branchColor, tagColor } from '../../shared/branchColors';
+import { branchColor, branchInfoColor } from '../../shared/branchColors';
 
 export interface RepoFileGroup {
   repoId: string;
@@ -217,8 +217,8 @@ function RepoSubGroup({
   const someSelected = selectedCount > 0 && !allSelected;
 
   const branchClr = repoStatus
-    ? (repoStatus.branch.detachedTag ? tagColor() : branchColor(repoStatus.branch.name, true))
-    : branchColor('main', true);
+    ? branchInfoColor(repoStatus.branch)
+    : branchColor('main');
   const [hovered, setHovered] = useState(false);
 
   const checkboxRef = useRef<HTMLInputElement>(null);
@@ -261,6 +261,7 @@ function RepoSubGroup({
             )}
             {repoStatus && (
               <span
+                data-branch-switch-badge=""
                 style={styles.branchBadge(branchClr)}
                 onClick={e => { e.stopPropagation(); onBranchClick(repoId); }}
                 title={repoStatus.branch.detachedTag ? t('Tag: {0} (detached HEAD)', repoStatus.branch.detachedTag) : repoStatus.branch.detachedHash ? t('Detached HEAD at {0}', repoStatus.branch.detachedHash) : repoStatus.branch.name}

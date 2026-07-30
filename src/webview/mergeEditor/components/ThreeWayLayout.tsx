@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { HighlighterCore, SpecialLanguage, ThemeRegistrationRaw } from 'shiki/core';
 import type { ConflictBlock, MergeConflictFile } from '../../shared/types';
 import type { NormalEdits, Resolution } from '../store/mergeStore';
@@ -1082,9 +1082,41 @@ interface HorizontalScrollbarMetrics {
   trackWidth: number;
 }
 
+const OVERLAY_SCROLLBAR_HIDE_DELAY_MS = 700;
+
+function useTransientScrollbarVisibility() {
+  const [active, setActive] = useState(false);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearHideTimer = useCallback(() => {
+    if (hideTimerRef.current === null) return;
+    clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = null;
+  }, []);
+
+  const holdVisible = useCallback(() => {
+    clearHideTimer();
+    setActive(true);
+  }, [clearHideTimer]);
+
+  const showTemporarily = useCallback(() => {
+    clearHideTimer();
+    setActive(true);
+    hideTimerRef.current = setTimeout(() => {
+      hideTimerRef.current = null;
+      setActive(false);
+    }, OVERLAY_SCROLLBAR_HIDE_DELAY_MS);
+  }, [clearHideTimer]);
+
+  useEffect(() => clearHideTimer, [clearHideTimer]);
+
+  return { active, holdVisible, showTemporarily };
+}
+
 function OverlayVerticalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HTMLDivElement> }) {
   const [metrics, setMetrics] = useState<VerticalScrollbarMetrics>({ visible: false, top: 0, height: 0, trackHeight: 0 });
   const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
+  const { active, holdVisible, showTemporarily } = useTransientScrollbarVisibility();
 
   useEffect(() => {
     const pane = scrollRef.current;
@@ -1106,22 +1138,29 @@ function OverlayVerticalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HT
       setMetrics({ visible: true, top, height, trackHeight });
     };
 
+    const handleScroll = () => {
+      update();
+      if (dragRef.current) holdVisible();
+      else showTemporarily();
+    };
+
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(pane);
     const codeArea = pane.querySelector<HTMLElement>('[data-merge-code-area]');
     if (codeArea) resizeObserver.observe(codeArea);
-    pane.addEventListener('scroll', update, { passive: true });
+    pane.addEventListener('scroll', handleScroll, { passive: true });
     update();
     return () => {
       resizeObserver.disconnect();
-      pane.removeEventListener('scroll', update);
+      pane.removeEventListener('scroll', handleScroll);
     };
-  }, [scrollRef]);
+  }, [holdVisible, scrollRef, showTemporarily]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const pane = scrollRef.current;
     if (!pane) return;
     event.preventDefault();
+    holdVisible();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { pointerId: event.pointerId, startY: event.clientY, startScrollTop: pane.scrollTop };
   };
@@ -1139,12 +1178,14 @@ function OverlayVerticalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HT
     if (dragRef.current?.pointerId !== event.pointerId) return;
     dragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    showTemporarily();
   };
 
   const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     const pane = scrollRef.current;
     if (!pane) return;
+    showTemporarily();
     const rect = event.currentTarget.getBoundingClientRect();
     const travel = Math.max(1, metrics.trackHeight - metrics.height);
     const targetTop = Math.max(0, Math.min(travel, event.clientY - rect.top - metrics.height / 2));
@@ -1153,7 +1194,7 @@ function OverlayVerticalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HT
 
   if (!metrics.visible) return null;
   return (
-    <div style={styles.overlayScrollbarTrack(metrics.trackHeight)} onPointerDown={onTrackPointerDown}>
+    <div style={styles.overlayScrollbarTrack(metrics.trackHeight, active)} onPointerDown={onTrackPointerDown}>
       <div
         role="scrollbar"
         aria-label={t('Vertical scrollbar')}
@@ -1174,6 +1215,7 @@ function OverlayVerticalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HT
 function OverlayHorizontalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HTMLDivElement> }) {
   const [metrics, setMetrics] = useState<HorizontalScrollbarMetrics>({ visible: false, left: 0, width: 0, trackWidth: 0 });
   const dragRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
+  const { active, holdVisible, showTemporarily } = useTransientScrollbarVisibility();
 
   useEffect(() => {
     const pane = scrollRef.current;
@@ -1194,22 +1236,29 @@ function OverlayHorizontalScrollbar({ scrollRef }: { scrollRef: React.RefObject<
       setMetrics({ visible: true, left, width, trackWidth });
     };
 
+    const handleScroll = () => {
+      update();
+      if (dragRef.current) holdVisible();
+      else showTemporarily();
+    };
+
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(pane);
     const codeArea = pane.querySelector<HTMLElement>('[data-merge-code-area]');
     if (codeArea) resizeObserver.observe(codeArea);
-    pane.addEventListener('scroll', update, { passive: true });
+    pane.addEventListener('scroll', handleScroll, { passive: true });
     update();
     return () => {
       resizeObserver.disconnect();
-      pane.removeEventListener('scroll', update);
+      pane.removeEventListener('scroll', handleScroll);
     };
-  }, [scrollRef]);
+  }, [holdVisible, scrollRef, showTemporarily]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const pane = scrollRef.current;
     if (!pane) return;
     event.preventDefault();
+    holdVisible();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: pane.scrollLeft };
   };
@@ -1227,12 +1276,14 @@ function OverlayHorizontalScrollbar({ scrollRef }: { scrollRef: React.RefObject<
     if (dragRef.current?.pointerId !== event.pointerId) return;
     dragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    showTemporarily();
   };
 
   const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
     const pane = scrollRef.current;
     if (!pane) return;
+    showTemporarily();
     const rect = event.currentTarget.getBoundingClientRect();
     const travel = Math.max(1, metrics.trackWidth - metrics.width);
     const targetLeft = Math.max(0, Math.min(travel, event.clientX - rect.left - metrics.width / 2));
@@ -1241,7 +1292,7 @@ function OverlayHorizontalScrollbar({ scrollRef }: { scrollRef: React.RefObject<
 
   if (!metrics.visible) return null;
   return (
-    <div style={styles.overlayHorizontalScrollbarTrack(metrics.trackWidth)} onPointerDown={onTrackPointerDown}>
+    <div style={styles.overlayHorizontalScrollbarTrack(metrics.trackWidth, active)} onPointerDown={onTrackPointerDown}>
       <div
         role="scrollbar"
         aria-label={t('Horizontal scrollbar')}
@@ -1760,7 +1811,7 @@ const styles = {
   grid: { position: 'relative' as const, display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${CONNECTOR_GUTTER_WIDTH} minmax(0, 1fr) ${CONNECTOR_GUTTER_WIDTH} minmax(0, 1fr)`, flex: 1, minHeight: 0, overflow: 'hidden', background: 'var(--vscode-editor-background)' },
   columnFrame: { position: 'relative' as const, zIndex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--vscode-editor-background)' },
   column: { position: 'relative' as const, width: '100%', height: '100%', overflowX: 'auto' as const, overflowY: 'auto' as const, scrollbarGutter: 'auto', minWidth: 0, background: 'var(--vscode-editor-background)' },
-  overlayScrollbarTrack: (height: number): React.CSSProperties => ({ position: 'absolute', top: 29, right: 0, zIndex: 9, width: 10, height, background: 'transparent', touchAction: 'none', pointerEvents: 'auto' }),
+  overlayScrollbarTrack: (height: number, active: boolean): React.CSSProperties => ({ position: 'absolute', top: 29, right: 0, zIndex: 9, width: 10, height, background: 'transparent', touchAction: 'none', opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', transition: 'opacity 120ms ease' }),
   overlayScrollbarThumb: (top: number, height: number): React.CSSProperties => ({
     position: 'absolute',
     top,
@@ -1772,7 +1823,7 @@ const styles = {
     cursor: 'default',
     touchAction: 'none',
   }),
-  overlayHorizontalScrollbarTrack: (width: number): React.CSSProperties => ({
+  overlayHorizontalScrollbarTrack: (width: number, active: boolean): React.CSSProperties => ({
     position: 'absolute',
     left: 0,
     bottom: 0,
@@ -1781,7 +1832,9 @@ const styles = {
     height: 10,
     background: 'transparent',
     touchAction: 'none',
-    pointerEvents: 'auto',
+    opacity: active ? 1 : 0,
+    pointerEvents: active ? 'auto' : 'none',
+    transition: 'opacity 120ms ease',
   }),
   overlayHorizontalScrollbarThumb: (left: number, width: number): React.CSSProperties => ({
     position: 'absolute',
@@ -1794,7 +1847,15 @@ const styles = {
     cursor: 'default',
     touchAction: 'none',
   }),
-  connectorGutter: { position: 'relative' as const, zIndex: 0, minWidth: 0, background: 'var(--vscode-editor-background)', pointerEvents: 'none' as const },
+  connectorGutter: {
+    position: 'relative' as const,
+    zIndex: 0,
+    minWidth: 0,
+    background: 'var(--vscode-editor-background)',
+    borderLeft: '1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent)',
+    borderRight: '1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent)',
+    pointerEvents: 'none' as const,
+  },
   connectorOverlay: { position: 'absolute' as const, inset: 0, zIndex: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' as const },
   connectorShape: { transition: 'opacity 120ms ease' },
   connectorPath: { mixBlendMode: 'normal' as const },

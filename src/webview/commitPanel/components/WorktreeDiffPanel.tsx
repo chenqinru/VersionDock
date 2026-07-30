@@ -48,6 +48,10 @@ const SCROLLBAR_CSS = `
   background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
   background-clip: content-box;
 }
+.versiondock-worktree-dir-row:hover,
+.versiondock-worktree-file-row[data-selected="false"]:hover {
+  background: var(--vscode-list-hoverBackground) !important;
+}
 `;
 
 const STATUS_COLORS: Record<FileStatus['status'], string> = {
@@ -107,7 +111,7 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
           </div>
           <div style={styles.subtitle}>{t('{0} compared with {1}', state.baseRef, state.currentRef)}</div>
         </div>
-        <button style={styles.iconButton} onClick={onClose} title={t('Back to Changes')}>
+        <button data-action-btn="" style={styles.iconButton} onClick={onClose} title={t('Back to Changes')}>
           <Codicon name="arrow-left" />
         </button>
       </div>
@@ -119,18 +123,18 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
         <div style={{ flex: 1 }} />
         {viewMode === 'tree' && (
           <>
-            <button style={styles.toolbarButton} onClick={expandAll} title={t('Expand all')}>
+            <button data-action-btn="" style={styles.toolbarButton} onClick={expandAll} title={t('Expand all')}>
               <Codicon name="expand-all" />
             </button>
-            <button style={styles.toolbarButton} onClick={collapseAll} title={t('Collapse all')}>
+            <button data-action-btn="" style={styles.toolbarButton} onClick={collapseAll} title={t('Collapse all')}>
               <Codicon name="collapse-all" />
             </button>
           </>
         )}
-        <button style={styles.toolbarButton} onClick={() => setViewMode('tree')} title={t('Tree view')}>
+        <button data-action-btn="" style={styles.toolbarButton} onClick={() => setViewMode('tree')} title={t('Tree view')}>
           <Codicon name="list-tree" />
         </button>
-        <button style={styles.toolbarButton} onClick={() => setViewMode('flat')} title={t('Flat list')}>
+        <button data-action-btn="" style={styles.toolbarButton} onClick={() => setViewMode('flat')} title={t('Flat list')}>
           <Codicon name="list-flat" />
         </button>
       </div>
@@ -225,7 +229,7 @@ function TreeNodeView({
   const isCollapsed = collapsed.has(node.path);
   return (
     <>
-      <div style={{ ...styles.dirRow, paddingLeft: `${10 + depth * 18}px` }} onClick={() => onToggle(node.path)} title={node.path}>
+      <div className="versiondock-worktree-dir-row" style={{ ...styles.dirRow, paddingLeft: `${10 + depth * 18}px` }} onClick={() => onToggle(node.path)} title={node.path}>
         <Codicon name={isCollapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
         <FileIcon name={node.name} isFolder isOpen={!isCollapsed} theme={iconTheme} size={16} />
         <span style={styles.dirName}>{node.name}</span>
@@ -270,6 +274,8 @@ function FileRow({
 
   return (
     <div
+      className="versiondock-worktree-file-row"
+      data-selected={selected ? 'true' : 'false'}
       style={{ ...styles.fileRow(selected), paddingLeft: `${10 + depth * 18}px` }}
       onClick={() => onSelect(file)}
       onContextMenu={(event) => {

@@ -4,6 +4,7 @@ import type { SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../../shared/ms
 import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
+import { branchColor } from '../../shared/branchColors';
 
 interface Props {
   entries: SubtreeEntry[];
@@ -132,7 +133,12 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
           <div style={row.titleLine}>
             <span style={row.name}>{entry.name}</span>
             <span style={row.badge}>{entry.defaultSquash ? t('squash') : t('full history')}</span>
-            {entry.lastSplitBranch && <span style={row.branchBadge}>{entry.lastSplitBranch}</span>}
+            {entry.lastSplitBranch && (
+              <span style={row.branchBadge(branchColor(entry.lastSplitBranch))} title={entry.lastSplitBranch}>
+                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+                <span style={row.branchBadgeLabel}>{entry.lastSplitBranch}</span>
+              </span>
+            )}
             <span style={row.statusBadge(statusTone)} title={status?.error ?? statusLabel}>{statusLabel}</span>
           </div>
           <div style={row.pathLine} title={entry.prefix}>
@@ -153,10 +159,10 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
             </span>
           ) : (
             <>
-              <button style={row.btn} title={t('Pull Subtree')} disabled={disabled} onClick={e => { e.stopPropagation(); onPull(entry.id); }}>
+              <button data-action-btn="" style={row.btn} title={t('Pull Subtree')} disabled={disabled} onClick={e => { e.stopPropagation(); onPull(entry.id); }}>
                 <Codicon name="cloud-download" />
               </button>
-              <button style={row.btn} title={t('More')} disabled={disabled} onClick={e => { e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}>
+              <button data-action-btn="" style={row.btn} title={t('More')} disabled={disabled} onClick={e => { e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}>
                 <Codicon name="ellipsis" />
               </button>
             </>
@@ -202,10 +208,10 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
           <span style={css.repoName}>{meta.name}</span>
           {summary && <span style={css.repoStatus}>{summary}</span>}
           <div style={css.headerActions}>
-            <button style={css.headerBtn} title={t('Add Subtree from Repository')} onClick={() => onAdd(meta.id)}>
+            <button data-action-btn="" style={css.headerBtn} title={t('Add Subtree from Repository')} onClick={() => onAdd(meta.id)}>
               <Codicon name="add" style={{ fontSize: '12px' }} />
             </button>
-            <button style={css.headerBtn} title={t('Register Existing Directory')} onClick={() => onRegister(meta.id)}>
+            <button data-action-btn="" style={css.headerBtn} title={t('Register Existing Directory')} onClick={() => onRegister(meta.id)}>
               <Codicon name="list-tree" style={{ fontSize: '12px' }} />
             </button>
           </div>
@@ -234,11 +240,11 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
       )}
       {!multiRepo && (
         <div style={css.singleRepoActions}>
-          <button style={css.actionBtn} onClick={() => onAdd(meta.id)}>
+          <button data-secondary-action-btn="" style={css.actionBtn} onClick={() => onAdd(meta.id)}>
             <Codicon name="add" style={{ marginRight: '4px', fontSize: '12px' }} />
             {t('Add Subtree')}
           </button>
-          <button style={css.actionBtn} onClick={() => onRegister(meta.id)}>
+          <button data-secondary-action-btn="" style={css.actionBtn} onClick={() => onRegister(meta.id)}>
             <Codicon name="list-tree" style={{ marginRight: '4px', fontSize: '12px' }} />
             {t('Register Existing')}
           </button>
@@ -408,14 +414,23 @@ const row = {
     flexShrink: 0,
     opacity: 0.75,
   } as React.CSSProperties,
-  branchBadge: {
+  branchBadge: (color: string): React.CSSProperties => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
     fontSize: '10px',
+    fontWeight: 600,
     padding: '1px 5px',
     borderRadius: '3px',
-    border: '1px solid var(--vscode-panel-border)',
-    opacity: 0.7,
-    flexShrink: 0,
-  } as React.CSSProperties,
+    background: `${color}33`,
+    color,
+    border: `1px solid ${color}88`,
+    flexShrink: 1,
+    minWidth: 0,
+    maxWidth: '160px',
+    overflow: 'hidden',
+  }),
+  branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   statusBadge: (tone: 'loading' | 'updated' | 'clean' | 'error'): React.CSSProperties => {
     const color = tone === 'updated'
       ? 'var(--vscode-gitDecoration-modifiedResourceForeground, var(--vscode-charts-yellow))'

@@ -6,6 +6,7 @@ import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import type { ViewMode } from '../store/commitStore';
 import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
+import { branchColor } from '../../shared/branchColors';
 
 interface Props {
   repoId: string;
@@ -13,6 +14,7 @@ interface Props {
   repoColor: string;
   multiRepo: boolean;
   worktreeBranch?: string;
+  worktreeBranchColor?: string;
   mainRepoName?: string;
   stashes: StashEntry[];
   loading: boolean;
@@ -265,14 +267,19 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
         onDoubleClick={() => onPop(repoId, entry.ref)}
         title={t('{0} — double-click to pop', entry.ref)}
       >
-        <button style={row.chevronBtn} onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}>
+        <button data-action-btn="" style={row.chevronBtn} onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', opacity: 0.65 }} />
         </button>
         <Codicon name="save" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
         <div style={row.info}>
           <span style={row.name}>
             {entry.message || entry.ref}
-            {entry.branch && <span style={row.branchBadge}>{entry.branch}</span>}
+            {entry.branch && (
+              <span style={row.branchBadge(branchColor(entry.branch))} title={entry.branch}>
+                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+                <span style={row.branchBadgeLabel}>{entry.branch}</span>
+              </span>
+            )}
           </span>
           <span style={row.meta}>
             <span style={row.fileCount}>
@@ -283,13 +290,13 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
         </div>
         {hovered && (
           <div style={row.actions}>
-            <button style={row.btn} title={t('Pop (apply and drop)')} onClick={e => { e.stopPropagation(); onPop(repoId, entry.ref); }}>
+            <button data-action-btn="" style={row.btn} title={t('Pop (apply and drop)')} onClick={e => { e.stopPropagation(); onPop(repoId, entry.ref); }}>
               <Codicon name="desktop-download" />
             </button>
-            <button style={{ ...row.btn, opacity: 0.5 }} title={t('Apply (keep stash)')} onClick={e => { e.stopPropagation(); onApply(repoId, entry.ref); }}>
+            <button data-action-btn="" style={{ ...row.btn, opacity: 0.5 }} title={t('Apply (keep stash)')} onClick={e => { e.stopPropagation(); onApply(repoId, entry.ref); }}>
               <Codicon name="arrow-down" />
             </button>
-            <button style={{ ...row.btn, color: 'var(--vscode-errorForeground)' }} title={t('Drop stash')} onClick={e => { e.stopPropagation(); onDrop(repoId, entry.ref); }}>
+            <button data-action-btn="" style={{ ...row.btn, color: 'var(--vscode-errorForeground)' }} title={t('Drop stash')} onClick={e => { e.stopPropagation(); onDrop(repoId, entry.ref); }}>
               <Codicon name="trash" />
             </button>
           </div>
@@ -336,7 +343,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
 
 export function StashTab({
   repoId, repoName, repoColor, multiRepo,
-  worktreeBranch, mainRepoName,
+  worktreeBranch, worktreeBranchColor, mainRepoName,
   stashes, loading, error, viewMode,
   onApply, onPop, onDrop, onOpenFileDiff,
   expansionCommand,
@@ -348,9 +355,9 @@ export function StashTab({
           <span style={css.dot(repoColor)} />
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
-            <span style={css.worktreeBadge}>
-              <Codicon name="repo-clone" style={{ fontSize: '11px', marginRight: '3px' }} />
-              {worktreeBranch}
+            <span style={css.worktreeBadge(worktreeBranchColor ?? branchColor(worktreeBranch))} title={worktreeBranch}>
+              <Codicon name="repo-clone" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+              <span style={css.branchBadgeLabel}>{worktreeBranch}</span>
             </span>
           )}
         </div>
@@ -397,7 +404,13 @@ const css = {
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
-  worktreeBadge: { display: 'flex', alignItems: 'center', fontSize: '11px', fontWeight: 'normal' as const, letterSpacing: '0.02em', color: 'var(--vscode-badge-foreground)', background: 'var(--vscode-badge-background)', borderRadius: '3px', padding: '1px 5px 1px 4px', flexShrink: 0, opacity: 0.75 } as React.CSSProperties,
+  worktreeBadge: (color: string): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: '3px',
+    fontSize: '10px', fontWeight: 600, background: `${color}33`, color,
+    border: `1px solid ${color}88`, borderRadius: '3px', padding: '1px 5px',
+    flexShrink: 1, minWidth: 0, maxWidth: '160px', overflow: 'hidden',
+  }),
+  branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   errorRow: {
     display: 'flex', alignItems: 'flex-start', padding: '4px 8px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)',
@@ -418,11 +431,13 @@ const row = {
   } as React.CSSProperties,
   info: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 },
   name: { fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, display: 'flex', alignItems: 'center', gap: '6px' } as React.CSSProperties,
-  branchBadge: {
-    fontSize: '9px', padding: '1px 5px', borderRadius: '3px', flexShrink: 0,
-    background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)',
-    fontWeight: 'normal', letterSpacing: '0.03em',
-  } as React.CSSProperties,
+  branchBadge: (color: string): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: '3px',
+    fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '3px', flexShrink: 1,
+    minWidth: 0, maxWidth: '160px', overflow: 'hidden',
+    background: `${color}33`, color, border: `1px solid ${color}88`,
+  }),
+  branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   meta: { display: 'flex', gap: '8px', marginTop: '2px' } as React.CSSProperties,
   fileCount: { fontSize: '10px', opacity: 0.5 },
   date: { fontSize: '10px', opacity: 0.4, whiteSpace: 'nowrap' as const },

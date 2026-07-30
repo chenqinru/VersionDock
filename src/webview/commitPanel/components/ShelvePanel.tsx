@@ -7,6 +7,7 @@ import type { ViewMode } from '../store/commitStore';
 import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
 import { scopedKey } from '../../shared/scopedKey';
+import { branchColor } from '../../shared/branchColors';
 
 interface Props {
   repoId: string;
@@ -14,6 +15,7 @@ interface Props {
   repoColor: string;
   multiRepo: boolean;
   worktreeBranch?: string;
+  worktreeBranchColor?: string;
   mainRepoName?: string;
   shelves: ShelveEntry[];
   loading: boolean;
@@ -161,6 +163,7 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
       {hovered ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '1px', marginLeft: 'auto', flexShrink: 0 }}>
           <button
+            data-action-btn=""
             style={{ background: 'transparent', border: 'none', color: 'var(--vscode-foreground)', cursor: 'pointer', padding: '2px 4px', borderRadius: '3px', fontSize: '12px', display: 'flex', alignItems: 'center', opacity: 0.7 }}
             title={t('Unshelve this file only')}
             onClick={e => { e.stopPropagation(); onUnshelveFile(repoId, entry.id, file.path); }}
@@ -264,7 +267,7 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
         onDoubleClick={() => onUnshelve(repoId, entry.id)}
         title={t('{0} — double-click to unshelve', entry.name)}
       >
-        <button style={rowStyle.chevronBtn} onClick={e => { e.stopPropagation(); toggleShelveCollapsed(entryKey); }}>
+        <button data-action-btn="" style={rowStyle.chevronBtn} onClick={e => { e.stopPropagation(); toggleShelveCollapsed(entryKey); }}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', opacity: 0.65 }} />
         </button>
         <Codicon name="archive" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
@@ -279,10 +282,10 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
         </div>
         {hovered && (
           <div style={rowStyle.actions}>
-            <button style={rowStyle.btn} title={t('Unshelve (apply and keep)')} onClick={e => { e.stopPropagation(); onUnshelve(repoId, entry.id); }}>
+            <button data-action-btn="" style={rowStyle.btn} title={t('Unshelve (apply and keep)')} onClick={e => { e.stopPropagation(); onUnshelve(repoId, entry.id); }}>
               <Codicon name="desktop-download" />
             </button>
-            <button style={{ ...rowStyle.btn, color: 'var(--vscode-errorForeground)' }} title={t('Delete shelve')} onClick={e => { e.stopPropagation(); onDrop(repoId, entry.id); }}>
+            <button data-action-btn="" style={{ ...rowStyle.btn, color: 'var(--vscode-errorForeground)' }} title={t('Delete shelve')} onClick={e => { e.stopPropagation(); onDrop(repoId, entry.id); }}>
               <Codicon name="trash" />
             </button>
           </div>
@@ -353,7 +356,7 @@ const rowStyle = {
 
 // ── Public component ──────────────────────────────────────────────────────────
 
-export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveFile, onDrop, onRequestList, onOpenFileDiff }: Props) {
+export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveFile, onDrop, onRequestList, onOpenFileDiff }: Props) {
   useEffect(() => { onRequestList(repoId); }, [onRequestList, repoId]);
 
   return (
@@ -363,9 +366,9 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBr
           <span style={css.dot(repoColor)} />
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
-            <span style={css.worktreeBadge}>
-              <Codicon name="repo-clone" style={{ fontSize: '11px', marginRight: '3px' }} />
-              {worktreeBranch}
+            <span style={css.worktreeBadge(worktreeBranchColor ?? branchColor(worktreeBranch))} title={worktreeBranch}>
+              <Codicon name="repo-clone" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+              <span style={css.branchBadgeLabel}>{worktreeBranch}</span>
             </span>
           )}
         </div>
@@ -409,7 +412,13 @@ const css = {
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
-  worktreeBadge: { display: 'flex', alignItems: 'center', fontSize: '11px', fontWeight: 'normal' as const, letterSpacing: '0.02em', color: 'var(--vscode-badge-foreground)', background: 'var(--vscode-badge-background)', borderRadius: '3px', padding: '1px 5px 1px 4px', flexShrink: 0, opacity: 0.75 } as React.CSSProperties,
+  worktreeBadge: (color: string): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: '3px',
+    fontSize: '10px', fontWeight: 600, background: `${color}33`, color,
+    border: `1px solid ${color}88`, borderRadius: '3px', padding: '1px 5px',
+    flexShrink: 1, minWidth: 0, maxWidth: '160px', overflow: 'hidden',
+  }),
+  branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   errorRow: {
     display: 'flex', alignItems: 'flex-start', padding: '4px 8px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)',

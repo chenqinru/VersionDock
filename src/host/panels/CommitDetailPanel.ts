@@ -825,8 +825,9 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .file-row.ctx-active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
     .row-indent { flex-shrink: 0; }
     .row-icon { font-size: 14px; flex-shrink: 0; opacity: 0.85; }
-    .row-name { font-size: 12px; white-space: nowrap; font-weight: 500; }
+    .row-name { font-size: 12px; white-space: nowrap; font-weight: 500; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .row-dir { font-size: 11px; opacity: 0.45; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .row-tail { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; }
     .row-stats { display: flex; gap: 3px; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); flex-shrink: 0; }
     .row-status { font-size: 10px; font-weight: 700; flex-shrink: 0; opacity: 0.85; margin-right: 6px; }
     .added   { color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b); }
@@ -838,12 +839,12 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       padding: 3px 8px 3px 0; cursor: pointer; user-select: none;
     }
     .dir-row:hover { background: var(--vscode-list-hoverBackground); }
-    .dir-name { font-size: 12px; white-space: nowrap; opacity: 0.85; }
+    .dir-name { font-size: 12px; white-space: nowrap; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .dir-badge {
       font-size: 10px; opacity: 0.45;
       background: var(--vscode-badge-background);
       color: var(--vscode-badge-foreground);
-      border-radius: 8px; padding: 0 5px; flex-shrink: 0;
+      border-radius: 8px; padding: 0 5px; flex-shrink: 0; margin-left: auto;
     }
 
     /* Context menu */
@@ -1271,8 +1272,10 @@ ${leftPanelContent}
           '<div class="row-indent" style="width:' + (depth * 14 + 4) + 'px"></div>' +
           fileIconHtml(node.name) +
           '<span class="row-name" style="color:' + col + '">' + escText(node.name) + '</span>' +
+          '<span class="row-tail">' +
           statsHtml(f) +
           '<span class="row-status" style="color:' + col + '">' + escText(status) + '</span>' +
+          '</span>' +
           '</div>'
         );
         return;
@@ -1323,8 +1326,10 @@ ${leftPanelContent}
           fileIconHtml(name) +
           '<span class="row-name" style="color:' + col + '">' + escText(name) + '</span>' +
           (dir ? '<span class="row-dir">' + escText(dir) + '</span>' : '') +
+          '<span class="row-tail">' +
           statsHtml(f) +
           '<span class="row-status" style="color:' + col + '">' + escText(status) + '</span>' +
+          '</span>' +
           '</div>'
         );
       }
@@ -1493,14 +1498,49 @@ ${leftPanelContent}
       const PAL_L = ['#2a6090','#6a3a80','#2a7a68','#8a4a28','#3a6a28','#7a5a18','#3a4a88','#7a2828','#1a5a70','#605030','#3a6a30','#603828'];
       const PRIM  = ['main','master','develop','dev','trunk','release'];
       const dark  = () => document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast');
-      function normB(n) { const i=n.indexOf('/'); return i>=0?n.slice(i+1):n; }
+      function normB(n) {
+        if (n.startsWith('refs/heads/')) return n.slice('refs/heads/'.length);
+        if (n.startsWith('refs/remotes/')) {
+          const remoteRef = n.slice('refs/remotes/'.length);
+          const slash = remoteRef.indexOf('/');
+          return slash >= 0 ? remoteRef.slice(slash + 1) : remoteRef;
+        }
+        return n;
+      }
+      function parseC(raw) {
+        const s = raw.trim();
+        const hex = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(s);
+        if (hex) return [parseInt(hex[1],16),parseInt(hex[2],16),parseInt(hex[3],16)];
+        const rgb = /^rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)/i.exec(s);
+        return rgb ? [parseInt(rgb[1],10),parseInt(rgb[2],10),parseInt(rgb[3],10)] : null;
+      }
+      function lum(r,g,b) {
+        const c = v => { const n=v/255; return n<=0.03928?n/12.92:Math.pow((n+0.055)/1.055,2.4); };
+        return 0.2126*c(r)+0.7152*c(g)+0.0722*c(b);
+      }
+      function toHex(r,g,b) { return '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join(''); }
+      function darken(raw,threshold) {
+        const rgb=parseC(raw); if(!rgb) return raw;
+        let [r,g,b]=rgb; let l=lum(r,g,b);
+        while(l>threshold){ r=Math.round(r*0.82);g=Math.round(g*0.82);b=Math.round(b*0.82);l=lum(r,g,b); }
+        return toHex(r,g,b);
+      }
+      function lighten(raw,threshold) {
+        const rgb=parseC(raw); if(!rgb) return raw;
+        let [r,g,b]=rgb; let l=lum(r,g,b);
+        while(l<threshold){
+          r=Math.min(255,Math.round(r*1.15+8));g=Math.min(255,Math.round(g*1.15+8));b=Math.min(255,Math.round(b*1.15+8));
+          const next=lum(r,g,b); if(next===l) break; l=next;
+        }
+        return toHex(r,g,b);
+      }
+      function primaryColor() {
+        const raw = getComputedStyle(document.body).getPropertyValue('--vscode-button-background').trim() || '#0078d4';
+        return dark() ? lighten(raw,0.18) : darken(raw,0.3);
+      }
       function hashB(n) { let h=0; const s=normB(n); for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0; return h%PAL_D.length; }
       function bColor(n) {
-        if (PRIM.includes(normB(n).toLowerCase())) {
-          const raw = getComputedStyle(document.body).getPropertyValue('--vscode-button-background').trim() || '#0078d4';
-          const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(raw);
-          return m ? raw : '#0078d4';
-        }
+        if (PRIM.includes(normB(n).toLowerCase())) return primaryColor();
         return (dark() ? PAL_D : PAL_L)[hashB(n)];
       }
       const tColor = () => dark() ? '#4aaa9a' : '#1a7a6a';
@@ -1529,8 +1569,8 @@ ${leftPanelContent}
             : b.type === 'remote'
               ? t('Remote: {0}', label)
               : t('Local: {0}', label);
-          sp.style.cssText = 'font-size:10px;padding:0 6px;height:16px;line-height:16px;border-radius:3px;display:inline-flex;align-items:center;gap:3px;background:' + color + '33;color:' + color + ';border:1px solid ' + color + '88;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;box-sizing:border-box;font-weight:500;margin:2px;';
-          sp.innerHTML = '<span class="codicon codicon-' + icon + '" style="font-size:10px;flex-shrink:0;line-height:1"></span>' + escText(label);
+          sp.style.cssText = 'font-size:10px;padding:0 6px;height:16px;line-height:16px;border-radius:3px;display:inline-flex;align-items:center;gap:3px;background:' + color + '33;color:' + color + ';border:1px solid ' + color + '88;max-width:160px;overflow:hidden;white-space:nowrap;flex-shrink:0;box-sizing:border-box;font-weight:500;margin:2px;';
+          sp.innerHTML = '<span class="codicon codicon-' + icon + '" style="font-size:10px;flex-shrink:0;line-height:1"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">' + escText(label) + '</span>';
           refsRow.appendChild(sp);
         }
       }
@@ -1648,8 +1688,10 @@ ${leftPanelContent}
                   fileIconHtml(name) +
                   '<span class="row-name" style="color:' + col + '">' + escText(name) + '</span>' +
                   (dir ? '<span class="row-dir">' + escText(dir) + '</span>' : '') +
+                  '<span class="row-tail">' +
                   statsHtml(f) +
                   '<span class="row-status" style="color:' + col + '">' + escText(status) + '</span>' +
+                  '</span>' +
                   '</div>'
                 );
               }

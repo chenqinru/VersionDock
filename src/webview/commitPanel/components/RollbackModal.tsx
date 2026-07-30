@@ -244,7 +244,7 @@ export function RollbackModal({ repos, repoMetas, onConfirm, onClose }: Props) {
         <div style={s.header}>
           <Codicon name="discard" style={{ fontSize: '14px', opacity: 0.8 }} />
           <span style={s.title}>{t('Rollback changes')}</span>
-          <button style={s.closeBtn} onClick={onClose}>
+          <button data-action-btn="" style={s.closeBtn} onClick={onClose}>
             <Codicon name="close" />
           </button>
         </div>
@@ -279,8 +279,9 @@ export function RollbackModal({ repos, repoMetas, onConfirm, onClose }: Props) {
           <span style={s.footerCount}>
             {totalSelected === 1 ? t('{0} file selected', totalSelected) : t('{0} files selected', totalSelected)}
           </span>
-          <button style={s.cancelBtn} onClick={onClose}>{t('Cancel')}</button>
+          <button data-action-btn="" style={s.cancelBtn} onClick={onClose}>{t('Cancel')}</button>
           <button
+            data-danger-action-btn=""
             style={{ ...s.confirmBtn, opacity: totalSelected === 0 ? 0.4 : 1 }}
             disabled={totalSelected === 0}
             onClick={handleConfirm}

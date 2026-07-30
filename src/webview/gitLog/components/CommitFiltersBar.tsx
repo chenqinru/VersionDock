@@ -43,6 +43,23 @@ export const FILTER_INPUT_STYLE = `
   color: var(--vscode-input-foreground);
   opacity: ${FILTER_PLACEHOLDER_OPACITY};
 }
+[data-filter-picker-btn][data-active="false"]:not(:disabled):hover,
+[data-filter-calendar-nav]:hover {
+  background: var(--vscode-toolbar-hoverBackground) !important;
+}
+[data-filter-picker-btn][data-active="true"]:not(:disabled):hover,
+[data-filter-dropdown-item][data-selected="true"]:hover,
+[data-filter-calendar-day][data-selected="true"]:hover {
+  filter: brightness(1.08);
+}
+[data-filter-dropdown-item][data-selected="false"]:hover,
+[data-filter-calendar-day][data-selected="false"]:hover {
+  background: var(--vscode-list-hoverBackground) !important;
+}
+[data-more-menu-item]:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)) !important;
+  color: var(--vscode-menu-selectionForeground, var(--vscode-menu-foreground, var(--vscode-foreground))) !important;
+}
 `;
 
 export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions, onFilterChange, onRepoChange, onClear, onFetchAll, repoNamesExpanded, onToggleRepoNames, onUndock, hideUndock, disableBranchFilter = false }: Props) {
@@ -189,6 +206,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
       {open && (
         <div style={styles.moreDropdown}>
           <div
+            data-more-menu-item=""
             style={styles.moreItem}
             onClick={() => { onFetchAll(); setOpen(false); }}
           >
@@ -197,6 +215,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
           </div>
           {showRepoNameToggle && (
             <div
+              data-more-menu-item=""
               style={styles.moreItem}
               onClick={() => { onToggleRepoNames?.(); setOpen(false); }}
             >
@@ -208,6 +227,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
             <>
               <div style={styles.moreSeparator} />
               <div
+                data-more-menu-item=""
                 style={styles.moreItem}
                 onClick={() => { onUndock?.('pick'); setOpen(false); }}
               >
@@ -260,6 +280,8 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
   return (
     <div ref={wrapRef} style={{ position: 'relative', ...style }}>
       <button
+        data-filter-picker-btn=""
+        data-active={value ? 'true' : 'false'}
         style={{ ...styles.pickerBtn(!!value), width: width ?? '100%' }}
         onClick={() => setOpen(current => !current)}
         title={active ? formatAuthorIdentity(active.name, active.email) : (value || t('Filter by author'))}
@@ -293,6 +315,8 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
           </div>
           <div style={styles.dropdownList}>
             <div
+              data-filter-dropdown-item=""
+              data-selected={!value ? 'true' : 'false'}
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(''); setOpen(false); }}
             >
@@ -302,6 +326,8 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
             {displayed.map(option => (
               <div
                 key={option.value}
+                data-filter-dropdown-item=""
+                data-selected={value === option.value ? 'true' : 'false'}
                 style={styles.dropdownItem(value === option.value)}
                 onClick={() => { onChange(option.value); setOpen(false); }}
                 title={formatAuthorIdentity(option.name, option.email)}
@@ -416,6 +442,8 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
   return (
     <div ref={wrapRef} style={{ position: 'relative', ...style }}>
       <button
+        data-filter-picker-btn=""
+        data-active={value ? 'true' : 'false'}
         style={{ ...styles.pickerBtn(!!value), width: width ?? '100%', ...(disabled ? styles.disabledPicker : {}) }}
         onClick={() => { if (!disabled) setOpen(current => !current); }}
         title={disabled ? t('Branch filter is unavailable in compare mode') : (active?.label || value || t('Filter by branch or tag'))}
@@ -444,6 +472,8 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
           </div>
           <div style={styles.dropdownList}>
             <div
+              data-filter-dropdown-item=""
+              data-selected={!value ? 'true' : 'false'}
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(''); setOpen(false); }}
             >
@@ -455,6 +485,8 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
             {displayedBranches.map(option => (
               <div
                 key={`b:${option.value}`}
+                data-filter-dropdown-item=""
+                data-selected={value === option.value ? 'true' : 'false'}
                 style={styles.dropdownItem(value === option.value)}
                 onClick={() => { onChange(option.value); setOpen(false); }}
               >
@@ -469,6 +501,8 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
             {displayedTags.map(option => (
               <div
                 key={`t:${option.value}`}
+                data-filter-dropdown-item=""
+                data-selected={value === option.value ? 'true' : 'false'}
                 style={styles.dropdownItem(value === option.value)}
                 onClick={() => { onChange(option.value); setOpen(false); }}
               >
@@ -509,6 +543,8 @@ function RepoPicker({ value, repos, onChange, style }: {
   return (
     <div ref={wrapRef} style={{ position: 'relative', ...style }}>
       <button
+        data-filter-picker-btn=""
+        data-active={value ? 'true' : 'false'}
         style={{ ...styles.pickerBtn(!!value), width: '100%' }}
         onClick={() => setOpen(current => !current)}
         title={active?.name ?? t('Filter by repository')}
@@ -527,6 +563,8 @@ function RepoPicker({ value, repos, onChange, style }: {
         <div style={styles.dropdown}>
           <div style={styles.dropdownList}>
             <div
+              data-filter-dropdown-item=""
+              data-selected={!value ? 'true' : 'false'}
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(null); setOpen(false); }}
             >
@@ -536,6 +574,8 @@ function RepoPicker({ value, repos, onChange, style }: {
             {repos.map(repo => (
               <div
                 key={repo.id}
+                data-filter-dropdown-item=""
+                data-selected={value === repo.id ? 'true' : 'false'}
                 style={styles.dropdownItem(value === repo.id)}
                 onClick={() => { onChange(repo.id); setOpen(false); }}
               >
@@ -600,6 +640,8 @@ function CalendarMonth({ year, month, from, to, hovered, onDay, onHover }: {
           return (
             <div
               key={ymd}
+              data-filter-calendar-day=""
+              data-selected={isEdge || inRange ? 'true' : 'false'}
               style={calStyles.day(isEdge, inRange)}
               onClick={() => onDay(date)}
               onMouseEnter={() => onHover(date)}
@@ -678,6 +720,8 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
   return (
     <div ref={wrapRef} style={{ position: 'relative', ...style }}>
       <button
+        data-filter-picker-btn=""
+        data-active={hasRange ? 'true' : 'false'}
         style={{ ...styles.pickerBtn(hasRange), width: '100%' }}
         onClick={() => setOpen(current => !current)}
         title={label ?? t('From YYYY-MM-DD')}
@@ -704,9 +748,9 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
         <div style={calStyles.popup}>
           <div style={calStyles.calCol}>
             <div style={calStyles.navRow}>
-              <button style={calStyles.navBtn} onClick={() => shiftLeft(-1)}><Codicon name="chevron-left" style={{ fontSize: '12px' }} /></button>
+              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftLeft(-1)}><Codicon name="chevron-left" style={{ fontSize: '12px' }} /></button>
               <span style={calStyles.navLabel}>{MONTHS[leftYM.month]} {leftYM.year}</span>
-              <button style={calStyles.navBtn} onClick={() => shiftLeft(1)}><Codicon name="chevron-right" style={{ fontSize: '12px' }} /></button>
+              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftLeft(1)}><Codicon name="chevron-right" style={{ fontSize: '12px' }} /></button>
             </div>
             <CalendarMonth year={leftYM.year} month={leftYM.month} from={fromDate} to={toDate} hovered={hovered} onDay={handleDay} onHover={setHovered} />
           </div>
@@ -715,9 +759,9 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
 
           <div style={calStyles.calCol}>
             <div style={calStyles.navRow}>
-              <button style={calStyles.navBtn} onClick={() => shiftRight(-1)}><Codicon name="chevron-left" style={{ fontSize: '12px' }} /></button>
+              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftRight(-1)}><Codicon name="chevron-left" style={{ fontSize: '12px' }} /></button>
               <span style={calStyles.navLabel}>{MONTHS[rightYM.month]} {rightYM.year}</span>
-              <button style={calStyles.navBtn} onClick={() => shiftRight(1)}><Codicon name="chevron-right" style={{ fontSize: '12px' }} /></button>
+              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftRight(1)}><Codicon name="chevron-right" style={{ fontSize: '12px' }} /></button>
             </div>
             <CalendarMonth year={rightYM.year} month={rightYM.month} from={fromDate} to={toDate} hovered={hovered} onDay={handleDay} onHover={setHovered} />
           </div>

@@ -24,6 +24,13 @@ const TREE_BASE_PAD = 6;
 const TREE_LEVEL_PAD = 16;
 const TREE_FILE_SPACER = 14;
 
+const INTERACTION_STYLE = `
+.versiondock-conflicts-dir-row:hover,
+.versiondock-conflicts-file-row[data-selected="false"]:hover {
+  background: var(--vscode-list-hoverBackground) !important;
+}
+`;
+
 function buildTree(files: ConflictListFile[]): TreeNode[] {
   const root: TreeDir = { kind: 'dir', name: '', path: '', children: [], count: 0 };
   for (const file of files) {
@@ -199,6 +206,7 @@ function App() {
 
   return (
     <div style={styles.app}>
+      <style>{INTERACTION_STYLE}</style>
       <div style={styles.header}>
         <h2 style={styles.title}>{t('Conflicts')}</h2>
         <div style={styles.subtitle}>{isMerging ? operationLabel : t('No merge in progress')}</div>
@@ -269,7 +277,7 @@ function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, on
   const rowStyle = node.isRepoRoot ? styles.repoRootRow : styles.dirRow;
   return (
     <div>
-      <div style={{ ...rowStyle, paddingLeft: TREE_BASE_PAD + depth * TREE_LEVEL_PAD }} onClick={() => onToggle(node.path)} title={node.name}>
+      <div className="versiondock-conflicts-dir-row" style={{ ...rowStyle, paddingLeft: TREE_BASE_PAD + depth * TREE_LEVEL_PAD }} onClick={() => onToggle(node.path)} title={node.name}>
         <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.chevron} />
         {node.isRepoRoot
           ? <span style={styles.repoRootDot(node.repoColor ?? 'var(--vscode-foreground)')} />
@@ -297,6 +305,8 @@ function FileRow({ file, depth, selected, iconTheme, onSelect, onOpen }: {
   const displayDir = dir ? `${file.repoName}/${dir}` : file.repoName;
   return (
     <div
+      className="versiondock-conflicts-file-row"
+      data-selected={selected ? 'true' : 'false'}
       style={{ ...styles.fileRow(selected), paddingLeft: TREE_BASE_PAD + depth * TREE_LEVEL_PAD }}
       onClick={event => onSelect(file, event)}
       onDoubleClick={() => onOpen(file)}
@@ -348,7 +358,7 @@ const styles = {
   repoRootDot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoRootName: { flex: 1, fontSize: 11, lineHeight: '16px', fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   dirCount: { marginLeft: 'auto', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)', fontSize: 10, fontWeight: 700, lineHeight: '18px', flexShrink: 0 } as React.CSSProperties,
-  fileRow: (selected: boolean): React.CSSProperties => ({ minHeight: 22, display: 'flex', alignItems: 'center', gap: 4, padding: '2px 10px 2px 0', cursor: 'default', background: selected ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent', color: selected ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)', fontSize: 13, userSelect: 'none' }),
+  fileRow: (selected: boolean): React.CSSProperties => ({ minHeight: 22, display: 'flex', alignItems: 'center', gap: 4, padding: '2px 10px 2px 0', cursor: 'pointer', background: selected ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent', color: selected ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)', fontSize: 13, userSelect: 'none' }),
   fileSpacer: { width: TREE_FILE_SPACER, height: 14, flexShrink: 0 } as React.CSSProperties,
   fileName: { whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flexShrink: 1 },
   dirPath: { marginLeft: 8, opacity: 0.45, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0, maxWidth: '45%' },

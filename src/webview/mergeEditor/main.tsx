@@ -91,6 +91,9 @@ function App() {
             state.setError(t('Unable to load three-way versions. Result pane is still available.'));
           }
           break;
+        case 'MERGE_FILE_LOAD_FAILED':
+          state.setError(msg.error);
+          break;
         case 'MERGE_FILE_VERSIONS_LOADED':
           if (msg.error) state.setError(msg.error);
           break;
@@ -102,8 +105,9 @@ function App() {
       }
     };
     window.addEventListener('message', handler);
+    send({ type: 'MERGE_READY' });
     return () => window.removeEventListener('message', handler);
-  }, []);
+  }, [send]);
 
   const saveResolved = useCallback(() => {
     const state = useMergeStore.getState();
@@ -262,7 +266,15 @@ function App() {
     setCurrentConflictIndex(0);
   }, [store]);
 
-  if (!store.file) return <div style={styles.loading}>{t('Loading merge editor...')}</div>;
+  if (!store.file) {
+    return (
+      <div style={styles.loading}>
+        {store.error
+          ? <span style={styles.loadingError}>{store.error}</span>
+          : t('Loading merge editor...')}
+      </div>
+    );
+  }
 
   const unresolved = store.unresolvedCount();
   const fileName = store.file.relativePath.split('/').pop() ?? store.file.relativePath;
@@ -373,6 +385,7 @@ function App() {
 const styles = {
   app: { height: '100vh', display: 'flex', flexDirection: 'column' as const, background: 'var(--vscode-editor-background)', color: 'var(--vscode-foreground)', fontFamily: 'var(--vscode-font-family)', overflow: 'hidden' },
   loading: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.65, background: 'var(--vscode-editor-background)', color: 'var(--vscode-foreground)' },
+  loadingError: { maxWidth: 720, padding: 24, color: 'var(--vscode-errorForeground)', whiteSpace: 'pre-wrap' as const, textAlign: 'center' as const, opacity: 1 },
   pathHeader: { height: 34, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: '1px solid var(--vscode-panel-border)', flexShrink: 0 },
   fileIcon: { width: 16, height: 16, flexShrink: 0 } as React.CSSProperties,
   pathText: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 },

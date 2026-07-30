@@ -9,6 +9,17 @@ import { t } from '../utils/l10n';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { scopedKey } from '../utils/scopedKey';
 
+interface ResolvedMergeFileContext {
+  repoId: string;
+  relativePath: string;
+  absolutePath: string;
+}
+
+interface InitialMergeFileResult {
+  file: MergeConflictFile;
+  versionsError?: string;
+}
+
 export class MergeEditorProvider implements vscode.Disposable {
   private panels = new Map<string, vscode.WebviewPanel>();
   private disposables: vscode.Disposable[] = [];
@@ -19,7 +30,9 @@ export class MergeEditorProvider implements vscode.Disposable {
   ) {}
 
   openForFile(filePath: string, repoId?: string, relativePath?: string): void {
-    void this.openForFileResolved(filePath, repoId, relativePath);
+    void this.openForFileResolved(filePath, repoId, relativePath).catch(error => {
+      vscode.window.showErrorMessage(t('VersionDock: {0}', error instanceof Error ? error.message : String(error)));
+    });
   }
 
   private async openForFileResolved(filePath: string, repoId?: string, relativePath?: string): Promise<void> {
@@ -50,68 +63,55 @@ export class MergeEditorProvider implements vscode.Disposable {
       }
     );
 
+    // Start loading immediately, but only deliver the result after the webview
+    // has installed its message listener and explicitly announced readiness.
+    const initialFilePromise = this.loadInitialFile(resolved);
+    const postInitialFile = async () => {
+      try {
+        const result = await initialFilePromise;
+        const iconTheme = await loadIconTheme(panel.webview).catch(() => undefined);
+        await panel.webview.postMessage({
+          type: 'MERGE_FILE_LOADED',
+          file: result.file,
+          iconTheme,
+        } satisfies HostToMergeMsg);
+        if (result.versionsError) {
+          await panel.webview.postMessage({
+            type: 'MERGE_FILE_VERSIONS_LOADED',
+            requestId: 'initial',
+            error: result.versionsError,
+          } satisfies HostToMergeMsg);
+        }
+      } catch (error) {
+        await panel.webview.postMessage({
+          type: 'MERGE_FILE_LOAD_FAILED',
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies HostToMergeMsg);
+      }
+    };
+
+    panel.webview.onDidReceiveMessage((msg: MergeToHostMsg) => {
+      if (msg.type === 'MERGE_READY') {
+        void postInitialFile();
+        return;
+      }
+      void this.handleMessage(msg, resolved.repoId, resolved.relativePath, resolved.absolutePath, panelKey, panel.webview);
+    });
+
+    panel.onDidDispose(() => this.panels.delete(panelKey));
+    this.panels.set(panelKey, panel);
+
+    // Register the host listener before assigning HTML so a very fast webview
+    // cannot send MERGE_READY before the extension is listening.
     panel.webview.html = getWebviewHtml(
       panel.webview,
       this.extensionUri,
       'mergeEditor',
       t('Merge: {0}', fileName)
     );
-
-    panel.webview.onDidReceiveMessage((msg: MergeToHostMsg) =>
-      this.handleMessage(msg, resolved.repoId, resolved.relativePath, resolved.absolutePath, panelKey, panel.webview)
-    );
-
-    panel.onDidDispose(() => this.panels.delete(panelKey));
-    this.panels.set(panelKey, panel);
-
-    const postLoadedFile = (file: MergeConflictFile) => {
-      loadIconTheme(panel.webview)
-        .catch(() => undefined)
-        .then(iconTheme => {
-          panel.webview.postMessage({
-            type: 'MERGE_FILE_LOADED',
-            file,
-            iconTheme,
-          } satisfies HostToMergeMsg);
-        });
-    };
-
-    const conflictFile = parseConflictFile(resolved.absolutePath, resolved.repoId, resolved.relativePath);
-    if (conflictFile) {
-      this.loadVersions(resolved.repoId, resolved.relativePath)
-        .then(versions => {
-          postLoadedFile({
-            ...conflictFile,
-            baseContent: versions.base,
-            oursContent: versions.ours,
-            theirsContent: versions.theirs,
-            language: versions.language,
-          });
-        })
-        .catch(e => {
-          postLoadedFile(conflictFile);
-          panel.webview.postMessage({
-            type: 'MERGE_FILE_VERSIONS_LOADED',
-            requestId: 'initial',
-            error: String(e),
-          } satisfies HostToMergeMsg);
-        });
-    } else {
-      Promise.all([
-        this.loadVersions(resolved.repoId, resolved.relativePath),
-        this.loadConflictSideStatus(resolved.repoId, resolved.relativePath),
-      ])
-        .then(([versions, sideStatus]) => {
-          postLoadedFile(this.buildSyntheticConflictFile(resolved, versions, sideStatus));
-        })
-        .catch(() => {
-          vscode.window.showErrorMessage(t('VersionDock: No conflict markers found in {0}', fileName));
-          panel.dispose();
-        });
-    }
   }
 
-  private async resolveFileContext(filePath: string, repoId?: string, relativePath?: string): Promise<{ repoId: string; relativePath: string; absolutePath: string } | undefined> {
+  private async resolveFileContext(filePath: string, repoId?: string, relativePath?: string): Promise<ResolvedMergeFileContext | undefined> {
     if (repoId) {
       const repo = this.manager.getRepo(repoId);
       if (!repo) return undefined;
@@ -140,6 +140,41 @@ export class MergeEditorProvider implements vscode.Disposable {
     return repo.getFileVersions(relativePath);
   }
 
+  private async loadInitialFile(resolved: ResolvedMergeFileContext): Promise<InitialMergeFileResult> {
+    const conflictFile = parseConflictFile(resolved.absolutePath, resolved.repoId, resolved.relativePath);
+    if (conflictFile) {
+      try {
+        const versions = await this.loadVersions(resolved.repoId, resolved.relativePath);
+        return {
+          file: {
+            ...conflictFile,
+            baseContent: versions.base,
+            oursContent: versions.ours,
+            theirsContent: versions.theirs,
+            language: versions.language,
+          },
+        };
+      } catch (error) {
+        return {
+          file: conflictFile,
+          versionsError: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
+
+    try {
+      const [versions, sideStatus] = await Promise.all([
+        this.loadVersions(resolved.repoId, resolved.relativePath),
+        this.loadConflictSideStatus(resolved.repoId, resolved.relativePath),
+      ]);
+      return { file: this.buildSyntheticConflictFile(resolved, versions, sideStatus) };
+    } catch (error) {
+      const fileName = path.basename(resolved.absolutePath);
+      const noMarkersMessage = t('VersionDock: No conflict markers found in {0}', fileName);
+      throw new Error(`${noMarkersMessage}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private async loadConflictSideStatus(repoId: string, relativePath: string) {
     const repo = this.manager.getRepo(repoId);
     if (!repo) return undefined;
@@ -148,7 +183,7 @@ export class MergeEditorProvider implements vscode.Disposable {
   }
 
   private buildSyntheticConflictFile(
-    resolved: { repoId: string; relativePath: string; absolutePath: string },
+    resolved: ResolvedMergeFileContext,
     versions: MergeFileVersions,
     sideStatus?: { currentStatus: MergeConflictFile['oursStatus']; incomingStatus: MergeConflictFile['theirsStatus'] },
   ): MergeConflictFile {
