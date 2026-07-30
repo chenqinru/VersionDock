@@ -691,6 +691,7 @@ export function GitLogApp() {
             compareState={store.compareState}
             repoColors={repoColors}
             repos={filterRepos}
+            authorOptions={authorOptions}
             currentBranchByRepo={currentBranchByRepo}
             remoteNamesByRepo={remoteNamesByRepo}
             baseCommits={laidOutCompareBase}

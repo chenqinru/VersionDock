@@ -1,15 +1,24 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import type { CommitNode, RepoMeta } from '../../shared/types';
 import type { CommitSelectionMode, ComparePaneState, CompareSide, CompareState } from '../store/logStore';
 import { CommitList } from './CommitList';
 import type { LaidOutCommit } from '../utils/graphLayout';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
+import {
+  AuthorPicker,
+  ClearFiltersButton,
+  DateRangePicker,
+  DebouncedInput,
+  FILTER_INPUT_STYLE,
+  type AuthorOption,
+} from './CommitFiltersBar';
 
 interface Props {
   compareState: CompareState;
   repoColors: Record<string, string>;
   repos: RepoMeta[];
+  authorOptions: AuthorOption[];
   currentBranchByRepo: Record<string, string>;
   remoteNamesByRepo: Readonly<Record<string, readonly string[]>>;
   baseCommits: LaidOutCommit[];
@@ -30,6 +39,7 @@ export function CompareView({
   compareState,
   repoColors,
   repos,
+  authorOptions,
   currentBranchByRepo,
   remoteNamesByRepo,
   baseCommits,
@@ -119,6 +129,7 @@ export function CompareView({
             selectedHashes={selectedHashes}
             primarySelectedHash={primarySelectedHash}
             repos={repos}
+            authorOptions={authorOptions}
             currentBranchByRepo={currentBranchByRepo}
             remoteNamesByRepo={remoteNamesByRepo}
             onSelect={(commit, mode) => onSelectCommit('targetOnly', commit, mode)}
@@ -141,6 +152,7 @@ export function CompareView({
             selectedHashes={selectedHashes}
             primarySelectedHash={primarySelectedHash}
             repos={repos}
+            authorOptions={authorOptions}
             currentBranchByRepo={currentBranchByRepo}
             remoteNamesByRepo={remoteNamesByRepo}
             onSelect={(commit, mode) => onSelectCommit('baseOnly', commit, mode)}
@@ -161,6 +173,7 @@ function ComparePane({
   selectedHashes,
   primarySelectedHash,
   repos,
+  authorOptions,
   currentBranchByRepo,
   remoteNamesByRepo,
   onSelect,
@@ -174,59 +187,57 @@ function ComparePane({
   selectedHashes: string[];
   primarySelectedHash: string | null;
   repos: RepoMeta[];
+  authorOptions: AuthorOption[];
   currentBranchByRepo: Record<string, string>;
   remoteNamesByRepo: Readonly<Record<string, readonly string[]>>;
   onSelect: (commit: LaidOutCommit, mode: CommitSelectionMode) => void;
   onLoadMore: () => void;
   onFilterChange: (partial: Partial<ComparePaneState>) => void;
 }) {
-  const [draft, setDraft] = useState({
-    filterText: pane.filterText,
-    filterAuthor: pane.filterAuthor,
-    filterDateFrom: pane.filterDateFrom,
-    filterDateTo: pane.filterDateTo,
-  });
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    setDraft({
-      filterText: pane.filterText,
-      filterAuthor: pane.filterAuthor,
-      filterDateFrom: pane.filterDateFrom,
-      filterDateTo: pane.filterDateTo,
-    });
-  }, [pane.filterAuthor, pane.filterDateFrom, pane.filterDateTo, pane.filterText]);
-
-  const updateDraft = (partial: Partial<typeof draft>) => {
-    const next = { ...draft, ...partial };
-    setDraft(next);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => onFilterChange(next), 250);
-  };
+  const hasFilters = !!(
+    pane.filterText
+    || pane.filterAuthor
+    || pane.filterBranch
+    || pane.filterDateFrom
+    || pane.filterDateTo
+    || pane.filterPath
+  );
 
   return (
     <div style={styles.pane}>
       <div style={styles.toolbar}>
-        <FilterInput
+        <style>{FILTER_INPUT_STYLE}</style>
+        <DebouncedInput
           icon="search"
-          width={180}
           placeholder={t('Search commits…')}
-          value={draft.filterText}
-          onChange={(value) => updateDraft({ filterText: value })}
+          value={pane.filterText}
+          onChange={(value) => onFilterChange({ filterText: value })}
+          debounceMs={250}
+          style={styles.textFilter}
         />
-        <FilterInput
-          icon="person"
-          width={150}
-          placeholder={t('Author…')}
-          value={draft.filterAuthor}
-          onChange={(value) => updateDraft({ filterAuthor: value })}
+        <AuthorPicker
+          value={pane.filterAuthor}
+          options={authorOptions}
+          onChange={(value) => onFilterChange({ filterAuthor: value })}
+          style={styles.authorFilter}
         />
-        <DateRangeFilter
-          from={draft.filterDateFrom}
-          to={draft.filterDateTo}
-          onFromChange={(value) => updateDraft({ filterDateFrom: value })}
-          onToChange={(value) => updateDraft({ filterDateTo: value })}
+        <DateRangePicker
+          from={pane.filterDateFrom}
+          to={pane.filterDateTo}
+          onFromChange={(value) => onFilterChange({ filterDateFrom: value })}
+          onToChange={(value) => onFilterChange({ filterDateTo: value })}
+          style={styles.dateFilter}
         />
+        {hasFilters && (
+          <ClearFiltersButton onClick={() => onFilterChange({
+            filterText: '',
+            filterAuthor: '',
+            filterBranch: '',
+            filterDateFrom: '',
+            filterDateTo: '',
+            filterPath: '',
+          })} />
+        )}
       </div>
 
       <div style={styles.notice} title={title}>{title}</div>
@@ -254,73 +265,6 @@ function ComparePane({
           />
         )}
       </div>
-    </div>
-  );
-}
-
-function FilterInput({
-  icon,
-  width,
-  placeholder,
-  value,
-  onChange,
-}: {
-  icon: string;
-  width: number;
-  placeholder: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div style={{ ...styles.fieldWrap, width }}>
-      <Codicon name={icon} style={styles.fieldIcon} />
-      <input
-        style={styles.fieldInput}
-        placeholder={placeholder}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      {value && (
-        <button style={styles.fieldClear} onClick={() => onChange('')} tabIndex={-1}>
-          <Codicon name="close" style={{ fontSize: '10px' }} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function DateRangeFilter({
-  from,
-  to,
-  onFromChange,
-  onToChange,
-}: {
-  from: string;
-  to: string;
-  onFromChange: (value: string) => void;
-  onToChange: (value: string) => void;
-}) {
-  return (
-    <div style={styles.dateRange}>
-      <Codicon name="calendar" style={styles.fieldIcon} />
-      <input
-        style={styles.dateInput}
-        placeholder={t('From YYYY-MM-DD')}
-        value={from}
-        onChange={(event) => onFromChange(event.target.value)}
-      />
-      <span style={styles.dateSep}>→</span>
-      <input
-        style={styles.dateInput}
-        placeholder={t('To YYYY-MM-DD')}
-        value={to}
-        onChange={(event) => onToChange(event.target.value)}
-      />
-      {(from || to) && (
-        <button style={styles.fieldClear} onClick={() => { onFromChange(''); onToChange(''); }} tabIndex={-1}>
-          <Codicon name="close" style={{ fontSize: '10px' }} />
-        </button>
-      )}
     </div>
   );
 }
@@ -439,76 +383,24 @@ const styles = {
     flexShrink: 0,
     borderBottom: '1px solid var(--vscode-panel-border)',
     background: 'var(--vscode-editor-background)',
+    position: 'relative' as const,
+    zIndex: 20,
   } as React.CSSProperties,
-  fieldWrap: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    background: 'var(--vscode-input-background)',
-    border: '1px solid var(--vscode-input-border)',
-    borderRadius: '4px',
-    padding: '0 6px',
-    height: '26px',
-    boxSizing: 'border-box' as const,
-  },
-  fieldIcon: {
-    fontSize: '13px',
-    opacity: 0.45,
-    flexShrink: 0,
-    lineHeight: 1,
+  textFilter: {
+    flex: '0 1 280px',
+    width: '280px',
+    minWidth: '180px',
   } as React.CSSProperties,
-  fieldInput: {
-    background: 'transparent',
-    border: 'none',
-    outline: 'none',
-    color: 'var(--vscode-input-foreground)',
-    fontSize: '12px',
-    flex: 1,
-    minWidth: 0,
-    padding: 0,
+  authorFilter: {
+    flex: '0 1 220px',
+    width: '220px',
+    minWidth: '150px',
   } as React.CSSProperties,
-  fieldClear: {
-    background: 'transparent',
-    border: 'none',
-    padding: '1px',
-    cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.4,
-    display: 'flex',
-    alignItems: 'center',
-    lineHeight: 1,
-    flexShrink: 0,
+  dateFilter: {
+    flex: '0 0 386px',
+    width: '386px',
+    maxWidth: '100%',
   } as React.CSSProperties,
-  dateRange: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    background: 'var(--vscode-input-background)',
-    border: '1px solid var(--vscode-input-border)',
-    borderRadius: '4px',
-    padding: '0 6px',
-    height: '26px',
-    boxSizing: 'border-box' as const,
-  },
-  dateInput: {
-    width: '108px',
-    background: 'transparent',
-    border: 'none',
-    outline: 'none',
-    color: 'var(--vscode-input-foreground)',
-    fontSize: '12px',
-    padding: 0,
-  } as React.CSSProperties,
-  dateSep: {
-    fontSize: '11px',
-    opacity: 0.5,
-    flexShrink: 0,
-  },
-  input: {
-    background: 'var(--vscode-input-background)',
-    border: '1px solid var(--vscode-input-border)',
-    borderRadius: '4px',
-  },
   notice: {
     padding: '5px 8px',
     fontSize: '12px',

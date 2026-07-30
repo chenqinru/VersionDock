@@ -38,7 +38,7 @@ interface Props {
 
 const FILTER_PLACEHOLDER_OPACITY = 0.54;
 
-const FILTER_INPUT_STYLE = `
+export const FILTER_INPUT_STYLE = `
 .versiondock-filter-input::placeholder {
   color: var(--vscode-input-foreground);
   opacity: ${FILTER_PLACEHOLDER_OPACITY};
@@ -127,9 +127,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
       )}
 
       {hasFilters && (
-        <button data-top-action-btn="" style={styles.clearBtn} onClick={onClear} title={t('Clear all filters')}>
-          <Codicon name="clear-all" style={{ fontSize: '15px' }} />
-        </button>
+        <ClearFiltersButton onClick={onClear} />
       )}
 
       <MoreMenu
@@ -141,6 +139,14 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
         hideUndock={hideUndock}
       />
     </div>
+  );
+}
+
+export function ClearFiltersButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button data-top-action-btn="" style={styles.clearBtn} onClick={onClick} title={t('Clear all filters')}>
+      <Codicon name="clear-all" style={{ fontSize: '15px' }} />
+    </button>
   );
 }
 
@@ -216,7 +222,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
   );
 }
 
-function AuthorPicker({ value, options, onChange, width, style }: {
+export function AuthorPicker({ value, options, onChange, width, style }: {
   value: string;
   options: AuthorOption[];
   onChange: (v: string) => void;
@@ -319,7 +325,7 @@ function AuthorPicker({ value, options, onChange, width, style }: {
   );
 }
 
-function DebouncedInput({ value, placeholder, icon, onChange, width, style, debounceMs }: {
+export function DebouncedInput({ value, placeholder, icon, onChange, width, style, debounceMs }: {
   value: string;
   placeholder: string;
   icon: string;
@@ -331,7 +337,17 @@ function DebouncedInput({ value, placeholder, icon, onChange, width, style, debo
   const [local, setLocal] = useState(value);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => { setLocal(value); }, [value]);
+  useEffect(() => {
+    setLocal(value);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, [value]);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
 
   function handleChange(v: string) {
     setLocal(v);
@@ -598,7 +614,7 @@ function CalendarMonth({ year, month, from, to, hovered, onDay, onHover }: {
   );
 }
 
-function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
+export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
   from: string;
   to: string;
   onFromChange: (v: string) => void;
