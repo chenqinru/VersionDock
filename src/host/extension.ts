@@ -14,6 +14,8 @@ import { GitProfileService } from './git/GitProfileService';
 import { ProfileStatusBar } from './ui/ProfileStatusBar';
 import { t } from './utils/l10n';
 import { VersionDockLogger } from './utils/Logger';
+import { AiProviderService } from './ai/AiProviderService';
+import { AiCommitMessageService } from './aiCommitMessage/AiCommitMessageService';
 
 async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void> {
   const SHOWN_KEY = 'hasShownViewModeQuickpick';
@@ -213,8 +215,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   badge.startLoading();
 
   const profileService = new GitProfileService(context, logger);
+  const aiProviderService = new AiProviderService();
+  const aiCommitMessageService = new AiCommitMessageService(context, aiProviderService);
 
-  const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, undefined, profileService, context.globalState, context.workspaceState, logger);
+  const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger);
 
   const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, logger);
   const mergeEditor = new MergeEditorProvider(context.extensionUri, manager, logger);
@@ -266,6 +270,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     profileStatusBar,
     profileService,
     annotationController,
+    vscode.commands.registerCommand('versiondock.aiCommitMessage.editPrompt', () => aiCommitMessageService.editPrompt()),
+    vscode.commands.registerCommand('versiondock.aiCommitMessage.resetPrompt', () => aiCommitMessageService.resetPrompt()),
   );
 
   registerCommands(context, commitPanel, logPanel, mergeEditor, conflictsPanel, branchStatusBar, annotationController, profileStatusBar, manager);

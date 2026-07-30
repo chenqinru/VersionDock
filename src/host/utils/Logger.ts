@@ -2,8 +2,18 @@ import * as vscode from 'vscode';
 
 export type LogDetails = Record<string, unknown>;
 
-const SENSITIVE_KEY = /(?:password|passwd|token|secret|credential|authorization|email)/i;
+const SENSITIVE_KEY = /(?:password|passwd|api[_-]?key|token|secret|credential|authorization|email)/i;
+const SAFE_TOKEN_METRIC_KEYS = new Set([
+  'firsttokenlatencyms',
+  'inputtokencount',
+  'inputtokenbudget',
+  'maxinputtokens',
+]);
 const EMAIL_ADDRESS = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
+
+function isSensitiveKey(key: string): boolean {
+  return !SAFE_TOKEN_METRIC_KEYS.has(key.toLowerCase()) && SENSITIVE_KEY.test(key);
+}
 
 function sanitizeText(value: string): string {
   return value
@@ -21,13 +31,13 @@ function sanitizeText(value: string): string {
 }
 
 function formatValue(key: string, value: unknown): string {
-  if (SENSITIVE_KEY.test(key)) return '"<redacted>"';
+  if (isSensitiveKey(key)) return '"<redacted>"';
   if (typeof value === 'string') return JSON.stringify(sanitizeText(value));
   if (value instanceof Error) return JSON.stringify(sanitizeText(value.message));
 
   try {
     const serialized = JSON.stringify(value, (nestedKey, nestedValue) => {
-      if (nestedKey && SENSITIVE_KEY.test(nestedKey)) return '<redacted>';
+      if (nestedKey && isSensitiveKey(nestedKey)) return '<redacted>';
       return typeof nestedValue === 'string' ? sanitizeText(nestedValue) : nestedValue;
     });
     return serialized === undefined ? String(value) : sanitizeText(serialized);

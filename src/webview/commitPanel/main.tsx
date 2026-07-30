@@ -1351,51 +1351,40 @@ export function CommitApp() {
 
   // ── Autopilot ─────────────────────────────────────────────────────────────
 
-  const buildGenerateMessageTargets = useCallback(() => {
+  const buildGenerateMessageSelection = useCallback(() => {
     const freshState = useCommitStore.getState();
     const currentRepos = freshState.status?.repos ?? [];
     if (freshState.changesViewMode === 'vscode') {
-      const repoMetas = new Map(freshState.repoMetas.map(meta => [meta.id, meta]));
-      return currentRepos
-        .filter(repo => vscodeSelectedRepos.has(repo.repoId))
-        .map(repo => ({
-          repoId: repo.repoId,
-          paths: Array.from(new Set(
-            (repoMetas.get(repo.repoId)?.kind === 'svn'
-              ? [...repo.stagedFiles, ...repo.unstagedFiles]
-              : repo.stagedFiles
-            ).map(file => file.path).filter(Boolean)
-          )),
-        }))
-        .filter(target => target.paths.length > 0);
+      return {
+        repoIds: currentRepos
+          .filter(repo => vscodeSelectedRepos.has(repo.repoId))
+          .map(repo => repo.repoId),
+        targets: [],
+      };
     }
 
-    const selectedTargets = currentRepos
+    const repoIds = currentRepos
       .filter(repo => freshState.repoSelections[repo.repoId] !== false)
+      .map(repo => repo.repoId);
+    const selectedTargets = currentRepos
+      .filter(repo => repoIds.includes(repo.repoId))
       .map(repo => ({
         repoId: repo.repoId,
         paths: freshState.getSelectedFilesForRepo(repo.repoId),
       }))
       .filter(target => target.paths.length > 0);
 
-    if (selectedTargets.length > 0) return selectedTargets;
-
-    return currentRepos
-      .filter(repo => freshState.repoSelections[repo.repoId] !== false)
-      .map(repo => ({
-        repoId: repo.repoId,
-        paths: Array.from(new Set(repo.stagedFiles.map(file => file.path).filter(Boolean))),
-      }))
-      .filter(target => target.paths.length > 0);
+    return { repoIds, targets: selectedTargets };
   }, [vscodeSelectedRepos]);
 
   const doAutopilot = useCallback(() => {
     if (generatingMessage) return;
     const requestId = generateId();
     activeGenerateRequestIdRef.current = requestId;
+    store.setCommitMessage('');
     setGeneratingMessage(true);
-    send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, targets: buildGenerateMessageTargets() });
-  }, [buildGenerateMessageTargets, generatingMessage, send]);
+    send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, ...buildGenerateMessageSelection() });
+  }, [buildGenerateMessageSelection, generatingMessage, send, store]);
 
   const stopAutopilot = useCallback(() => {
     const requestId = activeGenerateRequestIdRef.current;

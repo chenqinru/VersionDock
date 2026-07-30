@@ -176,7 +176,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_OPEN_MERGE_EDITOR'; repoId: string; filePath: string }
   | { type: 'COMMIT_ACCEPT_OURS'; requestId: string; repoId: string; filePath: string }
   | { type: 'COMMIT_ACCEPT_THEIRS'; requestId: string; repoId: string; filePath: string }
-  | { type: 'COMMIT_GENERATE_MESSAGE'; requestId: string; targets?: CommitGenerateMessageTarget[] }
+  | { type: 'COMMIT_GENERATE_MESSAGE'; requestId: string; repoIds?: string[]; targets?: CommitGenerateMessageTarget[] }
   | { type: 'COMMIT_CANCEL_GENERATE_MESSAGE'; requestId: string }
   | { type: 'SHELVE_LIST'; requestId: string; repoId: string }
   | { type: 'SHELVE_PUSH'; requestId: string; repoId: string; name: string; paths?: string[] }

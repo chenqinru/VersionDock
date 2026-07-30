@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
@@ -9,7 +8,6 @@ import type { GitService } from '../git/GitService';
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent } from '../utils/ShelveDocumentProvider';
-import { execCli } from '../vcs/cli';
 import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../types/messages';
 import type { DiffLine, FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { CHANGELIST_UNVERSIONED_ID } from '../types/git';
@@ -26,28 +24,19 @@ import { collectAbortOperationTargets, runAbortOperationFlow } from '../utils/ab
 import { toGitUri } from '../utils/resourceUri';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import type { VersionDockLogger } from '../utils/Logger';
+import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
+import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-const AI_COMMIT_MESSAGE_EXTENSION_ID = 'venberstep.ai-commit-message';
-const AI_COMMIT_MESSAGE_COMMAND_ID = 'ai-commit-message.generate';
-const AI_COMMIT_MESSAGE_EXTENSION_TIMEOUT_MS = 120_000;
-const AI_COMMIT_MESSAGE_POLL_INTERVAL_MS = 100;
-const AI_COMMIT_CONTEXT_MAX_FILES = 30;
-const AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE = 24;
-const AI_COMMIT_CONTEXT_MAX_CHARS = 12_000;
-const COPILOT_CONFIGURATION_SECTION = 'github.copilot.chat';
-const COPILOT_COMMIT_MESSAGE_INSTRUCTIONS_KEY = 'commitMessageGeneration.instructions';
+const AI_COMMIT_CONTEXT_MAX_FILES = 100;
+const AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE = 80;
+const AI_COMMIT_CONTEXT_MAX_HUNKS_PER_FILE = 8;
+const AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE = 3;
+const AI_COMMIT_CONTEXT_MAX_CHARS = 64_000;
 const SUBTREE_STATE_KEY = 'versiondock.subtrees';
 const CUSTOM_SUBTREE_PREFIX_ID = '__custom_prefix__';
 const SUBTREE_STATUS_CACHE_TTL_MS = 60_000;
 
-type AiCommitMessageProvider = 'githubCopilot' | 'aiCommitMessageExtension';
-type AiCommitMessageContext = { text: string; repoIds: string[] };
-type CopilotCommitMessageInstruction = { text?: string; file?: string };
-type CopilotCommitMessageInstructionSource = {
-  instructions: CopilotCommitMessageInstruction[] | undefined;
-  workspaceFolders: vscode.WorkspaceFolder[];
-};
 type SubtreeRefPickItem = vscode.QuickPickItem & { value: string; custom?: boolean };
 type CachedSubtreeStatus = { key: string; checkedAt: number; status: SubtreePushStatus };
 type SubtreeStatusRefreshOptions = {
@@ -63,24 +52,10 @@ type SvnIgnoreRepo = {
 type SvnIgnorePickItem = vscode.QuickPickItem & { entry: SvnIgnoreEntry };
 type SvnIgnoreActionPickItem = vscode.QuickPickItem & { action: 'add' | 'remove' };
 type SvnIgnoreCandidatePickItem = vscode.QuickPickItem & { filePath?: string; custom?: boolean };
-type NormalizedCommitGenerateMessageTarget = CommitGenerateMessageTarget & { source: 'selected' | 'staged' };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+type NormalizedCommitGenerateMessageTarget = CommitGenerateMessageTarget & { source: 'selected' | 'staged' | 'working' };
 
 function throwIfCancellationRequested(token: vscode.CancellationToken): void {
   if (token.isCancellationRequested) throw new Error('Cancelled');
-}
-
-function pathMaybeMatchesRepo(repoPath: string, targetPath: string): boolean {
-  const repo = path.resolve(repoPath);
-  const target = path.resolve(targetPath);
-  const targetRelative = path.relative(repo, target);
-  const repoRelative = path.relative(target, repo);
-  return targetRelative === ''
-    || (!targetRelative.startsWith('..') && !path.isAbsolute(targetRelative))
-    || (!repoRelative.startsWith('..') && !path.isAbsolute(repoRelative));
 }
 
 export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -177,6 +152,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly manager: WorkspaceGitManager,
     private readonly globalStoragePath: string,
     private readonly shelveDocProvider: ShelveDocumentProvider,
+    private readonly aiCommitMessageService: AiCommitMessageService,
     private mergeEditorProvider?: MergeEditorProvider,
     private readonly profileService?: GitProfileService,
     private readonly globalState?: vscode.Memento,
@@ -734,41 +710,73 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return this.globalState?.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
   }
 
-  private getAiCommitMessageProvider(): AiCommitMessageProvider {
-    const configured = vscode.workspace.getConfiguration('versiondock').get<string>('aiCommitMessage.provider', 'aiCommitMessageExtension');
-    return configured === 'aiCommitMessageExtension' ? 'aiCommitMessageExtension' : 'githubCopilot';
-  }
-
   private formatAiDiffLine(line: DiffLine): string {
     if (line.type === 'add') return `+${line.content}`;
     if (line.type === 'remove') return `-${line.content}`;
     return ` ${line.content}`;
   }
 
-  private summarizeAiDiff(diff: FileDiff | null): string[] {
-    if (!diff) return [];
+  private summarizeAiDiff(diff: FileDiff | null): { lines: string[]; truncated: boolean } {
+    if (!diff) return { lines: [], truncated: false };
     const lines: string[] = [];
-    if (diff.isBinary) return ['  binary file'];
-    for (const hunk of diff.hunks.slice(0, 4)) {
+    if (diff.isBinary) return { lines: ['  binary file'], truncated: false };
+    let truncated = diff.hunks.length > AI_COMMIT_CONTEXT_MAX_HUNKS_PER_FILE;
+    for (const hunk of diff.hunks.slice(0, AI_COMMIT_CONTEXT_MAX_HUNKS_PER_FILE)) {
+      const includedLineIndexes = new Set<number>();
+      for (let index = 0; index < hunk.lines.length; index++) {
+        if (hunk.lines[index].type === 'context') continue;
+        const start = Math.max(0, index - AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE);
+        const end = Math.min(hunk.lines.length - 1, index + AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE);
+        for (let includedIndex = start; includedIndex <= end; includedIndex++) {
+          includedLineIndexes.add(includedIndex);
+        }
+      }
+      if (includedLineIndexes.size === 0) continue;
+      if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
+        truncated = true;
+        break;
+      }
       lines.push(`  ${hunk.header}`);
-      for (const line of hunk.lines) {
-        if (line.type === 'context') continue;
-        lines.push(`  ${this.formatAiDiffLine(line)}`);
-        if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) return lines;
+      let previousIndex: number | undefined;
+      for (const index of Array.from(includedLineIndexes).sort((left, right) => left - right)) {
+        if (previousIndex !== undefined && index > previousIndex + 1) {
+          if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
+            truncated = true;
+            break;
+          }
+          lines.push('  ...');
+        }
+        if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
+          truncated = true;
+          break;
+        }
+        lines.push(`  ${this.formatAiDiffLine(hunk.lines[index])}`);
+        previousIndex = index;
+      }
+      if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
+        truncated = true;
+        break;
       }
     }
     if (lines.length === 0 && diff.modifiedContent && !diff.originalContent) {
-      const previewLines = diff.modifiedContent.split(/\r?\n/).slice(0, AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE);
+      const contentLines = diff.modifiedContent.split(/\r?\n/);
+      const previewLines = contentLines.slice(0, AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE);
       lines.push(...previewLines.filter(Boolean).map(line => `  +${line}`));
+      truncated = contentLines.length > AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE;
     }
-    return lines;
+    return { lines, truncated };
   }
 
   private resolveAiCommitMessageTargets(
     statuses: WorkspaceStatus['repos'],
     targets?: CommitGenerateMessageTarget[],
+    repoIds?: string[],
   ): NormalizedCommitGenerateMessageTarget[] {
-    const statusByRepo = new Map(statuses.map(status => [status.repoId, status]));
+    const requestedRepoIds = repoIds ? new Set(repoIds) : undefined;
+    const scopedStatuses = requestedRepoIds
+      ? statuses.filter(status => requestedRepoIds.has(status.repoId))
+      : statuses;
+    const statusByRepo = new Map(scopedStatuses.map(status => [status.repoId, status]));
     const selectedTargets = (targets ?? [])
       .map(target => ({
         repoId: target.repoId,
@@ -779,13 +787,17 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     if (selectedTargets.length > 0) return selectedTargets;
 
-    return statuses
-      .map(status => ({
+    return scopedStatuses.flatMap(status => {
+      const service = this.manager.getRepo(status.repoId);
+      const useWorkingChanges = service?.kind === 'svn' || status.stagedFiles.length === 0;
+      const files = useWorkingChanges ? status.unstagedFiles : status.stagedFiles;
+      const paths = Array.from(new Set(files.map(file => file.path).filter(Boolean)));
+      return paths.length > 0 ? [{
         repoId: status.repoId,
-        paths: Array.from(new Set(status.stagedFiles.map(file => file.path).filter(Boolean))),
-        source: 'staged' as const,
-      }))
-      .filter(target => target.paths.length > 0);
+        paths,
+        source: useWorkingChanges ? 'working' as const : 'staged' as const,
+      }] : [];
+    });
   }
 
   private mergeAiFileStatuses(status: RepoStatus): Map<string, FileStatus> {
@@ -806,17 +818,29 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private async buildAiCommitMessageContext(
     targets: CommitGenerateMessageTarget[] | undefined,
+    repoIds: string[] | undefined,
     cancellationToken: vscode.CancellationToken,
-  ): Promise<AiCommitMessageContext> {
+  ): Promise<AiCommitMessageGenerationContext> {
     throwIfCancellationRequested(cancellationToken);
     const ws = await this.manager.getAllStatuses();
     throwIfCancellationRequested(cancellationToken);
-    const normalizedTargets = this.resolveAiCommitMessageTargets(ws.repos, targets);
+    const normalizedTargets = this.resolveAiCommitMessageTargets(ws.repos, targets, repoIds);
     const repoMetas = new Map(this.manager.getRepoMetas().map(meta => [meta.id, meta]));
     const statusByRepo = new Map(ws.repos.map(status => [status.repoId, status]));
     const lines: string[] = [];
     const includedRepoIds = new Set<string>();
+    const includedRepoRootPaths = new Set<string>();
+    const vcsKinds = new Set<'git' | 'svn'>();
+    let contextCharCount = 0;
     let fileCount = 0;
+    let truncated = false;
+    const appendContextLines = (nextLines: string[]): void => {
+      for (const line of nextLines) {
+        if (lines.length > 0) contextCharCount++;
+        lines.push(line);
+        contextCharCount += line.length;
+      }
+    };
 
     for (const target of normalizedTargets) {
       throwIfCancellationRequested(cancellationToken);
@@ -831,14 +855,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const files = target.paths.map(filePath => filesByPath.get(filePath)).filter((file): file is FileStatus => !!file);
       if (files.length === 0) continue;
       includedRepoIds.add(status.repoId);
-      lines.push(`[${vcsKind}] ${repoName} (${status.branch.detachedTag ?? status.branch.detachedHash ?? status.branch.name})`);
+      includedRepoRootPaths.add(repoMeta?.rootPath ?? service.rootPath);
+      vcsKinds.add(service.kind === 'svn' ? 'svn' : 'git');
+      appendContextLines([`[${vcsKind}] ${repoName} (${status.branch.detachedTag ?? status.branch.detachedHash ?? status.branch.name})`]);
       for (const file of files) {
         throwIfCancellationRequested(cancellationToken);
-        if (fileCount >= AI_COMMIT_CONTEXT_MAX_FILES) break;
+        if (fileCount >= AI_COMMIT_CONTEXT_MAX_FILES) {
+          truncated = true;
+          break;
+        }
         fileCount++;
 
         const includeStaged = file.staged;
-        const includeUnstaged = target.source === 'selected' && file.unstaged;
+        const includeUnstaged = file.unstaged && (target.source === 'selected' || target.source === 'working');
         const diffSources = [
           ...(includeStaged ? [{ label: 'staged' as const, diff: () => service.getStagedDiff(status.repoId, file.path) }] : []),
           ...(includeUnstaged ? [{ label: 'working' as const, diff: () => service.getUnstagedDiff(status.repoId, file.path) }] : []),
@@ -846,14 +875,22 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
         for (const source of diffSources) {
           throwIfCancellationRequested(cancellationToken);
-          lines.push(`${file.status.toUpperCase()} ${file.path}${service.kind === 'git' ? ` [${source.label}]` : ''}`);
+          appendContextLines([`${file.status.toUpperCase()} ${file.path}${service.kind === 'git' ? ` [${source.label}]` : ''}`]);
           const diff = await source.diff().catch(() => null);
           throwIfCancellationRequested(cancellationToken);
-          lines.push(...this.summarizeAiDiff(diff));
+          const summary = this.summarizeAiDiff(diff);
+          appendContextLines(summary.lines);
+          if (summary.truncated) truncated = true;
         }
-        if (lines.join('\n').length >= AI_COMMIT_CONTEXT_MAX_CHARS) break;
+        if (contextCharCount >= AI_COMMIT_CONTEXT_MAX_CHARS) {
+          truncated = true;
+          break;
+        }
       }
-      if (fileCount >= AI_COMMIT_CONTEXT_MAX_FILES || lines.join('\n').length >= AI_COMMIT_CONTEXT_MAX_CHARS) break;
+      if (fileCount >= AI_COMMIT_CONTEXT_MAX_FILES || contextCharCount >= AI_COMMIT_CONTEXT_MAX_CHARS) {
+        truncated = true;
+        break;
+      }
     }
 
     if (lines.length === 0) throw new Error(t('No changes to generate a commit message from.'));
@@ -861,408 +898,100 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const text = context.length > AI_COMMIT_CONTEXT_MAX_CHARS
       ? `${context.slice(0, AI_COMMIT_CONTEXT_MAX_CHARS)}\n...`
       : context;
-    return { text, repoIds: Array.from(includedRepoIds) };
-  }
-
-  private getCopilotInstructionWorkspaceFolders(repoIds: string[]): vscode.WorkspaceFolder[] {
-    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-    if (workspaceFolders.length === 0 || repoIds.length === 0) return [...workspaceFolders];
-
-    const repoIdSet = new Set(repoIds);
-    const foldersByUri = new Map<string, vscode.WorkspaceFolder>();
-    for (const meta of this.manager.getRepoMetas()) {
-      if (!repoIdSet.has(meta.id)) continue;
-      const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(meta.rootPath));
-      if (folder) foldersByUri.set(folder.uri.toString(), folder);
-    }
-    return foldersByUri.size > 0 ? Array.from(foldersByUri.values()) : [...workspaceFolders];
-  }
-
-  private getCopilotCommitMessageInstructionSources(repoIds: string[]): CopilotCommitMessageInstructionSource[] {
-    const workspaceFolders = this.getCopilotInstructionWorkspaceFolders(repoIds);
-    const sources: CopilotCommitMessageInstructionSource[] = [];
-
-    for (const folder of workspaceFolders) {
-      const inspected = vscode.workspace
-        .getConfiguration(COPILOT_CONFIGURATION_SECTION, folder.uri)
-        .inspect<CopilotCommitMessageInstruction[]>(COPILOT_COMMIT_MESSAGE_INSTRUCTIONS_KEY);
-      sources.push({
-        instructions: inspected?.workspaceFolderValue,
-        workspaceFolders: [folder],
-      });
-    }
-
-    const inspected = vscode.workspace
-      .getConfiguration(COPILOT_CONFIGURATION_SECTION)
-      .inspect<CopilotCommitMessageInstruction[]>(COPILOT_COMMIT_MESSAGE_INSTRUCTIONS_KEY);
-    sources.push(
-      { instructions: inspected?.workspaceValue, workspaceFolders },
-      { instructions: inspected?.globalValue, workspaceFolders },
-    );
-    return sources;
-  }
-
-  private async readCopilotCommitMessageInstructionFile(
-    filePath: string,
-    workspaceFolders: vscode.WorkspaceFolder[],
-    seenFiles: Set<string>,
-    cancellationToken: vscode.CancellationToken,
-  ): Promise<string[]> {
-    const candidateUris = path.isAbsolute(filePath)
-      ? [vscode.Uri.file(filePath)]
-      : workspaceFolders.map(folder => vscode.Uri.joinPath(folder.uri, filePath));
-    const instructions: string[] = [];
-
-    for (const uri of candidateUris) {
-      throwIfCancellationRequested(cancellationToken);
-      const key = uri.toString();
-      if (seenFiles.has(key)) continue;
-      seenFiles.add(key);
-      try {
-        const content = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8').trim();
-        if (content) instructions.push(content);
-      } catch {
-        // Match Copilot's native behavior: missing instruction files are ignored.
-      }
-    }
-    return instructions;
-  }
-
-  private async getCopilotCommitMessageInstructions(
-    repoIds: string[],
-    cancellationToken: vscode.CancellationToken,
-  ): Promise<string[]> {
-    const instructions: string[] = [];
-    const seenText = new Set<string>();
-    const seenFiles = new Set<string>();
-
-    for (const source of this.getCopilotCommitMessageInstructionSources(repoIds)) {
-      if (!Array.isArray(source.instructions)) continue;
-      for (const entry of source.instructions) {
-        throwIfCancellationRequested(cancellationToken);
-        if (!entry || typeof entry !== 'object') continue;
-        if (typeof entry.text === 'string') {
-          const text = entry.text.trim();
-          if (text && !seenText.has(text)) {
-            seenText.add(text);
-            instructions.push(text);
-          }
-        }
-        if (typeof entry.file === 'string' && entry.file.trim()) {
-          instructions.push(...await this.readCopilotCommitMessageInstructionFile(
-            entry.file.trim(),
-            source.workspaceFolders,
-            seenFiles,
-            cancellationToken,
-          ));
-        }
-      }
-    }
-    return instructions;
-  }
-
-  private async generateCopilotCommitMessage(
-    targets: CommitGenerateMessageTarget[] | undefined,
-    cancellationToken: vscode.CancellationToken,
-  ): Promise<string> {
-    const context = await this.buildAiCommitMessageContext(targets, cancellationToken);
-    const customInstructions = await this.getCopilotCommitMessageInstructions(context.repoIds, cancellationToken);
-    throwIfCancellationRequested(cancellationToken);
-
-    // Try VS Code LM API (Copilot) — prefer gpt-4o but fall back to any available Copilot model.
-    let model: vscode.LanguageModelChat | undefined;
-    try {
-      const preferred = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o' });
-      model = preferred[0];
-      if (!model) {
-        const any = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-        model = any[0];
-      }
-    } catch {
-      model = undefined;
-    }
-    throwIfCancellationRequested(cancellationToken);
-
-    if (!model) {
-      throw new Error('No AI model available. Install GitHub Copilot to use this feature.');
-    }
-
-    const prompt = [
-      ...(customInstructions.length > 0 ? [
-        'Generate a VCS commit message from the provided changes.',
-        'Use the actual change intent from the diff, not only file names.',
-        'The repository may be Git or SVN. Do not mention Git or SVN unless it is part of the feature being changed.',
-        'Follow the user-provided commit-message instructions below. They take precedence over default formatting preferences.',
-        'Only output the commit message, nothing else.',
-        '',
-        'User-provided commit-message instructions:',
-        ...customInstructions.flatMap((instruction, index) => [`Instruction ${index + 1}:`, instruction, '']),
-      ] : [
-        'Generate one concise VCS commit message in imperative mood (max 72 chars).',
-        'Use the actual change intent from the diff, not only file names.',
-        'The repository may be Git or SVN. Do not mention Git or SVN unless it is part of the feature being changed.',
-        'Only output the message, nothing else.',
-      ]),
-      '',
-      'Changed files and diff summary:',
-      context.text,
-    ].join('\n');
-    const response = await model.sendRequest(
-      [vscode.LanguageModelChatMessage.User(prompt)],
-      {},
-      cancellationToken
-    );
-
-    let result = '';
-    for await (const chunk of response.text) {
-      throwIfCancellationRequested(cancellationToken);
-      result += chunk;
-    }
-    throwIfCancellationRequested(cancellationToken);
-    return result.trim();
-  }
-
-  private createCommitMessageInputBox(
-    requestId: string,
-    cancellationToken: vscode.CancellationToken,
-  ): {
-    inputBox: { value: string };
-    getValue: () => string;
-    dispose: () => void;
-  } {
-    let value = '';
-    let disposed = false;
-
-    const emit = (message: string): void => {
-      if (cancellationToken.isCancellationRequested) return;
-      this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message });
-    };
-
     return {
-      inputBox: {
-        get value() {
-          return value;
-        },
-        set value(nextValue: string) {
-          if (disposed || cancellationToken.isCancellationRequested) return;
-          value = String(nextValue ?? '');
-          emit(value);
-        },
-      },
-      getValue: () => value,
-      dispose: () => {
-        disposed = true;
-      },
+      text,
+      repoRootPaths: Array.from(includedRepoRootPaths),
+      vcsKinds: Array.from(vcsKinds),
+      repositoryCount: includedRepoIds.size,
+      fileCount,
+      contextCharCount: text.length,
+      truncated,
     };
-  }
-
-  private async getGitRepositoryInputBox(rootPath: string): Promise<{ value: string } | undefined> {
-    type GitExtensionExports = {
-      getAPI?: (version: number) => {
-        repositories?: Array<{
-          rootUri?: vscode.Uri;
-          inputBox?: { value: string };
-        }>;
-      };
-      repositories?: Array<{
-        rootUri?: vscode.Uri;
-        inputBox?: { value: string };
-      }>;
-    };
-
-    const gitExtension = vscode.extensions.getExtension('vscode.git');
-    if (!gitExtension) return undefined;
-
-    const exportsAny = gitExtension.isActive
-      ? (gitExtension.exports as GitExtensionExports)
-      : ((await gitExtension.activate()) as GitExtensionExports);
-    const gitApi = typeof exportsAny?.getAPI === 'function'
-      ? exportsAny.getAPI(1)
-      : exportsAny;
-    const repositories = gitApi?.repositories ?? [];
-    const matchedRepository = repositories.find(repository => {
-      const repoPath = repository.rootUri?.fsPath;
-      return typeof repoPath === 'string' && pathMaybeMatchesRepo(repoPath, rootPath);
-    }) ?? (repositories.length === 1 ? repositories[0] : undefined);
-
-    return matchedRepository?.inputBox;
-  }
-
-  private readGeneratedCommitMessage(
-    proxyInputBox: { getValue: () => string },
-    nativeGitInputBox: { value: string } | undefined,
-    initialNativeMessage: string,
-  ): string {
-    const proxyMessage = proxyInputBox.getValue().trim();
-    if (proxyMessage) return proxyMessage;
-    return nativeGitInputBox && nativeGitInputBox.value !== initialNativeMessage
-      ? nativeGitInputBox.value.trim()
-      : '';
-  }
-
-  private readGeneratedCommitMessageFromCommandResult(result: unknown): string {
-    if (typeof result === 'string') return result.trim();
-    if (!result || typeof result !== 'object' || !('message' in result)) return '';
-    const message = (result as { message?: unknown }).message;
-    return typeof message === 'string' ? message.trim() : '';
-  }
-
-  private async waitForGeneratedCommitMessage(
-    proxyInputBox: { getValue: () => string },
-    nativeGitInputBox: { value: string } | undefined,
-    initialNativeMessage: string,
-    commandPromise: Promise<unknown>,
-    cancellationToken: vscode.CancellationToken,
-  ): Promise<string> {
-    const deadline = Date.now() + AI_COMMIT_MESSAGE_EXTENSION_TIMEOUT_MS;
-    let lastMessage = '';
-    let commandDone = false;
-    let commandResult: unknown;
-    let commandError: unknown;
-
-    void commandPromise
-      .then(result => {
-        commandResult = result;
-      }, error => {
-        commandError = error;
-      })
-      .finally(() => {
-        commandDone = true;
-      });
-
-    while (Date.now() < deadline) {
-      throwIfCancellationRequested(cancellationToken);
-      const message = this.readGeneratedCommitMessage(proxyInputBox, nativeGitInputBox, initialNativeMessage);
-      if (message) lastMessage = message;
-
-      if (commandDone) {
-        const currentMessage = this.readGeneratedCommitMessage(proxyInputBox, nativeGitInputBox, initialNativeMessage);
-        const resultMessage = this.readGeneratedCommitMessageFromCommandResult(commandResult);
-        const finalMessage = currentMessage || resultMessage || lastMessage;
-        if (finalMessage) return finalMessage;
-        if (commandError) throw commandError;
-        throw new Error(t('AI Commit Message extension did not return a commit message.'));
-      }
-
-      await sleep(AI_COMMIT_MESSAGE_POLL_INTERVAL_MS);
-    }
-
-    throwIfCancellationRequested(cancellationToken);
-    const currentMessage = this.readGeneratedCommitMessage(proxyInputBox, nativeGitInputBox, initialNativeMessage);
-    if (currentMessage) return currentMessage;
-    const resultMessage = this.readGeneratedCommitMessageFromCommandResult(commandResult);
-    if (resultMessage) return resultMessage;
-    if (lastMessage) return lastMessage;
-    if (commandError) throw commandError;
-
-    throw new Error(t('AI Commit Message extension did not return a commit message.'));
-  }
-
-  private async createAiCommitMessageContextRepository(context: string): Promise<{
-    rootPath: string;
-    contextFilePath: string;
-    dispose: () => Promise<void>;
-  }> {
-    const rootPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'versiondock-ai-commit-'));
-    const contextFilePath = path.join(rootPath, 'selected-changes.diff');
-
-    await execCli('git', ['init'], { cwd: rootPath, timeout: 10_000 });
-    await fs.promises.writeFile(
-      contextFilePath,
-      [
-        'VersionDock selected/staged VCS diff context.',
-        'Use only the changed files and diff summaries below when generating the commit message.',
-        '',
-        context,
-        '',
-      ].join('\n'),
-      'utf8',
-    );
-    await execCli('git', ['add', 'selected-changes.diff'], { cwd: rootPath, timeout: 10_000 });
-
-    return {
-      rootPath,
-      contextFilePath,
-      dispose: async () => {
-        await fs.promises.rm(rootPath, { recursive: true, force: true }).catch(() => undefined);
-      },
-    };
-  }
-
-  private async generateAiCommitMessageExtensionCommitMessage(
-    targets: CommitGenerateMessageTarget[] | undefined,
-    requestId: string,
-    cancellationToken: vscode.CancellationToken,
-  ): Promise<string> {
-    throwIfCancellationRequested(cancellationToken);
-    const extension = vscode.extensions.getExtension(AI_COMMIT_MESSAGE_EXTENSION_ID);
-    if (!extension) {
-      throw new Error(t("Required extension '{0}' is not installed or enabled.", AI_COMMIT_MESSAGE_EXTENSION_ID));
-    }
-
-    await extension.activate();
-    throwIfCancellationRequested(cancellationToken);
-
-    const context = await this.buildAiCommitMessageContext(targets, cancellationToken);
-    const contextRepo = await this.createAiCommitMessageContextRepository(context.text);
-    const proxyInputBox = this.createCommitMessageInputBox(requestId, cancellationToken);
-    const rootUri = vscode.Uri.file(contextRepo.rootPath);
-    const resourceStates = Array.from(new Map(
-      [{ path: 'selected-changes.diff', resourceUri: vscode.Uri.file(contextRepo.contextFilePath) }]
-        .map(file => [file.path, { resourceUri: file.resourceUri }])
-    ).values());
-    const sourceControl = {
-      rootUri,
-      inputBox: proxyInputBox.inputBox,
-      resourceGroups: resourceStates.length > 0
-        ? [{ id: 'changes', label: 'Changes', resourceStates }]
-        : [],
-    };
-    const commandArg = {
-      __versiondockProxyGenerate: true,
-      __gitcharmProxyGenerate: true,
-      rootUri,
-      inputBox: proxyInputBox.inputBox,
-      changes: { resourceStates },
-      sourceControl,
-    };
-
-    let commandPromise: Promise<unknown> | undefined;
-    try {
-      throwIfCancellationRequested(cancellationToken);
-      commandPromise = Promise.resolve(vscode.commands.executeCommand(AI_COMMIT_MESSAGE_COMMAND_ID, commandArg));
-      const message = await this.waitForGeneratedCommitMessage(
-        proxyInputBox,
-        undefined,
-        '',
-        commandPromise,
-        cancellationToken,
-      );
-      throwIfCancellationRequested(cancellationToken);
-      return message;
-    } finally {
-      proxyInputBox.dispose();
-      if (cancellationToken.isCancellationRequested && commandPromise) {
-        void commandPromise.then(
-          () => contextRepo.dispose(),
-          () => contextRepo.dispose(),
-        );
-      } else {
-        await contextRepo.dispose();
-      }
-    }
   }
 
   private async generateCommitMessage(
     targets: CommitGenerateMessageTarget[] | undefined,
+    repoIds: string[] | undefined,
     requestId: string,
     cancellationToken: vscode.CancellationToken,
   ): Promise<string> {
-    const provider = this.getAiCommitMessageProvider();
-    if (provider === 'aiCommitMessageExtension') {
-      return this.generateAiCommitMessageExtensionCommitMessage(targets, requestId, cancellationToken);
+    const context = await this.buildAiCommitMessageContext(targets, repoIds, cancellationToken);
+    const provider = this.aiCommitMessageService.getProvider();
+    const startedAt = Date.now();
+    let streamedMessage = '';
+
+    const emitDelta = (delta: string): void => {
+      if (!delta || cancellationToken.isCancellationRequested) return;
+      streamedMessage += delta;
+      this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message: streamedMessage });
+    };
+
+    this.logger?.info('AICommitMessage', 'Generation started', {
+      requestId,
+      provider,
+      repositoryCount: context.repositoryCount,
+      fileCount: context.fileCount,
+      contextCharCount: context.contextCharCount,
+      vcs: context.vcsKinds.join('+'),
+      contextTruncated: context.truncated,
+    });
+
+    try {
+      const result = await this.aiCommitMessageService.generate({
+        context,
+        cancellationToken,
+        onDelta: emitDelta,
+      });
+      throwIfCancellationRequested(cancellationToken);
+
+      if (!result.streamed) {
+        streamedMessage = '';
+        for (const character of result.message) {
+          throwIfCancellationRequested(cancellationToken);
+          streamedMessage += character;
+          this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message: streamedMessage });
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+      } else if (streamedMessage !== result.message) {
+        streamedMessage = result.message;
+        this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message: result.message });
+      }
+
+      this.logger?.info('AICommitMessage', `Generated commit message\n${result.message}`);
+      this.logger?.info('AICommitMessage', 'Generation completed', {
+        requestId,
+        provider: result.provider,
+        model: result.model,
+        promptSource: result.promptSource,
+        inputCharCount: result.inputCharCount,
+        inputTruncated: result.inputTruncated,
+        ...(result.inputTokenCount === undefined ? {} : {
+          inputTokenCount: result.inputTokenCount,
+          inputTokenBudget: result.inputTokenBudget,
+          maxInputTokens: result.maxInputTokens,
+        }),
+        streamChunkCount: result.streamChunkCount,
+        streamCharCount: result.streamCharCount,
+        firstTokenLatencyMs: result.firstTokenLatencyMs,
+        durationMs: result.durationMs,
+      });
+      return result.message;
+    } catch (error: unknown) {
+      if (cancellationToken.isCancellationRequested || (error instanceof Error && error.message === 'Cancelled')) {
+        this.logger?.info('AICommitMessage', 'Generation cancelled', {
+          requestId,
+          provider,
+          durationMs: Date.now() - startedAt,
+        });
+      } else {
+        this.logger?.error('AICommitMessage', 'Generation failed', error, {
+          requestId,
+          provider,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+      throw error;
     }
-    return this.generateCopilotCommitMessage(targets, cancellationToken);
   }
 
   private getDefaultCommitAction(): 'commit' | 'commitAndPush' {
@@ -3092,7 +2821,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const cancellationSource = new vscode.CancellationTokenSource();
         this.activeCommitMessageGenerations.set(msg.requestId, cancellationSource);
         try {
-          const message = await this.generateCommitMessage(msg.targets, msg.requestId, cancellationSource.token);
+          const message = await this.generateCommitMessage(msg.targets, msg.repoIds, msg.requestId, cancellationSource.token);
           throwIfCancellationRequested(cancellationSource.token);
           this.post({ type: 'COMMIT_GENERATE_MESSAGE_RESULT', requestId: msg.requestId, message });
         } catch (e: unknown) {

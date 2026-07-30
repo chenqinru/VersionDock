@@ -30,8 +30,8 @@ It activates automatically when the opened workspace contains a Git repository o
 - Commit selected files only, or all staged changes.
 - SVN working copies use selected files as the commit target because SVN has no Git-style index.
 - **Commit** and **Commit & Push** unified dropdown button; **Amend** and **Amend & Push** via the dropdown.
-- Optional AI commit-message generation via the VS Code Language Model API (GitHub Copilot).
-- The GitHub Copilot provider honors VS Code's native `github.copilot.chat.commitMessageGeneration.instructions` setting, including both inline `text` instructions and workspace-relative `file` instructions.
+- Built-in AI commit-message generation for GitHub Copilot, OpenAI, Claude, Gemini, and custom OpenAI-compatible endpoints.
+- Generated messages stream into the commit box with a typewriter effect and use the same editable Commit Prompt for every provider.
 - Commit message pre-filled automatically with `Merge branch 'X' into 'Y'` when merge conflicts are detected.
 - New and modified files are **not** automatically selected — only files that were already selected before the change are preserved.
 
@@ -214,14 +214,9 @@ Open a workspace that contains one or more Git repositories or SVN working copie
 
 Use the Commit panel to select files, inspect diffs, write a commit message, commit, commit and push Git changes, shelve Git changes, manage Git stashes, or review unpushed Git commits. For SVN, selected files are committed directly to the server.
 
-When `versiondock.aiCommitMessage.provider` is set to `githubCopilot`, commit-message formatting can be customized with the native GitHub Copilot setting:
+The default AI provider is `github-copilot`. Select `openai`, `claude`, `gemini`, or `custom` to configure an API URL, model, and key.
 
-```json
-"github.copilot.chat.commitMessageGeneration.instructions": [
-  { "text": "Use Conventional Commits format." },
-  { "file": ".github/commit-message-instructions.md" }
-]
-```
+Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace prompt is stored at `.vscode/ai-commit-message.prompt.md`; the global prompt is stored in VersionDock's global extension storage. Workspace prompts take precedence when all selected repositories belong to one workspace, followed by the global prompt and the built-in default.
 
 Use the Log panel to browse history, filter commits or SVN revisions, inspect changed files, open diffs, and run supported branch or revision operations.
 
@@ -238,6 +233,8 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `VersionDock: Branch Menu` | Opens the Status Bar branch menu. |
 | `VersionDock: Update Project` | Pulls all repositories using merge or rebase. |
 | `VersionDock: Settings` | Opens VersionDock settings. |
+| `VersionDock: Edit Commit Prompt` | Edits the workspace or global prompt used by every AI provider. |
+| `VersionDock: Reset Commit Prompt` | Removes a workspace or global custom prompt. |
 | `VersionDock: Manage Version Control Accounts` | Opens the context-aware Git identity or SVN account manager. |
 | `VersionDock: Switch Git Profile` | Switches the active Git profile for the current workspace. |
 | `VersionDock: SVN Cleanup` | Runs `svn cleanup` for an SVN working copy. |
@@ -271,6 +268,10 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `versiondock.changesViewMode` | `"simplified"` | How to display changed files: `simplified`, `changelists`, or `vscode`. Chosen via QuickPick on first install. |
 | `versiondock.gitAnnotations.enabled` | `true` | Enable inline Git blame annotations in the editor. |
 | `versiondock.gitGhostText.enabled` | `true` | Enable inline Git ghost text in the editor. |
+| `versiondock.ai.provider` | `"github-copilot"` | AI provider: `github-copilot`, `openai`, `claude`, `gemini`, or `custom`. |
+| `versiondock.ai.model` | `""` | Model name. GitHub Copilot selects a model automatically when empty. |
+| `versiondock.ai.apiUrl` | `""` | Endpoint URL required by non-Copilot providers. |
+| `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers. |
 
 Example:
 
@@ -323,7 +324,7 @@ out/                      Built extension and webview bundles
 - SVN support is designed for working copies with a conventional `/trunk`, `/branches`, and `/tags` layout. Branch/tag actions are hidden or limited when that layout cannot be listed by the SVN server.
 - SVN has no Git index. The Commit panel treats checked files as the SVN commit target instead of staged files.
 - Destructive operations (rollback, delete, branch delete, reset, stash drop, shelve drop, commit undo) ask for confirmation.
-- AI commit-message generation requires an available VS Code language model such as GitHub Copilot.
+- GitHub Copilot generation requires an available VS Code language model; the other providers require a compatible URL, model, and API key.
 - The merge editor works on files that contain Git/SVN text conflict markers. SVN conflicts can be marked resolved as working after saving.
 - Git Annotations require the file to be tracked in a Git repository with at least one commit.
 
