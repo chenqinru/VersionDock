@@ -7,6 +7,7 @@ import { CommitDetail } from './components/CommitDetail';
 import { CommitFiltersBar, type AuthorOption } from './components/CommitFiltersBar';
 import { CompareView } from './components/CompareView';
 import { assignLanes, type LaidOutCommit } from './utils/graphLayout';
+import { filterFilesForHistoryPath } from './utils/historyPath';
 import { ResizeHandle } from '../shared/ResizeHandle';
 import { useResize } from '../shared/useResize';
 import { getVsCodeApi } from '../shared/vscodeApi';
@@ -423,12 +424,14 @@ export function GitLogApp() {
   const selectedCommitFiles = useMemo(() => {
     if (isCommitListReloading) return [];
     const historyPath = store.commitFilters.path;
-    const files = sortedSelectedCommits.flatMap(commit => toViewFiles(
-      commit.repoId,
-      commit.hash,
-      store.commitFilesByKey[getCommitKey(commit.repoId, commit.hash)] ?? [],
-    ));
-    return historyPath ? files.filter(file => file.path === historyPath) : files;
+    return sortedSelectedCommits.flatMap(commit => {
+      const files = toViewFiles(
+        commit.repoId,
+        commit.hash,
+        store.commitFilesByKey[getCommitKey(commit.repoId, commit.hash)] ?? [],
+      );
+      return historyPath ? filterFilesForHistoryPath(files, historyPath) : files;
+    });
   }, [isCommitListReloading, sortedSelectedCommits, store.commitFilesByKey, store.commitFilters.path]);
 
   const aggregatedFiles = useMemo(() => {

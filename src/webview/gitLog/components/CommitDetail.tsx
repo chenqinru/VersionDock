@@ -12,6 +12,7 @@ import { AuthorAvatar } from './AuthorAvatar';
 import { t } from '../../shared/i18n';
 import type { LogViewFileEntry } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
+import { isSameHistoryFilePath } from '../utils/historyPath';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -680,7 +681,9 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
 
   const handleOpenDiff = useCallback((file: LogViewFileEntry) => {
     onSelectFile(file);
-    const lineRange = activeHistoryPath === file.path ? activeLineRange : undefined;
+    const lineRange = activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path)
+      ? activeLineRange
+      : undefined;
     const repoCommits = commits.filter(selectedCommit => selectedCommit.repoId === file.repoId);
     if (repoCommits.length > 1) {
       const newest = repoCommits[0];
@@ -711,11 +714,12 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   }, [activeHistoryPath, activeLineRange, commits, onSelectFile]);
 
   const handleOpenSource = useCallback((file: LogViewFileEntry) => {
-    const lineRange = activeHistoryPath === file.path ? activeLineRange : undefined;
+    const isActiveHistoryFile = !!activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path);
+    const lineRange = isActiveHistoryFile ? activeLineRange : undefined;
     getVsCodeApi().postMessage({
       type: 'LOG_OPEN_FILE',
       repoId: file.repoId,
-      filePath: file.path,
+      filePath: isActiveHistoryFile ? activeHistoryPath : file.path,
       lineRange,
     } satisfies LogToHostMsg);
   }, [activeHistoryPath, activeLineRange]);
@@ -743,20 +747,26 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   }, [buildPathEntries]);
 
   const handleRevealInExplorer = useCallback((file: LogViewFileEntry) => {
+    const filePath = activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path)
+      ? activeHistoryPath
+      : file.path;
     getVsCodeApi().postMessage({
       type: 'LOG_REVEAL_IN_EXPLORER',
       repoId: file.repoId,
-      filePath: file.path,
+      filePath,
     } satisfies LogToHostMsg);
-  }, []);
+  }, [activeHistoryPath]);
 
   const handleRevealInOS = useCallback((file: LogViewFileEntry) => {
+    const filePath = activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path)
+      ? activeHistoryPath
+      : file.path;
     getVsCodeApi().postMessage({
       type: 'LOG_REVEAL_IN_OS',
       repoId: file.repoId,
-      filePath: file.path,
+      filePath,
     } satisfies LogToHostMsg);
-  }, []);
+  }, [activeHistoryPath]);
 
   const handleOpenSelectedChanges = useCallback(() => {
     if (!commit) return;
