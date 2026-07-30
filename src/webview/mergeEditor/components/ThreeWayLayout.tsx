@@ -1,20 +1,22 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { HighlighterCore, SpecialLanguage, ThemeRegistrationRaw } from 'shiki/core';
 import type { ConflictBlock, MergeConflictFile } from '../../shared/types';
 import type { NormalEdits, Resolution } from '../store/mergeStore';
 import { t } from '../../shared/i18n';
 import { getVersionDockColorTheme, type WebviewColorThemeData } from '../../shared/colorTheme';
 import { useShiki } from '../../shared/useShiki';
+import { Codicon } from '../../shared/Codicon';
 
 interface Props {
   file: MergeConflictFile;
-  resultContent: string;
   resolutions: Record<number, Resolution>;
   normalEdits: NormalEdits;
+  nonConflictingSelections: NonConflictingSelections;
   language: string;
   onResultChange: (content: string) => void;
   onResolveBlock: (index: number, resolution: Resolution) => void;
   onNormalEdit: (index: number, lines: string[]) => void;
+  onSelectNonConflicting: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
   currentConflictIndex: number;
   syncScrollEnabled: boolean;
 }
@@ -24,6 +26,8 @@ interface NormalSegment { kind: 'normal'; lines: string[] }
 interface ConflictSegment { kind: 'conflict'; index: number; block: ConflictBlock }
 type PaneSide = 'left' | 'center' | 'right';
 export type NonConflictingChangeScope = 'left' | 'all' | 'right';
+export type NonConflictingSelection = 'left' | 'right';
+export type NonConflictingSelections = Record<number, NonConflictingSelection>;
 
 type MergeBlockState = 'equal' | 'modified_left' | 'modified_right' | 'modified_both' | 'conflict';
 
@@ -45,8 +49,58 @@ interface ThreeWayBlock {
   rightLines: string[];
 }
 
+interface NormalBlockRef {
+  blockIndex: number;
+  block: ThreeWayBlock;
+}
+
 const CODE_LINE_HEIGHT = 21;
-const CONFLICT_HEADER_HEIGHT = 26;
+const CONNECTOR_GUTTER_WIDTH = 'clamp(40px, 3vw, 48px)';
+const MERGE_SCROLLBAR_STYLES = `
+  .versiondock-merge-pane {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none;
+  }
+  .versiondock-merge-pane::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+    display: none !important;
+    background: transparent !important;
+  }
+  .versiondock-merge-pane::-webkit-scrollbar-track,
+  .versiondock-merge-pane::-webkit-scrollbar-track-piece,
+  .versiondock-merge-pane::-webkit-scrollbar-thumb,
+  .versiondock-merge-pane::-webkit-scrollbar-corner {
+    display: none !important;
+    background: transparent !important;
+  }
+  .versiondock-block-action-button {
+    background: transparent !important;
+    border-color: transparent !important;
+  }
+  .versiondock-block-action-button--accept:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--vscode-foreground) 9%, transparent) !important;
+    color: var(--vscode-textLink-activeForeground, var(--vscode-foreground)) !important;
+    opacity: 1 !important;
+  }
+  .versiondock-block-action-button--reset {
+    border-left-color: color-mix(in srgb, var(--vscode-foreground) 14%, transparent) !important;
+    color: var(--vscode-descriptionForeground, var(--vscode-foreground)) !important;
+  }
+  .versiondock-block-action-button--reset:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--vscode-foreground) 9%, transparent) !important;
+    color: var(--vscode-foreground) !important;
+    opacity: 1 !important;
+  }
+  .versiondock-block-action-button:active:not(:disabled) {
+    opacity: 0.68 !important;
+  }
+  .versiondock-block-action-button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
+`;
+const MAX_STABLE_LCS_CELLS = 1_000_000;
 // Exact LCS remains quadratic in time even with linear-space reconstruction.
 // Above this budget we conservatively treat the changed middle as one block.
 // That can disable the convenience "apply non-conflicting" action for a very
@@ -54,6 +108,47 @@ const CONFLICT_HEADER_HEIGHT = 26;
 const MAX_EXACT_DIFF_CELLS = 4_000_000;
 
 function splitConflictSegments(content: string, file: MergeConflictFile): Segment[] {
+  const threeWayBlocks = compatibleThreeWayBlocks(file);
+  if (threeWayBlocks) {
+    const segments: Segment[] = [];
+    let normalLines: string[] = [];
+    let hasNormalBlock = false;
+    let conflictIndex = 0;
+
+    const flushNormal = () => {
+      if (!hasNormalBlock) return;
+      segments.push({ kind: 'normal', lines: normalLines });
+      normalLines = [];
+      hasNormalBlock = false;
+    };
+
+    threeWayBlocks.forEach(block => {
+      if (block.state !== 'conflict') {
+        normalLines.push(...block.baseLines);
+        hasNormalBlock = true;
+        return;
+      }
+
+      flushNormal();
+      const parsedBlock = file.conflicts[conflictIndex];
+      if (parsedBlock) {
+        segments.push({
+          kind: 'conflict',
+          index: conflictIndex,
+          block: {
+            ...parsedBlock,
+            oursLines: block.leftLines,
+            baseLines: block.baseLines,
+            theirsLines: block.rightLines,
+          },
+        });
+      }
+      conflictIndex += 1;
+    });
+    flushNormal();
+    return segments;
+  }
+
   const lines = content.split('\n');
   const segments: Segment[] = [];
   let normal: string[] = [];
@@ -91,6 +186,11 @@ function splitConflictSegments(content: string, file: MergeConflictFile): Segmen
 function linesEqual(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((line, index) => line === right[index]);
+}
+
+function changedLineFlags(baseLines: string[], displayedLines: string[]): boolean[] {
+  const matchedLines = new Set(findLineMatches(baseLines, displayedLines).map(match => match.sideIndex));
+  return displayedLines.map((_, index) => !matchedLines.has(index));
 }
 
 function splitLines(content: string): string[] {
@@ -191,7 +291,47 @@ function collectLcsMatches(
   collectLcsMatches(left, leftMid, leftEnd, right, rightMid, rightEnd, output);
 }
 
+function findStableLineMatches(baseLines: string[], sideLines: string[]): LineMatch[] {
+  const columnCount = sideLines.length + 1;
+  const table = new Uint32Array((baseLines.length + 1) * columnCount);
+  const cell = (baseIndex: number, sideIndex: number) => baseIndex * columnCount + sideIndex;
+
+  for (let baseIndex = baseLines.length - 1; baseIndex >= 0; baseIndex -= 1) {
+    for (let sideIndex = sideLines.length - 1; sideIndex >= 0; sideIndex -= 1) {
+      table[cell(baseIndex, sideIndex)] = baseLines[baseIndex] === sideLines[sideIndex]
+        ? table[cell(baseIndex + 1, sideIndex + 1)] + 1
+        : Math.max(table[cell(baseIndex + 1, sideIndex)], table[cell(baseIndex, sideIndex + 1)]);
+    }
+  }
+
+  const matches: LineMatch[] = [];
+  const preferSkippingSide = sideLines.length >= baseLines.length;
+  let baseIndex = 0;
+  let sideIndex = 0;
+  while (baseIndex < baseLines.length && sideIndex < sideLines.length) {
+    if (
+      baseLines[baseIndex] === sideLines[sideIndex]
+      && table[cell(baseIndex, sideIndex)] === table[cell(baseIndex + 1, sideIndex + 1)] + 1
+    ) {
+      matches.push({ baseIndex, sideIndex });
+      baseIndex += 1;
+      sideIndex += 1;
+      continue;
+    }
+
+    const skipBaseScore = table[cell(baseIndex + 1, sideIndex)];
+    const skipSideScore = table[cell(baseIndex, sideIndex + 1)];
+    if (skipSideScore > skipBaseScore || (skipSideScore === skipBaseScore && preferSkippingSide)) sideIndex += 1;
+    else baseIndex += 1;
+  }
+  return matches;
+}
+
 function findLineMatches(baseLines: string[], sideLines: string[]): LineMatch[] {
+  if ((baseLines.length + 1) * (sideLines.length + 1) <= MAX_STABLE_LCS_CELLS) {
+    return findStableLineMatches(baseLines, sideLines);
+  }
+
   if (sideLines.length <= baseLines.length) {
     const matches: Array<{ leftIndex: number; rightIndex: number }> = [];
     collectLcsMatches(baseLines, 0, baseLines.length, sideLines, 0, sideLines.length, matches);
@@ -203,6 +343,22 @@ function findLineMatches(baseLines: string[], sideLines: string[]): LineMatch[] 
   const matches: Array<{ leftIndex: number; rightIndex: number }> = [];
   collectLcsMatches(sideLines, 0, sideLines.length, baseLines, 0, baseLines.length, matches);
   return matches.map(match => ({ baseIndex: match.rightIndex, sideIndex: match.leftIndex }));
+}
+
+function shiftPureDeletionToLaterBoundary(baseLines: string[], change: SideChange): SideChange {
+  if (change.lines.length > 0 || change.baseStart >= change.baseEnd) return change;
+
+  let baseStart = change.baseStart;
+  let baseEnd = change.baseEnd;
+  // Repeated structural lines such as `}` followed by a blank line can make an
+  // LCS attach a deletion to the preceding method. Shift equal boundary lines
+  // forward so the deleted block keeps its complete trailing structure, which
+  // matches JetBrains' merge-view cleanup without changing the resulting text.
+  while (baseEnd < baseLines.length && baseLines[baseStart] === baseLines[baseEnd]) {
+    baseStart += 1;
+    baseEnd += 1;
+  }
+  return { ...change, baseStart, baseEnd };
 }
 
 export function diffLineChanges(baseLines: string[], sideLines: string[]): SideChange[] {
@@ -233,7 +389,8 @@ export function diffLineChanges(baseLines: string[], sideLines: string[]): SideC
   const baseMiddle = baseLines.slice(prefixLength, baseMiddleEnd);
   const sideMiddle = sideLines.slice(prefixLength, sideMiddleEnd);
   if (baseMiddle.length > 0 && sideMiddle.length > Math.floor(MAX_EXACT_DIFF_CELLS / baseMiddle.length)) {
-    return [{ baseStart: prefixLength, baseEnd: baseMiddleEnd, lines: sideMiddle }];
+    return [{ baseStart: prefixLength, baseEnd: baseMiddleEnd, lines: sideMiddle }]
+      .map(change => shiftPureDeletionToLaterBoundary(baseLines, change));
   }
 
   const matches = findLineMatches(baseMiddle, sideMiddle);
@@ -261,7 +418,7 @@ export function diffLineChanges(baseLines: string[], sideLines: string[]): SideC
     });
   }
 
-  return changes;
+  return changes.map(change => shiftPureDeletionToLaterBoundary(baseLines, change));
 }
 
 function applyRegionChanges(baseLines: string[], changes: SideChange[], start: number, end: number): string[] {
@@ -368,10 +525,9 @@ function isApplicableNonConflictingBlock(block: ThreeWayBlock): boolean {
   return block.state === 'modified_left' || block.state === 'modified_right' || block.state === 'modified_both';
 }
 
-function nonConflictingResultLines(block: ThreeWayBlock, scope: NonConflictingChangeScope): string[] {
-  if (block.state === 'modified_left') return scope === 'right' ? block.baseLines : block.leftLines;
-  if (block.state === 'modified_right') return scope === 'left' ? block.baseLines : block.rightLines;
-  if (block.state === 'modified_both') return scope === 'right' ? block.rightLines : block.leftLines;
+function nonConflictingResultLines(block: ThreeWayBlock, selection?: NonConflictingSelection): string[] {
+  if (selection === 'left') return block.leftLines;
+  if (selection === 'right') return block.rightLines;
   return block.baseLines;
 }
 
@@ -397,41 +553,86 @@ function normalSegmentRefs(segments: Segment[]): Array<{ segmentIndex: number; g
 export function getMergeToolbarCounts(file: MergeConflictFile): { changeCount: number; conflictCount: number; nonConflictingCount: number } {
   const conflictCount = file.conflicts.length;
   const blocks = compatibleThreeWayBlocks(file);
-  if (!blocks) return { changeCount: conflictCount, conflictCount, nonConflictingCount: 0 };
+  if (!blocks) return { changeCount: 0, conflictCount, nonConflictingCount: 0 };
+
+  const nonConflictingCount = blocks.filter(isApplicableNonConflictingBlock).length;
 
   return {
-    changeCount: blocks.filter(block => block.state !== 'equal').length,
+    changeCount: nonConflictingCount,
     conflictCount,
-    nonConflictingCount: blocks.filter(isApplicableNonConflictingBlock).length,
+    nonConflictingCount,
   };
 }
 
-export function buildNormalEditsForNonConflictingScope(file: MergeConflictFile, scope: NonConflictingChangeScope, previousEdits: NormalEdits): NormalEdits | null {
+export function buildNonConflictingSelectionsForScope(file: MergeConflictFile, scope: NonConflictingChangeScope): NonConflictingSelections | null {
+  const blocks = compatibleThreeWayBlocks(file);
+  if (!blocks) return null;
+
+  const selections: NonConflictingSelections = {};
+  blocks.forEach((block, blockIndex) => {
+    if (block.state === 'modified_left' && scope !== 'right') selections[blockIndex] = 'left';
+    else if (block.state === 'modified_right' && scope !== 'left') selections[blockIndex] = 'right';
+    else if (block.state === 'modified_both') selections[blockIndex] = scope === 'right' ? 'right' : 'left';
+  });
+  return selections;
+}
+
+export function buildNormalEditsForNonConflictingSelections(file: MergeConflictFile, selections: NonConflictingSelections): NormalEdits | null {
   const blocks = compatibleThreeWayBlocks(file);
   if (!blocks) return null;
 
   const groups = Array.from({ length: file.conflicts.length + 1 }, () => [] as string[]);
   let groupIndex = 0;
 
-  for (const block of blocks) {
+  blocks.forEach((block, blockIndex) => {
     if (block.state === 'conflict') {
       groupIndex += 1;
-      continue;
+      return;
     }
-    groups[Math.min(groupIndex, groups.length - 1)].push(...nonConflictingResultLines(block, scope));
-  }
+    groups[Math.min(groupIndex, groups.length - 1)].push(...nonConflictingResultLines(block, selections[blockIndex]));
+  });
 
   const refs = normalSegmentRefs(splitConflictSegments(file.content, file));
   const representedGroups = new Set(refs.map(ref => ref.groupIndex));
   const hasUnrepresentedContent = groups.some((lines, index) => lines.length > 0 && !representedGroups.has(index));
   if (hasUnrepresentedContent) return null;
 
-  const nextEdits: NormalEdits = { ...previousEdits };
+  const nextEdits: NormalEdits = {};
   refs.forEach(ref => {
     nextEdits[ref.segmentIndex] = groups[ref.groupIndex] ?? [];
   });
 
   return nextEdits;
+}
+
+export function buildNormalEditsForNonConflictingScope(file: MergeConflictFile, scope: NonConflictingChangeScope): NormalEdits | null {
+  const selections = buildNonConflictingSelectionsForScope(file, scope);
+  return selections ? buildNormalEditsForNonConflictingSelections(file, selections) : null;
+}
+
+export function buildBaseNormalEdits(file: MergeConflictFile): NormalEdits | null {
+  return buildNormalEditsForNonConflictingSelections(file, {});
+}
+
+function buildNormalBlockRefs(file: MergeConflictFile): Record<number, NormalBlockRef[]> | null {
+  const blocks = compatibleThreeWayBlocks(file);
+  if (!blocks) return null;
+
+  const groups = Array.from({ length: file.conflicts.length + 1 }, () => [] as NormalBlockRef[]);
+  let groupIndex = 0;
+  blocks.forEach((block, blockIndex) => {
+    if (block.state === 'conflict') {
+      groupIndex += 1;
+      return;
+    }
+    groups[Math.min(groupIndex, groups.length - 1)].push({ blockIndex, block });
+  });
+
+  const refs: Record<number, NormalBlockRef[]> = {};
+  normalSegmentRefs(splitConflictSegments(file.content, file)).forEach(ref => {
+    refs[ref.segmentIndex] = groups[ref.groupIndex] ?? [];
+  });
+  return refs;
 }
 
 function resolveLines(block: ConflictBlock, resolution: Resolution): string[] {
@@ -480,38 +681,26 @@ export function buildContentFromResolutions(file: MergeConflictFile, resolutions
 }
 
 function lineCount(segment: Segment, side: PaneSide, resolution?: Resolution, normalLines?: string[]): number {
-  if (segment.kind === 'normal') return visibleLineCount(normalLines ?? segment.lines);
-  if (side === 'left') return visibleLineCount(segment.block.oursLines);
-  if (side === 'right') return visibleLineCount(segment.block.theirsLines);
-  if (isResolvedResolution(resolution)) return visibleLineCount(resolveLines(segment.block, resolution));
-  return Math.max(segment.block.oursLines.length, segment.block.theirsLines.length, 1);
-}
-
-function visibleLineCount(lines: string[]): number {
-  return Math.max(lines.length, 1);
-}
-
-function comparedLineCount(block: ConflictBlock, resolution?: Resolution): number {
-  const resolvedLines = isResolvedResolution(resolution) ? resolveLines(block, resolution) : [];
-  return Math.max(visibleLineCount(block.oursLines), visibleLineCount(block.theirsLines), resolvedLines.length);
-}
-
-function sideConflictMinHeight(block: ConflictBlock, resolution?: Resolution): number {
-  return comparedLineCount(block, resolution) * CODE_LINE_HEIGHT;
-}
-
-function resultConflictMinHeight(block: ConflictBlock, resolution?: Resolution): number | undefined {
-  if (!isResolvedResolution(resolution)) return undefined;
-  return sideConflictMinHeight(block, resolution);
+  if (segment.kind === 'normal') return (normalLines ?? segment.lines).length;
+  if (side === 'left') return segment.block.oursLines.length;
+  if (side === 'right') return segment.block.theirsLines.length;
+  if (isResolvedResolution(resolution)) return resolveLines(segment.block, resolution).length;
+  return segment.block.baseLines.length;
 }
 
 function sideResolution(side: PaneSide): 'ours' | 'theirs' {
   return side === 'left' ? 'ours' : 'theirs';
 }
 
+function acceptedResolutionSides(resolution: Resolution | undefined): Array<'ours' | 'theirs'> {
+  if (isCustomResolution(resolution)) return resolution.acceptedSides;
+  if (resolution === 'both') return ['ours', 'theirs'];
+  if (resolution === 'ours' || resolution === 'theirs') return [resolution];
+  return [];
+}
+
 function includesResolutionSide(resolution: Resolution | undefined, side: 'ours' | 'theirs'): boolean {
-  if (resolution === 'both') return true;
-  return resolution === side;
+  return acceptedResolutionSides(resolution).includes(side);
 }
 
 function addResolutionSide(resolution: Resolution | undefined, side: 'ours' | 'theirs'): Resolution {
@@ -545,15 +734,310 @@ function useSyncedScroll(enabled = true) {
   return { refs, onScroll };
 }
 
-export function ThreeWayLayout({ file, language, resolutions, normalEdits, onResultChange, onResolveBlock, onNormalEdit, currentConflictIndex, syncScrollEnabled }: Props) {
+interface ConnectorShape {
+  key: string;
+  kind: 'conflict' | 'change';
+  side: 'left' | 'right';
+  index: number;
+  changeTone?: ChangeTone;
+  fillPath: string;
+  outlinePath: string;
+  active: boolean;
+}
+
+type RibbonDirection = 'ltr' | 'rtl';
+
+// Adapted from git-conflict-resolver's MIT-licensed "Satin Ribbon" renderer.
+// Each adjacent pane pair keeps its own direction so the three-pane layout can
+// retain the original 70%/30% taper and 45% Bezier control-point geometry.
+function connectorBandPath(source: DOMRect, target: DOMRect, root: DOMRect, sourceOuterEdge: number, sourceInnerEdge: number, targetInnerEdge: number, targetOuterEdge: number, direction: RibbonDirection): Pick<ConnectorShape, 'fillPath' | 'outlinePath'> {
+  const sourceOuterX = sourceOuterEdge - root.left;
+  const sourceX = sourceInnerEdge - root.left;
+  const targetX = targetInnerEdge - root.left;
+  const targetOuterX = targetOuterEdge - root.left;
+  const sourceTop = source.top - root.top;
+  const sourceBottom = source.bottom - root.top;
+  const targetTop = target.top - root.top;
+  const targetBottom = target.bottom - root.top;
+  const gutterWidth = targetX - sourceX;
+  const taperX = sourceX + gutterWidth * (direction === 'ltr' ? 0.70 : 0.30);
+  const curveStartX = direction === 'ltr' ? sourceX : taperX;
+  const curveEndX = direction === 'ltr' ? taperX : targetX;
+  const controlDistance = Math.max(1, (curveEndX - curveStartX) * 0.45);
+  const topPath = direction === 'ltr'
+    ? `M ${sourceOuterX} ${sourceTop} L ${sourceX} ${sourceTop} C ${sourceX + controlDistance} ${sourceTop}, ${taperX - controlDistance} ${targetTop}, ${taperX} ${targetTop} L ${targetOuterX} ${targetTop}`
+    : `M ${sourceOuterX} ${sourceTop} L ${taperX} ${sourceTop} C ${taperX + controlDistance} ${sourceTop}, ${targetX - controlDistance} ${targetTop}, ${targetX} ${targetTop} L ${targetOuterX} ${targetTop}`;
+  const returnPath = direction === 'ltr'
+    ? `L ${taperX} ${targetBottom} C ${taperX - controlDistance} ${targetBottom}, ${sourceX + controlDistance} ${sourceBottom}, ${sourceX} ${sourceBottom} L ${sourceOuterX} ${sourceBottom} Z`
+    : `L ${targetX} ${targetBottom} C ${targetX - controlDistance} ${targetBottom}, ${taperX + controlDistance} ${sourceBottom}, ${taperX} ${sourceBottom} L ${sourceOuterX} ${sourceBottom} Z`;
+  const outlineTopPath = direction === 'ltr'
+    ? `M ${sourceX} ${sourceTop} C ${sourceX + controlDistance} ${sourceTop}, ${taperX - controlDistance} ${targetTop}, ${taperX} ${targetTop} L ${targetX} ${targetTop}`
+    : `M ${sourceX} ${sourceTop} L ${taperX} ${sourceTop} C ${taperX + controlDistance} ${sourceTop}, ${targetX - controlDistance} ${targetTop}, ${targetX} ${targetTop}`;
+  const outlineBottomPath = direction === 'ltr'
+    ? `M ${sourceX} ${sourceBottom} C ${sourceX + controlDistance} ${sourceBottom}, ${taperX - controlDistance} ${targetBottom}, ${taperX} ${targetBottom} L ${targetX} ${targetBottom}`
+    : `M ${sourceX} ${sourceBottom} L ${taperX} ${sourceBottom} C ${taperX + controlDistance} ${sourceBottom}, ${targetX - controlDistance} ${targetBottom}, ${targetX} ${targetBottom}`;
+  return {
+    fillPath: `${topPath} L ${targetOuterX} ${targetBottom} ${returnPath}`,
+    outlinePath: `${outlineTopPath} ${outlineBottomPath}`,
+  };
+}
+
+function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, normalEdits, nonConflictingSelections, activeConflictIndex }: {
+  layoutRef: React.RefObject<HTMLDivElement>;
+  paneRefs: readonly React.RefObject<HTMLDivElement>[];
+  conflicts: ConflictBlock[];
+  resolutions: Record<number, Resolution>;
+  normalEdits: NormalEdits;
+  nonConflictingSelections: NonConflictingSelections;
+  activeConflictIndex: number;
+}) {
+  const [shapes, setShapes] = useState<ConnectorShape[]>([]);
+  const [clipBounds, setClipBounds] = useState({ top: 0, height: 0, width: 0 });
+
+  useEffect(() => {
+    const layout = layoutRef.current;
+    const panes = paneRefs.map(ref => ref.current);
+    if (!layout || panes.some(pane => !pane)) return;
+    const concretePanes = panes as HTMLDivElement[];
+
+    let frame = 0;
+    const renderConnectors = () => {
+        const rootRect = layout.getBoundingClientRect();
+        const titleAreas = concretePanes
+          .map(pane => pane.querySelector('[data-merge-column-title]')?.getBoundingClientRect())
+          .filter((rect): rect is DOMRect => Boolean(rect));
+        const viewportTop = titleAreas.length > 0 ? Math.max(...titleAreas.map(rect => rect.bottom - rootRect.top)) : 0;
+        const viewportBottom = Math.min(...concretePanes.map(pane => pane.getBoundingClientRect().bottom - rootRect.top));
+        const paneRects = concretePanes.map(pane => pane.getBoundingClientRect());
+        const nextShapes: ConnectorShape[] = [];
+        const isVisible = (...bounds: DOMRect[]) => (
+          Math.max(...bounds.map(bound => bound.bottom)) > rootRect.top + viewportTop
+          && Math.min(...bounds.map(bound => bound.top)) < rootRect.top + viewportBottom
+        );
+
+        for (let conflictIndex = 0; conflictIndex < conflicts.length; conflictIndex += 1) {
+          const selector = `[data-conflict-index="${conflictIndex}"]`;
+          const conflictBounds = (pane: HTMLDivElement): DOMRect | undefined => {
+            const block = pane.querySelector<HTMLElement>(selector);
+            const anchor = block?.querySelector<HTMLElement>('[data-merge-connector-anchor]');
+            return (anchor ?? block)?.getBoundingClientRect();
+          };
+          const left = conflictBounds(concretePanes[0]);
+          const center = conflictBounds(concretePanes[1]);
+          const right = conflictBounds(concretePanes[2]);
+          if (!left || !center || !right) continue;
+
+          if (!isVisible(left, center, right)) continue;
+
+          nextShapes.push({
+            key: `left-${conflictIndex}`,
+            kind: 'conflict',
+            side: 'left',
+            index: conflictIndex,
+            active: conflictIndex === activeConflictIndex,
+            ...connectorBandPath(left, center, rootRect, paneRects[0].left, paneRects[0].right, paneRects[1].left, paneRects[1].right, 'ltr'),
+          });
+          nextShapes.push({
+            key: `right-${conflictIndex}`,
+            kind: 'conflict',
+            side: 'right',
+            index: conflictIndex,
+            active: conflictIndex === activeConflictIndex,
+            ...connectorBandPath(center, right, rootRect, paneRects[1].left, paneRects[1].right, paneRects[2].left, paneRects[2].right, 'rtl'),
+          });
+        }
+
+        const changeIndexes = new Set<number>();
+        concretePanes.forEach(pane => {
+          pane.querySelectorAll<HTMLElement>('[data-change-block-index]').forEach(node => {
+            const index = Number(node.dataset.changeBlockIndex);
+            if (Number.isInteger(index)) changeIndexes.add(index);
+          });
+        });
+        const changeBounds = (pane: HTMLDivElement, blockIndex: number): DOMRect | undefined => {
+          const nodes = Array.from(pane.querySelectorAll<HTMLElement>(`[data-change-block-index="${blockIndex}"]`));
+          if (nodes.length === 0) return undefined;
+          const bounds = nodes.map(node => node.getBoundingClientRect());
+          const paneRect = pane.getBoundingClientRect();
+          const top = Math.min(...bounds.map(bound => bound.top));
+          const bottom = Math.max(...bounds.map(bound => bound.bottom));
+          return new DOMRect(paneRect.left, top, paneRect.width, Math.max(1, bottom - top));
+        };
+        const readChangeTone = (pane: HTMLDivElement, blockIndex: number): ChangeTone => {
+          const tone = pane.querySelector<HTMLElement>(`[data-change-block-index="${blockIndex}"][data-change-tone]`)?.dataset.changeTone;
+          return tone === 'added' || tone === 'deleted' || tone === 'accepted' ? tone : 'modified';
+        };
+
+        [...changeIndexes].sort((left, right) => left - right).forEach(blockIndex => {
+          const center = changeBounds(concretePanes[1], blockIndex);
+          if (!center) return;
+          const left = changeBounds(concretePanes[0], blockIndex);
+          const right = changeBounds(concretePanes[2], blockIndex);
+
+          if (left && isVisible(left, center)) {
+            nextShapes.push({
+              key: `change-left-${blockIndex}`,
+              kind: 'change',
+              side: 'left',
+              index: blockIndex,
+              changeTone: readChangeTone(concretePanes[0], blockIndex),
+              active: false,
+              ...connectorBandPath(left, center, rootRect, paneRects[0].left, paneRects[0].right, paneRects[1].left, paneRects[1].right, 'ltr'),
+            });
+          }
+          if (right && isVisible(center, right)) {
+            nextShapes.push({
+              key: `change-right-${blockIndex}`,
+              kind: 'change',
+              side: 'right',
+              index: blockIndex,
+              changeTone: readChangeTone(concretePanes[2], blockIndex),
+              active: false,
+              ...connectorBandPath(center, right, rootRect, paneRects[1].left, paneRects[1].right, paneRects[2].left, paneRects[2].right, 'rtl'),
+            });
+          }
+        });
+
+        setClipBounds({
+          top: viewportTop,
+          height: Math.max(0, viewportBottom - viewportTop),
+          width: rootRect.width,
+        });
+        setShapes(nextShapes);
+    };
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(renderConnectors);
+    };
+
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(layout);
+    concretePanes.forEach(pane => {
+      pane.addEventListener('scroll', update, { passive: true });
+      resizeObserver.observe(pane);
+    });
+    renderConnectors();
+
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      concretePanes.forEach(pane => pane.removeEventListener('scroll', update));
+    };
+  }, [activeConflictIndex, conflicts, layoutRef, nonConflictingSelections, normalEdits, paneRefs, resolutions]);
+
+  const clipId = 'versiondock-merge-connector-clip';
+  return (
+    <svg aria-hidden="true" style={styles.connectorOverlay}>
+      <defs>
+        <clipPath id={clipId}>
+          <rect x="0" y={clipBounds.top} width={clipBounds.width} height={clipBounds.height} />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${clipId})`}>
+        {shapes.map(shape => {
+          const selected = shape.kind === 'conflict'
+            ? includesResolutionSide(resolutions[shape.index], sideResolution(shape.side))
+            : nonConflictingSelections[shape.index] === shape.side;
+          const outlinedSelection = selected;
+          const tone = shape.kind === 'conflict' ? 'conflict' : shape.changeTone ?? 'modified';
+          const color = tone === 'accepted' || tone === 'added'
+            ? acceptedRibbon
+            : tone === 'deleted'
+              ? deletedRibbon
+              : tone === 'modified'
+                ? modifiedRibbon
+                : conflictRibbon;
+          return (
+            <g key={shape.key} style={styles.connectorShape}>
+              <path
+                d={outlinedSelection ? shape.outlinePath : shape.fillPath}
+                fill={outlinedSelection ? 'none' : color}
+                stroke={outlinedSelection
+                  ? shape.kind === 'conflict' ? conflictBoundaryColor : appliedBoundaryColor(shape.changeTone ?? 'modified')
+                  : undefined}
+                strokeWidth={outlinedSelection ? 1 : undefined}
+                strokeDasharray={outlinedSelection ? '1 2' : undefined}
+                strokeLinecap={outlinedSelection ? 'round' : undefined}
+                style={styles.connectorPath}
+              />
+            </g>
+          );
+        })}
+      </g>
+    </svg>
+  );
+}
+
+function BlockActionBar({ side, kind, selected, resettable, onAccept, onReset }: {
+  side: 'left' | 'right';
+  kind: 'conflict' | 'change';
+  selected: boolean;
+  resettable: boolean;
+  onAccept: () => void;
+  onReset: () => void;
+}) {
+  const acceptLabel = side === 'left' ? t('Accept Current') : t('Accept Incoming');
+  const resetLabel = kind === 'conflict' ? t('Reset') : t('Cancel application');
+  const directionIcon = <Codicon name={side === 'left' ? 'arrow-right' : 'arrow-left'} style={styles.blockActionDirectionIcon} />;
+  const acceptAction = (
+    <button
+      type="button"
+      className="versiondock-block-action-button versiondock-block-action-button--accept"
+      style={styles.blockActionButton('accept')}
+      onClick={onAccept}
+      title={acceptLabel}
+      aria-label={acceptLabel}
+    >
+      {side === 'left' && directionIcon}
+      <span>{acceptLabel}</span>
+      {side === 'right' && directionIcon}
+    </button>
+  );
+  const acceptedStatus = (
+    <span style={styles.blockActionStatus} title={acceptLabel}>
+      <Codicon name="check" style={styles.blockActionStatusIcon} />
+      <span>{t('Accepted')}</span>
+    </span>
+  );
+  const resetAction = resettable ? (
+    <button
+      type="button"
+      className="versiondock-block-action-button versiondock-block-action-button--reset"
+      style={styles.blockActionButton('reset')}
+      onClick={onReset}
+      title={resetLabel}
+      aria-label={resetLabel}
+    >
+      <Codicon name="discard" style={styles.blockActionResetIcon} />
+    </button>
+  ) : null;
+
+  return (
+    <div style={styles.blockActionBar}>
+      <span className="versiondock-block-action-segmented" style={styles.blockActionGroup}>
+        {selected ? acceptedStatus : acceptAction}
+        {resetAction}
+      </span>
+    </div>
+  );
+}
+
+export function ThreeWayLayout({ file, language, resolutions, normalEdits, nonConflictingSelections, onResultChange, onResolveBlock, onNormalEdit, onSelectNonConflicting, currentConflictIndex, syncScrollEnabled }: Props) {
+  const layoutRef = useRef<HTMLDivElement>(null);
   const segments = useMemo(() => splitConflictSegments(file.content, file), [file]);
+  const normalVersionLines = useMemo(() => ({
+    base: buildBaseNormalEdits(file),
+    left: buildNormalEditsForNonConflictingScope(file, 'left'),
+    right: buildNormalEditsForNonConflictingScope(file, 'right'),
+    blocks: buildNormalBlockRefs(file),
+  }), [file]);
   const { refs, onScroll } = useSyncedScroll(syncScrollEnabled);
 
   useEffect(() => {
     const container = refs[1].current;
     const active = container?.querySelector(`[data-conflict-index="${currentConflictIndex}"]`) as HTMLElement | null;
     if (!container || !active) return;
-    container.scrollTop = Math.max(0, active.offsetTop - 120);
+    container.scrollTop = Math.max(0, active.offsetTop - 180);
   }, [currentConflictIndex, file, refs]);
 
   const applyResolution = (index: number, resolution: Resolution) => {
@@ -571,47 +1055,267 @@ export function ThreeWayLayout({ file, language, resolutions, normalEdits, onRes
 
   return (
     <div style={styles.container}>
-      <div style={styles.grid}>
-        <Column refEl={refs[0]} title={t('Left (Current)')} side="left" segments={segments} resolutions={resolutions} normalEdits={normalEdits} language={language} activeConflictIndex={currentConflictIndex} onScroll={onScroll(0)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} />
-        <Column refEl={refs[1]} title={t('Center (Result)')} side="center" segments={segments} resolutions={resolutions} normalEdits={normalEdits} language={language} activeConflictIndex={currentConflictIndex} onScroll={onScroll(1)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} />
-        <Column refEl={refs[2]} title={t('Right (Incoming)')} side="right" segments={segments} resolutions={resolutions} normalEdits={normalEdits} language={language} activeConflictIndex={currentConflictIndex} onScroll={onScroll(2)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} />
+      <style>{MERGE_SCROLLBAR_STYLES}</style>
+      <div ref={layoutRef} style={styles.grid}>
+        <Column refEl={refs[0]} title={`${t('Current')} · ${file.oursLabel}`} side="left" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalVersionLines={normalVersionLines.left} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(0)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />
+        <div style={styles.connectorGutter} />
+        <Column refEl={refs[1]} title={`${t('Result')} · ${file.relativePath}`} side="center" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(1)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />
+        <div style={styles.connectorGutter} />
+        <Column refEl={refs[2]} title={`${t('Incoming')} · ${file.theirsLabel}`} side="right" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalVersionLines={normalVersionLines.right} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(2)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />
+        <MergeConnectorOverlay layoutRef={layoutRef} paneRefs={refs} conflicts={file.conflicts} resolutions={resolutions} normalEdits={normalEdits} nonConflictingSelections={nonConflictingSelections} activeConflictIndex={currentConflictIndex} />
       </div>
     </div>
   );
 }
 
-function Column({ refEl, title, side, segments, resolutions, normalEdits, language, activeConflictIndex, onScroll, onResolve, onNormalEdit }: {
+interface VerticalScrollbarMetrics {
+  visible: boolean;
+  top: number;
+  height: number;
+  trackHeight: number;
+}
+
+interface HorizontalScrollbarMetrics {
+  visible: boolean;
+  left: number;
+  width: number;
+  trackWidth: number;
+}
+
+function OverlayVerticalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HTMLDivElement> }) {
+  const [metrics, setMetrics] = useState<VerticalScrollbarMetrics>({ visible: false, top: 0, height: 0, trackHeight: 0 });
+  const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
+
+  useEffect(() => {
+    const pane = scrollRef.current;
+    if (!pane) return;
+
+    const update = () => {
+      const titleHeight = pane.querySelector<HTMLElement>('[data-merge-column-title]')?.offsetHeight ?? 29;
+      const horizontalScrollbarHeight = pane.scrollWidth > pane.clientWidth + 1 ? 10 : 0;
+      const trackHeight = Math.max(0, pane.clientHeight - titleHeight - horizontalScrollbarHeight);
+      const scrollableHeight = Math.max(0, pane.scrollHeight - pane.clientHeight);
+      if (scrollableHeight === 0 || trackHeight === 0) {
+        setMetrics({ visible: false, top: 0, height: 0, trackHeight });
+        return;
+      }
+
+      const height = Math.min(trackHeight, Math.max(28, trackHeight * (pane.clientHeight / pane.scrollHeight)));
+      const travel = Math.max(0, trackHeight - height);
+      const top = scrollableHeight > 0 ? (pane.scrollTop / scrollableHeight) * travel : 0;
+      setMetrics({ visible: true, top, height, trackHeight });
+    };
+
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(pane);
+    const codeArea = pane.querySelector<HTMLElement>('[data-merge-code-area]');
+    if (codeArea) resizeObserver.observe(codeArea);
+    pane.addEventListener('scroll', update, { passive: true });
+    update();
+    return () => {
+      resizeObserver.disconnect();
+      pane.removeEventListener('scroll', update);
+    };
+  }, [scrollRef]);
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const pane = scrollRef.current;
+    if (!pane) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { pointerId: event.pointerId, startY: event.clientY, startScrollTop: pane.scrollTop };
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const pane = scrollRef.current;
+    const drag = dragRef.current;
+    if (!pane || !drag || drag.pointerId !== event.pointerId) return;
+    const travel = Math.max(1, metrics.trackHeight - metrics.height);
+    const scrollableHeight = Math.max(0, pane.scrollHeight - pane.clientHeight);
+    pane.scrollTop = drag.startScrollTop + ((event.clientY - drag.startY) / travel) * scrollableHeight;
+  };
+
+  const stopDragging = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    const pane = scrollRef.current;
+    if (!pane) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const travel = Math.max(1, metrics.trackHeight - metrics.height);
+    const targetTop = Math.max(0, Math.min(travel, event.clientY - rect.top - metrics.height / 2));
+    pane.scrollTop = (targetTop / travel) * Math.max(0, pane.scrollHeight - pane.clientHeight);
+  };
+
+  if (!metrics.visible) return null;
+  return (
+    <div style={styles.overlayScrollbarTrack(metrics.trackHeight)} onPointerDown={onTrackPointerDown}>
+      <div
+        role="scrollbar"
+        aria-label={t('Vertical scrollbar')}
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(0, (scrollRef.current?.scrollHeight ?? 0) - (scrollRef.current?.clientHeight ?? 0))}
+        aria-valuenow={scrollRef.current?.scrollTop ?? 0}
+        style={styles.overlayScrollbarThumb(metrics.top, metrics.height)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={stopDragging}
+        onPointerCancel={stopDragging}
+      />
+    </div>
+  );
+}
+
+function OverlayHorizontalScrollbar({ scrollRef }: { scrollRef: React.RefObject<HTMLDivElement> }) {
+  const [metrics, setMetrics] = useState<HorizontalScrollbarMetrics>({ visible: false, left: 0, width: 0, trackWidth: 0 });
+  const dragRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
+
+  useEffect(() => {
+    const pane = scrollRef.current;
+    if (!pane) return;
+
+    const update = () => {
+      const verticalScrollbarWidth = pane.scrollHeight > pane.clientHeight + 1 ? 10 : 0;
+      const trackWidth = Math.max(0, pane.clientWidth - verticalScrollbarWidth);
+      const scrollableWidth = Math.max(0, pane.scrollWidth - pane.clientWidth);
+      if (scrollableWidth === 0 || trackWidth === 0) {
+        setMetrics({ visible: false, left: 0, width: 0, trackWidth });
+        return;
+      }
+
+      const width = Math.min(trackWidth, Math.max(28, trackWidth * (pane.clientWidth / pane.scrollWidth)));
+      const travel = Math.max(0, trackWidth - width);
+      const left = scrollableWidth > 0 ? (pane.scrollLeft / scrollableWidth) * travel : 0;
+      setMetrics({ visible: true, left, width, trackWidth });
+    };
+
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(pane);
+    const codeArea = pane.querySelector<HTMLElement>('[data-merge-code-area]');
+    if (codeArea) resizeObserver.observe(codeArea);
+    pane.addEventListener('scroll', update, { passive: true });
+    update();
+    return () => {
+      resizeObserver.disconnect();
+      pane.removeEventListener('scroll', update);
+    };
+  }, [scrollRef]);
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const pane = scrollRef.current;
+    if (!pane) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScrollLeft: pane.scrollLeft };
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const pane = scrollRef.current;
+    const drag = dragRef.current;
+    if (!pane || !drag || drag.pointerId !== event.pointerId) return;
+    const travel = Math.max(1, metrics.trackWidth - metrics.width);
+    const scrollableWidth = Math.max(0, pane.scrollWidth - pane.clientWidth);
+    pane.scrollLeft = drag.startScrollLeft + ((event.clientX - drag.startX) / travel) * scrollableWidth;
+  };
+
+  const stopDragging = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    const pane = scrollRef.current;
+    if (!pane) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const travel = Math.max(1, metrics.trackWidth - metrics.width);
+    const targetLeft = Math.max(0, Math.min(travel, event.clientX - rect.left - metrics.width / 2));
+    pane.scrollLeft = (targetLeft / travel) * Math.max(0, pane.scrollWidth - pane.clientWidth);
+  };
+
+  if (!metrics.visible) return null;
+  return (
+    <div style={styles.overlayHorizontalScrollbarTrack(metrics.trackWidth)} onPointerDown={onTrackPointerDown}>
+      <div
+        role="scrollbar"
+        aria-label={t('Horizontal scrollbar')}
+        aria-orientation="horizontal"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(0, (scrollRef.current?.scrollWidth ?? 0) - (scrollRef.current?.clientWidth ?? 0))}
+        aria-valuenow={scrollRef.current?.scrollLeft ?? 0}
+        style={styles.overlayHorizontalScrollbarThumb(metrics.left, metrics.width)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={stopDragging}
+        onPointerCancel={stopDragging}
+      />
+    </div>
+  );
+}
+
+function Column({ refEl, title, side, segments, resolutions, normalEdits, baseNormalLines, normalVersionLines, normalBlockRefs, nonConflictingSelections, language, onScroll, onResolve, onNormalEdit, onSelectNonConflicting }: {
   refEl: React.RefObject<HTMLDivElement>;
   title: string;
   side: PaneSide;
   segments: Segment[];
   resolutions: Record<number, Resolution>;
   normalEdits: NormalEdits;
+  baseNormalLines?: NormalEdits | null;
+  normalVersionLines?: NormalEdits | null;
+  normalBlockRefs?: Record<number, NormalBlockRef[]> | null;
+  nonConflictingSelections: NonConflictingSelections;
   language: string;
-  activeConflictIndex: number;
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void;
   onResolve: (index: number, resolution: Resolution) => void;
   onNormalEdit: (index: number, lines: string[]) => void;
+  onSelectNonConflicting: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
 }) {
   let lineNo = 1;
   return (
-    <div ref={refEl} style={styles.column} onScroll={onScroll}>
-      <div style={styles.columnTitle}>{title}</div>
-      <div style={styles.codeWrap}>
-        {segments.map((segment, index) => {
+    <div style={styles.columnFrame}>
+      <div ref={refEl} className="versiondock-merge-pane" data-merge-pane={side} style={styles.column} onScroll={onScroll}>
+        <div data-merge-column-title style={styles.columnTitle} title={title}>{title}</div>
+        <div data-merge-code-area style={styles.codeWrap}>
+          {segments.map((segment, index) => {
           const start = lineNo;
           const resolution = segment.kind === 'conflict' ? resolutions[segment.index] : undefined;
-          const normalLines = segment.kind === 'normal' && side === 'center' ? normalEdits[index] : undefined;
+          const normalLines = segment.kind === 'normal'
+            ? side === 'center' ? normalEdits[index] : normalVersionLines?.[index]
+            : undefined;
+          const displayedNormalLines = segment.kind === 'normal' ? normalLines ?? segment.lines : undefined;
+          const changeFlags = displayedNormalLines
+            ? changedLineFlags(baseNormalLines?.[index] ?? (segment.kind === 'normal' ? segment.lines : []), displayedNormalLines)
+            : undefined;
+          const resultAreaVisuals = segment.kind === 'normal' && side === 'center' && normalBlockRefs?.[index]
+            ? buildResultChangeAreaVisuals(normalBlockRefs[index], nonConflictingSelections)
+            : undefined;
+          const displayedChangeFlags = resultAreaVisuals && resultAreaVisuals.flags.length === displayedNormalLines?.length
+            ? resultAreaVisuals.flags
+            : changeFlags;
+          const displayedChangeTones = resultAreaVisuals && resultAreaVisuals.tones.length === displayedNormalLines?.length
+            ? resultAreaVisuals.tones
+            : undefined;
+          const displayedChangeBlockRanges = resultAreaVisuals && resultAreaVisuals.flags.length === displayedNormalLines?.length
+            ? resultAreaVisuals.ranges
+            : undefined;
           lineNo += lineCount(segment, side, resolution, normalLines);
-          const active = segment.kind === 'conflict' && segment.index === activeConflictIndex;
-          return <SegmentView key={index} segmentIndex={index} segment={segment} side={side} startLine={start} language={language} resolution={resolution} normalLines={normalLines} active={active} onResolve={onResolve} onNormalEdit={onNormalEdit} />;
-        })}
+            return <SegmentView key={index} segmentIndex={index} segment={segment} side={side} startLine={start} language={language} resolution={resolution} normalLines={normalLines} normalBlocks={normalBlockRefs?.[index]} nonConflictingSelections={nonConflictingSelections} changeFlags={displayedChangeFlags} changeTones={displayedChangeTones} changeBlockRanges={displayedChangeBlockRanges} onResolve={onResolve} onNormalEdit={onNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />;
+          })}
+        </div>
       </div>
+      <OverlayVerticalScrollbar scrollRef={refEl} />
+      <OverlayHorizontalScrollbar scrollRef={refEl} />
     </div>
   );
 }
 
-function SegmentView({ segmentIndex, segment, side, startLine, language, resolution, normalLines, active, onResolve, onNormalEdit }: {
+function SegmentView({ segmentIndex, segment, side, startLine, language, resolution, normalLines, normalBlocks, nonConflictingSelections, changeFlags, changeTones, changeBlockRanges, onResolve, onNormalEdit, onSelectNonConflicting }: {
   segmentIndex: number;
   segment: Segment;
   side: PaneSide;
@@ -619,9 +1323,14 @@ function SegmentView({ segmentIndex, segment, side, startLine, language, resolut
   language: string;
   resolution?: Resolution;
   normalLines?: string[];
-  active: boolean;
+  normalBlocks?: NormalBlockRef[];
+  nonConflictingSelections: NonConflictingSelections;
+  changeFlags?: boolean[];
+  changeTones?: ChangeTone[];
+  changeBlockRanges?: ChangeBlockRange[];
   onResolve: (index: number, resolution: Resolution) => void;
   onNormalEdit: (index: number, lines: string[]) => void;
+  onSelectNonConflicting: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
 }) {
   if (segment.kind === 'normal') {
     if (side === 'center') {
@@ -631,135 +1340,225 @@ function SegmentView({ segmentIndex, segment, side, startLine, language, resolut
           value={linesToEditableValue(lines)}
           startLine={startLine}
           language={language}
+          changeFlags={changeFlags}
+          changeTones={changeTones}
+          changeBlockRanges={changeBlockRanges}
           onChange={value => onNormalEdit(segmentIndex, editableValueToLines(value))}
         />
       );
     }
-    return <CodeLines lines={segment.lines} startLine={startLine} language={language} />;
+    if (normalBlocks) {
+      return <NormalSideBlocks blocks={normalBlocks} side={side} startLine={startLine} language={language} selections={nonConflictingSelections} onSelect={onSelectNonConflicting} />;
+    }
+    return <CodeLines lines={normalLines ?? segment.lines} startLine={startLine} language={language} changeFlags={changeFlags} changeTone="modified" />;
   }
 
   const resolved = isResolvedResolution(resolution);
 
   if (side === 'center') {
-    if (resolved) {
-      const lines = resolveLines(segment.block, resolution);
+    const lines = resolved ? resolveLines(segment.block, resolution) : segment.block.baseLines;
+    if (lines.length === 0) {
       return (
-        <div data-conflict-index={segment.index} style={{ ...styles.conflictBlock(side, resolution, active), minHeight: resultConflictMinHeight(segment.block, resolution) }}>
-          <ConflictHeader side="center" resolution={resolution} onReset={() => onResolve(segment.index, 'unresolved')} />
-          <div style={styles.resultContentArea(resolution === 'ours' ? 'mine' : resolution === 'theirs' ? 'theirs' : undefined)}>
-            <EditableCodeBlock
-              value={linesToEditableValue(lines)}
-              startLine={startLine}
-              language={language}
-              onChange={value => onResolve(segment.index, { type: 'custom', lines: editableValueToLines(value) })}
-            />
-          </div>
-        </div>
+        <div
+          data-conflict-index={segment.index}
+          style={resolved ? styles.emptyAppliedConflictAnchor : styles.emptyBlockAnchor('conflict')}
+        />
       );
     }
-
     return (
-      <div data-conflict-index={segment.index} style={styles.conflictBlock(side, 'unresolved', active)}>
-        <ConflictHeader side="center" resolution={resolution} />
-        <div style={styles.resultContentArea('mine')}>
-          <EditableCodeBlock
-            value={linesToEditableValue(segment.block.oursLines)}
-            startLine={startLine}
-            language={language}
-            dim={segment.block.oursLines.length === 0}
-            onChange={value => onResolve(segment.index, { type: 'custom', lines: editableValueToLines(value) })}
-          />
-        </div>
-        <div style={styles.incomingSeparator}>{t('Incoming')} ↓</div>
-        <div style={styles.ghostBlock}>
-          <CodeLines lines={segment.block.theirsLines.length === 0 ? [''] : segment.block.theirsLines} startLine={startLine} language={language} dim />
-        </div>
+      <div data-conflict-index={segment.index} style={resolved ? styles.appliedConflictBlock : styles.conflictBlock}>
+        <EditableCodeBlock
+          value={linesToEditableValue(lines)}
+          startLine={startLine}
+          language={language}
+          dim={lines.length === 0}
+          onChange={value => onResolve(segment.index, {
+            type: 'custom',
+            lines: editableValueToLines(value),
+            acceptedSides: acceptedResolutionSides(resolution),
+          })}
+        />
       </div>
     );
   }
 
   const lines = side === 'left' ? segment.block.oursLines : segment.block.theirsLines;
-  const accepted = (side === 'left' && resolution === 'ours') || (side === 'right' && resolution === 'theirs');
   const currentSide = sideResolution(side);
+  const accepted = includesResolutionSide(resolution, currentSide);
+  const resettable = accepted || isCustomResolution(resolution);
+  const accept = () => onResolve(segment.index, addResolutionSide(resolution, currentSide));
+  const reset = () => onResolve(
+    segment.index,
+    isCustomResolution(resolution) ? 'unresolved' : removeResolutionSide(resolution, currentSide),
+  );
 
   return (
-    <div data-conflict-index={segment.index} style={{ ...styles.conflictBlock(side, accepted ? resolution : 'unresolved', active), minHeight: sideConflictMinHeight(segment.block, resolution) + CONFLICT_HEADER_HEIGHT }}>
-      <ConflictHeader
-        side={side}
-        resolution={resolution}
-        onAccept={() => onResolve(segment.index, addResolutionSide(resolution, currentSide))}
-        onDelete={() => onResolve(segment.index, removeResolutionSide(resolution, currentSide))}
-      />
-      <CodeLines lines={lines.length === 0 ? [''] : lines} startLine={startLine} language={language} dim={lines.length === 0} />
+    <div data-conflict-index={segment.index} style={accepted ? styles.appliedConflictSideBlock : styles.conflictBlock}>
+      <BlockActionBar side={side} kind="conflict" selected={accepted} resettable={resettable} onAccept={accept} onReset={reset} />
+      <div
+        data-merge-connector-anchor
+        style={lines.length > 0
+          ? accepted ? styles.appliedConflictContentAnchor : styles.connectorContentAnchor
+          : accepted ? styles.emptyAppliedConflictAnchor : styles.emptyBlockAnchor('conflict')}
+      >
+        {lines.length > 0 && <CodeLines lines={lines} startLine={startLine} language={language} />}
+      </div>
     </div>
   );
 }
 
-function ConflictHeader({ side, resolution, onAccept, onDelete, onReset }: {
-  side: PaneSide;
-  resolution?: Resolution;
-  onAccept?: () => void;
-  onDelete?: () => void;
-  onReset?: () => void;
+type ChangeTone = 'modified' | 'added' | 'deleted' | 'accepted';
+
+interface ChangeBlockRange {
+  blockIndex: number;
+  startLine: number;
+  lineCount: number;
+  tone: ChangeTone;
+  applied: boolean;
+}
+
+function buildResultChangeAreaVisuals(blocks: NormalBlockRef[], selections: NonConflictingSelections): { flags: boolean[]; tones: ChangeTone[]; ranges: ChangeBlockRange[] } {
+  const flags: boolean[] = [];
+  const tones: ChangeTone[] = [];
+  const ranges: ChangeBlockRange[] = [];
+  let lineCursor = 0;
+  blocks.forEach(({ block, blockIndex }) => {
+    const resultLines = nonConflictingResultLines(block, selections[blockIndex]);
+    const applicable = isApplicableNonConflictingBlock(block);
+    const selected = Boolean(selections[blockIndex]);
+    const insertion = block.baseLines.length === 0 && (block.leftLines.length > 0 || block.rightLines.length > 0);
+    const deletion = block.baseLines.length > 0 && (
+      (block.state === 'modified_left' && block.leftLines.length === 0)
+      || (block.state === 'modified_right' && block.rightLines.length === 0)
+      || (block.state === 'modified_both' && block.leftLines.length === 0 && block.rightLines.length === 0)
+    );
+    const tone: ChangeTone = insertion ? 'added' : deletion ? 'deleted' : 'modified';
+    if (applicable) ranges.push({ blockIndex, startLine: lineCursor, lineCount: resultLines.length, tone, applied: selected });
+    resultLines.forEach(() => {
+      flags.push(applicable && !selected);
+      tones.push(tone);
+    });
+    lineCursor += resultLines.length;
+  });
+  return { flags, tones, ranges };
+}
+
+function NormalSideBlocks({ blocks, side, startLine, language, selections, onSelect }: {
+  blocks: NormalBlockRef[];
+  side: 'left' | 'right';
+  startLine: number;
+  language: string;
+  selections: NonConflictingSelections;
+  onSelect: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
 }) {
-  const resolved = isResolvedResolution(resolution);
-
-  if (side === 'center') {
-    return (
-      <div style={styles.conflictHeader('center')}>
-        <span style={styles.resultHeaderText}>{t('Result')}</span>
-        {resolved && <button style={styles.inlineButton('undo')} onClick={onReset} title={t('Reset')}>{'\u21a9'}</button>}
-      </div>
-    );
-  }
-
-  const currentSide = sideResolution(side);
-  const appliedHere = includesResolutionSide(resolution, currentSide);
-  const acceptDisabled = appliedHere;
-  const deleteDisabled = !appliedHere;
-
-  if (side === 'left') {
-    return (
-      <div style={styles.conflictHeader(side)}>
-        <button style={styles.inlineButton('delete', deleteDisabled)} disabled={deleteDisabled} onClick={onDelete} title={t('Delete')}>{'\u2715'}</button>
-        <button style={styles.inlineButton('mine', acceptDisabled)} disabled={acceptDisabled} onClick={onAccept} title={t('Accept Current')}>{t('Accept Current')} {'\u25b6'}</button>
-      </div>
-    );
-  }
-
-  return (
-    <div style={styles.conflictHeader(side)}>
-      <button style={styles.inlineButton('theirs', acceptDisabled)} disabled={acceptDisabled} onClick={onAccept} title={t('Accept Incoming')}>{'\u25c0'} {t('Accept Incoming')}</button>
-      <button style={styles.inlineButton('delete', deleteDisabled)} disabled={deleteDisabled} onClick={onDelete} title={t('Delete')}>{'\u2715'}</button>
-    </div>
-  );
-}
-
-function CodeLines({ lines, startLine, language, dim }: { lines: string[]; startLine: number; language: string; dim?: boolean }) {
-  const highlighter = useShiki();
-  const colorTheme = getVersionDockColorTheme();
-
-  const renderedLines = useMemo(() => {
-    return renderShikiLines(highlighter, lines, language, colorTheme);
-  }, [colorTheme, highlighter, language, lines]);
-
+  let lineNo = startLine;
   return (
     <>
-      {lines.map((line, index) => (
-        <div key={index} style={styles.codeLine(dim)}>
-          <span style={styles.lineNo}>{startLine + index}</span>
-          <span style={styles.codeText}>{renderedLines[index] ?? (line || ' ')}</span>
-        </div>
-      ))}
+      {blocks.map(({ block, blockIndex }) => {
+        const lines = side === 'left' ? block.leftLines : block.rightLines;
+        const flags = changedLineFlags(block.baseLines, lines);
+        const changedOnSide = side === 'left'
+          ? block.state === 'modified_left' || block.state === 'modified_both'
+          : block.state === 'modified_right' || block.state === 'modified_both';
+        const changeTone: ChangeTone = block.baseLines.length === 0 && lines.length > 0
+          ? 'added'
+          : block.baseLines.length > 0 && lines.length === 0
+            ? 'deleted'
+            : 'modified';
+        const applied = selections[blockIndex] === side;
+        const blockStartLine = lineNo;
+        lineNo += lines.length;
+        if (lines.length === 0 && !changedOnSide) return null;
+        return (
+          <div
+            key={blockIndex}
+            style={styles.normalChangeBlock}
+          >
+            {changedOnSide && (
+              <BlockActionBar
+                side={side}
+                kind="change"
+                selected={applied}
+                resettable={applied}
+                onAccept={() => onSelect(blockIndex, side)}
+                onReset={() => onSelect(blockIndex, 'base')}
+              />
+            )}
+            {changedOnSide ? (
+              <div
+                data-change-block-index={blockIndex}
+                data-change-tone={changeTone}
+                style={lines.length > 0
+                  ? styles.connectorContentAnchor
+                  : styles.emptyChangeConnectorAnchor(changeTone, applied)}
+              >
+                {lines.length > 0 && (
+                  <>
+                    {applied && <span aria-hidden="true" style={styles.appliedChangeMarker(changeTone)} />}
+                    <CodeLines
+                      lines={lines}
+                      startLine={blockStartLine}
+                      language={language}
+                      changeFlags={applied ? undefined : flags}
+                      changeTone={changeTone}
+                    />
+                  </>
+                )}
+              </div>
+            ) : lines.length > 0 ? (
+              <CodeLines lines={lines} startLine={blockStartLine} language={language} />
+            ) : null}
+          </div>
+        );
+      })}
     </>
   );
 }
 
-function EditableCodeBlock({ value, startLine, language, dim, onChange }: {
+function CodeLines({ lines, startLine, language, dim, changeFlags, changeTone }: {
+  lines: string[];
+  startLine: number;
+  language: string;
+  dim?: boolean;
+  changeFlags?: boolean[];
+  changeTone?: ChangeTone;
+}) {
+  const highlighter = useShiki();
+  const colorTheme = getVersionDockColorTheme();
+  const displayedLines = useMemo(() => lines.length > 0 ? lines : [''], [lines]);
+
+  const renderedLines = useMemo(() => {
+    return renderShikiLines(highlighter, displayedLines, language, colorTheme);
+  }, [colorTheme, displayedLines, highlighter, language]);
+
+  return (
+    <>
+      {displayedLines.map((line, index) => {
+        const changed = Boolean(changeFlags?.[index]);
+        return (
+          <div key={index} style={styles.codeLine(
+            dim,
+            changed ? changeTone : undefined,
+            changed && !changeFlags?.[index - 1],
+            changed && !changeFlags?.[index + 1],
+          )}>
+            <span style={styles.lineNo}>{startLine + index}</span>
+            <span style={styles.codeText}>{renderedLines[index] ?? (line || ' ')}</span>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function EditableCodeBlock({ value, startLine, language, dim, changeFlags, changeTones, changeBlockRanges, onChange }: {
   value: string;
   startLine: number;
   language: string;
   dim?: boolean;
+  changeFlags?: boolean[];
+  changeTones?: ChangeTone[];
+  changeBlockRanges?: ChangeBlockRange[];
   onChange: (value: string) => void;
 }) {
   const highlighter = useShiki();
@@ -778,14 +1577,31 @@ function EditableCodeBlock({ value, startLine, language, dim, onChange }: {
   return (
     <div style={styles.editableBlock(dim)}>
       <div style={styles.editableLineNumbers}>
-        {lineNumbers.map(line => (
-          <span key={line} style={styles.editableLineNo}>{line}</span>
+        {lineNumbers.map((line, index) => (
+          <span key={line} style={styles.editableLineNo(
+            changeFlags?.[index] ? changeTones?.[index] : undefined,
+            Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
+            Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
+          )}>{line}</span>
         ))}
       </div>
       <div style={styles.editableTextWrap(lineTotal, contentWidth)}>
+        {changeBlockRanges?.map(range => (
+          <span
+            key={range.blockIndex}
+            data-change-block-index={range.blockIndex}
+            data-change-tone={range.tone}
+            data-change-applied={range.applied || undefined}
+            style={styles.changeBlockMarker(range.startLine, range.lineCount, range.tone, range.applied)}
+          />
+        ))}
         <div aria-hidden="true" style={styles.editableHighlight}>
           {lines.map((line, index) => (
-            <div key={index} style={styles.editableHighlightLine}>
+            <div key={index} style={styles.editableHighlightLine(
+              changeFlags?.[index] ? changeTones?.[index] : undefined,
+              Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
+              Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
+            )}>
               {renderedLines[index] ?? (line || ' ')}
             </div>
           ))}
@@ -902,140 +1718,238 @@ function normalizeShikiLang(language: string): SupportedShikiLanguage {
   return 'typescript';
 }
 
-const mineBg = 'rgba(46, 160, 67, 0.18)';
-const mineHeaderBg = 'rgba(46, 160, 67, 0.10)';
-const mineBorder = 'rgba(76, 175, 80, 0.85)';
-const mineText = '#c8e6c9';
-const theirsBg = 'rgba(33, 150, 243, 0.18)';
-const theirsHeaderBg = 'rgba(33, 150, 243, 0.10)';
-const theirsBorder = 'rgba(33, 150, 243, 0.85)';
-const theirsText = '#bbdefb';
-const resultBorder = 'var(--vscode-panel-border)';
-const unresolvedCenterBg = 'var(--vscode-editor-background)';
+// Use VS Code's semantic diff/merge colors directly. Themes are responsible
+// for choosing suitable light, dark, and high-contrast values; keeping the
+// same token for code blocks and ribbons also prevents the connector gutter
+// from visually fading the change color a second time.
+const conflictBg = 'var(--vscode-diffEditor-removedTextBackground, color-mix(in srgb, var(--vscode-editorError-foreground, #f14c4c) 22%, transparent))';
+const conflictRibbon = conflictBg;
+const modifiedBg = 'var(--vscode-merge-incomingContentBackground, color-mix(in srgb, var(--vscode-editorInfo-foreground, #3794ff) 22%, transparent))';
+const modifiedRibbon = modifiedBg;
+const deletedBg = 'color-mix(in srgb, var(--vscode-editor-foreground) 18%, var(--vscode-editor-background))';
+const deletedRibbon = deletedBg;
+const acceptedBg = 'var(--vscode-diffEditor-insertedTextBackground, color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #73c991) 24%, transparent))';
+const acceptedRibbon = acceptedBg;
+const addedBg = acceptedBg;
+const conflictBoundaryColor = 'var(--vscode-editorOverviewRuler-deletedForeground, var(--vscode-editorError-foreground, #f14c4c))';
+
+function appliedBoundaryColor(tone: ChangeTone): string {
+  if (tone === 'added' || tone === 'accepted') {
+    return 'var(--vscode-editorOverviewRuler-addedForeground, var(--vscode-editorGutter-addedBackground, #73c991))';
+  }
+  if (tone === 'deleted') {
+    return 'var(--vscode-disabledForeground, var(--vscode-descriptionForeground, #8c8c8c))';
+  }
+  return 'var(--vscode-editorInfo-foreground, #3794ff)';
+}
+
+function changeLineVisual(tone?: ChangeTone, _startsChange = false, _endsChange = false): React.CSSProperties {
+  if (!tone) return {};
+  const background = tone === 'accepted'
+    ? acceptedBg
+    : tone === 'added'
+      ? addedBg
+      : tone === 'deleted'
+        ? deletedBg
+        : modifiedBg;
+  return { background };
+}
 
 const styles = {
   container: { display: 'flex', flexDirection: 'column' as const, flex: 1, minHeight: 0 },
-  grid: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', flex: 1, minHeight: 0 },
-  column: { overflow: 'auto', borderRight: '1px solid var(--vscode-panel-border)', minWidth: 0 },
-  columnTitle: {
-    position: 'sticky' as const,
-    top: 0,
-    zIndex: 2,
-    padding: '6px 12px',
-    fontSize: 12,
-    fontWeight: 600,
-    background: 'var(--vscode-editorGroupHeader-tabsBackground, #252526)',
-    borderBottom: '1px solid var(--vscode-panel-border)',
-  },
-  codeWrap: { width: 'max-content', minWidth: '100%', paddingBottom: 28 },
-  conflictBlock: (side: 'left' | 'center' | 'right', state?: Resolution, active?: boolean): React.CSSProperties => {
-    const isMine = side === 'left' || state === 'ours';
-    const isTheirs = side === 'right' || state === 'theirs';
-    const border = isMine ? mineBorder : isTheirs ? theirsBorder : resultBorder;
-    const background = side === 'center'
-      ? state === 'ours'
-        ? mineBg
-        : state === 'theirs'
-          ? theirsBg
-          : isResolvedResolution(state)
-            ? 'var(--vscode-editor-background)'
-            : unresolvedCenterBg
-      : side === 'left'
-        ? mineBg
-        : theirsBg;
-
-    return {
-      position: 'relative',
-      background,
-      borderTop: `1px solid ${resultBorder}`,
-      borderBottom: `1px solid ${resultBorder}`,
-      boxShadow: active ? `0 0 0 1px var(--vscode-focusBorder, #007fd4) inset` : undefined,
-      outline: active ? `1px solid ${border}` : undefined,
-      outlineOffset: -1,
-    };
-  },
-  conflictHeader: (side: PaneSide): React.CSSProperties => ({
-    height: CONFLICT_HEADER_HEIGHT,
+  grid: { position: 'relative' as const, display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${CONNECTOR_GUTTER_WIDTH} minmax(0, 1fr) ${CONNECTOR_GUTTER_WIDTH} minmax(0, 1fr)`, flex: 1, minHeight: 0, overflow: 'hidden', background: 'var(--vscode-editor-background)' },
+  columnFrame: { position: 'relative' as const, zIndex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--vscode-editor-background)' },
+  column: { position: 'relative' as const, width: '100%', height: '100%', overflowX: 'auto' as const, overflowY: 'auto' as const, scrollbarGutter: 'auto', minWidth: 0, background: 'var(--vscode-editor-background)' },
+  overlayScrollbarTrack: (height: number): React.CSSProperties => ({ position: 'absolute', top: 29, right: 0, zIndex: 9, width: 10, height, background: 'transparent', touchAction: 'none', pointerEvents: 'auto' }),
+  overlayScrollbarThumb: (top: number, height: number): React.CSSProperties => ({
+    position: 'absolute',
+    top,
+    right: 2,
+    width: 6,
+    height,
+    borderRadius: 6,
+    background: 'var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4))',
+    cursor: 'default',
+    touchAction: 'none',
+  }),
+  overlayHorizontalScrollbarTrack: (width: number): React.CSSProperties => ({
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+    zIndex: 9,
+    width,
+    height: 10,
+    background: 'transparent',
+    touchAction: 'none',
+    pointerEvents: 'auto',
+  }),
+  overlayHorizontalScrollbarThumb: (left: number, width: number): React.CSSProperties => ({
+    position: 'absolute',
+    left,
+    bottom: 2,
+    width,
+    height: 6,
+    borderRadius: 6,
+    background: 'var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4))',
+    cursor: 'default',
+    touchAction: 'none',
+  }),
+  connectorGutter: { position: 'relative' as const, zIndex: 0, minWidth: 0, background: 'var(--vscode-editor-background)', pointerEvents: 'none' as const },
+  connectorOverlay: { position: 'absolute' as const, inset: 0, zIndex: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' as const },
+  connectorShape: { transition: 'opacity 120ms ease' },
+  connectorPath: { mixBlendMode: 'normal' as const },
+  blockActionBar: {
+    position: 'sticky',
+    top: 29,
+    zIndex: 4,
+    width: '100%',
+    height: CODE_LINE_HEIGHT,
+    boxSizing: 'border-box',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 4,
-    padding: side === 'center' ? '0 8px' : '0 6px',
-    background: side === 'left'
-      ? mineHeaderBg
-      : side === 'right'
-        ? theirsHeaderBg
-        : 'var(--vscode-editor-background)',
-    borderBottom: side === 'center' ? '1px solid var(--vscode-panel-border)' : `1px solid ${side === 'left' ? mineBorder : theirsBorder}`,
-    fontFamily: 'var(--vscode-font-family)',
-    fontSize: 12,
-    userSelect: 'none' as const,
-  }),
-  resultHeaderText: {
-    color: 'var(--vscode-foreground)',
-    fontSize: 12,
-    fontWeight: 600,
+    padding: '1px 0',
+    background: 'var(--vscode-editor-background)',
+    userSelect: 'none',
+  } as React.CSSProperties,
+  blockActionGroup: {
+    position: 'sticky' as const,
+    left: 6,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 0,
+    width: 'max-content',
+    height: 19,
+    overflow: 'hidden',
+    borderRadius: 5,
+    background: 'color-mix(in srgb, var(--vscode-foreground) 8%, transparent)',
   },
-  inlineButton: (kind: 'mine' | 'theirs' | 'delete' | 'undo', disabled = false): React.CSSProperties => ({
-    height: 20,
+  blockActionButton: (kind: 'accept' | 'reset'): React.CSSProperties => ({
+    minWidth: kind === 'accept' ? 0 : 21,
+    height: 19,
+    padding: kind === 'accept' ? '0 6px' : 0,
+    border: '1px solid transparent',
+    borderRadius: 0,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    minWidth: kind === 'mine' || kind === 'theirs' ? 104 : 26,
-    padding: kind === 'mine' || kind === 'theirs' ? '0 9px' : 0,
-    borderRadius: 3,
-    border: `1px solid ${
-      kind === 'mine'
-        ? mineBorder
-        : kind === 'theirs'
-          ? theirsBorder
-          : kind === 'delete'
-            ? '#e57373'
-            : 'var(--vscode-button-border, #555)'
-    }`,
-    background: kind === 'mine'
-      ? mineBg
-      : kind === 'theirs'
-        ? theirsBg
-        : kind === 'delete'
-          ? '#4a1a1a'
-          : 'transparent',
-    color: kind === 'mine'
-      ? mineText
-      : kind === 'theirs'
-        ? theirsText
-        : kind === 'delete'
-          ? '#ffcdd2'
-          : 'var(--vscode-foreground)',
-    cursor: disabled ? 'default' : 'pointer',
     fontFamily: 'var(--vscode-font-family)',
     fontSize: 11,
-    fontWeight: 600,
-    lineHeight: '18px',
-    opacity: disabled ? 0.35 : 1,
+    fontWeight: 500,
+    lineHeight: '17px',
+    whiteSpace: 'nowrap',
+    color: kind === 'accept'
+      ? 'var(--vscode-foreground)'
+      : 'var(--vscode-descriptionForeground, var(--vscode-foreground))',
+    opacity: kind === 'accept' ? 0.9 : 0.78,
+    cursor: 'pointer',
+    transition: 'background-color 80ms ease, color 80ms ease, opacity 80ms ease',
+  }),
+  blockActionStatus: {
+    height: 19,
+    padding: '0 6px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    color: 'var(--vscode-foreground)',
+    fontSize: 11,
+    fontWeight: 500,
+    lineHeight: '19px',
     whiteSpace: 'nowrap' as const,
-  }),
-  resultContentArea: (kind?: 'mine' | 'theirs'): React.CSSProperties => ({
-    minHeight: '1.5em',
-    position: 'relative',
-    background: kind === 'mine' ? mineBg : kind === 'theirs' ? theirsBg : 'transparent',
-  }),
-  incomingSeparator: {
-    padding: '2px 12px',
-    background: 'rgba(33, 150, 243, 0.08)',
-    borderTop: '1px dashed rgba(33, 150, 243, 0.3)',
+  },
+  blockActionDirectionIcon: { fontSize: 11, lineHeight: '11px', pointerEvents: 'none' as const },
+  blockActionStatusIcon: { color: 'var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground, var(--vscode-foreground)))', fontSize: 11, lineHeight: '11px', pointerEvents: 'none' as const },
+  blockActionResetIcon: { fontSize: 13, lineHeight: '13px', pointerEvents: 'none' as const },
+  columnTitle: {
+    position: 'sticky' as const,
+    top: 0,
+    left: 0,
+    zIndex: 6,
+    width: '100%',
+    height: 29,
+    boxSizing: 'border-box' as const,
+    display: 'flex',
+    alignItems: 'center',
+    padding: '0 10px',
+    fontSize: 11,
+    fontWeight: 600,
     color: 'var(--vscode-descriptionForeground)',
-    fontFamily: 'var(--vscode-font-family)',
-    fontSize: 10,
-    letterSpacing: '0.05em',
-    pointerEvents: 'none' as const,
+    background: 'var(--vscode-editor-background)',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
     userSelect: 'none' as const,
   },
-  ghostBlock: { background: 'rgba(33, 150, 243, 0.10)', opacity: 0.55, pointerEvents: 'none' as const, userSelect: 'none' as const },
-  codeLine: (dim?: boolean): React.CSSProperties => ({ display: 'flex', minHeight: 21, lineHeight: '21px', fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: 'var(--vscode-editor-font-size, 13px)', opacity: dim ? 0.45 : 1 }),
-  lineNo: { width: 36, paddingRight: 10, textAlign: 'right' as const, color: 'var(--vscode-editorLineNumber-foreground, #6e7681)', userSelect: 'none' as const, flexShrink: 0 },
-  codeText: { whiteSpace: 'pre' as const, paddingRight: 16 },
+  codeWrap: { width: 'max-content', minWidth: '100%', paddingTop: 4, paddingBottom: 32 },
+  conflictBlock: {
+    position: 'relative',
+    minHeight: CODE_LINE_HEIGHT,
+    background: conflictBg,
+  } as React.CSSProperties,
+  appliedConflictBlock: {
+    position: 'relative',
+    minHeight: CODE_LINE_HEIGHT,
+    borderTop: `1px dotted ${conflictBoundaryColor}`,
+    borderBottom: `1px dotted ${conflictBoundaryColor}`,
+    boxSizing: 'border-box',
+  } as React.CSSProperties,
+  appliedConflictSideBlock: {
+    position: 'relative',
+    minHeight: CODE_LINE_HEIGHT,
+    boxSizing: 'border-box',
+  } as React.CSSProperties,
+  emptyAppliedConflictAnchor: {
+    position: 'relative',
+    width: '100%',
+    height: 2,
+    minHeight: 2,
+    borderTop: `2px dotted ${conflictBoundaryColor}`,
+    boxSizing: 'border-box',
+    pointerEvents: 'none',
+  } as React.CSSProperties,
+  emptyBlockAnchor: (tone: 'conflict' | ChangeTone): React.CSSProperties => ({
+    position: 'relative',
+    width: '100%',
+    height: 2,
+    minHeight: 2,
+    background: tone === 'conflict' ? conflictBg : changeLineVisual(tone).background,
+    pointerEvents: 'none',
+  }),
+  connectorContentAnchor: {
+    position: 'relative' as const,
+    width: '100%',
+  },
+  appliedConflictContentAnchor: {
+    position: 'relative',
+    width: '100%',
+    borderTop: `1px dotted ${conflictBoundaryColor}`,
+    borderBottom: `1px dotted ${conflictBoundaryColor}`,
+    boxSizing: 'border-box',
+  } as React.CSSProperties,
+  emptyChangeConnectorAnchor: (tone: ChangeTone, applied: boolean): React.CSSProperties => ({
+    position: 'relative',
+    width: '100%',
+    height: 2,
+    minHeight: 2,
+    boxSizing: 'border-box',
+    background: applied ? undefined : changeLineVisual(tone).background,
+    borderTop: applied ? `2px dotted ${appliedBoundaryColor(tone)}` : undefined,
+    pointerEvents: 'none',
+  }),
+  normalChangeBlock: { position: 'relative' as const },
+  appliedChangeMarker: (tone: ChangeTone): React.CSSProperties => ({
+    position: 'absolute',
+    inset: 0,
+    zIndex: 2,
+    borderTop: `1px dotted ${appliedBoundaryColor(tone)}`,
+    borderBottom: `1px dotted ${appliedBoundaryColor(tone)}`,
+    boxSizing: 'border-box',
+    pointerEvents: 'none',
+  }),
+  codeLine: (dim?: boolean, changeTone?: ChangeTone, startsChange?: boolean, endsChange?: boolean): React.CSSProperties => ({ position: 'relative', display: 'flex', minHeight: 21, lineHeight: '21px', fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: 'var(--vscode-editor-font-size, 13px)', opacity: dim ? 0.45 : 1, ...changeLineVisual(changeTone, startsChange, endsChange) }),
+  lineNo: { width: 44, paddingRight: 12, textAlign: 'right' as const, color: 'var(--vscode-editorLineNumber-foreground, #6e7681)', userSelect: 'none' as const, flexShrink: 0 },
+  codeText: { whiteSpace: 'pre', paddingRight: 16, flexShrink: 0 },
   editableBlock: (dim?: boolean): React.CSSProperties => ({
     display: 'flex',
     width: 'max-content',
@@ -1046,18 +1960,19 @@ const styles = {
     opacity: dim ? 0.45 : 1,
   }),
   editableLineNumbers: {
-    width: 36,
+    width: 44,
     flexShrink: 0,
     userSelect: 'none' as const,
   },
-  editableLineNo: {
+  editableLineNo: (changeTone?: ChangeTone, startsChange?: boolean, endsChange?: boolean): React.CSSProperties => ({
     display: 'block',
     height: CODE_LINE_HEIGHT,
     lineHeight: `${CODE_LINE_HEIGHT}px`,
-    paddingRight: 10,
+    paddingRight: 12,
     textAlign: 'right' as const,
     color: 'var(--vscode-editorLineNumber-foreground, #6e7681)',
-  },
+    ...changeLineVisual(changeTone, startsChange, endsChange),
+  }),
   editableTextWrap: (lineTotal: number, contentWidth: string): React.CSSProperties => ({
     position: 'relative',
     flex: 1,
@@ -1065,6 +1980,19 @@ const styles = {
     minWidth: contentWidth,
     height: lineTotal * CODE_LINE_HEIGHT,
     minHeight: CODE_LINE_HEIGHT,
+  }),
+  changeBlockMarker: (startLine: number, lineCount: number, tone: ChangeTone, applied: boolean): React.CSSProperties => ({
+    position: 'absolute',
+    top: startLine * CODE_LINE_HEIGHT - (lineCount === 0 ? 1 : 0),
+    left: applied || lineCount === 0 ? -44 : 0,
+    right: 0,
+    height: lineCount === 0 ? 2 : lineCount * CODE_LINE_HEIGHT,
+    zIndex: applied ? 2 : undefined,
+    background: !applied && lineCount === 0 ? changeLineVisual(tone).background : undefined,
+    borderTop: applied ? `${lineCount === 0 ? 2 : 1}px dotted ${appliedBoundaryColor(tone)}` : undefined,
+    borderBottom: applied && lineCount > 0 ? `1px dotted ${appliedBoundaryColor(tone)}` : undefined,
+    boxSizing: 'border-box',
+    pointerEvents: 'none',
   }),
   editableHighlight: {
     position: 'absolute',
@@ -1079,11 +2007,13 @@ const styles = {
     fontSize: 'var(--vscode-editor-font-size, 13px)',
     lineHeight: `${CODE_LINE_HEIGHT}px`,
   } as React.CSSProperties,
-  editableHighlightLine: {
+  editableHighlightLine: (changeTone?: ChangeTone, startsChange?: boolean, endsChange?: boolean): React.CSSProperties => ({
+    width: 'calc(100% + 16px)',
     height: CODE_LINE_HEIGHT,
     minHeight: CODE_LINE_HEIGHT,
     lineHeight: `${CODE_LINE_HEIGHT}px`,
-  },
+    ...changeLineVisual(changeTone, startsChange, endsChange),
+  }),
   resultTextarea: (lineTotal: number): React.CSSProperties => ({
     position: 'relative',
     display: 'block',
