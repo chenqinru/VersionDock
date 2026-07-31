@@ -29,6 +29,7 @@ export async function openSquashEditor(
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: false }
     );
+    panel.iconPath = new vscode.ThemeIcon('fold');
 
     const codiconUri = panel.webview.asWebviewUri(
       vscode.Uri.joinPath(extensionUri, 'media', 'codicons', 'codicon.css')

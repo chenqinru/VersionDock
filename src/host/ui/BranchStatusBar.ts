@@ -1394,6 +1394,7 @@ export class BranchStatusBar implements vscode.Disposable {
     ]);
     const hasConflicts = (status?.conflictCount ?? 0) > 0
       || [...(status?.unstagedFiles ?? []), ...(status?.stagedFiles ?? [])].some(file => file.status === 'conflicted');
+    const hasAbortableMerge = status?.operationState === 'merge';
     type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
     const items: ActionItem[] = [
       ...(options.showBack === false ? [] : [
@@ -1424,11 +1425,11 @@ export class BranchStatusBar implements vscode.Disposable {
           description: t('Open the conflicts panel to resolve files'),
           action: async () => { await vscode.commands.executeCommand('versiondock.openConflicts'); },
         },
-        {
+        ...(hasAbortableMerge ? [{
           label: `$(error) ${t('Abort Merge')}`,
           description: t('SVN conflicts detected — revert conflicted files'),
           action: () => this.abortOperation(meta, 'merge'),
-        },
+        }] : []),
         {
           label: `$(check) ${t('Mark Resolved (Working)…')}`,
           action: () => this.markSvnResolvedWorking(meta),

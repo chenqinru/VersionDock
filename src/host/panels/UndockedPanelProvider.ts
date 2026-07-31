@@ -77,6 +77,7 @@ export class UndockedPanelProvider implements vscode.Disposable {
         ],
       },
     );
+    this.panel.iconPath = new vscode.ThemeIcon('source-control');
 
     this.panel.webview.html = getWebviewHtml(
       this.panel.webview,

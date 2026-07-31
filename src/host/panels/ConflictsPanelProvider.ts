@@ -40,6 +40,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
         ],
       },
     );
+    panel.iconPath = new vscode.ThemeIcon('warning');
 
     panel.webview.html = getWebviewHtml(panel.webview, this.extensionUri, 'conflicts', t('Conflicts'));
     const configWatcher = vscode.workspace.onDidChangeConfiguration(e => {

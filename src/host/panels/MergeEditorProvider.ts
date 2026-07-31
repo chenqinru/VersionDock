@@ -73,6 +73,7 @@ export class MergeEditorProvider implements vscode.Disposable {
         ],
       }
     );
+    panel.iconPath = new vscode.ThemeIcon('merge');
 
     // Start loading immediately, but only deliver the result after the webview
     // has installed its message listener and explicitly announced readiness.

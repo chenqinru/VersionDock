@@ -23,6 +23,7 @@ export async function openEditMessageEditor(
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: false }
     );
+    panel.iconPath = new vscode.ThemeIcon('edit');
 
     const codiconUri = panel.webview.asWebviewUri(
       vscode.Uri.joinPath(extensionUri, 'media', 'codicons', 'codicon.css')
