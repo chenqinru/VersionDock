@@ -17,6 +17,7 @@ import { VersionDockLogger } from './utils/Logger';
 import { AiProviderService } from './ai/AiProviderService';
 import { AiCommitMessageService } from './aiCommitMessage/AiCommitMessageService';
 import { AiMergeConflictService } from './aiMergeConflict/AiMergeConflictService';
+import { AiCommitExplanationService } from './aiCommitExplanation/AiCommitExplanationService';
 
 async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void> {
   const SHOWN_KEY = 'hasShownViewModeQuickpick';
@@ -219,10 +220,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiProviderService = new AiProviderService();
   const aiCommitMessageService = new AiCommitMessageService(context, aiProviderService);
   const aiMergeConflictService = new AiMergeConflictService(context, aiProviderService);
+  const aiCommitExplanationService = new AiCommitExplanationService(context, aiProviderService);
 
   const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger);
 
-  const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, logger);
+  const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, aiCommitExplanationService, logger);
   const mergeEditor = new MergeEditorProvider(context.extensionUri, manager, aiMergeConflictService, logger);
   const conflictsPanel = new ConflictsPanelProvider(context.extensionUri, manager, mergeEditor, logger);
   const undockedPanel = new UndockedPanelProvider(context.extensionUri, commitPanel, logPanel, logger);
@@ -276,6 +278,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('versiondock.aiCommitMessage.resetPrompt', () => aiCommitMessageService.resetPrompt()),
     vscode.commands.registerCommand('versiondock.aiMergeConflict.editPrompt', () => aiMergeConflictService.editPrompt()),
     vscode.commands.registerCommand('versiondock.aiMergeConflict.resetPrompt', () => aiMergeConflictService.resetPrompt()),
+    vscode.commands.registerCommand('versiondock.aiCommitExplanation.editPrompt', () => aiCommitExplanationService.editPrompt()),
+    vscode.commands.registerCommand('versiondock.aiCommitExplanation.resetPrompt', () => aiCommitExplanationService.resetPrompt()),
   );
 
   registerCommands(context, commitPanel, logPanel, mergeEditor, conflictsPanel, branchStatusBar, annotationController, profileStatusBar, manager);

@@ -17,6 +17,7 @@ import type { SvnService } from '../svn/SvnService';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
 import type { VersionDockLogger } from '../utils/Logger';
+import type { AiCommitExplanationService } from '../aiCommitExplanation/AiCommitExplanationService';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -140,6 +141,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
     private readonly shelveDocProvider: ShelveDocumentProvider,
+    private readonly aiCommitExplanationService: AiCommitExplanationService,
     private readonly logger: VersionDockLogger,
   ) {
     // Register manager listeners here so they fire even when the panel has never been opened.
@@ -1925,13 +1927,25 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'LOG_OPEN_EXTENDED_DETAIL': {
         const { openCommitDetailPanel } = await import('./CommitDetailPanel');
-        await openCommitDetailPanel(this.extensionUri, this.manager, msg.repoId, msg.hash);
+        await openCommitDetailPanel(this.extensionUri, this.manager, this.aiCommitExplanationService, this.logger, msg.repoId, msg.hash);
         break;
       }
 
       case 'LOG_OPEN_EXTENDED_DETAIL_MULTI': {
         const { openAggregatedCommitDetailPanel } = await import('./CommitDetailPanel');
-        await openAggregatedCommitDetailPanel(this.extensionUri, this.manager, msg.commits);
+        await openAggregatedCommitDetailPanel(this.extensionUri, this.manager, this.aiCommitExplanationService, this.logger, msg.commits);
+        break;
+      }
+
+      case 'LOG_OPEN_AI_EXPLANATION': {
+        const { openCommitDetailPanel } = await import('./CommitDetailPanel');
+        await openCommitDetailPanel(this.extensionUri, this.manager, this.aiCommitExplanationService, this.logger, msg.repoId, msg.hash, true);
+        break;
+      }
+
+      case 'LOG_OPEN_AI_EXPLANATION_MULTI': {
+        const { openAggregatedCommitDetailPanel } = await import('./CommitDetailPanel');
+        await openAggregatedCommitDetailPanel(this.extensionUri, this.manager, this.aiCommitExplanationService, this.logger, msg.commits, true);
         break;
       }
 

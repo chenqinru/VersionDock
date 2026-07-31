@@ -83,6 +83,7 @@ On first install, a QuickPick lets you choose your preferred view mode. You can 
 - Branch sidebar: local branches, remote branches, tags; single-repo workspaces hide the repository list.
 - Filters by text, author, branch, date, and repository.
 - Commit detail with changed-file list and per-file diffs.
+- Extended single-commit and aggregate-commit detail pages can explain historical Git/SVN changes with AI, including streamed typewriter output, cancellation, and explicit truncation notices for oversized diffs.
 - Click a commit title to expand/collapse the message; if the commit has a body, it opens as a Markdown document in a VS Code tab.
 - Author avatars in commit rows and commit detail: resolves GitHub noreply emails to GitHub avatars, other emails to Gravatar, with a colored-initials fallback.
 - Branch operations from the sidebar: checkout, fetch, pull, push, merge, rebase, delete, rename, compare, and create new branch.
@@ -218,6 +219,8 @@ The default AI provider is `github-copilot`. Select `openai`, `claude`, `gemini`
 
 Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace prompt is stored at `.vscode/ai-commit-message.prompt.md`; the global prompt is stored in VersionDock's global extension storage. Workspace prompts take precedence when all selected repositories belong to one workspace, followed by the global prompt and the built-in default.
 
+Open an extended commit detail page and select **AI Explain** to generate a structured explanation from commit metadata and historical diffs. Use **VersionDock: Edit Commit Explanation Prompt** to customize the explanation. Its workspace prompt is stored at `.vscode/ai-commit-explanation.prompt.md`; the workspace, global, and built-in precedence matches the commit-message prompt. Explanations stay in the current detail page and are not cached on disk.
+
 Use the Log panel to browse history, filter commits or SVN revisions, inspect changed files, open diffs, and run supported branch or revision operations.
 
 Use the Status Bar branch menu for fast project-wide actions such as updating all repositories, pushing Git repositories, creating branches, switching branches, managing remotes, SVN cleanup, or handling merge/rebase states.
@@ -235,6 +238,8 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `VersionDock: Settings` | Opens VersionDock settings. |
 | `VersionDock: Edit Commit Prompt` | Edits the workspace or global prompt used by every AI provider. |
 | `VersionDock: Reset Commit Prompt` | Removes a workspace or global custom prompt. |
+| `VersionDock: Edit Commit Explanation Prompt` | Edits the workspace or global prompt used for AI commit explanations. |
+| `VersionDock: Reset Commit Explanation Prompt` | Removes a workspace or global custom commit-explanation prompt. |
 | `VersionDock: Manage Version Control Accounts` | Opens the context-aware Git identity or SVN account manager. |
 | `VersionDock: Switch Git Profile` | Switches the active Git profile for the current workspace. |
 | `VersionDock: SVN Cleanup` | Runs `svn cleanup` for an SVN working copy. |

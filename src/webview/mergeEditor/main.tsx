@@ -62,6 +62,10 @@ const AI_MERGE_STYLES = `
     0%, 100% { filter: brightness(1); }
     50% { filter: brightness(1.12); }
   }
+  @keyframes versiondock-ai-stop-breathe {
+    0%, 100% { transform: scale(1); opacity: 0.85; }
+    50% { transform: scale(1.16); opacity: 1; }
+  }
   .versiondock-ai-resolve-button:hover:not(:disabled) {
     filter: brightness(1.1) saturate(1.08);
     transform: translateY(-1px);
@@ -75,6 +79,9 @@ const AI_MERGE_STYLES = `
   }
   .versiondock-ai-resolve-button[data-running="true"] {
     animation: versiondock-ai-button-breathe 1.8s ease-in-out infinite;
+  }
+  .versiondock-ai-resolve-button[data-running="true"] .codicon {
+    animation: versiondock-ai-stop-breathe 1.1s ease-in-out infinite;
   }
   .versiondock-ai-status[data-running="true"]::after {
     content: '';
@@ -90,6 +97,7 @@ const AI_MERGE_STYLES = `
   }
   @media (prefers-reduced-motion: reduce) {
     .versiondock-ai-resolve-button,
+    .versiondock-ai-resolve-button .codicon,
     .versiondock-ai-status::after,
     .versiondock-ai-orbit { animation: none !important; }
   }

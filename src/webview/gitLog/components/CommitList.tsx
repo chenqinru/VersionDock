@@ -937,6 +937,18 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
         <div ref={menuRef} style={ctxStyles.menu(menuPos.left, menuPos.top)}>
           <div style={ctxStyles.header}>{multiSelected.length === 1 ? t('{0} commit selected', multiSelected.length) : t('{0} commits selected', multiSelected.length)}</div>
           <div style={ctxStyles.separator} />
+          <div
+            data-context-menu-item=""
+            style={ctxStyles.item}
+            onClick={() => send({
+              type: 'LOG_OPEN_AI_EXPLANATION_MULTI',
+              commits: sortedNewestFirst.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
+            })}
+          >
+            <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+            <span>{t('AI Explain')}</span>
+          </div>
+          <div style={ctxStyles.separator} />
           <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_PATCH_MULTI', requestId: generateId(), repoId, hashes: multiSelected.map(c => c.hash) })}>
             <Codicon name="diff" style={ctxStyles.icon} />
             <span>{t('Create Patch...')}</span>
@@ -987,6 +999,19 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
         <div data-context-menu-item="" style={ctxStyles.item} onClick={copyHash}>
           <Codicon name="copy" style={ctxStyles.icon} />
           <span>{t('Copy Revision Number')}</span>
+        </div>
+        <div
+          data-context-menu-item=""
+          style={ctxStyles.item}
+          onClick={() => multiSelected.length > 1
+            ? send({
+              type: 'LOG_OPEN_AI_EXPLANATION_MULTI',
+              commits: sortedNewestFirst.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
+            })
+            : send({ type: 'LOG_OPEN_AI_EXPLANATION', repoId: commit.repoId, hash: commit.hash })}
+        >
+          <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+          <span>{t('AI Explain')}</span>
         </div>
         <div style={ctxStyles.separator} />
         <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_NEW_BRANCH_FROM_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>

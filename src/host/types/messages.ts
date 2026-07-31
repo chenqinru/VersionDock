@@ -356,6 +356,8 @@ export type LogToHostMsg =
   | { type: 'LOG_CLONE_REPO' }
   | { type: 'LOG_OPEN_EXTENDED_DETAIL'; repoId: string; hash: string }
   | { type: 'LOG_OPEN_EXTENDED_DETAIL_MULTI'; commits: Array<{ repoId: string; hash: string }> }
+  | { type: 'LOG_OPEN_AI_EXPLANATION'; repoId: string; hash: string }
+  | { type: 'LOG_OPEN_AI_EXPLANATION_MULTI'; commits: Array<{ repoId: string; hash: string }> }
   | { type: 'LOG_OPEN_COMMIT_CHANGES'; repoId: string; hash: string }
   | { type: 'LOG_OPEN_COMMIT_CHANGES_MULTI'; groups: Array<{ repoId: string; fromHash?: string; toHash: string; files: string[] }> }
   | { type: 'LOG_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }

@@ -6,6 +6,10 @@ import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { toGitUri } from '../utils/resourceUri';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
+import type { AiCommitExplanationService } from '../aiCommitExplanation/AiCommitExplanationService';
+import { buildCommitExplanationContext } from '../aiCommitExplanation/buildCommitExplanationContext';
+import type { CommitExplanationCommit, CommitExplanationFile } from '../aiCommitExplanation/types';
+import type { VersionDockLogger } from '../utils/Logger';
 
 type CommitDetailFile = {
   repoId?: string;
@@ -34,7 +38,16 @@ type CommitSummary = {
   committerDate: string;
   parents: string[];
   branches: { local: string[]; remote: string[]; tags: string[] };
+  repoRootPath: string;
+  vcsKind: 'git' | 'svn';
+  files: CommitExplanationFile[];
 };
+
+type CommitSummaryView = Omit<CommitSummary, 'repoRootPath' | 'vcsKind' | 'files'>;
+
+type CommitExplanationWebviewMessage =
+  | { type: 'generateExplanation'; requestId: string }
+  | { type: 'cancelExplanation'; requestId: string };
 
 type CommitDetailRepo = {
   kind?: string;
@@ -47,8 +60,11 @@ type CommitDetailRepo = {
 export async function openCommitDetailPanel(
   extensionUri: vscode.Uri,
   manager: WorkspaceGitManager,
+  aiCommitExplanationService: AiCommitExplanationService,
+  logger: VersionDockLogger,
   repoId: string,
   hash: string,
+  autoExplain = false,
 ): Promise<void> {
   const repo = manager.getRepo(repoId);
   if (!repo) {
@@ -89,7 +105,7 @@ export async function openCommitDetailPanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
-      retainContextWhenHidden: false,
+      retainContextWhenHidden: true,
       localResourceRoots: [
         extensionUri,
         vscode.Uri.file(vscode.env.appRoot),
@@ -115,12 +131,34 @@ export async function openCommitDetailPanel(
     `img-src ${panel.webview.cspSource} https://gravatar.com https://avatars.githubusercontent.com data:`,
   ].join('; ');
 
+  const explanationCommits: CommitExplanationCommit[] = [{
+    repoId,
+    repoName,
+    repoRootPath: repoMeta?.rootPath ?? repo.rootPath,
+    vcsKind: repo.kind === 'svn' ? 'svn' : 'git',
+    hash,
+    shortHash: commitInfo.shortHash,
+    fullMessage: fullMessage.trim() || commitInfo.message,
+    authorName: commitInfo.authorName,
+    authorDate: commitInfo.authorDate,
+    files,
+  }];
+  registerCommitExplanationHandlers(
+    panel,
+    manager,
+    aiCommitExplanationService,
+    logger,
+    'single',
+    explanationCommits,
+  );
+
   panel.webview.html = getHtml(nonce, csp, codiconUri, {
     repoName, repoId, hash,
     repoColor,
     repoKind: repo.kind,
     showRepoGrouping,
     mode: 'single',
+    autoExplain,
     i18n,
     iconTheme,
     shortHash: commitInfo.shortHash,
@@ -230,7 +268,10 @@ export async function openCommitDetailPanel(
 export async function openAggregatedCommitDetailPanel(
   extensionUri: vscode.Uri,
   manager: WorkspaceGitManager,
+  aiCommitExplanationService: AiCommitExplanationService,
+  logger: VersionDockLogger,
   commits: Array<{ repoId: string; hash: string }>,
+  autoExplain = false,
 ): Promise<void> {
   if (commits.length === 0) return;
 
@@ -251,22 +292,25 @@ export async function openAggregatedCommitDetailPanel(
       const repoMeta = repoMetaById.get(selection.repoId);
       const repoName = repoMeta?.name ?? selection.repoId;
       const repoColor = repoMeta?.color ?? '#4ec9b0';
+      const files = await repo.getCommitFiles(selection.hash, commitInfo.parents);
       commitSummaries.push({
         repoId: selection.repoId,
         repoName,
         repoColor,
+        repoRootPath: repoMeta?.rootPath ?? repo.rootPath,
+        vcsKind: repo.kind === 'svn' ? 'svn' : 'git',
         hash: commitInfo.hash,
         shortHash: commitInfo.shortHash,
         message: commitInfo.message,
-        fullMessage: fullMessage.trim(),
+        fullMessage: fullMessage.trim() || commitInfo.message,
         authorName: commitInfo.authorName,
         authorEmail: commitInfo.authorEmail,
         authorDate: commitInfo.authorDate,
         committerDate: commitInfo.committerDate,
         parents: commitInfo.parents,
         branches,
+        files,
       });
-      const files = await repo.getCommitFiles(selection.hash, commitInfo.parents);
       fileEntries.push(...files.map(file => ({
         ...file,
         repoId: selection.repoId,
@@ -328,7 +372,7 @@ export async function openAggregatedCommitDetailPanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
-      retainContextWhenHidden: false,
+      retainContextWhenHidden: true,
       localResourceRoots: [
         extensionUri,
         vscode.Uri.file(vscode.env.appRoot),
@@ -353,6 +397,15 @@ export async function openAggregatedCommitDetailPanel(
   ].join('; ');
 
   const firstCommit = commitSummaries[0];
+  registerCommitExplanationHandlers(
+    panel,
+    manager,
+    aiCommitExplanationService,
+    logger,
+    'aggregate',
+    commitSummaries,
+  );
+
   panel.webview.html = getHtml(nonce, csp, codiconUri, {
     repoName: involvedRepoIds.length === 1 ? firstCommit.repoName : t('{0} repositories involved', involvedRepoIds.length),
     repoId: firstCommit.repoId,
@@ -361,6 +414,7 @@ export async function openAggregatedCommitDetailPanel(
     repoKind: 'git',
     showRepoGrouping: repoMetas.length > 1 || involvedRepoIds.length > 1,
     mode: 'aggregate',
+    autoExplain,
     i18n,
     iconTheme,
     shortHash: commitSummaries.length === 1 ? t('{0} commit selected', commitSummaries.length) : t('{0} commits selected', commitSummaries.length),
@@ -373,7 +427,7 @@ export async function openAggregatedCommitDetailPanel(
     parents: [],
     files: Array.from(aggregatedMap.values()),
     branches: { local: [], remote: [], tags: [] },
-    commits: commitSummaries,
+    commits: commitSummaries.map(({ repoRootPath: _repoRootPath, vcsKind: _vcsKind, files: _files, ...commit }) => commit),
     selectedTimeRange,
     involvedRepoCount: involvedRepoIds.length,
   });
@@ -418,6 +472,139 @@ export async function openAggregatedCommitDetailPanel(
       } catch (e: unknown) {
         vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
       }
+    }
+  });
+}
+
+function registerCommitExplanationHandlers(
+  panel: vscode.WebviewPanel,
+  manager: WorkspaceGitManager,
+  service: AiCommitExplanationService,
+  logger: VersionDockLogger,
+  mode: 'single' | 'aggregate',
+  commits: CommitExplanationCommit[],
+): void {
+  let activeGeneration: { requestId: string; cancellation: vscode.CancellationTokenSource } | undefined;
+
+  const cancelActive = (requestId?: string): void => {
+    if (!activeGeneration || (requestId && activeGeneration.requestId !== requestId)) return;
+    activeGeneration.cancellation.cancel();
+  };
+
+  panel.onDidDispose(() => {
+    cancelActive();
+    activeGeneration?.cancellation.dispose();
+    activeGeneration = undefined;
+  });
+
+  panel.webview.onDidReceiveMessage(async (msg: CommitExplanationWebviewMessage) => {
+    if (msg.type === 'cancelExplanation') {
+      cancelActive(msg.requestId);
+      return;
+    }
+    if (msg.type !== 'generateExplanation') return;
+
+    cancelActive();
+    activeGeneration?.cancellation.dispose();
+    const cancellation = new vscode.CancellationTokenSource();
+    const generation = { requestId: msg.requestId, cancellation };
+    activeGeneration = generation;
+    const provider = service.getProvider();
+    const startedAt = Date.now();
+
+    const postIfActive = (message: Record<string, unknown>): void => {
+      if (activeGeneration !== generation || cancellation.token.isCancellationRequested) return;
+      void panel.webview.postMessage({ ...message, requestId: msg.requestId });
+    };
+
+    logger.info('AICommitExplanation', 'Generation started', {
+      requestId: msg.requestId,
+      provider,
+      mode,
+      commitCount: commits.length,
+      repositoryCount: new Set(commits.map(commit => commit.repoId)).size,
+    });
+
+    try {
+      postIfActive({ type: 'aiExplanationStatus', phase: 'reading' });
+      await Promise.resolve();
+      postIfActive({ type: 'aiExplanationStatus', phase: 'analyzing' });
+      const context = await buildCommitExplanationContext(manager, mode, commits, cancellation.token);
+      postIfActive({
+        type: 'aiExplanationStatus',
+        phase: 'thinking',
+        contextTruncated: context.truncated,
+        fileCount: context.fileCount,
+      });
+
+      let streamedText = '';
+      const result = await service.generate({
+        context,
+        cancellationToken: cancellation.token,
+        onDelta: delta => {
+          if (!delta) return;
+          streamedText += delta;
+          postIfActive({ type: 'aiExplanationDelta', delta });
+        },
+      });
+      if (activeGeneration !== generation || cancellation.token.isCancellationRequested) throw new Error('Cancelled');
+
+      postIfActive({
+        type: 'aiExplanationResult',
+        explanation: result.explanation,
+        provider: result.provider,
+        model: result.model,
+        promptSource: result.promptSource,
+        durationMs: result.durationMs,
+        contextTruncated: context.truncated,
+        inputTruncated: result.inputTruncated,
+        streamed: result.streamed,
+        streamedCharCount: streamedText.length,
+      });
+      logger.info('AICommitExplanation', 'Generation completed', {
+        requestId: msg.requestId,
+        provider: result.provider,
+        model: result.model,
+        mode,
+        promptSource: result.promptSource,
+        commitCount: context.commitCount,
+        repositoryCount: context.repositoryCount,
+        fileCount: context.fileCount,
+        contextCharCount: context.contextCharCount,
+        contextTruncated: context.truncated,
+        inputTruncated: result.inputTruncated,
+        streamChunkCount: result.streamChunkCount,
+        firstTokenLatencyMs: result.firstTokenLatencyMs,
+        durationMs: result.durationMs,
+      });
+    } catch (error: unknown) {
+      const cancelled = cancellation.token.isCancellationRequested
+        || (error instanceof Error && error.message === 'Cancelled');
+      if (activeGeneration === generation) {
+        void panel.webview.postMessage({
+          type: cancelled ? 'aiExplanationCancelled' : 'aiExplanationResult',
+          requestId: msg.requestId,
+          ...(cancelled ? {} : { error: error instanceof Error ? error.message : String(error) }),
+        });
+      }
+      if (cancelled) {
+        logger.info('AICommitExplanation', 'Generation cancelled', {
+          requestId: msg.requestId,
+          provider,
+          mode,
+          durationMs: Date.now() - startedAt,
+        });
+      } else {
+        logger.error('AICommitExplanation', 'Generation failed', error, {
+          requestId: msg.requestId,
+          provider,
+          mode,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    } finally {
+      if (activeGeneration === generation) activeGeneration = undefined;
+      cancellation.dispose();
     }
   });
 }
@@ -519,6 +706,7 @@ function escJson(v: unknown): string {
 
 interface PanelData {
   mode: 'single' | 'aggregate';
+  autoExplain: boolean;
   repoName: string;
   repoId: string;
   repoColor: string;
@@ -537,7 +725,7 @@ interface PanelData {
   parents: string[];
   files: CommitDetailFile[];
   branches: { local: string[]; remote: string[]; tags: string[] };
-  commits?: CommitSummary[];
+  commits?: CommitSummaryView[];
   selectedTimeRange?: string;
   involvedRepoCount?: number;
 }
@@ -687,6 +875,27 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       flex: 1; font-weight: 500;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .toolbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .ai-explain-btn {
+      height: 28px; padding: 0 11px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      border: none;
+      border-radius: 6px; cursor: pointer;
+      background: linear-gradient(100deg, #7514d7 0%, #7b2ee2 44%, #4058f4 100%);
+      background-size: 120% 100%; background-position: 0 0;
+      color: #ffffff; font: inherit; font-size: 12px; font-weight: 600;
+      box-shadow: none; white-space: nowrap;
+      transition: filter 140ms ease, transform 140ms ease, background-position 240ms ease;
+    }
+    .ai-explain-btn:hover { filter: brightness(1.1) saturate(1.08); transform: translateY(-1px); }
+    .ai-explain-btn:active { transform: translateY(0); }
+    .ai-explain-btn:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px;
+    }
+    .ai-explain-btn[data-busy="true"] {
+      background-position: 100% 0;
+    }
+    .ai-explain-btn[data-busy="true"] .codicon { animation: aiSparkPulse 1.1s ease-in-out infinite; }
 
     /* ── Split layout ── */
     .split { display: flex; flex: 1; overflow: hidden; }
@@ -699,6 +908,117 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       overflow-y: auto;
       padding: 20px 24px;
       gap: 20px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+    }
+
+    /* ── AI explanation ── */
+    .ai-explanation {
+      position: relative; isolation: isolate; overflow: hidden;
+      display: flex; flex-direction: column; gap: 11px;
+      flex-shrink: 0;
+      padding: 14px 15px 12px;
+      border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, #9472ff 30%);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--vscode-editor-background) 92%, #7457d9 8%);
+      box-shadow: 0 8px 24px color-mix(in srgb, #392477 12%, transparent);
+      animation: aiPanelEnter 180ms ease-out both;
+    }
+    .ai-explanation.hidden { display: none; }
+    .ai-explanation::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, #6e63ff, #55c8e8, #b66cff, #6e63ff);
+      background-size: 220% 100%; opacity: 0.82;
+    }
+    .ai-explanation[data-state="generating"]::before { animation: aiSpectrum 1.8s linear infinite; }
+    .ai-explanation[data-state="error"]::before { background: var(--vscode-errorForeground); }
+    .ai-header { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .ai-orb {
+      position: relative; width: 30px; height: 30px; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 50%; color: #f2edff;
+      background: linear-gradient(145deg, #5d57dd, #9d5ed8);
+      box-shadow: 0 0 0 3px color-mix(in srgb, #8568ee 14%, transparent), 0 4px 12px rgba(76,52,153,0.28);
+    }
+    .ai-orb::after {
+      content: ''; position: absolute; inset: -4px; border-radius: inherit;
+      border: 1px solid color-mix(in srgb, #9278ff 48%, transparent); opacity: 0;
+    }
+    .ai-explanation[data-state="generating"] .ai-orb::after { animation: aiOrbRing 1.6s ease-out infinite; }
+    .ai-heading { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .ai-title { font-size: 12px; font-weight: 700; letter-spacing: 0.01em; }
+    .ai-status { font-size: 11px; opacity: 0.62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ai-live-dot {
+      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+      background: #70d9ec; box-shadow: 0 0 7px rgba(112,217,236,0.55); opacity: 0;
+    }
+    .ai-explanation[data-state="generating"] .ai-live-dot { opacity: 1; animation: aiDotPulse 1s ease-in-out infinite; }
+    .ai-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .ai-stage {
+      position: relative; display: flex; align-items: center; gap: 5px;
+      min-width: 0; color: var(--vscode-descriptionForeground); font-size: 10px; opacity: 0.48;
+      transition: opacity 160ms ease, color 160ms ease;
+    }
+    .ai-stage::before {
+      content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+      background: var(--vscode-descriptionForeground); transition: transform 160ms ease, background 160ms ease;
+    }
+    .ai-stage.active { opacity: 1; color: var(--vscode-foreground); }
+    .ai-stage.active::before { transform: scale(1.4); background: #8f78ff; box-shadow: 0 0 6px rgba(143,120,255,0.5); }
+    .ai-stage.done { opacity: 0.76; }
+    .ai-stage.done::before { background: #55c8a9; }
+    .ai-stage-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ai-output {
+      min-height: 42px;
+      color: var(--vscode-editor-foreground);
+      font-size: 12px; line-height: 1.62; word-break: break-word;
+    }
+    .ai-output:empty { display: none; }
+    .ai-output h3 { margin: 11px 0 4px; font-size: 12px; line-height: 1.45; color: var(--vscode-foreground); }
+    .ai-output h3:first-child { margin-top: 0; }
+    .ai-output p { margin: 3px 0; }
+    .ai-output ul { margin: 4px 0 5px 17px; padding: 0; }
+    .ai-output li { margin: 3px 0; padding-left: 1px; }
+    .ai-output pre {
+      margin: 6px 0; padding: 8px 10px; overflow-x: auto;
+      border-radius: 4px; background: var(--vscode-textCodeBlock-background);
+      font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; white-space: pre-wrap;
+    }
+    .ai-cursor {
+      display: inline-block; width: 6px; height: 1.05em; margin-left: 2px; vertical-align: -2px;
+      border-radius: 1px; background: #8f78ff; animation: aiCursorBlink 740ms steps(1) infinite;
+    }
+    .ai-placeholder { display: flex; align-items: center; gap: 7px; font-size: 11px; opacity: 0.62; }
+    .ai-thinking-dots { display: inline-flex; gap: 3px; }
+    .ai-thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: aiThinkingDot 1s ease-in-out infinite; }
+    .ai-thinking-dots i:nth-child(2) { animation-delay: 120ms; }
+    .ai-thinking-dots i:nth-child(3) { animation-delay: 240ms; }
+    .ai-error { display: none; color: var(--vscode-errorForeground); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+    .ai-error.visible { display: block; }
+    .ai-footer { display: none; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent); }
+    .ai-footer.visible { display: flex; }
+    .ai-meta { flex: 1; min-width: 120px; font-size: 10px; color: var(--vscode-descriptionForeground); }
+    .ai-warning { display: none; align-items: center; gap: 4px; color: var(--vscode-editorWarning-foreground, #cca700); font-size: 10px; }
+    .ai-warning.visible { display: inline-flex; }
+    @keyframes aiPanelEnter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes aiSpectrum { to { background-position: -220% 0; } }
+    @keyframes aiSparkPulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.16); opacity: 1; } }
+    @keyframes aiOrbRing { 0% { opacity: 0.55; transform: scale(0.84); } 70%,100% { opacity: 0; transform: scale(1.22); } }
+    @keyframes aiDotPulse { 0%,100% { opacity: 0.4; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
+    @keyframes aiCursorBlink { 0%,48% { opacity: 1; } 49%,100% { opacity: 0; } }
+    @keyframes aiThinkingDot { 0%,60%,100% { opacity: 0.28; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+    @media (max-width: 640px) {
+      .ai-explain-label { display: none; }
+      .ai-explain-btn { width: 30px; padding: 4px; }
+      .ai-stage-label { display: none; }
+      .ai-stages { grid-template-columns: repeat(3, 22px); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ai-explanation, .ai-explanation::before, .ai-orb::after, .ai-live-dot,
+      .ai-explain-btn, .ai-explain-btn .codicon,
+      .ai-thinking-dots i, .ai-cursor { animation: none !important; transition: none !important; }
+      .ai-explain-btn:hover { transform: none; }
+      .ai-cursor { opacity: 1; }
     }
     .section-label {
       font-size: 10px; font-weight: 600;
@@ -905,10 +1225,41 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     <span class="codicon codicon-git-commit" style="opacity:0.6"></span>
     <span class="toolbar-hash">${escHtml(data.shortHash)}</span>
     <span class="toolbar-message">${escHtml(data.message)}</span>
+    <div class="toolbar-actions">
+      <button class="ai-explain-btn" id="btnAiExplain" data-busy="false" title="${escHtml(t('Explain commit with AI'))}">
+        <span class="codicon codicon-sparkle-filled" id="aiExplainIcon"></span>
+        <span class="ai-explain-label" id="aiExplainLabel">${escHtml(t('AI Explain'))}</span>
+      </button>
+    </div>
   </div>
 
   <div class="split">
     <div class="left-panel">
+      <section class="ai-explanation hidden" id="aiExplanation" data-state="idle" aria-label="${escHtml(t('AI Commit Explanation'))}">
+        <div class="ai-header">
+          <span class="ai-orb" aria-hidden="true"><span class="codicon codicon-sparkle"></span></span>
+          <div class="ai-heading">
+            <span class="ai-title">${escHtml(t('AI Commit Explanation'))}</span>
+            <span class="ai-status" id="aiStatus" role="status" aria-live="polite">${escHtml(data.mode === 'aggregate' ? t('Ready to explain the selected commits') : t('Ready to explain this commit'))}</span>
+          </div>
+          <span class="ai-live-dot" aria-hidden="true"></span>
+        </div>
+        <div class="ai-stages" id="aiStages" aria-hidden="true">
+          <div class="ai-stage" data-ai-stage="reading"><span class="ai-stage-label">${escHtml(t('Read commit'))}</span></div>
+          <div class="ai-stage" data-ai-stage="analyzing"><span class="ai-stage-label">${escHtml(t('Analyze changes'))}</span></div>
+          <div class="ai-stage" data-ai-stage="thinking"><span class="ai-stage-label">${escHtml(t('Compose explanation'))}</span></div>
+        </div>
+        <div class="ai-placeholder" id="aiPlaceholder">
+          <span>${escHtml(t('AI is preparing the explanation'))}</span>
+          <span class="ai-thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
+        <div class="ai-output" id="aiOutput"></div>
+        <div class="ai-error" id="aiError"></div>
+        <div class="ai-footer" id="aiFooter">
+          <span class="ai-meta" id="aiMeta"></span>
+          <span class="ai-warning" id="aiWarning"><span class="codicon codicon-warning"></span>${escHtml(t('Some oversized changes were truncated'))}</span>
+        </div>
+      </section>
 ${leftPanelContent}
     </div>
 
@@ -952,6 +1303,7 @@ ${leftPanelContent}
     authorEmail: data.authorEmail,
     authorName: data.authorName,
     mode: data.mode,
+    autoExplain: data.autoExplain,
     branches: allBranches,
     commits: data.commits ?? [],
     iconTheme: data.iconTheme,
@@ -992,6 +1344,280 @@ ${leftPanelContent}
     function escAttr(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
+
+    // ── AI commit explanation ──
+    const aiPanel = document.getElementById('aiExplanation');
+    const aiButton = document.getElementById('btnAiExplain');
+    const aiButtonIcon = document.getElementById('aiExplainIcon');
+    const aiButtonLabel = document.getElementById('aiExplainLabel');
+    const aiStatus = document.getElementById('aiStatus');
+    const aiOutput = document.getElementById('aiOutput');
+    const aiPlaceholder = document.getElementById('aiPlaceholder');
+    const aiError = document.getElementById('aiError');
+    const aiFooter = document.getElementById('aiFooter');
+    const aiMeta = document.getElementById('aiMeta');
+    const aiWarning = document.getElementById('aiWarning');
+    const aiStageElements = Array.from(document.querySelectorAll('[data-ai-stage]'));
+    const reduceAiMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const readyAiStatus = __d.mode === 'aggregate'
+      ? t('Ready to explain the selected commits')
+      : t('Ready to explain this commit');
+    let activeAiRequestId = null;
+    let aiBusy = false;
+    let aiTargetText = '';
+    let aiDisplayedText = '';
+    let aiTypingHandle = null;
+    let pendingAiResult = null;
+
+    function aiRequestId() {
+      return 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    }
+
+    function setAiButton(busy, hasResult) {
+      aiBusy = busy;
+      aiButton.dataset.busy = busy ? 'true' : 'false';
+      aiButtonIcon.className = 'codicon codicon-' + (busy ? 'stop-circle' : 'sparkle-filled');
+      aiButtonLabel.textContent = busy ? t('Stop') : hasResult ? t('Explain again') : t('AI Explain');
+      aiButton.title = busy ? t('Stop AI commit explanation') : hasResult ? t('Explain commits again with AI') : t('Explain commit with AI');
+      aiButton.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+
+    function setAiStages(phase, completed) {
+      const order = ['reading', 'analyzing', 'thinking'];
+      const effectivePhase = phase === 'writing' ? 'thinking' : phase;
+      const currentIndex = order.indexOf(effectivePhase);
+      aiStageElements.forEach((element, index) => {
+        element.classList.toggle('active', !completed && index === currentIndex);
+        element.classList.toggle('done', completed || (currentIndex >= 0 && index < currentIndex));
+      });
+    }
+
+    function setAiPhase(phase, fileCount) {
+      setAiStages(phase, false);
+      if (phase === 'reading') aiStatus.textContent = t('Reading commit information…');
+      if (phase === 'analyzing') aiStatus.textContent = t('Analyzing changed files…');
+      if (phase === 'thinking') aiStatus.textContent = fileCount == null
+        ? t('Organizing the explanation…')
+        : t('Organizing an explanation for {0} files…', fileCount);
+      if (phase === 'writing') aiStatus.textContent = t('AI is writing the explanation…');
+    }
+
+    function appendAiCursor(container) {
+      const cursor = document.createElement('span');
+      cursor.className = 'ai-cursor';
+      cursor.setAttribute('aria-hidden', 'true');
+      const last = container.lastElementChild;
+      if (last?.tagName === 'UL' && last.lastElementChild) last.lastElementChild.appendChild(cursor);
+      else if (last) last.appendChild(cursor);
+      else container.appendChild(cursor);
+    }
+
+    function renderAiMarkdown(text, showCursor) {
+      const fragment = document.createDocumentFragment();
+      const lines = String(text || '').replace(/\\r\\n/g, '\\n').split('\\n');
+      let list = null;
+      let codeBlock = null;
+
+      for (const line of lines) {
+        if (line.trim().startsWith(String.fromCharCode(96, 96, 96))) {
+          if (codeBlock) {
+            fragment.appendChild(codeBlock);
+            codeBlock = null;
+          } else {
+            codeBlock = document.createElement('pre');
+          }
+          list = null;
+          continue;
+        }
+        if (codeBlock) {
+          codeBlock.textContent += (codeBlock.textContent ? '\\n' : '') + line;
+          continue;
+        }
+        const heading = /^##\\s+(.+)$/.exec(line);
+        if (heading) {
+          const element = document.createElement('h3');
+          element.textContent = heading[1];
+          fragment.appendChild(element);
+          list = null;
+          continue;
+        }
+        const bullet = /^[-*]\\s+(.+)$/.exec(line);
+        if (bullet) {
+          if (!list) {
+            list = document.createElement('ul');
+            fragment.appendChild(list);
+          }
+          const item = document.createElement('li');
+          item.textContent = bullet[1];
+          list.appendChild(item);
+          continue;
+        }
+        if (!line.trim()) {
+          list = null;
+          continue;
+        }
+        const paragraph = document.createElement('p');
+        paragraph.textContent = line;
+        fragment.appendChild(paragraph);
+        list = null;
+      }
+      if (codeBlock) fragment.appendChild(codeBlock);
+      aiOutput.replaceChildren(fragment);
+      if (showCursor) appendAiCursor(aiOutput);
+    }
+
+    function finishAiTypingIfReady() {
+      if (!pendingAiResult || aiDisplayedText !== aiTargetText) return;
+      const result = pendingAiResult;
+      pendingAiResult = null;
+      activeAiRequestId = null;
+      aiPanel.dataset.state = 'complete';
+      aiPlaceholder.style.display = 'none';
+      renderAiMarkdown(aiDisplayedText, false);
+      setAiStages('thinking', true);
+      aiStatus.textContent = t('Explanation complete');
+      const provider = result.provider || t('AI');
+      const model = result.model ? ' · ' + result.model : '';
+      const duration = typeof result.durationMs === 'number' ? ' · ' + (result.durationMs / 1000).toFixed(1) + 's' : '';
+      aiMeta.textContent = provider + model + duration;
+      aiWarning.classList.toggle('visible', !!result.contextTruncated || !!result.inputTruncated);
+      aiFooter.classList.add('visible');
+      setAiButton(false, true);
+    }
+
+    function scheduleAiTyping() {
+      if (reduceAiMotion) {
+        aiDisplayedText = aiTargetText;
+        renderAiMarkdown(aiDisplayedText, aiBusy && !pendingAiResult);
+        finishAiTypingIfReady();
+        return;
+      }
+      if (aiTypingHandle !== null) return;
+      const tick = () => {
+        aiTypingHandle = null;
+        const remaining = aiTargetText.length - aiDisplayedText.length;
+        if (remaining > 0) {
+          const chunkSize = remaining > 600 ? 12 : remaining > 240 ? 6 : remaining > 80 ? 3 : 1;
+          aiDisplayedText = aiTargetText.slice(0, aiDisplayedText.length + chunkSize);
+          renderAiMarkdown(aiDisplayedText, true);
+        }
+        if (aiDisplayedText.length < aiTargetText.length) {
+          aiTypingHandle = window.setTimeout(tick, 12);
+        } else {
+          finishAiTypingIfReady();
+        }
+      };
+      aiTypingHandle = window.setTimeout(tick, 12);
+    }
+
+    function resetAiSurface() {
+      if (aiTypingHandle !== null) window.clearTimeout(aiTypingHandle);
+      aiTypingHandle = null;
+      aiTargetText = '';
+      aiDisplayedText = '';
+      pendingAiResult = null;
+      aiOutput.replaceChildren();
+      aiError.textContent = '';
+      aiError.classList.remove('visible');
+      aiMeta.textContent = '';
+      aiWarning.classList.remove('visible');
+      aiFooter.classList.remove('visible');
+      aiPlaceholder.style.display = '';
+      aiPlaceholder.firstElementChild.textContent = t('AI is preparing the explanation');
+      aiStatus.textContent = readyAiStatus;
+      setAiStages('', false);
+    }
+
+    function startAiExplanation() {
+      if (aiBusy) return;
+      resetAiSurface();
+      activeAiRequestId = aiRequestId();
+      aiPanel.classList.remove('hidden');
+      aiPanel.dataset.state = 'generating';
+      setAiButton(true, false);
+      setAiPhase('reading');
+      vscode.postMessage({ type: 'generateExplanation', requestId: activeAiRequestId });
+    }
+
+    function stopAiExplanation(notifyHost = true) {
+      if (!aiBusy || !activeAiRequestId) return;
+      const requestId = activeAiRequestId;
+      activeAiRequestId = null;
+      if (notifyHost) vscode.postMessage({ type: 'cancelExplanation', requestId });
+      if (aiTypingHandle !== null) window.clearTimeout(aiTypingHandle);
+      aiTypingHandle = null;
+      aiDisplayedText = aiTargetText;
+      renderAiMarkdown(aiDisplayedText, false);
+      aiPanel.dataset.state = 'cancelled';
+      aiPlaceholder.style.display = aiDisplayedText ? 'none' : '';
+      aiPlaceholder.firstElementChild.textContent = t('Explanation stopped');
+      aiStatus.textContent = t('Explanation stopped');
+      aiFooter.classList.add('visible');
+      aiMeta.textContent = t('Partial output was kept');
+      setAiButton(false, true);
+    }
+
+    function showAiError(message) {
+      if (aiTypingHandle !== null) window.clearTimeout(aiTypingHandle);
+      aiTypingHandle = null;
+      pendingAiResult = null;
+      activeAiRequestId = null;
+      aiPanel.dataset.state = 'error';
+      aiPlaceholder.style.display = 'none';
+      renderAiMarkdown(aiDisplayedText, false);
+      aiStatus.textContent = t('AI explanation failed');
+      aiError.textContent = message || t('Unknown error');
+      aiError.classList.add('visible');
+      aiFooter.classList.remove('visible');
+      aiMeta.textContent = '';
+      setAiButton(false, true);
+    }
+
+    aiButton.addEventListener('click', () => {
+      if (aiBusy) stopAiExplanation();
+      else startAiExplanation();
+    });
+
+    window.addEventListener('message', event => {
+      const message = event.data;
+      if (!message || message.requestId !== activeAiRequestId) return;
+      if (message.type === 'aiExplanationStatus') {
+        setAiPhase(message.phase, message.fileCount);
+        if (message.contextTruncated) aiWarning.classList.add('visible');
+        return;
+      }
+      if (message.type === 'aiExplanationDelta') {
+        if (pendingAiResult) return;
+        aiPlaceholder.style.display = 'none';
+        setAiPhase('writing');
+        aiTargetText += String(message.delta || '');
+        scheduleAiTyping();
+        return;
+      }
+      if (message.type === 'aiExplanationCancelled') {
+        stopAiExplanation(false);
+        return;
+      }
+      if (message.type === 'aiExplanationResult') {
+        if (message.error) {
+          showAiError(String(message.error));
+          return;
+        }
+        const finalText = String(message.explanation || '');
+        if (!finalText) {
+          showAiError(t('AI provider did not return a commit explanation.'));
+          return;
+        }
+        if (!finalText.startsWith(aiDisplayedText)) aiDisplayedText = '';
+        aiTargetText = finalText;
+        pendingAiResult = message;
+        aiPlaceholder.style.display = 'none';
+        setAiPhase('writing');
+        scheduleAiTyping();
+      }
+    });
+
+    if (__d.autoExplain) window.requestAnimationFrame(startAiExplanation);
 
     // ── Date formatting ──
     function fmtDate(iso) {
