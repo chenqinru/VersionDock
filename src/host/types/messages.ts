@@ -11,6 +11,11 @@ import type {
 } from './git';
 import type { WorktreeEntry } from '../git/WorkspaceGitManager';
 import type { IconThemeData } from '../utils/IconThemeService';
+import type {
+  ComposerApplyResult,
+  ComposerCommitGroup,
+  ComposerPreparedSource,
+} from '../aiCommitComposer/types';
 
 export interface MergeParentCommit {
   hash: string;
@@ -69,6 +74,12 @@ export interface PushCommitFile {
 export interface CommitGenerateMessageTarget {
   repoId: string;
   paths: string[];
+}
+
+export interface ComposerWorkingCandidate {
+  repoId: string;
+  paths: string[];
+  stagedOnly: boolean;
 }
 
 // ─── Subtree (native git subtree) ────────────────────────────────────────────
@@ -181,6 +192,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_ACCEPT_THEIRS'; requestId: string; repoId: string; filePath: string }
   | { type: 'COMMIT_GENERATE_MESSAGE'; requestId: string; repoIds?: string[]; targets?: CommitGenerateMessageTarget[] }
   | { type: 'COMMIT_CANCEL_GENERATE_MESSAGE'; requestId: string }
+  | { type: 'COMMIT_OPEN_AI_COMPOSER'; candidates: ComposerWorkingCandidate[] }
   | { type: 'SHELVE_LIST'; requestId: string; repoId: string }
   | { type: 'SHELVE_PUSH'; requestId: string; repoId: string; name: string; paths?: string[] }
   | { type: 'SHELVE_APPLY'; requestId: string; repoId: string; shelveId: string; paths?: string[] }
@@ -329,6 +341,7 @@ export type LogToHostMsg =
   | { type: 'LOG_REQUEST_MERGE_COMMITS'; requestId: string; repoId: string; hash: string; parents: string[] }
   | { type: 'LOG_DROP_COMMIT'; requestId: string; repoId: string; hash: string }
   | { type: 'LOG_SQUASH_COMMITS'; requestId: string; repoId: string; hashes: string[]; oldestHash: string; message: string; commits: { hash: string; shortHash: string; message: string }[] }
+  | { type: 'LOG_OPEN_AI_COMPOSER'; repoId: string; hashes: string[] }
   | { type: 'LOG_CHERRY_PICK_MULTI'; requestId: string; repoId: string; hashes: string[] }
   | { type: 'LOG_REVERT_COMMITS'; requestId: string; repoId: string; hashes: string[] }
   | { type: 'LOG_DROP_COMMITS'; requestId: string; repoId: string; hashes: string[]; oldestHash: string }
@@ -389,6 +402,28 @@ export type MergeToHostMsg =
   | { type: 'MERGE_ACCEPT_THEIRS'; requestId: string }
   | { type: 'MERGE_OPEN_FILE'; filePath: string }
   | { type: 'MERGE_CLOSE' };
+
+// ─── AI Commit Composer ──────────────────────────────────────────────────────
+
+export type HostToComposerMsg =
+  | { type: 'COMPOSER_PHASE'; phase: 'scanning' | 'analyzing' | 'validating' | 'applying'; detail?: string }
+  | { type: 'COMPOSER_SOURCE'; source: ComposerPreparedSource }
+  | { type: 'COMPOSER_PLAN'; groups: ComposerCommitGroup[]; provider: string; model?: string; promptSource: 'workspace' | 'global' | 'builtin' }
+  | { type: 'COMPOSER_MESSAGE_UPDATE'; requestId: string; groupId: string; message: string }
+  | { type: 'COMPOSER_MESSAGE_RESULT'; requestId: string; groupId: string; message?: string; error?: string }
+  | { type: 'COMPOSER_ERROR'; error: string }
+  | { type: 'COMPOSER_APPLY_PROGRESS'; completed: number; total: number; message: string }
+  | { type: 'COMPOSER_APPLY_RESULT'; result: ComposerApplyResult };
+
+export type ComposerToHostMsg =
+  | { type: 'COMPOSER_READY' }
+  | { type: 'COMPOSER_REANALYZE' }
+  | { type: 'COMPOSER_CANCEL' }
+  | { type: 'COMPOSER_GENERATE_MESSAGE'; requestId: string; groupId: string; unitIds: string[] }
+  | { type: 'COMPOSER_CANCEL_MESSAGE'; requestId: string }
+  | { type: 'COMPOSER_APPLY'; groups: ComposerCommitGroup[] }
+  | { type: 'COMPOSER_CLOSE' }
+  | { type: 'COMPOSER_WEBVIEW_ERROR'; message: string; stack?: string };
 
 // ─── Conflicts: Host → WebView ─────────────────────────────────────────────
 

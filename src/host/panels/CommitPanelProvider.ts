@@ -27,6 +27,7 @@ import type { VersionDockLogger } from '../utils/Logger';
 import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
 import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
 import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
+import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AI_COMMIT_CONTEXT_MAX_FILES = 100;
@@ -64,6 +65,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private view?: vscode.WebviewView;
   private logProvider?: GitLogPanelProvider;
   private undockedPanel?: UndockedPanelProvider;
+  private aiCommitComposerProvider?: AiCommitComposerProvider;
   private changelistService?: ChangelistService;
   private badgeController?: import('../ui/BadgeController').BadgeController;
   private readonly replyTarget = new AsyncLocalStorage<'sidebar' | 'undocked'>();
@@ -100,6 +102,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   setUndockedPanel(provider: UndockedPanelProvider): void {
     this.undockedPanel = provider;
+  }
+
+  setAiCommitComposerProvider(provider: AiCommitComposerProvider): void {
+    this.aiCommitComposerProvider = provider;
   }
 
   handleUndockedMessage(msg: CommitToHostMsg, _provider: UndockedPanelProvider): void {
@@ -2856,6 +2862,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
           cancellationSource.dispose();
         }
+        break;
+      }
+
+      case 'COMMIT_OPEN_AI_COMPOSER': {
+        if (!this.aiCommitComposerProvider) {
+          vscode.window.showErrorMessage(t('AI Commit Composer is unavailable.'));
+          return;
+        }
+        await this.aiCommitComposerProvider.openWorking(msg.candidates);
         break;
       }
 

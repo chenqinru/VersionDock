@@ -182,6 +182,14 @@
         "title": "%commands.aiCommitExplanation.resetPrompt.title%"
       },
       {
+        "command": "versiondock.aiCommitComposer.editPrompt",
+        "title": "%commands.aiCommitComposer.editPrompt.title%"
+      },
+      {
+        "command": "versiondock.aiCommitComposer.resetPrompt",
+        "title": "%commands.aiCommitComposer.resetPrompt.title%"
+      },
+      {
         "command": "versiondock.openGitAnnotations",
         "title": "%commands.openGitAnnotations.title%",
         "icon": "$(git-commit)"

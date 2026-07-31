@@ -18,6 +18,8 @@ import { AiProviderService } from './ai/AiProviderService';
 import { AiCommitMessageService } from './aiCommitMessage/AiCommitMessageService';
 import { AiMergeConflictService } from './aiMergeConflict/AiMergeConflictService';
 import { AiCommitExplanationService } from './aiCommitExplanation/AiCommitExplanationService';
+import { AiCommitComposerService } from './aiCommitComposer/AiCommitComposerService';
+import { AiCommitComposerProvider } from './panels/AiCommitComposerProvider';
 
 async function maybeResetViewLocationsOnStartup(logger: VersionDockLogger): Promise<void> {
   const enabled = vscode.workspace.getConfiguration('versiondock').get<boolean>('resetViewLocationsOnStartup', false);
@@ -235,12 +237,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiCommitMessageService = new AiCommitMessageService(context, aiProviderService);
   const aiMergeConflictService = new AiMergeConflictService(context, aiProviderService);
   const aiCommitExplanationService = new AiCommitExplanationService(context, aiProviderService);
+  const aiCommitComposerService = new AiCommitComposerService(context, aiProviderService);
 
   const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger);
 
   const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, aiCommitMessageService, aiCommitExplanationService, logger);
   const mergeEditor = new MergeEditorProvider(context.extensionUri, manager, aiMergeConflictService, logger);
   const conflictsPanel = new ConflictsPanelProvider(context.extensionUri, manager, mergeEditor, logger);
+  const aiCommitComposer = new AiCommitComposerProvider(context.extensionUri, manager, aiCommitComposerService, aiCommitMessageService, logger);
   const undockedPanel = new UndockedPanelProvider(context.extensionUri, commitPanel, logPanel, logger);
   commitPanel.setMergeEditorProvider(mergeEditor);
   commitPanel.setLogProvider(logPanel);
@@ -248,6 +252,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   commitPanel.setUndockedPanel(undockedPanel);
   logPanel.setCommitPanel(commitPanel);
   logPanel.setUndockedPanel(undockedPanel);
+  commitPanel.setAiCommitComposerProvider(aiCommitComposer);
+  logPanel.setAiCommitComposerProvider(aiCommitComposer);
 
   // Apply saved hidden repos immediately, before either webview opens.
   const savedHidden = manager.normalizeRepoIds(context.workspaceState.get<string[]>('versiondock.hiddenRepoIds', []));
@@ -283,6 +289,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logPanel,
     mergeEditor,
     conflictsPanel,
+    aiCommitComposer,
     undockedPanel,
     branchStatusBar,
     profileStatusBar,
@@ -294,6 +301,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('versiondock.aiMergeConflict.resetPrompt', () => aiMergeConflictService.resetPrompt()),
     vscode.commands.registerCommand('versiondock.aiCommitExplanation.editPrompt', () => aiCommitExplanationService.editPrompt()),
     vscode.commands.registerCommand('versiondock.aiCommitExplanation.resetPrompt', () => aiCommitExplanationService.resetPrompt()),
+    vscode.commands.registerCommand('versiondock.aiCommitComposer.editPrompt', () => aiCommitComposer.editPrompt()),
+    vscode.commands.registerCommand('versiondock.aiCommitComposer.resetPrompt', () => aiCommitComposer.resetPrompt()),
   );
 
   registerCommands(context, commitPanel, logPanel, mergeEditor, conflictsPanel, branchStatusBar, annotationController, profileStatusBar, manager);

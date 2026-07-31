@@ -2144,7 +2144,7 @@ export class GitService {
     if (!normalized) {
       throw new Error(t('Commit message cannot be empty'));
     }
-    const validation = await this.validateSquashHashes(hashes);
+    const validation = await this.validateCommitRewriteHashes(hashes, 'squash');
     await this.git.raw(['reset', '--soft', `${validation.oldestHash}^`]);
     await this.git.raw(['commit', '-m', normalized]);
   }
@@ -2182,7 +2182,16 @@ export class GitService {
 
   async canSquashCommitRange(hashes: string[]): Promise<{ ok: boolean; hashes: string[]; oldestHash?: string; reason?: string }> {
     try {
-      const validated = await this.validateSquashHashes(hashes);
+      const validated = await this.validateCommitRewriteHashes(hashes, 'squash');
+      return { ok: true, hashes: validated.hashes, oldestHash: validated.oldestHash };
+    } catch (error: unknown) {
+      return { ok: false, hashes: [], reason: String(error instanceof Error ? error.message : error) };
+    }
+  }
+
+  async canReorganizeCommitRange(hashes: string[]): Promise<{ ok: boolean; hashes: string[]; oldestHash?: string; reason?: string }> {
+    try {
+      const validated = await this.validateCommitRewriteHashes(hashes, 'reorganize');
       return { ok: true, hashes: validated.hashes, oldestHash: validated.oldestHash };
     } catch (error: unknown) {
       return { ok: false, hashes: [], reason: String(error instanceof Error ? error.message : error) };
@@ -2229,20 +2238,27 @@ export class GitService {
     return raw.trim().split('\n').map(line => line.trim()).filter(Boolean);
   }
 
-  private async validateSquashHashes(hashes: string[]): Promise<{ hashes: string[]; oldestHash: string }> {
+  private async validateCommitRewriteHashes(hashes: string[], mode: 'squash' | 'reorganize'): Promise<{ hashes: string[]; oldestHash: string }> {
     const uniqueHashes = Array.from(new Set(hashes.map(hash => hash.trim()).filter(Boolean)));
-    if (uniqueHashes.length < 2) {
-      throw new Error(t('Select at least two commits to squash.'));
+    const minimumCount = mode === 'squash' ? 2 : 1;
+    if (uniqueHashes.length < minimumCount) {
+      throw new Error(mode === 'squash'
+        ? t('Select at least two commits to squash.')
+        : t('Select at least one commit to reorganize.'));
     }
 
     const currentBranch = (await this.git.raw(['branch', '--show-current']).catch(() => '')).trim();
     if (!currentBranch) {
-      throw new Error(t('Cannot squash commits while HEAD is detached.'));
+      throw new Error(mode === 'squash'
+        ? t('Cannot squash commits while HEAD is detached.')
+        : t('Cannot reorganize commits while HEAD is detached.'));
     }
 
     const status = await this.getStatusFresh();
     if (status.stagedFiles.length > 0 || status.conflictCount > 0) {
-      throw new Error(t('Clear staged changes and conflicts before squashing commits.'));
+      throw new Error(mode === 'squash'
+        ? t('Clear staged changes and conflicts before squashing commits.')
+        : t('Clear staged changes and conflicts before reorganizing commits.'));
     }
 
     const firstParentChain = await this.getFirstParentHeadChain();
@@ -2262,7 +2278,9 @@ export class GitService {
     if (unpushedHashes !== 'all') {
       for (const hash of orderedHashes) {
         if (!unpushedHashes.has(hash)) {
-          throw new Error(t('Only unpushed commits can be squashed.'));
+          throw new Error(mode === 'squash'
+            ? t('Only unpushed commits can be squashed.')
+            : t('Only unpushed commits can be reorganized.'));
         }
       }
     }
@@ -2270,7 +2288,9 @@ export class GitService {
     const oldestHash = orderedHashes[orderedHashes.length - 1];
     const parent = (await this.git.raw(['rev-parse', `${oldestHash}^1`]).catch(() => '')).trim();
     if (!parent) {
-      throw new Error(t('Cannot squash because the oldest selected commit has no parent.'));
+      throw new Error(mode === 'squash'
+        ? t('Cannot squash because the oldest selected commit has no parent.')
+        : t('Cannot reorganize because the oldest selected commit has no parent.'));
     }
 
     return { hashes: orderedHashes, oldestHash };

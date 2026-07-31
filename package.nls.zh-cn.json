@@ -27,6 +27,8 @@
   "commands.aiMergeConflict.resetPrompt.title": "VersionDock：重置 AI 冲突解决提示词",
   "commands.aiCommitExplanation.editPrompt.title": "VersionDock：编辑 AI 提交解释提示词",
   "commands.aiCommitExplanation.resetPrompt.title": "VersionDock：重置 AI 提交解释提示词",
+  "commands.aiCommitComposer.editPrompt.title": "VersionDock：编辑 AI 智能拆分提示词",
+  "commands.aiCommitComposer.resetPrompt.title": "VersionDock：重置 AI 智能拆分提示词",
   "commands.openGitAnnotations.title": "开启 Git 注释",
   "commands.closeGitAnnotations.title": "关闭 Git 注释",
   "commands.openGitGhostText.title": "开启 Git 行内提示",

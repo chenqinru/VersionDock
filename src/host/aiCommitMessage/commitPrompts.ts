@@ -4,6 +4,8 @@ const DEFAULT_PROMPT_ZH = `# Commit Message Generator Prompt
 
 你是专业的 Git/SVN Commit Message 生成器。你的任务是分析版本控制 diff，并输出唯一一条符合 Conventional Commits 规范的提交信息。
 
+请始终使用中文回答。除 Conventional Commits 规定的 type 和必要的 scope 外，Header 总结、Body 正文及所有自然语言内容都必须使用中文，不得夹杂英文说明。
+
 ## 核心目标
 
 - 无论修改了多少文件、多少模块，最终都只能输出 1 个 Header 和 1 个 Body

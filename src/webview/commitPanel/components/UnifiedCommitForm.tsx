@@ -28,6 +28,7 @@ interface Props {
   onPushAll: () => void;
   onAutopilot: () => void;
   onStopAutopilot: () => void;
+  onOpenComposer: () => void;
   generatingMessage: boolean;
 }
 
@@ -172,7 +173,7 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
 export function UnifiedCommitForm({
   message, messageHistory, repoStatuses, repoMetas, amendFlags,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
-  onAutopilot, onStopAutopilot, generatingMessage,
+  onAutopilot, onStopAutopilot, onOpenComposer, generatingMessage,
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
 
@@ -350,6 +351,9 @@ export function UnifiedCommitForm({
           animation: none;
           filter: brightness(0.7);
         }
+      }
+      @media (max-width: 360px) {
+        .versiondock-composer-button-label { display: none; }
       }
       .gs-commit-textarea::-webkit-scrollbar {
         width: 6px;
@@ -542,8 +546,17 @@ export function UnifiedCommitForm({
 
       {/* Amend + actions row */}
       <div style={styles.actionsRow}>
-        {showGitActions && (
-          <div style={styles.leftActions}>
+        <div style={styles.leftActions}>
+          <button
+            style={styles.composerButton(commitTargets.length === 0 || loading)}
+            disabled={commitTargets.length === 0 || loading}
+            title={t('Split selected changes into meaningful commits with AI')}
+            onClick={onOpenComposer}
+          >
+            <Codicon name="sparkle-filled" style={{ fontSize: 13 }} />
+            <span className="versiondock-composer-button-label">{t('AI Split')}</span>
+          </button>
+          {showGitActions && (
             <DropdownButton
               variant="secondary"
               enabled={!!message.trim() && commitTargets.length > 0}
@@ -563,8 +576,8 @@ export function UnifiedCommitForm({
               }
               onMainClick={primarySaveAction === 'stash' ? onStash : onShelve}
             />
-          </div>
-        )}
+          )}
+        </div>
 
         <div style={styles.rightActions}>
           <DropdownButton
@@ -725,8 +738,24 @@ const styles = {
   leftActions: {
     display: 'flex',
     alignItems: 'center',
+    gap: '6px',
     flexShrink: 0,
   },
+  composerButton: (disabled: boolean): React.CSSProperties => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '5px',
+    padding: '5px 9px',
+    border: 'none',
+    borderRadius: '4px',
+    background: 'linear-gradient(125deg, #7657ff, #2f8fff)',
+    color: '#fff',
+    boxShadow: 'none',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.42 : 1,
+    whiteSpace: 'nowrap',
+    fontSize: '11px',
+  }),
   rightActions: {
     flex: 1,
     minWidth: 0,

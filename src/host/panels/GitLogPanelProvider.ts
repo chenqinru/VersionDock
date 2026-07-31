@@ -20,6 +20,7 @@ import type { VersionDockLogger } from '../utils/Logger';
 import type { AiCommitExplanationService } from '../aiCommitExplanation/AiCommitExplanationService';
 import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
 import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
+import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -101,6 +102,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private readonly tagSyncGenerations = new Map<string, number>();
   private commitPanel?: CommitPanelProvider;
   private undockedPanel?: UndockedPanelProvider;
+  private aiCommitComposerProvider?: AiCommitComposerProvider;
   private readonly replyTarget = new AsyncLocalStorage<'sidebar' | 'undocked'>();
   private readonly svnDiffOpenTasks = new Map<string, Promise<void>>();
   private pendingHistoryFilter?: HistoryFilter;
@@ -114,6 +116,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   setUndockedPanel(provider: UndockedPanelProvider): void {
     this.undockedPanel = provider;
+  }
+
+  setAiCommitComposerProvider(provider: AiCommitComposerProvider): void {
+    this.aiCommitComposerProvider = provider;
   }
 
   handleUndockedMessage(msg: LogToHostMsg, _provider: UndockedPanelProvider): void {
@@ -1511,6 +1517,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           vscode.window.showErrorMessage(t('VersionDock: Squash failed: {0}', String(e)));
         }
+        break;
+      }
+
+      case 'LOG_OPEN_AI_COMPOSER': {
+        if (!this.aiCommitComposerProvider) {
+          vscode.window.showErrorMessage(t('AI Commit Composer is unavailable.'));
+          return;
+        }
+        this.aiCommitComposerProvider.openHistory(msg.repoId, msg.hashes);
         break;
       }
 

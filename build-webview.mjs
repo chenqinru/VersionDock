@@ -13,6 +13,7 @@ const apps = [
   { name: 'undockedPanel', entry: 'src/webview/undockedPanel/main.tsx' },
   { name: 'mergeEditor', entry: 'src/webview/mergeEditor/main.tsx' },
   { name: 'conflicts',   entry: 'src/webview/conflicts/main.tsx' },
+  { name: 'aiCommitComposer', entry: 'src/webview/aiCommitComposer/main.tsx' },
 ];
 
 /** @returns {import('esbuild').BuildOptions} */

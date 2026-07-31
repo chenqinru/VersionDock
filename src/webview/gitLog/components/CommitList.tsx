@@ -975,6 +975,18 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
               <div style={ctxStyles.separator} />
               <div
                 data-context-menu-item=""
+                style={ctxStyles.aiComposerItem}
+                onClick={() => send({
+                  type: 'LOG_OPEN_AI_COMPOSER',
+                  repoId,
+                  hashes: sortedNewestFirst.map(selectedCommit => selectedCommit.hash),
+                })}
+              >
+                <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+                <span>{t('AI Reorganize Commits')}</span>
+              </div>
+              <div
+                data-context-menu-item=""
                 style={{ ...ctxStyles.item, color: 'var(--vscode-errorForeground)' }}
                 onClick={() => send({ type: 'LOG_DROP_COMMITS', requestId: generateId(), repoId, hashes: multiSelected.map(c => c.hash), oldestHash })}
               >
@@ -1083,6 +1095,20 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
         {commit.unpushed && isHead && (
           <>
             <div style={ctxStyles.separator} />
+            {!isSvn && (
+              <div
+                data-context-menu-item=""
+                style={ctxStyles.aiComposerItem}
+                onClick={() => send({
+                  type: 'LOG_OPEN_AI_COMPOSER',
+                  repoId: commit.repoId,
+                  hashes: [commit.hash],
+                })}
+              >
+                <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+                <span>{t('AI Reorganize Commits')}</span>
+              </div>
+            )}
             <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_EDIT_COMMIT_MESSAGE', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, currentMessage: commit.message })}>
               <Codicon name="edit" style={ctxStyles.icon} />
               <span>{t('Edit Commit Message')}</span>
@@ -1146,6 +1172,16 @@ const ctxStyles = {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+  } as React.CSSProperties,
+  aiComposerItem: {
+    padding: '4px 12px',
+    cursor: 'pointer',
+    color: 'var(--vscode-textLink-foreground)',
+    whiteSpace: 'nowrap' as const,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontWeight: 600,
   } as React.CSSProperties,
   itemDisabled: {
     padding: '4px 12px',

@@ -9,6 +9,7 @@ export interface CliOptions {
   cwd: string;
   timeout?: number;
   stdin?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 export class CliError extends Error {
@@ -34,6 +35,7 @@ export function execCli(command: string, args: string[], options: CliOptions): P
         timeout: options.timeout ?? 120_000,
         maxBuffer: 20 * 1024 * 1024,
         windowsHide: true,
+        env: options.env,
       },
       (error, stdout, stderr) => {
         const out = stdout?.toString() ?? '';
