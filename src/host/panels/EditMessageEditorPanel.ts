@@ -197,6 +197,13 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       );
       animation: ai-marquee-spin 1.45s linear infinite;
     }
+    .ai-marquee-border::after {
+      content: '';
+      position: absolute;
+      inset: 1px;
+      border-radius: 3px;
+      background: var(--vscode-editor-background, #1e1e1e);
+    }
     @keyframes ai-marquee-spin { to { transform: rotate(1turn); } }
     @keyframes ai-textarea-breathe {
       0%, 100% { filter: brightness(0.82); }

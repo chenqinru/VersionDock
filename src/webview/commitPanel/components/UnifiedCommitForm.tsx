@@ -330,6 +330,13 @@ export function UnifiedCommitForm({
         );
         animation: gs-ai-marquee-spin 1.45s linear infinite;
       }
+      .gs-ai-marquee-border::after {
+        content: '';
+        position: absolute;
+        inset: 1px;
+        border-radius: 3px;
+        background: var(--vscode-editor-background, #1e1e1e);
+      }
       .gs-commit-textarea[data-generating='true'] {
         position: relative;
         z-index: 1;
