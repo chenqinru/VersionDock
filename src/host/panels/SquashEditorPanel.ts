@@ -249,7 +249,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     }
     .generation-error.visible { display: block; }
     @media (prefers-reduced-motion: reduce) {
-      .ai-marquee-border::before { animation: none; }
       textarea[data-generating="true"] { animation: none; filter: brightness(0.7); }
     }
     .footer {

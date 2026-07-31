@@ -336,7 +336,6 @@ export function UnifiedCommitForm({
         animation: gs-ai-textarea-breathe 1.2s ease-in-out infinite;
       }
       @media (prefers-reduced-motion: reduce) {
-        .gs-ai-marquee-border::before { animation: none; }
         .gs-commit-textarea[data-generating='true'] {
           animation: none;
           filter: brightness(0.7);
