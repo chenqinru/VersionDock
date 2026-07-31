@@ -160,6 +160,7 @@
   "Commits being squashed": "正在压缩的提交",
   "Edit commit message ({0})": "编辑提交信息（{0}）",
   "Edit commit message": "编辑提交信息",
+  "Original commit message": "原提交信息",
   "Author": "作者",
   "Author date": "作者时间",
   "Branches & tags": "分支和标签",

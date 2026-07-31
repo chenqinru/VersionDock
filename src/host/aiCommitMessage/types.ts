@@ -34,3 +34,8 @@ export interface AiCommitMessageGenerateResult {
   firstTokenLatencyMs?: number;
   durationMs: number;
 }
+
+export type AiCommitMessageEditorGenerator = (
+  cancellationToken: import('vscode').CancellationToken,
+  onMessage: (message: string) => void,
+) => Promise<string>;

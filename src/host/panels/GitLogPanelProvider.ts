@@ -18,6 +18,8 @@ import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { AiCommitExplanationService } from '../aiCommitExplanation/AiCommitExplanationService';
+import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
+import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -141,6 +143,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
     private readonly shelveDocProvider: ShelveDocumentProvider,
+    private readonly aiCommitMessageService: AiCommitMessageService,
     private readonly aiCommitExplanationService: AiCommitExplanationService,
     private readonly logger: VersionDockLogger,
   ) {
@@ -1477,9 +1480,21 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         const fullMessages = await Promise.all(msg.hashes.map(h => repo.getFullCommitMessage(h).then(m => m.trim())));
-        const fullCombined = fullMessages.join('\n\n');
         const fullCommits = msg.commits.map((c, i) => ({ ...c, message: fullMessages[i] ?? c.message }));
-        const result = await openSquashEditor(this.extensionUri, msg.hashes.length, fullCombined, fullCommits);
+        const result = await openSquashEditor(
+          this.extensionUri,
+          msg.hashes.length,
+          fullCommits,
+          (cancellationToken, onMessage) => generateHistoricalCommitMessage({
+            service: this.aiCommitMessageService,
+            repo,
+            hashes: msg.hashes,
+            requestId: `${msg.requestId}:squash`,
+            cancellationToken,
+            onMessage,
+            logger: this.logger,
+          }),
+        );
         if (!result.confirmed) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') });
           return;
@@ -1525,7 +1540,20 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
         const fullMessage = (await repo.getFullCommitMessage(msg.hash)).trim();
-        const result = await openEditMessageEditor(this.extensionUri, msg.hash.slice(0, 7), fullMessage);
+        const result = await openEditMessageEditor(
+          this.extensionUri,
+          msg.hash.slice(0, 7),
+          fullMessage,
+          (cancellationToken, onMessage) => generateHistoricalCommitMessage({
+            service: this.aiCommitMessageService,
+            repo,
+            hashes: [msg.hash],
+            requestId: `${msg.requestId}:edit`,
+            cancellationToken,
+            onMessage,
+            logger: this.logger,
+          }),
+        );
         if (!result.confirmed) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') });
           return;

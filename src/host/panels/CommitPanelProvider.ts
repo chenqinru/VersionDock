@@ -26,6 +26,7 @@ import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
 import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
+import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AI_COMMIT_CONTEXT_MAX_FILES = 100;
@@ -916,6 +917,20 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     cancellationToken: vscode.CancellationToken,
   ): Promise<string> {
     const context = await this.buildAiCommitMessageContext(targets, repoIds, cancellationToken);
+    return this.generateCommitMessageFromContext(
+      context,
+      requestId,
+      cancellationToken,
+      message => this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message }),
+    );
+  }
+
+  private async generateCommitMessageFromContext(
+    context: AiCommitMessageGenerationContext,
+    requestId: string,
+    cancellationToken: vscode.CancellationToken,
+    onMessage: (message: string) => void,
+  ): Promise<string> {
     const provider = this.aiCommitMessageService.getProvider();
     const startedAt = Date.now();
     let streamedMessage = '';
@@ -923,7 +938,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const emitDelta = (delta: string): void => {
       if (!delta || cancellationToken.isCancellationRequested) return;
       streamedMessage += delta;
-      this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message: streamedMessage });
+      onMessage(streamedMessage);
     };
 
     this.logger?.info('AICommitMessage', 'Generation started', {
@@ -949,12 +964,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         for (const character of result.message) {
           throwIfCancellationRequested(cancellationToken);
           streamedMessage += character;
-          this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message: streamedMessage });
+          onMessage(streamedMessage);
           await new Promise(resolve => setTimeout(resolve, 20));
         }
       } else if (streamedMessage !== result.message) {
         streamedMessage = result.message;
-        this.post({ type: 'COMMIT_SET_MESSAGE', requestId, message: result.message });
+        onMessage(result.message);
       }
 
       this.logger?.info('AICommitMessage', `Generated commit message\n${result.message}`);
@@ -3178,9 +3193,21 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
         const fullMessages = await Promise.all(msg.hashes.map(h => repo.getFullCommitMessage(h).then(m => m.trim())));
-        const fullCombined = fullMessages.join('\n\n');
         const fullCommits = msg.commits.map((c, i) => ({ ...c, message: fullMessages[i] ?? c.message }));
-        const result = await openSquashEditor(this.extensionUri, msg.hashes.length, fullCombined, fullCommits);
+        const result = await openSquashEditor(
+          this.extensionUri,
+          msg.hashes.length,
+          fullCommits,
+          (cancellationToken, onMessage) => generateHistoricalCommitMessage({
+            service: this.aiCommitMessageService,
+            repo,
+            hashes: msg.hashes,
+            requestId: `${msg.requestId}:squash`,
+            cancellationToken,
+            onMessage,
+            logger: this.logger,
+          }),
+        );
         if (!result.confirmed) {
           this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') });
           return;
@@ -3262,7 +3289,20 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
         const fullMessage = (await repo.getFullCommitMessage(msg.hash)).trim();
-        const result = await openEditMessageEditor(this.extensionUri, msg.hash.slice(0, 7), fullMessage);
+        const result = await openEditMessageEditor(
+          this.extensionUri,
+          msg.hash.slice(0, 7),
+          fullMessage,
+          (cancellationToken, onMessage) => generateHistoricalCommitMessage({
+            service: this.aiCommitMessageService,
+            repo,
+            hashes: [msg.hash],
+            requestId: `${msg.requestId}:edit`,
+            cancellationToken,
+            onMessage,
+            logger: this.logger,
+          }),
+        );
         if (!result.confirmed) {
           this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') });
           return;

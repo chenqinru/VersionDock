@@ -160,6 +160,7 @@
   "Commits being squashed": "Commits being squashed",
   "Edit commit message ({0})": "Edit commit message ({0})",
   "Edit commit message": "Edit commit message",
+  "Original commit message": "Original commit message",
   "Author": "Author",
   "Author date": "Author date",
   "Branches & tags": "Branches & tags",
