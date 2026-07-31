@@ -9,6 +9,7 @@ import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { branchInfoColor } from '../../shared/branchColors';
 import { scopedKey } from '../../shared/scopedKey';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -360,7 +361,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
               onClick={e => e.stopPropagation()}
               title={isEmpty ? undefined : t('Include this repository in the commit')}
               disabled={isEmpty}
-              style={{ margin: '0 0 0 8px', flexShrink: 0, accentColor: 'var(--vscode-button-background)', cursor: isEmpty ? 'default' : 'pointer', ...(isEmpty ? { opacity: 0.3, pointerEvents: 'none' } : {}) }}
+              style={{ margin: '0 0 0 8px', flexShrink: 0, accentColor: 'var(--vscode-button-background)', cursor: isEmpty ? 'default' : 'pointer', ...nativeCheckboxBorderStyle(), ...(isEmpty ? { opacity: 0.3, pointerEvents: 'none' } : {}) }}
             />
           )}
           <div style={repoHeaderMainStyle} onClick={() => toggleCollapsed(collapseKey)}>

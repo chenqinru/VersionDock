@@ -9,6 +9,7 @@ import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { scopedKey } from '../../shared/scopedKey';
 import { branchColor, branchInfoColor } from '../../shared/branchColors';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 export interface RepoFileGroup {
   repoId: string;
@@ -94,7 +95,7 @@ export function ChangelistGroup({
           onChange={() => {}}
           onClick={totalFiles > 0 ? toggleAll : e => e.stopPropagation()}
           disabled={totalFiles === 0}
-          style={{ ...styles.clCheckbox, ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
+          style={{ ...styles.clCheckbox, ...nativeCheckboxBorderStyle(), ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
           title={totalFiles > 0 ? t('Select all files in this changelist') : undefined}
         />
         <div style={styles.headerMain} onClick={() => toggleCollapsed(collapseKey)}>
@@ -246,7 +247,7 @@ function RepoSubGroup({
           checked={allSelected}
           onChange={() => {}}
             onClick={totalFiles > 0 ? toggleAll : e => e.stopPropagation()}
-            style={{ ...styles.repoCheckbox, ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
+            style={{ ...styles.repoCheckbox, ...nativeCheckboxBorderStyle(), ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
             title={totalFiles > 0 ? t('Select all files in {0}', repoName) : undefined}
             disabled={totalFiles === 0}
           />

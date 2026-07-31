@@ -23,6 +23,7 @@ import type { HostToMergeMsg, IconThemeData, MergeToHostMsg } from '../../host/t
 import { t } from '../shared/i18n';
 import type { MergeConflictFile } from '../shared/types';
 import { Codicon } from '../shared/Codicon';
+import { nativeCheckboxBorderStyle } from '../shared/nativeCheckboxStyle';
 
 const SYNC_SCROLL_STORAGE_KEY = 'versiondock.merge.syncScroll';
 
@@ -802,7 +803,7 @@ function App() {
           </button>
           <span style={styles.separator} />
           <label style={styles.syncLabel}>
-            <input type="checkbox" checked={syncScrollEnabled} onChange={handleSyncScrollToggle} style={styles.syncInput} />
+            <input type="checkbox" checked={syncScrollEnabled} onChange={handleSyncScrollToggle} style={{ ...styles.syncInput, ...nativeCheckboxBorderStyle() }} />
             {t('Synchronous Scrolling')}
           </label>
         </div>

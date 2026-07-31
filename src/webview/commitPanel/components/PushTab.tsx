@@ -7,6 +7,7 @@ import { FileIcon } from '../../shared/FileIcon';
 import { branchInfoColor } from '../../shared/branchColors';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 interface Props {
   repos: RepoStatus[];
@@ -861,7 +862,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
             disabled={!canCheck}
             onChange={() => onToggle(repoStatus.repoId)}
             onClick={event => event.stopPropagation()}
-            style={{ ...styles.checkbox, opacity: canCheck ? 1 : 0.35, cursor: canCheck ? 'pointer' : 'default' }}
+            style={{ ...styles.checkbox, ...nativeCheckboxBorderStyle(), opacity: canCheck ? 1 : 0.35, cursor: canCheck ? 'pointer' : 'default' }}
             title={!canCheck ? t('Nothing to push') : checked ? t('Exclude from push') : t('Include in push')}
           />
         )}

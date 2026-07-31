@@ -3,6 +3,7 @@ import type { RepoMeta, RepoStatus } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 interface Props {
   message: string;
@@ -429,7 +430,7 @@ export function UnifiedCommitForm({
             type="checkbox"
             checked={amend}
             onChange={() => onAmendToggle(amendRepoId!)}
-            style={{ marginRight: '4px' }}
+            style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
           />
           {t('Amend last commit')}
         </label>

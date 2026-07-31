@@ -1,5 +1,6 @@
 import React from 'react';
 import { t } from '../../shared/i18n';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 interface Props {
   repoName: string;
@@ -70,7 +71,7 @@ export function CommitForm({
             checked={amend}
             onChange={(e) => onAmendChange(e.target.checked)}
             disabled={loading}
-            style={{ marginRight: '5px' }}
+            style={{ ...nativeCheckboxBorderStyle(), marginRight: '5px' }}
           />
           {t('Amend last commit')}
         </label>

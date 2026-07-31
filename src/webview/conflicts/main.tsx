@@ -6,6 +6,7 @@ import { FileIcon } from '../shared/FileIcon';
 import { t } from '../shared/i18n';
 import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
 import { scopedKey } from '../shared/scopedKey';
+import { nativeCheckboxBorderStyle } from '../shared/nativeCheckboxStyle';
 import type { ConflictsToHostMsg, ConflictListFile, HostToConflictsMsg, IconThemeData } from '../../host/types/messages';
 
 function generateId() {
@@ -212,7 +213,7 @@ function App() {
         <div style={styles.subtitle}>{isMerging ? operationLabel : t('No merge in progress')}</div>
         <div style={styles.count}>{conflictCountSummary}</div>
         <label style={styles.checkboxLabel}>
-          <input type="checkbox" checked={groupByDir} onChange={event => setGroupByDir(event.currentTarget.checked)} />
+          <input type="checkbox" checked={groupByDir} onChange={event => setGroupByDir(event.currentTarget.checked)} style={nativeCheckboxBorderStyle()} />
           {t('Group by directory')}
         </label>
       </div>

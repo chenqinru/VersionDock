@@ -9,6 +9,7 @@ import { baseNameFromPath } from '../../shared/pathUtils';
 import { branchInfoColor } from '../../shared/branchColors';
 import { mergeRepoFiles } from '../utils/mergeRepoFiles';
 import { scopedKey } from '../../shared/scopedKey';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 interface Props {
   repoStatus: RepoStatus;
@@ -93,7 +94,7 @@ export function ProjectGroup({
           onChange={totalFiles > 0 ? toggleAll : () => {}}
           onClick={(e) => e.stopPropagation()}
           disabled={totalFiles === 0}
-          style={{ ...styles.repoCheckbox, ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
+          style={{ ...styles.repoCheckbox, ...nativeCheckboxBorderStyle(), ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
           title={totalFiles > 0 ? t('Select all files in this repo') : undefined}
         />
 

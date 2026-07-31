@@ -4,6 +4,7 @@ import type { RepoMeta } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 // ── Tree types (mirrors FileTree logic) ──────────────────────────────────────
 
@@ -59,7 +60,7 @@ function Checkbox({ checked, indeterminate, onChange, onClick }: {
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate ?? false; }, [indeterminate]);
-  return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} onClick={onClick} style={s.checkbox} />;
+  return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} onClick={onClick} style={{ ...s.checkbox, ...nativeCheckboxBorderStyle() }} />;
 }
 
 // ── Dir node ──────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
 import { t } from '../../shared/i18n';
 import { scopedKey } from '../../shared/scopedKey';
+import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 interface Props {
   repoId: string;
@@ -115,7 +116,8 @@ function Checkbox({ checked, indeterminate, onChange, onClick }: {
   }, [indeterminate]);
   return (
     <input ref={ref} type="checkbox" checked={checked}
-      onChange={onChange} onClick={onClick} style={styles.checkbox} />
+      onChange={onChange} onClick={onClick}
+      style={{ ...styles.checkbox, ...nativeCheckboxBorderStyle() }} />
   );
 }
 
