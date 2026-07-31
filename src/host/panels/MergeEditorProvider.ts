@@ -9,6 +9,7 @@ import { t } from '../utils/l10n';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { scopedKey } from '../utils/scopedKey';
 import type { VersionDockLogger } from '../utils/Logger';
+import type { AiMergeConflictService } from '../aiMergeConflict/AiMergeConflictService';
 
 interface ResolvedMergeFileContext {
   repoId: string;
@@ -24,10 +25,12 @@ interface InitialMergeFileResult {
 export class MergeEditorProvider implements vscode.Disposable {
   private panels = new Map<string, vscode.WebviewPanel>();
   private disposables: vscode.Disposable[] = [];
+  private activeAiGenerations = new Map<string, { requestId: string; source: vscode.CancellationTokenSource }>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
+    private readonly aiMergeConflictService: AiMergeConflictService,
     private readonly logger: VersionDockLogger,
   ) {}
 
@@ -133,6 +136,7 @@ export class MergeEditorProvider implements vscode.Disposable {
     });
 
     panel.onDidDispose(() => {
+      this.cancelAiGeneration(panelKey);
       this.panels.delete(panelKey);
       this.logger.debug('MergeEditor', 'Editor closed', {
         repoId: resolved.repoId,
@@ -307,6 +311,99 @@ export class MergeEditorProvider implements vscode.Disposable {
         break;
       }
 
+      case 'MERGE_AI_RESOLVE': {
+        this.cancelAiGeneration(panelKey);
+        const source = new vscode.CancellationTokenSource();
+        this.activeAiGenerations.set(panelKey, { requestId: msg.requestId, source });
+        const startedAt = Date.now();
+        const provider = this.aiMergeConflictService.getProvider();
+        this.logger.info('AIMergeConflict', 'Generation started', {
+          requestId: msg.requestId,
+          repoId,
+          relativePath,
+          provider,
+          conflictCount: msg.conflictIndexes.length,
+        });
+
+        try {
+          const repo = this.manager.getRepo(repoId);
+          if (!repo) throw new Error(t('Repo not found'));
+          const file = (await this.loadInitialFile({ repoId, relativePath, absolutePath })).file;
+          const availableIndexes = new Set(file.conflicts.map(conflict => conflict.index));
+          if (msg.conflictIndexes.some(index => !availableIndexes.has(index))) {
+            throw new Error(t('The conflict file changed. Reopen the Merge Editor and try again.'));
+          }
+
+          const result = await this.aiMergeConflictService.generate({
+            file,
+            conflictIndexes: msg.conflictIndexes,
+            repoRootPaths: [repo.rootPath],
+            cancellationToken: source.token,
+          });
+          if (source.token.isCancellationRequested) throw new Error('Cancelled');
+          post({
+            type: 'MERGE_AI_RESOLVE_RESULT',
+            requestId: msg.requestId,
+            resolutions: result.resolutions,
+            provider: result.provider,
+            model: result.model,
+            promptSource: result.promptSource,
+          });
+          this.logger.info('AIMergeConflict', 'Generation completed', {
+            requestId: msg.requestId,
+            repoId,
+            relativePath,
+            provider: result.provider,
+            model: result.model,
+            promptSource: result.promptSource,
+            resolutionCount: result.resolutions.length,
+            inputCharCount: result.inputCharCount,
+            inputTokenCount: result.inputTokenCount,
+            inputTokenBudget: result.inputTokenBudget,
+            maxInputTokens: result.maxInputTokens,
+            streamChunkCount: result.streamChunkCount,
+            streamCharCount: result.streamCharCount,
+            firstTokenLatencyMs: result.firstTokenLatencyMs,
+            durationMs: result.durationMs,
+          });
+        } catch (error: unknown) {
+          const cancelled = source.token.isCancellationRequested || (error instanceof Error && error.message === 'Cancelled');
+          post({
+            type: 'MERGE_AI_RESOLVE_RESULT',
+            requestId: msg.requestId,
+            error: cancelled ? 'Cancelled' : error instanceof Error ? error.message : String(error),
+          });
+          if (cancelled) {
+            this.logger.info('AIMergeConflict', 'Generation cancelled', {
+              requestId: msg.requestId,
+              repoId,
+              relativePath,
+              provider,
+              durationMs: Date.now() - startedAt,
+            });
+          } else {
+            this.logger.error('AIMergeConflict', 'Generation failed', error, {
+              requestId: msg.requestId,
+              repoId,
+              relativePath,
+              provider,
+              durationMs: Date.now() - startedAt,
+            });
+          }
+        } finally {
+          const active = this.activeAiGenerations.get(panelKey);
+          if (active?.source === source) this.activeAiGenerations.delete(panelKey);
+          source.dispose();
+        }
+        break;
+      }
+
+      case 'MERGE_AI_CANCEL': {
+        const active = this.activeAiGenerations.get(panelKey);
+        if (active?.requestId === msg.requestId) active.source.cancel();
+        break;
+      }
+
       case 'MERGE_SAVE_FILE': {
         const startedAt = Date.now();
         try {
@@ -398,8 +495,16 @@ export class MergeEditorProvider implements vscode.Disposable {
   }
 
   dispose(): void {
+    for (const panelKey of this.activeAiGenerations.keys()) this.cancelAiGeneration(panelKey);
     this.panels.forEach(p => p.dispose());
     this.panels.clear();
     this.disposables.forEach(d => d.dispose());
+  }
+
+  private cancelAiGeneration(panelKey: string): void {
+    const active = this.activeAiGenerations.get(panelKey);
+    if (!active) return;
+    this.activeAiGenerations.delete(panelKey);
+    active.source.cancel();
   }
 }

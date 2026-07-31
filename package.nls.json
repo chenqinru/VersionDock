@@ -23,6 +23,8 @@
   "commands.openSettings.title": "VersionDock: Settings",
   "commands.aiCommitMessage.editPrompt.title": "VersionDock: Edit Commit Prompt",
   "commands.aiCommitMessage.resetPrompt.title": "VersionDock: Reset Commit Prompt",
+  "commands.aiMergeConflict.editPrompt.title": "VersionDock: Edit AI Merge Prompt",
+  "commands.aiMergeConflict.resetPrompt.title": "VersionDock: Reset AI Merge Prompt",
   "commands.openGitAnnotations.title": "Enable Git Annotations",
   "commands.closeGitAnnotations.title": "Disable Git Annotations",
   "commands.openGitGhostText.title": "Enable Git ghost text",

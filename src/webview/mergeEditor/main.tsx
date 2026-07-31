@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useMergeStore, type Resolution } from './store/mergeStore';
 import {
@@ -7,10 +7,13 @@ import {
   buildNonConflictingSelectionsForScope,
   buildNormalEditsForNonConflictingSelections,
   buildNormalEditsForNonConflictingScope,
+  diffLineChanges,
+  getEffectiveConflictBlocks,
   getMergeToolbarCounts,
   type NonConflictingChangeScope,
   type NonConflictingSelection,
   type NonConflictingSelections,
+  type AiMergeDraft,
   ThreeWayLayout,
 } from './components/ThreeWayLayout';
 import { getVsCodeApi } from '../shared/vscodeApi';
@@ -22,6 +25,75 @@ import type { MergeConflictFile } from '../shared/types';
 import { Codicon } from '../shared/Codicon';
 
 const SYNC_SCROLL_STORAGE_KEY = 'versiondock.merge.syncScroll';
+
+type AiPhase = 'idle' | 'analyzing' | 'typing' | 'completed';
+type AiResolveResultMessage = Extract<HostToMergeMsg, { type: 'MERGE_AI_RESOLVE_RESULT' }>;
+
+interface AiUiState {
+  phase: AiPhase;
+  current: number;
+  total: number;
+  provider?: string;
+  model?: string;
+}
+
+interface AiRunSnapshot {
+  resolutions: Record<number, Resolution>;
+  normalEdits: Record<number, string[]>;
+  resultContent: string;
+  nonConflictingSelections: NonConflictingSelections;
+  appliedNonConflictingScope: NonConflictingChangeScope | null;
+  currentConflictIndex: number;
+}
+
+const IDLE_AI_STATE: AiUiState = { phase: 'idle', current: 0, total: 0 };
+
+const AI_MERGE_STYLES = `
+  @keyframes versiondock-ai-orbit {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes versiondock-ai-status-scan {
+    0% { transform: translateX(-120%); opacity: 0; }
+    18% { opacity: 0.72; }
+    82% { opacity: 0.72; }
+    100% { transform: translateX(420%); opacity: 0; }
+  }
+  @keyframes versiondock-ai-button-breathe {
+    0%, 100% { filter: brightness(1); }
+    50% { filter: brightness(1.12); }
+  }
+  .versiondock-ai-resolve-button:hover:not(:disabled) {
+    filter: brightness(1.1) saturate(1.08);
+    transform: translateY(-1px);
+  }
+  .versiondock-ai-resolve-button:active:not(:disabled) {
+    transform: translateY(0);
+  }
+  .versiondock-ai-resolve-button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+  }
+  .versiondock-ai-resolve-button[data-running="true"] {
+    animation: versiondock-ai-button-breathe 1.8s ease-in-out infinite;
+  }
+  .versiondock-ai-status[data-running="true"]::after {
+    content: '';
+    position: absolute;
+    inset: auto auto 0 0;
+    width: 28%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--vscode-focusBorder), transparent);
+    animation: versiondock-ai-status-scan 1.65s ease-in-out infinite;
+  }
+  .versiondock-ai-orbit {
+    animation: versiondock-ai-orbit 1.2s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .versiondock-ai-resolve-button,
+    .versiondock-ai-status::after,
+    .versiondock-ai-orbit { animation: none !important; }
+  }
+`;
 
 function normalEditsEqual(left: Record<number, string[]> | null, right: Record<number, string[]> | null): boolean {
   if (!left || !right) return left === right;
@@ -54,6 +126,148 @@ function shouldDeleteResolvedFile(file: MergeConflictFile, resultContent: string
   return file.conflicts.every((_, index) => resolutions[index] === deletedSide);
 }
 
+function cloneResolutions(resolutions: Record<number, Resolution>): Record<number, Resolution> {
+  return Object.fromEntries(Object.entries(resolutions).map(([key, resolution]) => [
+    Number(key),
+    typeof resolution === 'object'
+      ? { ...resolution, lines: [...resolution.lines], acceptedSides: [...resolution.acceptedSides] }
+      : resolution,
+  ]));
+}
+
+function cloneNormalEdits(edits: Record<number, string[]>): Record<number, string[]> {
+  return Object.fromEntries(Object.entries(edits).map(([key, lines]) => [Number(key), [...lines]]));
+}
+
+function codeLinesEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((line, index) => line === right[index]);
+}
+
+function trimBoundaryBlankLines(lines: string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start].trim() === '') start += 1;
+  while (end > start && lines[end - 1].trim() === '') end -= 1;
+  return lines.slice(start, end);
+}
+
+function codeLinesEqualIgnoringBoundaryBlanks(left: string[], right: string[]): boolean {
+  return codeLinesEqual(trimBoundaryBlankLines(left), trimBoundaryBlankLines(right));
+}
+
+function normalizeCodeForComparison(lines: string[]): string {
+  return trimBoundaryBlankLines(lines).join('\n').replace(/\s+/g, ' ').trim();
+}
+
+function comparableCodeLines(lines: string[]): string[] {
+  return lines
+    .map(line => line.trim().replace(/\s+/g, ' '))
+    .filter(line => line.length > 0);
+}
+
+function sideSpecificCodeLines(sideLines: string[], otherSideLines: string[]): string[] {
+  const comparableSide = comparableCodeLines(sideLines);
+  const comparableOtherSide = comparableCodeLines(otherSideLines);
+  return diffLineChanges(comparableOtherSide, comparableSide).flatMap(change => change.lines);
+}
+
+function containsLinesInOrder(lines: string[], expectedLines: string[]): boolean {
+  if (expectedLines.length === 0) return false;
+  const comparableLines = comparableCodeLines(lines);
+  let expectedIndex = 0;
+  for (const line of comparableLines) {
+    if (line !== expectedLines[expectedIndex]) continue;
+    expectedIndex += 1;
+    if (expectedIndex === expectedLines.length) return true;
+  }
+  return false;
+}
+
+function findLineSlice(lines: string[], slice: string[]): { start: number; end: number } | null {
+  const candidate = trimBoundaryBlankLines(slice);
+  if (candidate.length === 0 || candidate.length > lines.length) return null;
+  for (let start = 0; start <= lines.length - candidate.length; start += 1) {
+    if (candidate.every((line, index) => line === lines[start + index])) {
+      return { start, end: start + candidate.length };
+    }
+  }
+  return null;
+}
+
+function expandAiResolutionLines(
+  markerConflict: MergeConflictFile['conflicts'][number],
+  effectiveConflict: MergeConflictFile['conflicts'][number],
+  resolvedLines: string[],
+): string[] {
+  const matchesMarkerOurs = codeLinesEqualIgnoringBoundaryBlanks(resolvedLines, markerConflict.oursLines);
+  const matchesMarkerTheirs = codeLinesEqualIgnoringBoundaryBlanks(resolvedLines, markerConflict.theirsLines);
+  if (matchesMarkerOurs && matchesMarkerTheirs) {
+    return codeLinesEqual(effectiveConflict.oursLines, effectiveConflict.theirsLines)
+      ? [...effectiveConflict.oursLines]
+      : [...resolvedLines];
+  }
+  if (matchesMarkerOurs) return [...effectiveConflict.oursLines];
+  if (matchesMarkerTheirs) return [...effectiveConflict.theirsLines];
+
+  const oursSlice = findLineSlice(effectiveConflict.oursLines, markerConflict.oursLines);
+  const theirsSlice = findLineSlice(effectiveConflict.theirsLines, markerConflict.theirsLines);
+  if (oursSlice && !theirsSlice) {
+    return [
+      ...effectiveConflict.oursLines.slice(0, oursSlice.start),
+      ...resolvedLines,
+      ...effectiveConflict.oursLines.slice(oursSlice.end),
+    ];
+  }
+  if (!oursSlice && theirsSlice) {
+    return [
+      ...effectiveConflict.theirsLines.slice(0, theirsSlice.start),
+      ...resolvedLines,
+      ...effectiveConflict.theirsLines.slice(theirsSlice.end),
+    ];
+  }
+  if (!oursSlice || !theirsSlice) return [...resolvedLines];
+
+  const oursPrefix = effectiveConflict.oursLines.slice(0, oursSlice.start);
+  const theirsPrefix = effectiveConflict.theirsLines.slice(0, theirsSlice.start);
+  const oursSuffix = effectiveConflict.oursLines.slice(oursSlice.end);
+  const theirsSuffix = effectiveConflict.theirsLines.slice(theirsSlice.end);
+  if (!codeLinesEqual(oursPrefix, theirsPrefix) || !codeLinesEqual(oursSuffix, theirsSuffix)) return [...resolvedLines];
+  return [...oursPrefix, ...resolvedLines, ...oursSuffix];
+}
+
+function inferAiAcceptedSides(
+  conflict: MergeConflictFile['conflicts'][number],
+  resolvedLines: string[],
+): Array<'ours' | 'theirs'> {
+  const resolvedCode = normalizeCodeForComparison(resolvedLines);
+  const matchesOurs = resolvedCode === normalizeCodeForComparison(conflict.oursLines);
+  const matchesTheirs = resolvedCode === normalizeCodeForComparison(conflict.theirsLines);
+  if (matchesOurs && matchesTheirs) return ['ours', 'theirs'];
+  if (matchesOurs) return ['ours'];
+  if (matchesTheirs) return ['theirs'];
+
+  const keepsOurs = containsLinesInOrder(
+    resolvedLines,
+    sideSpecificCodeLines(conflict.oursLines, conflict.theirsLines),
+  );
+  const keepsTheirs = containsLinesInOrder(
+    resolvedLines,
+    sideSpecificCodeLines(conflict.theirsLines, conflict.oursLines),
+  );
+  if (keepsOurs && keepsTheirs) return ['ours', 'theirs'];
+  if (keepsOurs) return ['ours'];
+  if (keepsTheirs) return ['theirs'];
+  return [];
+}
+
+function waitForAnimationFrame(): Promise<void> {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
+
+function waitForDelay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
+
 function App() {
   const store = useMergeStore();
   const [currentConflictIndex, setCurrentConflictIndex] = useState(0);
@@ -61,6 +275,12 @@ function App() {
   const [syncScrollEnabled, setSyncScrollEnabled] = useState(readSyncScrollSetting);
   const [appliedNonConflictingScope, setAppliedNonConflictingScope] = useState<NonConflictingChangeScope | null>(null);
   const [nonConflictingSelections, setNonConflictingSelections] = useState<NonConflictingSelections>({});
+  const [aiState, setAiState] = useState<AiUiState>(IDLE_AI_STATE);
+  const [aiDraft, setAiDraft] = useState<AiMergeDraft | null>(null);
+  const aiRequestIdRef = useRef<string | null>(null);
+  const aiRunTokenRef = useRef(0);
+  const aiSnapshotRef = useRef<AiRunSnapshot | null>(null);
+  const handleAiResultRef = useRef<(msg: AiResolveResultMessage) => void>(() => undefined);
 
   const send = useCallback((msg: MergeToHostMsg) => {
     getVsCodeApi().postMessage(msg);
@@ -73,6 +293,11 @@ function App() {
       const state = useMergeStore.getState();
       switch (msg.type) {
         case 'MERGE_FILE_LOADED':
+          aiRunTokenRef.current += 1;
+          aiRequestIdRef.current = null;
+          aiSnapshotRef.current = null;
+          setAiState(IDLE_AI_STATE);
+          setAiDraft(null);
           state.setFile(msg.file);
           setAppliedNonConflictingScope(null);
           setNonConflictingSelections({});
@@ -96,6 +321,9 @@ function App() {
           break;
         case 'MERGE_FILE_VERSIONS_LOADED':
           if (msg.error) state.setError(msg.error);
+          break;
+        case 'MERGE_AI_RESOLVE_RESULT':
+          handleAiResultRef.current(msg);
           break;
         case 'MERGE_SAVE_RESULT':
           state.setSaving(false);
@@ -152,6 +380,190 @@ function App() {
       right: buildNonConflictingSelectionsForScope(store.file, 'right'),
     };
   }, [store.file]);
+
+  const restoreAiSnapshot = useCallback(() => {
+    const snapshot = aiSnapshotRef.current;
+    const state = useMergeStore.getState();
+    if (!snapshot || !state.file) return;
+    state.file.conflicts.forEach((_, index) => {
+      state.resolveBlock(index, snapshot.resolutions[index] ?? 'unresolved');
+    });
+    state.setNormalEdits(cloneNormalEdits(snapshot.normalEdits));
+    state.setResultContent(snapshot.resultContent);
+    setNonConflictingSelections({ ...snapshot.nonConflictingSelections });
+    setAppliedNonConflictingScope(snapshot.appliedNonConflictingScope);
+    setCurrentConflictIndex(snapshot.currentConflictIndex);
+  }, []);
+
+  const stopAiResolution = useCallback(() => {
+    const requestId = aiRequestIdRef.current;
+    if (requestId && aiState.phase === 'analyzing') {
+      send({ type: 'MERGE_AI_CANCEL', requestId });
+    }
+    aiRunTokenRef.current += 1;
+    restoreAiSnapshot();
+    aiRequestIdRef.current = null;
+    aiSnapshotRef.current = null;
+    setAiDraft(null);
+    setAiState(IDLE_AI_STATE);
+  }, [aiState.phase, restoreAiSnapshot, send]);
+
+  const handleAiResolveResult = useCallback((msg: AiResolveResultMessage) => {
+    if (msg.requestId !== aiRequestIdRef.current) return;
+    aiRequestIdRef.current = null;
+
+    if (msg.error || !msg.resolutions) {
+      aiRunTokenRef.current += 1;
+      restoreAiSnapshot();
+      aiSnapshotRef.current = null;
+      setAiDraft(null);
+      setAiState(IDLE_AI_STATE);
+      if (msg.error && msg.error !== 'Cancelled') {
+        useMergeStore.getState().setError(t('AI conflict resolution failed: {0}', msg.error));
+      }
+      return;
+    }
+
+    const resolutions = [...msg.resolutions].sort((left, right) => left.index - right.index);
+    const runToken = ++aiRunTokenRef.current;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    setAiState({
+      phase: 'typing',
+      current: 0,
+      total: resolutions.length,
+      provider: msg.provider,
+      model: msg.model,
+    });
+
+    void (async () => {
+      try {
+        const initialState = useMergeStore.getState();
+        const snapshot = aiSnapshotRef.current;
+        if (!snapshot || !initialState.file) return;
+        const effectiveConflicts = getEffectiveConflictBlocks(initialState.file);
+
+        const baseNormalEdits = nonConflictingChoices?.base;
+        const allNormalEdits = nonConflictingChoices?.all;
+        const allSelections = nonConflictingSelectionChoices?.all;
+        const canAutoApplyNonConflicting = Boolean(
+          baseNormalEdits
+          && allNormalEdits
+          && allSelections
+          && Object.keys(snapshot.nonConflictingSelections).length === 0
+          && normalEditsEqual(snapshot.normalEdits, baseNormalEdits),
+        );
+
+        if (canAutoApplyNonConflicting && allSelections && initialState.file) {
+          const animatedSelections: NonConflictingSelections = {};
+          for (const blockIndex of Object.keys(allSelections).map(Number).sort((left, right) => left - right)) {
+            if (aiRunTokenRef.current !== runToken) return;
+            animatedSelections[blockIndex] = allSelections[blockIndex];
+            const normalEdits = buildNormalEditsForNonConflictingSelections(initialState.file, animatedSelections);
+            if (normalEdits) {
+              const currentState = useMergeStore.getState();
+              currentState.setNormalEdits(normalEdits);
+              currentState.setResultContent(buildContentFromResolutions(initialState.file, currentState.resolutions, normalEdits));
+              setNonConflictingSelections({ ...animatedSelections });
+              setAppliedNonConflictingScope(Object.keys(animatedSelections).length === Object.keys(allSelections).length ? 'all' : null);
+            }
+            await waitForDelay(reducedMotion ? 16 : 80);
+          }
+        }
+
+        for (let position = 0; position < resolutions.length; position += 1) {
+          if (aiRunTokenRef.current !== runToken) return;
+          const resolution = resolutions[position];
+          const markerConflict = initialState.file.conflicts.find(conflict => conflict.index === resolution.index);
+          const effectiveConflict = effectiveConflicts.find(conflict => conflict.index === resolution.index);
+          if (!markerConflict || !effectiveConflict) throw new Error(t('Conflict {0} is no longer available. Reopen the Merge Editor.', resolution.index + 1));
+          const expandedLines = expandAiResolutionLines(markerConflict, effectiveConflict, resolution.lines);
+          const text = expandedLines.join('\n');
+          setCurrentConflictIndex(resolution.index);
+          setAiState({
+            phase: 'typing',
+            current: position + 1,
+            total: resolutions.length,
+            provider: msg.provider,
+            model: msg.model,
+          });
+
+          if (text.length === 0) {
+            setAiDraft({ index: resolution.index, content: '' });
+            await waitForDelay(reducedMotion ? 16 : 220);
+          } else {
+            const targetDuration = reducedMotion ? 120 : Math.min(6_000, Math.max(1_100, text.length * 11));
+            const frameCount = Math.max(1, Math.floor(targetDuration / 16));
+            const charactersPerFrame = Math.max(1, Math.ceil(text.length / frameCount));
+            for (let cursor = charactersPerFrame; cursor < text.length + charactersPerFrame; cursor += charactersPerFrame) {
+              if (aiRunTokenRef.current !== runToken) return;
+              setAiDraft({ index: resolution.index, content: text.slice(0, Math.min(cursor, text.length)) });
+              await waitForAnimationFrame();
+            }
+          }
+
+          if (aiRunTokenRef.current !== runToken) return;
+          const currentState = useMergeStore.getState();
+          if (!currentState.file) return;
+          const customResolution: Resolution = {
+            type: 'custom',
+            lines: expandedLines,
+            acceptedSides: inferAiAcceptedSides(effectiveConflict, expandedLines),
+            resolvedByAi: true,
+          };
+          const nextResolutions = { ...currentState.resolutions, [resolution.index]: customResolution };
+          currentState.resolveBlock(resolution.index, customResolution);
+          currentState.setResultContent(buildContentFromResolutions(currentState.file, nextResolutions, currentState.normalEdits));
+          setAiDraft(null);
+          await waitForDelay(reducedMotion ? 16 : 140);
+        }
+
+        if (aiRunTokenRef.current !== runToken) return;
+        aiSnapshotRef.current = null;
+        setAiDraft(null);
+        setAiState({
+          phase: 'completed',
+          current: resolutions.length,
+          total: resolutions.length,
+          provider: msg.provider,
+          model: msg.model,
+        });
+      } catch (error: unknown) {
+        if (aiRunTokenRef.current !== runToken) return;
+        restoreAiSnapshot();
+        aiSnapshotRef.current = null;
+        setAiDraft(null);
+        setAiState(IDLE_AI_STATE);
+        useMergeStore.getState().setError(t('AI conflict resolution failed: {0}', error instanceof Error ? error.message : String(error)));
+      }
+    })();
+  }, [nonConflictingChoices, nonConflictingSelectionChoices, restoreAiSnapshot]);
+
+  handleAiResultRef.current = handleAiResolveResult;
+
+  const startAiResolution = useCallback(() => {
+    const state = useMergeStore.getState();
+    if (!state.file) return;
+    const conflictIndexes = state.file.conflicts
+      .map((_, index) => index)
+      .filter(index => state.resolutions[index] === 'unresolved');
+    if (conflictIndexes.length === 0) return;
+
+    aiRunTokenRef.current += 1;
+    aiSnapshotRef.current = {
+      resolutions: cloneResolutions(state.resolutions),
+      normalEdits: cloneNormalEdits(state.normalEdits),
+      resultContent: state.resultContent,
+      nonConflictingSelections: { ...nonConflictingSelections },
+      appliedNonConflictingScope,
+      currentConflictIndex,
+    };
+    state.setError(null);
+    setAiDraft(null);
+    const requestId = generateId();
+    aiRequestIdRef.current = requestId;
+    setAiState({ phase: 'analyzing', current: 0, total: conflictIndexes.length });
+    send({ type: 'MERGE_AI_RESOLVE', requestId, conflictIndexes });
+  }, [appliedNonConflictingScope, currentConflictIndex, nonConflictingSelections, send]);
 
   useEffect(() => {
     if (!store.file || store.file.conflicts.length === 0) return;
@@ -246,6 +658,11 @@ function App() {
 
   const resetMerge = useCallback(() => {
     if (!store.file) return;
+    aiRunTokenRef.current += 1;
+    aiRequestIdRef.current = null;
+    aiSnapshotRef.current = null;
+    setAiDraft(null);
+    setAiState(IDLE_AI_STATE);
     const unresolvedResolutions: Record<number, Resolution> = {};
     store.file.conflicts.forEach((_, index) => {
       unresolvedResolutions[index] = 'unresolved';
@@ -293,12 +710,43 @@ function App() {
       ? !normalEditsEqual(store.normalEdits, nonConflictingChoices.base)
       : Object.keys(store.normalEdits).length > 0)
   );
+  const aiBusy = aiState.phase === 'analyzing' || aiState.phase === 'typing';
+  const aiStatusMessage = aiState.phase === 'analyzing'
+    ? t('AI is analyzing {0} conflicts…', aiState.total)
+    : aiState.phase === 'typing'
+      ? t('AI is writing conflict {0} of {1}…', aiState.current, aiState.total)
+      : aiState.phase === 'completed'
+        ? t('AI resolved {0} conflicts. Review the result before applying.', aiState.total)
+        : '';
+  const aiResultStatusLabel = aiState.phase === 'analyzing'
+    ? t('AI analyzing')
+    : aiState.phase === 'typing'
+      ? t('AI writing {0}/{1}', aiState.current, aiState.total)
+      : aiState.phase === 'completed'
+        ? t('AI complete')
+        : undefined;
+  const aiProgress = aiState.phase === 'analyzing'
+    ? 18
+    : aiState.total > 0 ? Math.max(0, Math.min(100, (aiState.current / aiState.total) * 100)) : 0;
 
   return (
     <div style={styles.app}>
+      <style>{AI_MERGE_STYLES}</style>
       <div style={styles.pathHeader}>
         <FileIcon name={fileName} theme={iconTheme} size={16} style={styles.fileIcon} />
         <span style={styles.pathText}>{store.file.relativePath}</span>
+        <button
+          type="button"
+          className="versiondock-ai-resolve-button"
+          data-running={aiBusy || undefined}
+          style={styles.aiResolveButton(aiBusy, unresolved === 0 && !aiBusy)}
+          disabled={unresolved === 0 && !aiBusy}
+          onClick={aiBusy ? stopAiResolution : startAiResolution}
+          title={aiBusy ? t('Stop AI conflict resolution') : t('Resolve all remaining conflicts with AI')}
+        >
+          <Codicon name={aiBusy ? 'stop-circle' : 'sparkle-filled'} style={styles.aiResolveIcon} />
+          <span>{aiBusy ? t('Stop AI') : unresolved > 0 ? t('Resolve {0} conflicts with AI', unresolved) : t('AI resolved')}</span>
+        </button>
       </div>
 
       {store.error && <div style={styles.error}>{store.error}</div>}
@@ -306,16 +754,16 @@ function App() {
       <div style={styles.mergeToolbar}>
         <div style={styles.toolbarLeft}>
           <button
-            style={styles.navButton(!canGoToPreviousUnresolved)}
-            disabled={!canGoToPreviousUnresolved}
+            style={styles.navButton(!canGoToPreviousUnresolved || aiBusy)}
+            disabled={!canGoToPreviousUnresolved || aiBusy}
             onClick={goToPreviousUnresolvedConflict}
             title={t('Previous Unresolved Conflict')}
           >
             ↑
           </button>
           <button
-            style={styles.navButton(!canGoToNextUnresolved)}
-            disabled={!canGoToNextUnresolved}
+            style={styles.navButton(!canGoToNextUnresolved || aiBusy)}
+            disabled={!canGoToNextUnresolved || aiBusy}
             onClick={goToNextUnresolvedConflict}
             title={t('Next Unresolved Conflict')}
           >
@@ -326,8 +774,8 @@ function App() {
           {(['left', 'all', 'right'] as const).map(scope => (
             <button
               key={scope}
-              style={styles.scopeButton(!canApplyNonConflicting, appliedNonConflictingScope === scope)}
-              disabled={!canApplyNonConflicting}
+              style={styles.scopeButton(!canApplyNonConflicting || aiBusy, appliedNonConflictingScope === scope)}
+              disabled={!canApplyNonConflicting || aiBusy}
               title={t('Apply {0} non-conflicting changes', scope === 'left' ? t('Left') : scope === 'all' ? t('All') : t('Right'))}
               onClick={() => handleApplyNonConflicting(scope)}
             >
@@ -336,8 +784,8 @@ function App() {
             </button>
           ))}
           <button
-            style={styles.scopeButton(!canCancelNonConflicting)}
-            disabled={!canCancelNonConflicting}
+            style={styles.scopeButton(!canCancelNonConflicting || aiBusy)}
+            disabled={!canCancelNonConflicting || aiBusy}
             title={t('Restore non-conflicting changes to Base')}
             onClick={handleCancelNonConflicting}
           >
@@ -353,6 +801,27 @@ function App() {
         <span style={styles.toolbarStats}>{t('{0} changes · {1} conflicts', toolbarCounts.changeCount, toolbarCounts.conflictCount)} · {unresolved > 0 ? t('{0} conflicts remaining', unresolved) : t('All conflicts resolved')}</span>
       </div>
 
+      {aiState.phase !== 'idle' && (
+        <div
+          className="versiondock-ai-status"
+          data-running={aiBusy || undefined}
+          style={styles.aiStatus(aiState.phase)}
+          role="status"
+          aria-live="polite"
+        >
+          <span className={aiBusy ? 'versiondock-ai-orbit' : undefined} style={styles.aiStatusIconWrap}>
+            <Codicon name={aiState.phase === 'completed' ? 'check' : 'sparkle'} style={styles.aiStatusIcon(aiState.phase)} />
+          </span>
+          <span style={styles.aiStatusText}>{aiStatusMessage}</span>
+          {(aiState.provider || aiState.model) && (
+            <span style={styles.aiProviderLabel}>{[aiState.provider, aiState.model].filter(Boolean).join(' · ')}</span>
+          )}
+          <span style={styles.aiProgressTrack} aria-hidden="true">
+            <span style={styles.aiProgressFill(aiProgress, aiState.phase)} />
+          </span>
+        </div>
+      )}
+
       <ThreeWayLayout
         file={store.file}
         resolutions={store.resolutions}
@@ -365,17 +834,22 @@ function App() {
         onSelectNonConflicting={handleSelectNonConflicting}
         currentConflictIndex={currentConflictIndex}
         syncScrollEnabled={syncScrollEnabled}
+        readOnly={aiBusy}
+        aiDraft={aiDraft}
+        resultStatusLabel={aiResultStatusLabel}
+        showCompletionNotice={unresolved === 0 && !store.saving && !aiBusy}
+        onApplyResolved={saveResolved}
       />
 
       <div style={styles.footer}>
         <div style={styles.footerGroup}>
-          <button style={styles.footerButton(store.saving)} disabled={store.saving} onClick={() => acceptSide('ours')}>{t('Accept Current')}</button>
-          <button style={styles.footerButton(store.saving)} disabled={store.saving} onClick={() => acceptSide('theirs')}>{t('Accept Incoming')}</button>
-          <button style={styles.footerButton(!canResetMerge)} disabled={!canResetMerge} onClick={resetMerge}>{t('Reset')}</button>
+          <button style={styles.footerButton(store.saving || aiBusy)} disabled={store.saving || aiBusy} onClick={() => acceptSide('ours')}>{t('Accept Current')}</button>
+          <button style={styles.footerButton(store.saving || aiBusy)} disabled={store.saving || aiBusy} onClick={() => acceptSide('theirs')}>{t('Accept Incoming')}</button>
+          <button style={styles.footerButton(!canResetMerge || aiBusy)} disabled={!canResetMerge || aiBusy} onClick={resetMerge}>{t('Reset')}</button>
         </div>
         <div style={styles.footerGroup}>
-          <button style={styles.footerButton()} onClick={() => send({ type: 'MERGE_CLOSE' })}>{t('Cancel')}</button>
-          <button style={styles.applyButton} disabled={store.saving || unresolved > 0} onClick={saveResolved}>{store.saving ? t('Saving...') : t('Apply')}</button>
+          <button style={styles.footerButton(aiBusy)} disabled={aiBusy} onClick={() => send({ type: 'MERGE_CLOSE' })}>{t('Cancel')}</button>
+          <button style={styles.applyButton(store.saving || unresolved > 0 || aiBusy)} disabled={store.saving || unresolved > 0 || aiBusy} onClick={saveResolved}>{store.saving ? t('Saving...') : t('Apply')}</button>
         </div>
       </div>
     </div>
@@ -386,9 +860,34 @@ const styles = {
   app: { height: '100vh', display: 'flex', flexDirection: 'column' as const, background: 'var(--vscode-editor-background)', color: 'var(--vscode-foreground)', fontFamily: 'var(--vscode-font-family)', overflow: 'hidden' },
   loading: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.65, background: 'var(--vscode-editor-background)', color: 'var(--vscode-foreground)' },
   loadingError: { maxWidth: 720, padding: 24, color: 'var(--vscode-errorForeground)', whiteSpace: 'pre-wrap' as const, textAlign: 'center' as const, opacity: 1 },
-  pathHeader: { height: 34, display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', borderBottom: '1px solid var(--vscode-panel-border)', flexShrink: 0 },
+  pathHeader: { height: 40, display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px 0 12px', borderBottom: '1px solid var(--vscode-panel-border)', flexShrink: 0 },
   fileIcon: { width: 16, height: 16, flexShrink: 0 } as React.CSSProperties,
-  pathText: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 },
+  pathText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 },
+  aiResolveButton: (running: boolean, disabled: boolean): React.CSSProperties => ({
+    minWidth: 0,
+    height: 28,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    padding: '0 11px',
+    border: 'none',
+    borderRadius: 6,
+    boxSizing: 'border-box',
+    background: 'linear-gradient(100deg, #7514d7 0%, #7b2ee2 44%, #4058f4 100%)',
+    backgroundSize: '120% 100%',
+    backgroundPosition: running ? '100% 0' : '0 0',
+    color: '#ffffff',
+    boxShadow: 'none',
+    fontFamily: 'var(--vscode-font-family)',
+    fontSize: 12,
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+    transition: 'filter 140ms ease, transform 140ms ease, background-position 240ms ease',
+  }),
+  aiResolveIcon: { fontSize: 15, lineHeight: '15px', color: 'currentColor' },
   error: { padding: '6px 12px', color: 'var(--vscode-inputValidation-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)', borderBottom: '1px solid var(--vscode-inputValidation-errorBorder)', fontSize: 12 },
   mergeToolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 30, padding: '4px 12px', borderBottom: '1px solid var(--vscode-panel-border)', fontSize: 12, flexShrink: 0 },
   toolbarLeft: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } as React.CSSProperties,
@@ -400,10 +899,46 @@ const styles = {
   syncLabel: { display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' as const },
   syncInput: { margin: 0 },
   toolbarStats: { opacity: 0.7, whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis' } as React.CSSProperties,
+  aiStatus: (phase: AiPhase): React.CSSProperties => ({
+    position: 'relative',
+    minHeight: 28,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '0 12px',
+    overflow: 'hidden',
+    flexShrink: 0,
+    borderBottom: '1px solid color-mix(in srgb, var(--vscode-focusBorder) 34%, var(--vscode-panel-border))',
+    background: phase === 'completed'
+      ? 'color-mix(in srgb, var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground)) 7%, var(--vscode-editor-background))'
+      : 'color-mix(in srgb, var(--vscode-focusBorder) 7%, var(--vscode-editor-background))',
+    color: 'var(--vscode-foreground)',
+    fontSize: 11,
+  }),
+  aiStatusIconWrap: { width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  aiStatusIcon: (phase: AiPhase): React.CSSProperties => ({
+    fontSize: 13,
+    color: phase === 'completed'
+      ? 'var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground))'
+      : 'var(--vscode-focusBorder, var(--vscode-textLink-foreground))',
+  }),
+  aiStatusText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontWeight: 550 },
+  aiProviderLabel: { marginLeft: 'auto', color: 'var(--vscode-descriptionForeground)', whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '30%' },
+  aiProgressTrack: { width: 88, height: 2, overflow: 'hidden', flexShrink: 0, borderRadius: 2, background: 'color-mix(in srgb, var(--vscode-foreground) 14%, transparent)' },
+  aiProgressFill: (progress: number, phase: AiPhase): React.CSSProperties => ({
+    display: 'block',
+    width: `${progress}%`,
+    height: '100%',
+    borderRadius: 2,
+    background: phase === 'completed'
+      ? 'var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground))'
+      : 'var(--vscode-focusBorder, var(--vscode-textLink-foreground))',
+    transition: 'width 180ms ease',
+  }),
   footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--vscode-panel-border)', flexShrink: 0 },
   footerGroup: { display: 'flex', gap: 8 },
   footerButton: (disabled = false): React.CSSProperties => ({ padding: '5px 14px', border: '1px solid var(--vscode-button-border, transparent)', borderRadius: 3, background: 'var(--vscode-button-secondaryBackground)', color: disabled ? 'var(--vscode-disabledForeground)' : 'var(--vscode-button-secondaryForeground)', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.62 : 1 }),
-  applyButton: { padding: '5px 14px', border: '1px solid var(--vscode-button-border, transparent)', borderRadius: 3, background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)', cursor: 'pointer' },
+  applyButton: (disabled = false): React.CSSProperties => ({ padding: '5px 14px', border: '1px solid var(--vscode-button-border, transparent)', borderRadius: 3, background: 'var(--vscode-button-background)', color: 'var(--vscode-button-foreground)', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1, fontWeight: 600 }),
 };
 
 createRoot(document.getElementById('root')!).render(

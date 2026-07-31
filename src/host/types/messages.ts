@@ -367,6 +367,7 @@ export type HostToMergeMsg =
   | { type: 'MERGE_FILE_LOADED'; file: MergeConflictFile; iconTheme?: IconThemeData }
   | { type: 'MERGE_FILE_LOAD_FAILED'; error: string }
   | { type: 'MERGE_FILE_VERSIONS_LOADED'; requestId: string; versions?: { base: string; ours: string; theirs: string; language: string }; error?: string }
+  | { type: 'MERGE_AI_RESOLVE_RESULT'; requestId: string; resolutions?: Array<{ index: number; lines: string[] }>; provider?: string; model?: string; promptSource?: 'workspace' | 'global' | 'builtin'; error?: string }
   | { type: 'MERGE_SAVE_RESULT'; requestId: string; ok: boolean; error?: string };
 
 // ─── Merge Editor: WebView → Host ────────────────────────────────────────────
@@ -375,6 +376,8 @@ export type MergeToHostMsg =
   | { type: 'MERGE_READY' }
   | { type: 'MERGE_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'MERGE_REQUEST_FILE_VERSIONS'; requestId: string }
+  | { type: 'MERGE_AI_RESOLVE'; requestId: string; conflictIndexes: number[] }
+  | { type: 'MERGE_AI_CANCEL'; requestId: string }
   | { type: 'MERGE_SAVE_FILE'; requestId: string; resolvedContent: string; deleteFile?: boolean }
   | { type: 'MERGE_ACCEPT_OURS'; requestId: string }
   | { type: 'MERGE_ACCEPT_THEIRS'; requestId: string }

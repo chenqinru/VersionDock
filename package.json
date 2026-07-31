@@ -166,6 +166,14 @@
         "title": "%commands.aiCommitMessage.resetPrompt.title%"
       },
       {
+        "command": "versiondock.aiMergeConflict.editPrompt",
+        "title": "%commands.aiMergeConflict.editPrompt.title%"
+      },
+      {
+        "command": "versiondock.aiMergeConflict.resetPrompt",
+        "title": "%commands.aiMergeConflict.resetPrompt.title%"
+      },
+      {
         "command": "versiondock.openGitAnnotations",
         "title": "%commands.openGitAnnotations.title%",
         "icon": "$(git-commit)"

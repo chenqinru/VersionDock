@@ -11,7 +11,7 @@ import type {
 
 const GENERATION_TIMEOUT_MS = 120_000;
 const GENERATION_TEMPERATURE = 0.2;
-const CLAUDE_MAX_TOKENS = 1024;
+const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
 const COPILOT_INPUT_TOKEN_RESERVE_MAX = 512;
 const COPILOT_INPUT_TOKEN_RESERVE_MIN = 64;
 
@@ -79,7 +79,7 @@ export class AiProviderService {
     try {
       const response: ProviderResponse = config.provider === 'github-copilot'
         ? await this.generateWithCopilot(config.model, options.systemPrompt, options.userMessage, requestCancellation.token, onDelta)
-        : await this.generateWithApi(config, options.systemPrompt, options.userMessage, requestCancellation.token, onDelta);
+        : await this.generateWithApi(config, options.systemPrompt, options.userMessage, requestCancellation.token, onDelta, options.maxOutputTokens);
       throwIfCancelled(requestCancellation.token);
       if (!response.text.trim()) throw new Error(t('AI provider did not return content.'));
 
@@ -213,7 +213,7 @@ export class AiProviderService {
     const promptOnlyTokenCount = await countTokens(promptOnlyMessage);
     if (promptOnlyTokenCount > inputTokenBudget) {
       throw new Error(t(
-        'Commit Prompt exceeds the input limit of GitHub Copilot model "{0}".',
+        'AI prompt exceeds the input limit of GitHub Copilot model "{0}".',
         model.name || model.id,
       ));
     }
@@ -295,6 +295,7 @@ export class AiProviderService {
     userMessage: string,
     cancellationToken: vscode.CancellationToken,
     onDelta: (delta: string) => void,
+    maxOutputTokens?: number,
   ): Promise<{ text: string; streamed: boolean }> {
     const controller = new AbortController();
     const cancellation = cancellationToken.onCancellationRequested(() => controller.abort());
@@ -311,7 +312,7 @@ export class AiProviderService {
           },
           body: JSON.stringify({
             model: config.model,
-            max_tokens: CLAUDE_MAX_TOKENS,
+            max_tokens: maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
             system: systemPrompt,
             temperature: GENERATION_TEMPERATURE,
             stream: true,
@@ -334,6 +335,7 @@ export class AiProviderService {
             ],
             temperature: GENERATION_TEMPERATURE,
             stream: true,
+            ...(maxOutputTokens === undefined ? {} : { max_tokens: maxOutputTokens }),
           }),
         });
 

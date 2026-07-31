@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { MergeConflictFile } from '../../shared/types';
 
-export type CustomResolution = { type: 'custom'; lines: string[]; acceptedSides: Array<'ours' | 'theirs'> };
+export type CustomResolution = { type: 'custom'; lines: string[]; acceptedSides: Array<'ours' | 'theirs'>; resolvedByAi?: boolean };
 export type Resolution = 'ours' | 'theirs' | 'both' | 'unresolved' | CustomResolution;
 export type NormalEdits = Record<number, string[]>;
 

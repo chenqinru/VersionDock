@@ -19,6 +19,16 @@ interface Props {
   onSelectNonConflicting: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
   currentConflictIndex: number;
   syncScrollEnabled: boolean;
+  readOnly?: boolean;
+  aiDraft?: AiMergeDraft | null;
+  resultStatusLabel?: string;
+  showCompletionNotice?: boolean;
+  onApplyResolved?: () => void;
+}
+
+export interface AiMergeDraft {
+  index: number;
+  content: string;
 }
 
 type Segment = NormalSegment | ConflictSegment;
@@ -98,6 +108,48 @@ const MERGE_SCROLLBAR_STYLES = `
   .versiondock-block-action-button:focus-visible {
     outline: 1px solid var(--vscode-focusBorder);
     outline-offset: -1px;
+  }
+  @keyframes versiondock-ai-caret-pulse {
+    0%, 42% { opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--vscode-focusBorder) 72%, transparent); }
+    50%, 92% { opacity: 0.16; box-shadow: none; }
+    100% { opacity: 1; }
+  }
+  @keyframes versiondock-ai-code-glow {
+    0%, 100% { background: color-mix(in srgb, var(--vscode-focusBorder) 4%, transparent); }
+    50% { background: color-mix(in srgb, var(--vscode-focusBorder) 10%, transparent); }
+  }
+  .versiondock-ai-code-caret {
+    display: inline-block;
+    width: 2px;
+    height: 1.08em;
+    margin-left: 1px;
+    vertical-align: -0.16em;
+    border-radius: 1px;
+    background: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+    animation: versiondock-ai-caret-pulse 900ms steps(1, end) infinite;
+  }
+  .versiondock-ai-typing-line {
+    animation: versiondock-ai-code-glow 1.5s ease-in-out infinite;
+  }
+  @keyframes versiondock-merge-complete-enter {
+    from { opacity: 0; transform: translate(-50%, -6px) scale(0.98); }
+    to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  }
+  .versiondock-merge-complete-notice {
+    animation: versiondock-merge-complete-enter 180ms ease-out;
+  }
+  .versiondock-merge-complete-action:hover {
+    color: var(--vscode-textLink-activeForeground) !important;
+    text-decoration: underline;
+  }
+  .versiondock-merge-complete-action:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .versiondock-ai-code-caret,
+    .versiondock-ai-typing-line,
+    .versiondock-merge-complete-notice { animation: none !important; }
   }
 `;
 const MAX_STABLE_LCS_CELLS = 1_000_000;
@@ -181,6 +233,13 @@ function splitConflictSegments(content: string, file: MergeConflictFile): Segmen
 
   if (normal.length > 0) segments.push({ kind: 'normal', lines: normal });
   return segments;
+}
+
+export function getEffectiveConflictBlocks(file: MergeConflictFile): ConflictBlock[] {
+  return splitConflictSegments(file.content, file)
+    .filter((segment): segment is ConflictSegment => segment.kind === 'conflict')
+    .sort((left, right) => left.index - right.index)
+    .map(segment => segment.block);
 }
 
 function linesEqual(left: string[], right: string[]): boolean {
@@ -782,7 +841,7 @@ function connectorBandPath(source: DOMRect, target: DOMRect, root: DOMRect, sour
   };
 }
 
-function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, normalEdits, nonConflictingSelections, activeConflictIndex }: {
+function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, normalEdits, nonConflictingSelections, activeConflictIndex, aiDraft }: {
   layoutRef: React.RefObject<HTMLDivElement>;
   paneRefs: readonly React.RefObject<HTMLDivElement>[];
   conflicts: ConflictBlock[];
@@ -790,6 +849,7 @@ function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, no
   normalEdits: NormalEdits;
   nonConflictingSelections: NonConflictingSelections;
   activeConflictIndex: number;
+  aiDraft?: AiMergeDraft | null;
 }) {
   const [shapes, setShapes] = useState<ConnectorShape[]>([]);
   const [clipBounds, setClipBounds] = useState({ top: 0, height: 0, width: 0 });
@@ -923,7 +983,7 @@ function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, no
       resizeObserver.disconnect();
       concretePanes.forEach(pane => pane.removeEventListener('scroll', update));
     };
-  }, [activeConflictIndex, conflicts, layoutRef, nonConflictingSelections, normalEdits, paneRefs, resolutions]);
+  }, [activeConflictIndex, aiDraft, conflicts, layoutRef, nonConflictingSelections, normalEdits, paneRefs, resolutions]);
 
   const clipId = 'versiondock-merge-connector-clip';
   return (
@@ -938,7 +998,8 @@ function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, no
           const selected = shape.kind === 'conflict'
             ? includesResolutionSide(resolutions[shape.index], sideResolution(shape.side))
             : nonConflictingSelections[shape.index] === shape.side;
-          const outlinedSelection = selected;
+          const resolution = shape.kind === 'conflict' ? resolutions[shape.index] : undefined;
+          const outlinedSelection = selected || (isCustomResolution(resolution) && Boolean(resolution.resolvedByAi));
           const tone = shape.kind === 'conflict' ? 'conflict' : shape.changeTone ?? 'modified';
           const color = tone === 'accepted' || tone === 'added'
             ? acceptedRibbon
@@ -968,11 +1029,12 @@ function MergeConnectorOverlay({ layoutRef, paneRefs, conflicts, resolutions, no
   );
 }
 
-function BlockActionBar({ side, kind, selected, resettable, onAccept, onReset }: {
+function BlockActionBar({ side, kind, selected, resettable, disabled, onAccept, onReset }: {
   side: 'left' | 'right';
   kind: 'conflict' | 'change';
   selected: boolean;
   resettable: boolean;
+  disabled?: boolean;
   onAccept: () => void;
   onReset: () => void;
 }) {
@@ -985,6 +1047,7 @@ function BlockActionBar({ side, kind, selected, resettable, onAccept, onReset }:
       className="versiondock-block-action-button versiondock-block-action-button--accept"
       style={styles.blockActionButton('accept')}
       onClick={onAccept}
+      disabled={disabled}
       title={acceptLabel}
       aria-label={acceptLabel}
     >
@@ -1005,6 +1068,7 @@ function BlockActionBar({ side, kind, selected, resettable, onAccept, onReset }:
       className="versiondock-block-action-button versiondock-block-action-button--reset"
       style={styles.blockActionButton('reset')}
       onClick={onReset}
+      disabled={disabled}
       title={resetLabel}
       aria-label={resetLabel}
     >
@@ -1022,7 +1086,7 @@ function BlockActionBar({ side, kind, selected, resettable, onAccept, onReset }:
   );
 }
 
-export function ThreeWayLayout({ file, language, resolutions, normalEdits, nonConflictingSelections, onResultChange, onResolveBlock, onNormalEdit, onSelectNonConflicting, currentConflictIndex, syncScrollEnabled }: Props) {
+export function ThreeWayLayout({ file, language, resolutions, normalEdits, nonConflictingSelections, onResultChange, onResolveBlock, onNormalEdit, onSelectNonConflicting, currentConflictIndex, syncScrollEnabled, readOnly = false, aiDraft, resultStatusLabel, showCompletionNotice = false, onApplyResolved }: Props) {
   const layoutRef = useRef<HTMLDivElement>(null);
   const segments = useMemo(() => splitConflictSegments(file.content, file), [file]);
   const normalVersionLines = useMemo(() => ({
@@ -1057,12 +1121,12 @@ export function ThreeWayLayout({ file, language, resolutions, normalEdits, nonCo
     <div style={styles.container}>
       <style>{MERGE_SCROLLBAR_STYLES}</style>
       <div ref={layoutRef} style={styles.grid}>
-        <Column refEl={refs[0]} title={`${t('Current')} · ${file.oursLabel}`} side="left" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalVersionLines={normalVersionLines.left} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(0)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />
+        <Column refEl={refs[0]} title={`${t('Current')} · ${file.oursLabel}`} side="left" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalVersionLines={normalVersionLines.left} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(0)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} readOnly={readOnly} aiDraft={aiDraft} />
         <div style={styles.connectorGutter} />
-        <Column refEl={refs[1]} title={`${t('Result')} · ${file.relativePath}`} side="center" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(1)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />
+        <Column refEl={refs[1]} title={`${t('Result')} · ${file.relativePath}${resultStatusLabel ? ` · ${resultStatusLabel}` : ''}`} side="center" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(1)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} readOnly={readOnly} aiDraft={aiDraft} completionNotice={showCompletionNotice && onApplyResolved ? <MergeCompletionNotice onApply={onApplyResolved} /> : undefined} />
         <div style={styles.connectorGutter} />
-        <Column refEl={refs[2]} title={`${t('Incoming')} · ${file.theirsLabel}`} side="right" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalVersionLines={normalVersionLines.right} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(2)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />
-        <MergeConnectorOverlay layoutRef={layoutRef} paneRefs={refs} conflicts={file.conflicts} resolutions={resolutions} normalEdits={normalEdits} nonConflictingSelections={nonConflictingSelections} activeConflictIndex={currentConflictIndex} />
+        <Column refEl={refs[2]} title={`${t('Incoming')} · ${file.theirsLabel}`} side="right" segments={segments} resolutions={resolutions} normalEdits={normalEdits} baseNormalLines={normalVersionLines.base} normalVersionLines={normalVersionLines.right} normalBlockRefs={normalVersionLines.blocks} nonConflictingSelections={nonConflictingSelections} language={language} onScroll={onScroll(2)} onResolve={applyResolution} onNormalEdit={applyNormalEdit} onSelectNonConflicting={onSelectNonConflicting} readOnly={readOnly} aiDraft={aiDraft} />
+        <MergeConnectorOverlay layoutRef={layoutRef} paneRefs={refs} conflicts={file.conflicts} resolutions={resolutions} normalEdits={normalEdits} nonConflictingSelections={nonConflictingSelections} activeConflictIndex={currentConflictIndex} aiDraft={aiDraft} />
       </div>
     </div>
   );
@@ -1082,7 +1146,8 @@ interface HorizontalScrollbarMetrics {
   trackWidth: number;
 }
 
-const OVERLAY_SCROLLBAR_HIDE_DELAY_MS = 700;
+const OVERLAY_SCROLLBAR_HIDE_DELAY_MS = 1_000;
+const OVERLAY_SCROLLBAR_FADE_DURATION_MS = 500;
 
 function useTransientScrollbarVisibility() {
   const [active, setActive] = useState(false);
@@ -1310,7 +1375,21 @@ function OverlayHorizontalScrollbar({ scrollRef }: { scrollRef: React.RefObject<
   );
 }
 
-function Column({ refEl, title, side, segments, resolutions, normalEdits, baseNormalLines, normalVersionLines, normalBlockRefs, nonConflictingSelections, language, onScroll, onResolve, onNormalEdit, onSelectNonConflicting }: {
+function MergeCompletionNotice({ onApply }: { onApply: () => void }) {
+  return (
+    <div className="versiondock-merge-complete-notice" style={styles.completionNotice} role="status" aria-live="polite">
+      <Codicon name="check" style={styles.completionNoticeIcon} />
+      <div style={styles.completionNoticeContent}>
+        <strong style={styles.completionNoticeTitle}>{t('All conflicts resolved')}</strong>
+        <button type="button" className="versiondock-merge-complete-action" style={styles.completionNoticeAction} onClick={onApply}>
+          {t('Apply changes and complete the merge')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Column({ refEl, title, side, segments, resolutions, normalEdits, baseNormalLines, normalVersionLines, normalBlockRefs, nonConflictingSelections, language, onScroll, onResolve, onNormalEdit, onSelectNonConflicting, readOnly, aiDraft, completionNotice }: {
   refEl: React.RefObject<HTMLDivElement>;
   title: string;
   side: PaneSide;
@@ -1326,6 +1405,9 @@ function Column({ refEl, title, side, segments, resolutions, normalEdits, baseNo
   onResolve: (index: number, resolution: Resolution) => void;
   onNormalEdit: (index: number, lines: string[]) => void;
   onSelectNonConflicting: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
+  readOnly: boolean;
+  aiDraft?: AiMergeDraft | null;
+  completionNotice?: React.ReactNode;
 }) {
   let lineNo = 1;
   return (
@@ -1356,17 +1438,18 @@ function Column({ refEl, title, side, segments, resolutions, normalEdits, baseNo
             ? resultAreaVisuals.ranges
             : undefined;
           lineNo += lineCount(segment, side, resolution, normalLines);
-            return <SegmentView key={index} segmentIndex={index} segment={segment} side={side} startLine={start} language={language} resolution={resolution} normalLines={normalLines} normalBlocks={normalBlockRefs?.[index]} nonConflictingSelections={nonConflictingSelections} changeFlags={displayedChangeFlags} changeTones={displayedChangeTones} changeBlockRanges={displayedChangeBlockRanges} onResolve={onResolve} onNormalEdit={onNormalEdit} onSelectNonConflicting={onSelectNonConflicting} />;
+            return <SegmentView key={index} segmentIndex={index} segment={segment} side={side} startLine={start} language={language} resolution={resolution} normalLines={normalLines} normalBlocks={normalBlockRefs?.[index]} nonConflictingSelections={nonConflictingSelections} changeFlags={displayedChangeFlags} changeTones={displayedChangeTones} changeBlockRanges={displayedChangeBlockRanges} onResolve={onResolve} onNormalEdit={onNormalEdit} onSelectNonConflicting={onSelectNonConflicting} readOnly={readOnly} aiDraft={aiDraft} />;
           })}
         </div>
       </div>
+      {completionNotice}
       <OverlayVerticalScrollbar scrollRef={refEl} />
       <OverlayHorizontalScrollbar scrollRef={refEl} />
     </div>
   );
 }
 
-function SegmentView({ segmentIndex, segment, side, startLine, language, resolution, normalLines, normalBlocks, nonConflictingSelections, changeFlags, changeTones, changeBlockRanges, onResolve, onNormalEdit, onSelectNonConflicting }: {
+function SegmentView({ segmentIndex, segment, side, startLine, language, resolution, normalLines, normalBlocks, nonConflictingSelections, changeFlags, changeTones, changeBlockRanges, onResolve, onNormalEdit, onSelectNonConflicting, readOnly, aiDraft }: {
   segmentIndex: number;
   segment: Segment;
   side: PaneSide;
@@ -1382,6 +1465,8 @@ function SegmentView({ segmentIndex, segment, side, startLine, language, resolut
   onResolve: (index: number, resolution: Resolution) => void;
   onNormalEdit: (index: number, lines: string[]) => void;
   onSelectNonConflicting: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
+  readOnly: boolean;
+  aiDraft?: AiMergeDraft | null;
 }) {
   if (segment.kind === 'normal') {
     if (side === 'center') {
@@ -1394,21 +1479,25 @@ function SegmentView({ segmentIndex, segment, side, startLine, language, resolut
           changeFlags={changeFlags}
           changeTones={changeTones}
           changeBlockRanges={changeBlockRanges}
+          readOnly={readOnly}
           onChange={value => onNormalEdit(segmentIndex, editableValueToLines(value))}
         />
       );
     }
     if (normalBlocks) {
-      return <NormalSideBlocks blocks={normalBlocks} side={side} startLine={startLine} language={language} selections={nonConflictingSelections} onSelect={onSelectNonConflicting} />;
+      return <NormalSideBlocks blocks={normalBlocks} side={side} startLine={startLine} language={language} selections={nonConflictingSelections} onSelect={onSelectNonConflicting} disabled={readOnly} />;
     }
     return <CodeLines lines={normalLines ?? segment.lines} startLine={startLine} language={language} changeFlags={changeFlags} changeTone="modified" />;
   }
 
   const resolved = isResolvedResolution(resolution);
+  const activeAiDraft = side === 'center' && aiDraft?.index === segment.index ? aiDraft : null;
 
   if (side === 'center') {
-    const lines = resolved ? resolveLines(segment.block, resolution) : segment.block.baseLines;
-    if (lines.length === 0) {
+    const lines = activeAiDraft
+      ? editableValueToLines(activeAiDraft.content)
+      : resolved ? resolveLines(segment.block, resolution) : segment.block.baseLines;
+    if (lines.length === 0 && !activeAiDraft) {
       return (
         <div
           data-conflict-index={segment.index}
@@ -1417,12 +1506,15 @@ function SegmentView({ segmentIndex, segment, side, startLine, language, resolut
       );
     }
     return (
-      <div data-conflict-index={segment.index} style={resolved ? styles.appliedConflictBlock : styles.conflictBlock}>
+      <div data-conflict-index={segment.index} style={activeAiDraft ? styles.aiTypingConflictBlock : resolved ? styles.appliedConflictBlock : styles.conflictBlock}>
         <EditableCodeBlock
           value={linesToEditableValue(lines)}
           startLine={startLine}
           language={language}
-          dim={lines.length === 0}
+          dim={lines.length === 0 && !activeAiDraft}
+          readOnly={readOnly}
+          autoFocus={Boolean(activeAiDraft)}
+          aiTyping={Boolean(activeAiDraft)}
           onChange={value => onResolve(segment.index, {
             type: 'custom',
             lines: editableValueToLines(value),
@@ -1445,7 +1537,7 @@ function SegmentView({ segmentIndex, segment, side, startLine, language, resolut
 
   return (
     <div data-conflict-index={segment.index} style={accepted ? styles.appliedConflictSideBlock : styles.conflictBlock}>
-      <BlockActionBar side={side} kind="conflict" selected={accepted} resettable={resettable} onAccept={accept} onReset={reset} />
+      <BlockActionBar side={side} kind="conflict" selected={accepted} resettable={resettable} disabled={readOnly} onAccept={accept} onReset={reset} />
       <div
         data-merge-connector-anchor
         style={lines.length > 0
@@ -1494,13 +1586,14 @@ function buildResultChangeAreaVisuals(blocks: NormalBlockRef[], selections: NonC
   return { flags, tones, ranges };
 }
 
-function NormalSideBlocks({ blocks, side, startLine, language, selections, onSelect }: {
+function NormalSideBlocks({ blocks, side, startLine, language, selections, onSelect, disabled }: {
   blocks: NormalBlockRef[];
   side: 'left' | 'right';
   startLine: number;
   language: string;
   selections: NonConflictingSelections;
   onSelect: (blockIndex: number, selection: NonConflictingSelection | 'base') => void;
+  disabled?: boolean;
 }) {
   let lineNo = startLine;
   return (
@@ -1531,6 +1624,7 @@ function NormalSideBlocks({ blocks, side, startLine, language, selections, onSel
                 kind="change"
                 selected={applied}
                 resettable={applied}
+                disabled={disabled}
                 onAccept={() => onSelect(blockIndex, side)}
                 onReset={() => onSelect(blockIndex, 'base')}
               />
@@ -1602,7 +1696,7 @@ function CodeLines({ lines, startLine, language, dim, changeFlags, changeTone }:
   );
 }
 
-function EditableCodeBlock({ value, startLine, language, dim, changeFlags, changeTones, changeBlockRanges, onChange }: {
+function EditableCodeBlock({ value, startLine, language, dim, changeFlags, changeTones, changeBlockRanges, readOnly = false, autoFocus = false, aiTyping = false, onChange }: {
   value: string;
   startLine: number;
   language: string;
@@ -1610,8 +1704,12 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
   changeFlags?: boolean[];
   changeTones?: ChangeTone[];
   changeBlockRanges?: ChangeBlockRange[];
+  readOnly?: boolean;
+  autoFocus?: boolean;
+  aiTyping?: boolean;
   onChange: (value: string) => void;
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlighter = useShiki();
   const colorTheme = getVersionDockColorTheme();
   const lines = useMemo(() => {
@@ -1625,8 +1723,22 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
   const lineNumbers = Array.from({ length: lineTotal }, (_, index) => startLine + index);
   const contentWidth = `${Math.max(24, ...lines.map(line => line.length + 1))}ch`;
 
+  useEffect(() => {
+    if (!autoFocus) return;
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.focus({ preventScroll: true });
+    textarea.setSelectionRange(value.length, value.length);
+    const pane = textarea.closest<HTMLElement>('[data-merge-pane="center"]');
+    const conflictBlock = textarea.closest<HTMLElement>('[data-conflict-index]');
+    if (pane && conflictBlock) {
+      const targetTop = conflictBlock.offsetTop - Math.max(72, pane.clientHeight * 0.42);
+      pane.scrollTop = Math.max(0, targetTop);
+    }
+  }, [autoFocus, value]);
+
   return (
-    <div style={styles.editableBlock(dim)}>
+    <div style={styles.editableBlock(dim, aiTyping)}>
       <div style={styles.editableLineNumbers}>
         {lineNumbers.map((line, index) => (
           <span key={line} style={styles.editableLineNo(
@@ -1648,22 +1760,25 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
         ))}
         <div aria-hidden="true" style={styles.editableHighlight}>
           {lines.map((line, index) => (
-            <div key={index} style={styles.editableHighlightLine(
+            <div key={index} className={aiTyping && index === lines.length - 1 ? 'versiondock-ai-typing-line' : undefined} style={styles.editableHighlightLine(
               changeFlags?.[index] ? changeTones?.[index] : undefined,
               Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
               Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
             )}>
               {renderedLines[index] ?? (line || ' ')}
+              {aiTyping && index === lines.length - 1 && <span className="versiondock-ai-code-caret" />}
             </div>
           ))}
         </div>
         <textarea
+          ref={textareaRef}
           value={value}
           onChange={event => onChange(event.currentTarget.value)}
+          readOnly={readOnly}
           rows={lineTotal}
           wrap="off"
           spellCheck={false}
-          style={styles.resultTextarea(lineTotal)}
+          style={styles.resultTextarea(lineTotal, aiTyping)}
         />
       </div>
     </div>
@@ -1811,7 +1926,7 @@ const styles = {
   grid: { position: 'relative' as const, display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${CONNECTOR_GUTTER_WIDTH} minmax(0, 1fr) ${CONNECTOR_GUTTER_WIDTH} minmax(0, 1fr)`, flex: 1, minHeight: 0, overflow: 'hidden', background: 'var(--vscode-editor-background)' },
   columnFrame: { position: 'relative' as const, zIndex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--vscode-editor-background)' },
   column: { position: 'relative' as const, width: '100%', height: '100%', overflowX: 'auto' as const, overflowY: 'auto' as const, scrollbarGutter: 'auto', minWidth: 0, background: 'var(--vscode-editor-background)' },
-  overlayScrollbarTrack: (height: number, active: boolean): React.CSSProperties => ({ position: 'absolute', top: 29, right: 0, zIndex: 9, width: 10, height, background: 'transparent', touchAction: 'none', opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', transition: 'opacity 120ms ease' }),
+  overlayScrollbarTrack: (height: number, active: boolean): React.CSSProperties => ({ position: 'absolute', top: 29, right: 0, zIndex: 9, width: 10, height, background: 'transparent', touchAction: 'none', opacity: active ? 1 : 0, pointerEvents: active ? 'auto' : 'none', transition: `opacity ${OVERLAY_SCROLLBAR_FADE_DURATION_MS}ms ease-out` }),
   overlayScrollbarThumb: (top: number, height: number): React.CSSProperties => ({
     position: 'absolute',
     top,
@@ -1834,7 +1949,7 @@ const styles = {
     touchAction: 'none',
     opacity: active ? 1 : 0,
     pointerEvents: active ? 'auto' : 'none',
-    transition: 'opacity 120ms ease',
+    transition: `opacity ${OVERLAY_SCROLLBAR_FADE_DURATION_MS}ms ease-out`,
   }),
   overlayHorizontalScrollbarThumb: (left: number, width: number): React.CSSProperties => ({
     position: 'absolute',
@@ -1858,7 +1973,39 @@ const styles = {
   },
   connectorOverlay: { position: 'absolute' as const, inset: 0, zIndex: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none' as const },
   connectorShape: { transition: 'opacity 120ms ease' },
-  connectorPath: { mixBlendMode: 'normal' as const },
+  connectorPath: { mixBlendMode: 'normal' as const, transition: 'fill 160ms ease, stroke 160ms ease, opacity 160ms ease' },
+  completionNotice: {
+    position: 'absolute',
+    top: 42,
+    left: '50%',
+    zIndex: 12,
+    maxWidth: 'calc(100% - 32px)',
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: '9px 12px',
+    border: '1px solid color-mix(in srgb, var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground)) 48%, var(--vscode-panel-border))',
+    borderRadius: 5,
+    background: 'color-mix(in srgb, var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground)) 18%, var(--vscode-editor-background))',
+    boxShadow: '0 4px 14px color-mix(in srgb, var(--vscode-widget-shadow, #000) 38%, transparent)',
+    transform: 'translateX(-50%)',
+    color: 'var(--vscode-foreground)',
+  } as React.CSSProperties,
+  completionNoticeIcon: { marginTop: 1, flexShrink: 0, fontSize: 15, color: 'var(--vscode-testing-iconPassed, var(--vscode-gitDecoration-addedResourceForeground))' },
+  completionNoticeContent: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 } as React.CSSProperties,
+  completionNoticeTitle: { fontSize: 12, lineHeight: '16px', whiteSpace: 'nowrap' as const },
+  completionNoticeAction: {
+    width: 'fit-content',
+    margin: 0,
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--vscode-textLink-foreground)',
+    fontFamily: 'var(--vscode-font-family)',
+    fontSize: 12,
+    lineHeight: '16px',
+    cursor: 'pointer',
+  } as React.CSSProperties,
   blockActionBar: {
     position: 'sticky',
     top: 29,
@@ -1955,6 +2102,12 @@ const styles = {
     borderBottom: `1px dotted ${conflictBoundaryColor}`,
     boxSizing: 'border-box',
   } as React.CSSProperties,
+  aiTypingConflictBlock: {
+    position: 'relative',
+    minHeight: CODE_LINE_HEIGHT,
+    background: 'color-mix(in srgb, var(--vscode-focusBorder) 7%, var(--vscode-editor-background))',
+    boxShadow: 'inset 2px 0 0 var(--vscode-focusBorder)',
+  } as React.CSSProperties,
   appliedConflictSideBlock: {
     position: 'relative',
     minHeight: CODE_LINE_HEIGHT,
@@ -2011,7 +2164,7 @@ const styles = {
   codeLine: (dim?: boolean, changeTone?: ChangeTone, startsChange?: boolean, endsChange?: boolean): React.CSSProperties => ({ position: 'relative', display: 'flex', minHeight: 21, lineHeight: '21px', fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: 'var(--vscode-editor-font-size, 13px)', opacity: dim ? 0.45 : 1, ...changeLineVisual(changeTone, startsChange, endsChange) }),
   lineNo: { width: 44, paddingRight: 12, textAlign: 'right' as const, color: 'var(--vscode-editorLineNumber-foreground, #6e7681)', userSelect: 'none' as const, flexShrink: 0 },
   codeText: { whiteSpace: 'pre', paddingRight: 16, flexShrink: 0 },
-  editableBlock: (dim?: boolean): React.CSSProperties => ({
+  editableBlock: (dim?: boolean, aiTyping?: boolean): React.CSSProperties => ({
     display: 'flex',
     width: 'max-content',
     minWidth: '100%',
@@ -2019,6 +2172,7 @@ const styles = {
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
     fontSize: 'var(--vscode-editor-font-size, 13px)',
     opacity: dim ? 0.45 : 1,
+    background: aiTyping ? 'color-mix(in srgb, var(--vscode-focusBorder) 4%, transparent)' : undefined,
   }),
   editableLineNumbers: {
     width: 44,
@@ -2075,7 +2229,7 @@ const styles = {
     lineHeight: `${CODE_LINE_HEIGHT}px`,
     ...changeLineVisual(changeTone, startsChange, endsChange),
   }),
-  resultTextarea: (lineTotal: number): React.CSSProperties => ({
+  resultTextarea: (lineTotal: number, aiTyping?: boolean): React.CSSProperties => ({
     position: 'relative',
     display: 'block',
     width: '100%',
@@ -2088,7 +2242,7 @@ const styles = {
     overflow: 'hidden',
     background: 'transparent',
     color: 'transparent',
-    caretColor: 'var(--vscode-editor-foreground, var(--vscode-foreground))',
+    caretColor: aiTyping ? 'transparent' : 'var(--vscode-editor-foreground, var(--vscode-foreground))',
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
     fontSize: 'var(--vscode-editor-font-size, 13px)',
     lineHeight: `${CODE_LINE_HEIGHT}px`,

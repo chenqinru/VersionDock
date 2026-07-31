@@ -14,6 +14,7 @@ export interface AiProviderGenerateOptions {
   userMessage: string;
   cancellationToken: vscode.CancellationToken;
   onDelta: (delta: string) => void;
+  maxOutputTokens?: number;
 }
 
 export interface AiProviderGenerateResult {
