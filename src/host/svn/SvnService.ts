@@ -2676,6 +2676,10 @@ export class SvnService extends GitService {
     return [];
   }
 
+  async stashCount(): Promise<number> {
+    return 0;
+  }
+
   async stashList(): Promise<StashEntry[]> {
     return [];
   }

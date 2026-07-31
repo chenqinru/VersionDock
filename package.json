@@ -623,6 +623,12 @@
           "default": false,
           "description": "%configuration.fetchOnStartup.description%"
         },
+        "versiondock.resetViewLocationsOnStartup": {
+          "order": 45,
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.resetViewLocationsOnStartup.description%"
+        },
         "versiondock.notifyOnIncomingCommits": {
           "order": 50,
           "type": "boolean",
@@ -727,6 +733,20 @@
           ],
           "default": "commit",
           "description": "%configuration.defaultCommitAction.description%"
+        },
+        "versiondock.defaultSaveAction": {
+          "order": 21,
+          "type": "string",
+          "enum": [
+            "stash",
+            "shelve"
+          ],
+          "enumDescriptions": [
+            "%configuration.defaultSaveAction.enum.stash%",
+            "%configuration.defaultSaveAction.enum.shelve%"
+          ],
+          "default": "stash",
+          "description": "%configuration.defaultSaveAction.description%"
         },
         "versiondock.suppressDivergedBranchWarning": {
           "order": 35,

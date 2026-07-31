@@ -302,6 +302,7 @@ export function CommitApp() {
 
   // ── Stash state ───────────────────────────────────────────────────────────
   const [stashMap, setStashMap]       = useState<Record<string, StashEntry[]>>({});
+  const [stashCountMap, setStashCountMap] = useState<Record<string, number>>({});
   const [stashLoading, setStashLoading] = useState<Record<string, boolean>>({});
   const [stashError, setStashError]   = useState<Record<string, string | null>>({});
   const [stashExpansionCommand, setStashExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: false });
@@ -532,7 +533,7 @@ export function CommitApp() {
       switch (msg.type) {
         case 'COMMIT_STATUS_UPDATE':
           commitStatusRefreshPendingRef.current = false;
-          store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.hasWorkspaceFolder);
+          store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder);
           if (Array.isArray(msg.status.repos) && useCommitStore.getState().changesViewMode === 'vscode') {
             const prevCounts = prevUnstagedCountsRef.current;
             let hasNewChanges = false;
@@ -659,12 +660,19 @@ export function CommitApp() {
           }
           break;
 
+        case 'STASH_COUNT_RESULT':
+          if (!msg.error) {
+            setStashCountMap(prev => ({ ...prev, [msg.repoId]: msg.count }));
+          }
+          break;
+
         case 'STASH_LIST_RESULT':
           setStashLoading(prev => ({ ...prev, [msg.repoId]: false }));
           if (msg.error) {
             setStashError(prev => ({ ...prev, [msg.repoId]: msg.error ?? null }));
           } else {
             setStashMap(prev => ({ ...prev, [msg.repoId]: msg.stashes }));
+            setStashCountMap(prev => ({ ...prev, [msg.repoId]: msg.stashes.length }));
             setStashError(prev => ({ ...prev, [msg.repoId]: null }));
           }
           break;
@@ -675,6 +683,7 @@ export function CommitApp() {
           } else {
             // Refresh stash list for affected repo
             setStashLoading(prev => ({ ...prev, [msg.repoId]: true }));
+            getVsCodeApi().postMessage({ type: 'STASH_COUNT', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
             getVsCodeApi().postMessage({ type: 'STASH_LIST', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
           }
           break;
@@ -805,6 +814,10 @@ export function CommitApp() {
   }, [send]);
 
   // ── Stash callbacks ───────────────────────────────────────────────────────
+
+  const requestStashCount = useCallback((repoId: string) => {
+    send({ type: 'STASH_COUNT', requestId: generateId(), repoId });
+  }, [send]);
 
   const requestStashList = useCallback((repoId: string) => {
     setStashLoading(prev => ({ ...prev, [repoId]: true }));
@@ -1093,8 +1106,8 @@ export function CommitApp() {
     for (const repoId of gitRepoKey.split('\0')) {
       if (bootstrappedRepoIds.has(repoId)) continue;
       bootstrappedRepoIds.add(repoId);
+      requestStashCount(repoId);
       requestShelveList(repoId);
-      requestStashList(repoId);
     }
     if (!tabCountWorktreeRequestedRef.current) {
       tabCountWorktreeRequestedRef.current = true;
@@ -1104,7 +1117,7 @@ export function CommitApp() {
       tabCountSubtreeRequestedRef.current = true;
       requestSubtreeList();
     }
-  }, [gitRepoKey, requestShelveList, requestStashList, requestSubtreeList, requestWorktreeList]);
+  }, [gitRepoKey, requestShelveList, requestStashCount, requestSubtreeList, requestWorktreeList]);
 
   // ── Context menu handlers ─────────────────────────────────────────────────
 
@@ -1661,8 +1674,8 @@ export function CommitApp() {
         const totalShelves = Object.entries(shelveMap).reduce((sum, [repoId, shelves]) => (
           visibleRepoIds.has(repoId) ? sum + shelves.length : sum
         ), 0);
-        const totalStashes = Object.entries(stashMap).reduce((sum, [repoId, stashes]) => (
-          visibleRepoIds.has(repoId) ? sum + stashes.length : sum
+        const totalStashes = gitRepos.reduce((sum, repo) => (
+          sum + (stashCountMap[repo.repoId] ?? stashMap[repo.repoId]?.length ?? 0)
         ), 0);
         const totalWorktrees = worktreeRepos.reduce((sum, repo) => (
           visibleRepoIds.has(repo.repoId) ? sum + repo.worktrees.length : sum
@@ -1937,6 +1950,7 @@ export function CommitApp() {
             loading={store.loading}
             changesViewMode={store.changesViewMode}
             defaultCommitAction={store.defaultCommitAction}
+            defaultSaveAction={store.defaultSaveAction}
             vscodeSelectedRepos={store.changesViewMode === 'vscode' ? vscodeSelectedRepos : undefined}
             getSelectedFilesForRepo={store.getSelectedFilesForRepo}
             onDeselectRepo={repoId => {

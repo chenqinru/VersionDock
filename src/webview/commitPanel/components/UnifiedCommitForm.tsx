@@ -13,6 +13,7 @@ interface Props {
   loading: boolean;
   changesViewMode?: 'simplified' | 'changelists' | 'vscode';
   defaultCommitAction?: 'commit' | 'commitAndPush';
+  defaultSaveAction?: 'stash' | 'shelve';
   vscodeSelectedRepos?: Set<string>;
   getSelectedFilesForRepo: (repoId: string) => string[];
   onDeselectRepo: (repoId: string) => void;
@@ -169,7 +170,7 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
 
 export function UnifiedCommitForm({
   message, messageHistory, repoStatuses, repoMetas, amendFlags,
-  loading, changesViewMode, defaultCommitAction = 'commit', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
+  loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
   onAutopilot, onStopAutopilot, generatingMessage,
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
@@ -193,6 +194,7 @@ export function UnifiedCommitForm({
   const hasGitCommitTargets = commitTargets.some(r => metaMap.get(r.repoId)?.kind !== 'svn');
   const showGitActions = commitTargets.length > 0 ? hasGitCommitTargets : hasGitRepos;
   const primaryCommitAction = showGitActions ? defaultCommitAction : 'commit';
+  const primarySaveAction = defaultSaveAction;
 
   const commitLabel = t('Commit');
   const pushLabel = t('Commit & Push');
@@ -537,15 +539,21 @@ export function UnifiedCommitForm({
             <DropdownButton
               variant="secondary"
               enabled={!!message.trim() && commitTargets.length > 0}
-              icon="archive"
+              icon={primarySaveAction === 'stash' ? 'save' : 'archive'}
               label={t('Save')}
               title={t('Shelve or stash changes')}
               disabledTitle={t('Enter a commit message first')}
-              items={[
-                { icon: 'archive', label: t('Shelve Changes'), onSelect: onShelve },
-                { icon: 'save',    label: t('Stash Changes'),  onSelect: onStash  },
-              ]}
-              onMainClick={onShelve}
+              items={primarySaveAction === 'stash'
+                ? [
+                    { icon: 'save',    label: t('Stash Changes'),  onSelect: onStash  },
+                    { icon: 'archive', label: t('Shelve Changes'), onSelect: onShelve },
+                  ]
+                : [
+                    { icon: 'archive', label: t('Shelve Changes'), onSelect: onShelve },
+                    { icon: 'save',    label: t('Stash Changes'),  onSelect: onStash  },
+                  ]
+              }
+              onMainClick={primarySaveAction === 'stash' ? onStash : onShelve}
             />
           </div>
         )}

@@ -8,6 +8,7 @@ import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
 import { scopedKey } from '../../shared/scopedKey';
 import { branchColor } from '../../shared/branchColors';
+import { getCommitMessageTitle } from '../../shared/commitMessage';
 
 interface Props {
   repoId: string;
@@ -253,6 +254,8 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
   const { isShelveCollapsed, toggleShelveCollapsed } = useCommitStore();
   const entryKey = shelveEntryKey(repoId, entry.id);
   const expanded = !isShelveCollapsed(entryKey);
+  const fullMessage = entry.name || entry.id;
+  const messageTitle = getCommitMessageTitle(fullMessage, entry.id);
 
   const treeNodes = viewMode === 'tree' ? buildTree(entry.files) : null;
 
@@ -272,7 +275,15 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
         </button>
         <Codicon name="archive" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
         <div style={rowStyle.info}>
-          <span style={rowStyle.name}>{entry.name}</span>
+          <span style={rowStyle.name}>
+            <span style={rowStyle.message} title={fullMessage}>{messageTitle}</span>
+            {entry.branch && (
+              <span style={rowStyle.branchBadge(branchColor(entry.branch))} title={entry.branch}>
+                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+                <span style={rowStyle.branchBadgeLabel}>{entry.branch}</span>
+              </span>
+            )}
+          </span>
           <span style={rowStyle.meta}>
             <span style={rowStyle.fileCount}>
               {entry.files.length === 1 ? t('{0} file', entry.files.length) : t('{0} files', entry.files.length)}
@@ -328,7 +339,8 @@ const rowStyle = {
   root: { borderBottom: '1px solid var(--vscode-panel-border)' } as React.CSSProperties,
   header: {
     display: 'flex', alignItems: 'center', gap: '5px',
-    padding: '5px 8px 5px 4px', cursor: 'default', minHeight: '32px',
+    padding: '5px 8px 5px 4px', cursor: 'pointer', minHeight: '32px',
+    minWidth: 0, overflow: 'hidden',
   } as React.CSSProperties,
   chevronBtn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
@@ -336,7 +348,15 @@ const rowStyle = {
     color: 'var(--vscode-foreground)', flexShrink: 0,
   } as React.CSSProperties,
   info: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 },
-  name: { fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  name: { fontSize: '12px', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' as const, display: 'flex', alignItems: 'center', gap: '6px' } as React.CSSProperties,
+  message: { flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } as React.CSSProperties,
+  branchBadge: (color: string): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: '3px',
+    fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '3px', flexShrink: 0,
+    minWidth: 0, maxWidth: 'min(160px, 40%)', overflow: 'hidden',
+    background: `${color}33`, color, border: `1px solid ${color}88`,
+  }),
+  branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   meta: { display: 'flex', gap: '8px', marginTop: '2px' } as React.CSSProperties,
   fileCount: { fontSize: '10px', opacity: 0.5 },
   date: { fontSize: '10px', opacity: 0.4, whiteSpace: 'nowrap' as const },

@@ -2377,18 +2377,32 @@ export class GitService {
 
   // ── Stash operations ──────────────────────────────────────────────────────
 
+  async stashCount(): Promise<number> {
+    const raw = await this.git.raw(['stash', 'list', '--format=%gd']).catch(() => '');
+    return raw.split(/\r?\n/).filter(line => line.trim()).length;
+  }
+
   async stashList(): Promise<StashEntry[]> {
-    const raw = await this.git.raw(['stash', 'list', '--format=%gd|%ci|%gs']).catch(() => '');
+    // Use the stash commit subject instead of the reflog subject. Git flattens
+    // multiline stash messages into " - " inside %gs, while %s contains only
+    // the actual first-line title.
+    const fieldSeparator = '\x1f';
+    const recordSeparator = '\x1e';
+    const raw = await this.git.raw([
+      'stash', 'list', '--format=%gd%x1f%ci%x1f%s%x1f%B%x1e',
+    ]).catch(() => '');
     if (!raw.trim()) return [];
 
     const entries: StashEntry[] = [];
-    for (const line of raw.trim().split('\n')) {
-      if (!line.trim()) continue;
-      const parts = line.split('|');
-      if (parts.length < 3) continue;
-      const ref = parts[0].trim();         // stash@{N}
-      const date = parts[1].trim();        // ISO date
-      const subject = parts.slice(2).join('|').trim(); // "On branch: message" or "WIP on branch: message"
+    for (const rawRecord of raw.split(recordSeparator)) {
+      const record = rawRecord.replace(/^\r?\n/, '');
+      if (!record.trim()) continue;
+      const parts = record.split(fieldSeparator);
+      if (parts.length < 4) continue;
+      const ref = parts[0].trim();          // stash@{N}
+      const date = parts[1].trim();         // ISO date
+      const subject = parts[2].trim();      // "On branch: message" or "WIP on branch: message"
+      const rawFullMessage = parts.slice(3).join(fieldSeparator).trim();
 
       const indexMatch = ref.match(/stash@\{(\d+)\}/);
       const index = indexMatch ? parseInt(indexMatch[1], 10) : 0;
@@ -2397,6 +2411,9 @@ export class GitService {
       const branchMatch = subject.match(/^(?:WIP on|On) ([^:]+):/);
       const branch = branchMatch ? branchMatch[1].trim() : '';
       const message = branchMatch ? subject.slice(branchMatch[0].length).trim() : subject;
+      const fullMessage = branchMatch && rawFullMessage.startsWith(branchMatch[0])
+        ? rawFullMessage.slice(branchMatch[0].length).trim()
+        : rawFullMessage || message;
 
       // Get files for this stash entry
       const files: Array<{ path: string; status: string }> = [];
@@ -2418,7 +2435,7 @@ export class GitService {
         }
       } catch { /* stash^3 may not exist for tracked-only stashes */ }
 
-      entries.push({ ref, index, message, date, branch, files });
+      entries.push({ ref, index, message, fullMessage, date, branch, files });
     }
     return entries;
   }

@@ -70,6 +70,7 @@
   "configuration.repositoryScanMaxDepth.description": "Maximum depth of workspace subfolders to scan for Git repositories (0 = only workspace folders).",
   "configuration.repositoryScanIgnoredFolders.description": "Folder names or workspace-relative paths to skip while scanning for nested Git repositories.",
   "configuration.fetchOnStartup.description": "Automatically fetch all remotes when the extension activates",
+  "configuration.resetViewLocationsOnStartup.description": "Run VS Code's 'Reset View Locations' action on startup. Useful to clear stale VersionDock badge placement, but it resets view positions globally.",
   "configuration.notifyOnIncomingCommits.description": "Show a notification on startup when there are incoming commits available to pull",
   "configuration.notifyOnUnpushedCommits.description": "Show a notification on startup when there are unpushed commits ready to push",
   "configuration.projectColors.description": "Map of workspace folder/repository name to hex color for the commit graph (e.g. {\"my-repo\": \"#ff6b6b\"})",
@@ -93,5 +94,8 @@
   "configuration.defaultCommitAction.enum.commit": "The main button commits without pushing",
   "configuration.defaultCommitAction.enum.commitAndPush": "The main button commits and pushes immediately",
   "configuration.defaultCommitAction.description": "Default action for the commit button in the Commit Panel.",
+  "configuration.defaultSaveAction.enum.stash": "The main Save button stashes selected changes",
+  "configuration.defaultSaveAction.enum.shelve": "The main Save button shelves selected changes",
+  "configuration.defaultSaveAction.description": "Default action for the Save button in the Commit Panel.",
   "configuration.suppressDivergedBranchWarning.description": "Suppress the 'Branches have diverged' warning in the Git Menu and status bar."
 }

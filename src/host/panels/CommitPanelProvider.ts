@@ -314,7 +314,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }).catch(() => { /* icon theme optional */ });
         }
       }
-      if (e.affectsConfiguration('versiondock.changesViewMode') || e.affectsConfiguration('versiondock.defaultCommitAction')) {
+      if (e.affectsConfiguration('versiondock.changesViewMode') || e.affectsConfiguration('versiondock.defaultCommitAction') || e.affectsConfiguration('versiondock.defaultSaveAction')) {
         this.changelistService?.setChangelistMode(this.getChangesViewMode() === 'changelists');
         void this.manager.getAllStatuses().then(status => {
           this.postChangelistsUpdate(status);
@@ -347,9 +347,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     if (msg.type === 'COMMIT_STATUS_UPDATE') {
       this.badgeController?.update(msg.status);
       this.updateVcsContext(msg.repos);
-      const m = msg as typeof msg & { fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; hasWorkspaceFolder?: boolean };
+      const m = msg as typeof msg & { fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean };
       if (m.fileViewMode === undefined) m.fileViewMode = this.getFileViewMode();
       if (m.defaultCommitAction === undefined) m.defaultCommitAction = this.getDefaultCommitAction();
+      if (m.defaultSaveAction === undefined) m.defaultSaveAction = this.getDefaultSaveAction();
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
     }
     const broadcast = msg.type === 'COMMIT_STATUS_UPDATE'
@@ -357,6 +358,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       || msg.type === 'COMMIT_HIDDEN_REPOS_UPDATE'
       || msg.type === 'CHANGELISTS_UPDATE'
       || msg.type === 'SHELVE_LIST_RESULT'
+      || msg.type === 'STASH_COUNT_RESULT'
       || msg.type === 'STASH_LIST_RESULT'
       || msg.type === 'PUSH_UNPUSHED_RESULT'
       || msg.type === 'WORKTREE_LIST_RESULT'
@@ -1011,6 +1013,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private getDefaultCommitAction(): 'commit' | 'commitAndPush' {
     return vscode.workspace.getConfiguration('versiondock').get<'commit' | 'commitAndPush'>('defaultCommitAction', 'commit');
+  }
+
+  private getDefaultSaveAction(): 'stash' | 'shelve' {
+    return vscode.workspace.getConfiguration('versiondock').get<'stash' | 'shelve'>('defaultSaveAction', 'stash');
   }
 
   private getHiddenRepoIds(): string[] {
@@ -3038,6 +3044,21 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
         } catch (e) {
           vscode.window.showErrorMessage(t('VersionDock: Cannot open stash diff — {0}', String(e)));
+        }
+        break;
+      }
+
+      case 'STASH_COUNT': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo) {
+          this.post({ type: 'STASH_COUNT_RESULT', requestId: msg.requestId, repoId: msg.repoId, count: 0, error: t('Repo not found') });
+          return;
+        }
+        try {
+          const count = await repo.stashCount();
+          this.post({ type: 'STASH_COUNT_RESULT', requestId: msg.requestId, repoId: msg.repoId, count });
+        } catch (e: unknown) {
+          this.post({ type: 'STASH_COUNT_RESULT', requestId: msg.requestId, repoId: msg.repoId, count: 0, error: String(e) });
         }
         break;
       }

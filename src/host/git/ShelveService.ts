@@ -413,6 +413,7 @@ export class ShelveService {
       id,
       name,
       date: new Date().toISOString(),
+      branch: statusOutput.current || undefined,
       files: fileList,
       patchFile: patchFileName,
       binaryFiles: binaryFiles.length > 0 ? binaryFiles : undefined,

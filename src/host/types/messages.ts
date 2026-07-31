@@ -27,6 +27,7 @@ export interface ShelveEntry {
   id: string;           // unique id = filename without extension
   name: string;         // user-provided description
   date: string;         // ISO date string
+  branch?: string;      // source branch (missing for shelves created by older versions)
   files: Array<{ path: string; status: string }>;
   patchFile: string;    // relative path inside .versiondock/shelf/
   changelistAssignments?: Array<{ path: string; changelistId: string; changelistName: string }>;
@@ -38,6 +39,7 @@ export interface StashEntry {
   ref: string;      // e.g. "stash@{0}"
   index: number;    // 0, 1, 2...
   message: string;  // description
+  fullMessage?: string; // complete description including the body
   date: string;     // ISO date
   branch: string;   // branch name
   files: Array<{ path: string; status: string }>;
@@ -98,7 +100,7 @@ export type CommitPanelTab = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree'
 // ─── Commit Panel: Host → WebView ────────────────────────────────────────────
 
 export type HostToCommitMsg =
-  | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; hasWorkspaceFolder?: boolean }
+  | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean }
   | { type: 'COMMIT_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'COMMIT_DIFF_RESULT'; requestId: string; diff: FileDiff | null; error?: string }
   | { type: 'COMMIT_WORKTREE_DIFF_STARTED'; repoId: string; repoName: string; repoColor: string; baseRef: string; currentRef: string; files: FileStatus[] }
@@ -112,6 +114,7 @@ export type HostToCommitMsg =
   | { type: 'SHELVE_LIST_RESULT'; requestId: string; repoId: string; shelves: ShelveEntry[]; error?: string }
   | { type: 'SHELVE_DIFF_RESULT'; requestId: string; repoId: string; shelveId: string; filePath: string; diff: string; error?: string }
   | { type: 'SHELVE_OP_RESULT'; requestId: string; repoId: string; op: 'push' | 'apply' | 'drop'; ok: boolean; error?: string; hasConflicts?: boolean; conflictFiles?: string[] }
+  | { type: 'STASH_COUNT_RESULT'; requestId: string; repoId: string; count: number; error?: string }
   | { type: 'STASH_LIST_RESULT'; requestId: string; repoId: string; stashes: StashEntry[]; error?: string }
   | { type: 'STASH_SHOW_RESULT'; requestId: string; diff: string; error?: string }
   | { type: 'STASH_OP_RESULT'; requestId: string; repoId: string; op: 'apply' | 'pop' | 'drop' | 'push'; ok: boolean; error?: string }
@@ -184,6 +187,7 @@ export type CommitToHostMsg =
   | { type: 'SHELVE_DROP'; requestId: string; repoId: string; shelveId: string }
   | { type: 'SHELVE_GET_FILE_DIFF'; requestId: string; repoId: string; shelveId: string; filePath: string }
   | { type: 'SHELVE_OPEN_FILE_DIFF'; repoId: string; shelveId: string; filePath: string }
+  | { type: 'STASH_COUNT'; requestId: string; repoId: string }
   | { type: 'STASH_LIST'; requestId: string; repoId: string }
   | { type: 'STASH_PUSH'; requestId: string; repoId: string; message: string; paths?: string[] }
   | { type: 'STASH_SHOW'; requestId: string; repoId: string; stashRef: string; filePath: string }

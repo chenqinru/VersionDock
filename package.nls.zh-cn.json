@@ -70,6 +70,7 @@
   "configuration.repositoryScanMaxDepth.description": "扫描工作区子文件夹中 Git 仓库的最大深度（0 表示仅扫描工作区文件夹）。",
   "configuration.repositoryScanIgnoredFolders.description": "扫描嵌套 Git 仓库时跳过的文件夹名或工作区相对路径。",
   "configuration.fetchOnStartup.description": "扩展激活时自动抓取所有远程",
+  "configuration.resetViewLocationsOnStartup.description": "扩展启动时运行 VS Code 的“重置视图位置”操作。可用于清理 VersionDock 徽标的过期位置，但会全局重置所有视图的位置。",
   "configuration.notifyOnIncomingCommits.description": "启动时如有可拉取的传入提交，则显示通知",
   "configuration.notifyOnUnpushedCommits.description": "启动时如有待推送提交，则显示通知",
   "configuration.projectColors.description": "提交图中工作区文件夹或仓库名到十六进制颜色的映射（例如 {\"my-repo\": \"#ff6b6b\"}）",
@@ -93,5 +94,8 @@
   "configuration.defaultCommitAction.enum.commit": "主按钮只提交，不推送",
   "configuration.defaultCommitAction.enum.commitAndPush": "主按钮提交后立即推送",
   "configuration.defaultCommitAction.description": "提交面板中提交按钮的默认操作。",
+  "configuration.defaultSaveAction.enum.stash": "主“保存”按钮暂存选中的更改",
+  "configuration.defaultSaveAction.enum.shelve": "主“保存”按钮搁置选中的更改",
+  "configuration.defaultSaveAction.description": "提交面板中“保存”按钮的默认操作。",
   "configuration.suppressDivergedBranchWarning.description": "在 Git 菜单和状态栏中隐藏“分支已发散”警告。"
 }

@@ -7,6 +7,7 @@ import type { ViewMode } from '../store/commitStore';
 import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
 import { branchColor } from '../../shared/branchColors';
+import { getCommitMessageTitle } from '../../shared/commitMessage';
 
 interface Props {
   repoId: string;
@@ -232,6 +233,8 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // Per-directory open state (tree mode)
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set());
+  const fullMessage = entry.fullMessage || entry.message || entry.ref;
+  const messageTitle = getCommitMessageTitle(fullMessage, entry.ref);
 
   const treeNodes = React.useMemo(
     () => viewMode === 'tree' ? buildTree(entry.files) : null,
@@ -273,7 +276,9 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
         <Codicon name="save" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
         <div style={row.info}>
           <span style={row.name}>
-            {entry.message || entry.ref}
+            <span style={row.message} title={fullMessage}>
+              {messageTitle}
+            </span>
             {entry.branch && (
               <span style={row.branchBadge(branchColor(entry.branch))} title={entry.branch}>
                 <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
@@ -422,7 +427,8 @@ const row = {
   root: { borderBottom: '1px solid var(--vscode-panel-border)' } as React.CSSProperties,
   header: {
     display: 'flex', alignItems: 'center', gap: '5px',
-    padding: '5px 8px 5px 4px', cursor: 'default', minHeight: '32px',
+    padding: '5px 8px 5px 4px', cursor: 'pointer', minHeight: '32px',
+    minWidth: 0, overflow: 'hidden',
   } as React.CSSProperties,
   chevronBtn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
@@ -430,11 +436,12 @@ const row = {
     color: 'var(--vscode-foreground)', flexShrink: 0,
   } as React.CSSProperties,
   info: { display: 'flex', flexDirection: 'column' as const, flex: 1, minWidth: 0 },
-  name: { fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, display: 'flex', alignItems: 'center', gap: '6px' } as React.CSSProperties,
+  name: { fontSize: '12px', overflow: 'hidden', whiteSpace: 'nowrap' as const, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 } as React.CSSProperties,
+  message: { flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const } as React.CSSProperties,
   branchBadge: (color: string): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', gap: '3px',
-    fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '3px', flexShrink: 1,
-    minWidth: 0, maxWidth: '160px', overflow: 'hidden',
+    fontSize: '10px', fontWeight: 600, padding: '1px 5px', borderRadius: '3px', flexShrink: 0,
+    minWidth: 0, maxWidth: 'min(160px, 40%)', overflow: 'hidden',
     background: `${color}33`, color, border: `1px solid ${color}88`,
   }),
   branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,

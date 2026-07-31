@@ -19,6 +19,18 @@ import { AiCommitMessageService } from './aiCommitMessage/AiCommitMessageService
 import { AiMergeConflictService } from './aiMergeConflict/AiMergeConflictService';
 import { AiCommitExplanationService } from './aiCommitExplanation/AiCommitExplanationService';
 
+async function maybeResetViewLocationsOnStartup(logger: VersionDockLogger): Promise<void> {
+  const enabled = vscode.workspace.getConfiguration('versiondock').get<boolean>('resetViewLocationsOnStartup', false);
+  if (!enabled) return;
+
+  try {
+    await vscode.commands.executeCommand('workbench.action.resetViewLocations');
+    logger.info('Startup', 'Reset view locations');
+  } catch (error) {
+    logger.error('Startup', 'Failed to reset view locations', error);
+  }
+}
+
 async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void> {
   const SHOWN_KEY = 'hasShownViewModeQuickpick';
   if (globalState.get<boolean>(SHOWN_KEY)) return;
@@ -201,6 +213,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   logger.info('Extension', 'Activating', {
     workspaceFolderCount: vscode.workspace.workspaceFolders?.length ?? 0,
   });
+
+  await maybeResetViewLocationsOnStartup(logger);
 
   const manager = new WorkspaceVcsManager(context, logger);
 
