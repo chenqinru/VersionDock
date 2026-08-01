@@ -7,6 +7,7 @@ export interface AiProviderConfig {
   apiKey: string;
   apiUrl: string;
   model: string;
+  maxInputTokens: number;
 }
 
 export interface AiProviderGenerateOptions {

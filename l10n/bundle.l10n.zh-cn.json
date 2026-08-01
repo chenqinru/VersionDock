@@ -1309,6 +1309,7 @@
   "AI API request failed: {0} {1} {2}": "AI API 请求失败：{0} {1} {2}",
   "AI API URL is invalid: {0}": "AI API URL 无效：{0}",
   "AI API URL must use HTTP or HTTPS.": "AI API URL 必须使用 HTTP 或 HTTPS。",
+  "AI prompt exceeds the configured input limit of {0} tokens.": "AI 提示词超过配置的 {0} Token 输入上限。",
   "AI request timed out after 120 seconds.": "AI 请求超过 120 秒，已超时。",
   "AI provider did not return a commit message.": "AI 提供商未返回提交消息。",
   "AI provider did not return content.": "AI 提供商未返回内容。",

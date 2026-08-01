@@ -1309,6 +1309,7 @@
   "AI API request failed: {0} {1} {2}": "AI API request failed: {0} {1} {2}",
   "AI API URL is invalid: {0}": "AI API URL is invalid: {0}",
   "AI API URL must use HTTP or HTTPS.": "AI API URL must use HTTP or HTTPS.",
+  "AI prompt exceeds the configured input limit of {0} tokens.": "AI prompt exceeds the configured input limit of {0} tokens.",
   "AI request timed out after 120 seconds.": "AI request timed out after 120 seconds.",
   "AI provider did not return a commit message.": "AI provider did not return a commit message.",
   "AI provider did not return content.": "AI provider did not return content.",

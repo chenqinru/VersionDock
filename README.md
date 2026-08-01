@@ -219,6 +219,8 @@ The default AI provider is `github-copilot`. Select `openai`, `claude`, `gemini`
 
 Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace prompt is stored at `.vscode/ai-commit-message.prompt.md`; the global prompt is stored in VersionDock's global extension storage. Workspace prompts take precedence when all selected repositories belong to one workspace, followed by the global prompt and the built-in default.
 
+AI commit and explanation context is allocated in two phases: repository/commit metadata plus every file summary is added first, then diff hunks are included round-robin across files until the active provider's input limit is reached. This prevents an early large file from consuming the entire input budget. GitHub Copilot uses the selected model's own `maxInputTokens`; other providers use `versiondock.ai.maxInputTokens`.
+
 Open an extended commit detail page and select **AI Explain** to generate a structured explanation from commit metadata and historical diffs. Use **VersionDock: Edit Commit Explanation Prompt** to customize the explanation. Its workspace prompt is stored at `.vscode/ai-commit-explanation.prompt.md`; the workspace, global, and built-in precedence matches the commit-message prompt. Explanations stay in the current detail page and are not cached on disk.
 
 Use the Log panel to browse history, filter commits or SVN revisions, inspect changed files, open diffs, and run supported branch or revision operations.
@@ -277,6 +279,7 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `versiondock.ai.model` | `""` | Model name. GitHub Copilot selects a model automatically when empty. |
 | `versiondock.ai.apiUrl` | `""` | Endpoint URL required by non-Copilot providers. |
 | `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers. |
+| `versiondock.ai.maxInputTokens` | `128000` | Maximum locally estimated input tokens for OpenAI, Claude, Gemini, and Custom requests. Changes apply to the next request; Copilot ignores this setting and uses the selected model's own limit. |
 
 Example:
 

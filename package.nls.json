@@ -88,6 +88,7 @@
   "configuration.ai.apiKey.description": "API key for VersionDock AI features using OpenAI, Claude, Gemini, or custom providers. Ignored for GitHub Copilot.",
   "configuration.ai.apiUrl.description": "API endpoint URL for VersionDock AI features using OpenAI, Claude, Gemini, or custom providers. Ignored for GitHub Copilot.",
   "configuration.ai.model.description": "Model name for VersionDock AI features. For GitHub Copilot, leave empty to select a model automatically.",
+  "configuration.ai.maxInputTokens.description": "Maximum estimated input tokens for VersionDock AI features using OpenAI, Claude, Gemini, or custom providers. Ignored for GitHub Copilot, which uses the selected model's own input limit.",
   "configuration.changesViewMode.enum.simplified": "Show Staged and Unstaged sections per repository (default behavior)",
   "configuration.changesViewMode.enum.changelists": "Show files grouped by Changelists, similar to PhpStorm",
   "configuration.changesViewMode.enum.vscode": "Show Staged Changes / Changes sections like native VS Code, with inline stage/unstage buttons",

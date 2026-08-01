@@ -36,6 +36,10 @@ export class AiCommitExplanationService {
     return this.aiProviderService.getProvider();
   }
 
+  getMaxInputTokens(): Promise<number> {
+    return this.aiProviderService.getMaxInputTokens();
+  }
+
   async editPrompt(): Promise<void> {
     await this.promptManager.edit();
   }

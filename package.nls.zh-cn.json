@@ -88,6 +88,7 @@
   "configuration.ai.apiKey.description": "VersionDock AI 功能的 API Key，适用于 OpenAI、Claude、Gemini 或 custom 提供商。GitHub Copilot 会忽略此项。",
   "configuration.ai.apiUrl.description": "VersionDock AI 功能的 API 接口 URL，适用于 OpenAI、Claude、Gemini 或 custom 提供商。GitHub Copilot 会忽略此项。",
   "configuration.ai.model.description": "VersionDock AI 功能的模型名称。GitHub Copilot 留空时自动选择模型。",
+  "configuration.ai.maxInputTokens.description": "VersionDock AI 功能的最大估算输入 Token 数，适用于 OpenAI、Claude、Gemini 或 custom 提供商。GitHub Copilot 会忽略此项，并使用所选模型自身的输入上限。",
   "configuration.changesViewMode.enum.simplified": "按仓库显示暂存和未暂存分区（默认行为）",
   "configuration.changesViewMode.enum.changelists": "按 Changelist 分组显示文件，类似 PhpStorm",
   "configuration.changesViewMode.enum.vscode": "像 VS Code 原生视图一样显示暂存更改和更改分区，并提供行内暂存/取消暂存按钮",

@@ -34,6 +34,10 @@ export class AiCommitMessageService {
     return this.aiProviderService.getProvider();
   }
 
+  getMaxInputTokens(): Promise<number> {
+    return this.aiProviderService.getMaxInputTokens();
+  }
+
   async editPrompt(): Promise<void> {
     await this.commitPromptManager.edit();
   }

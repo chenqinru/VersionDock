@@ -529,7 +529,9 @@ function registerCommitExplanationHandlers(
       postIfActive({ type: 'aiExplanationStatus', phase: 'reading' });
       await Promise.resolve();
       postIfActive({ type: 'aiExplanationStatus', phase: 'analyzing' });
-      const context = await buildCommitExplanationContext(manager, mode, commits, cancellation.token);
+      const maxInputTokens = await service.getMaxInputTokens();
+      if (cancellation.token.isCancellationRequested) throw new Error('Cancelled');
+      const context = await buildCommitExplanationContext(manager, mode, commits, maxInputTokens, cancellation.token);
       postIfActive({
         type: 'aiExplanationStatus',
         phase: 'thinking',

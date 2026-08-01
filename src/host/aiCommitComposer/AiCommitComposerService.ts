@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
+import { estimateTokenCount, getContextTokenBudget } from '../ai/tokenBudget';
 import { t } from '../utils/l10n';
 import { ComposerPromptManager } from './ComposerPromptManager';
 import { CommitPromptManager } from '../aiCommitMessage/CommitPromptManager';
 import type { ComposerAnalysisResult, ComposerAnalyzeOptions, ComposerCommitGroup } from './types';
 
-const MAX_CONTEXT_CHARS = 120_000;
 const MAX_OUTPUT_TOKENS = 8192;
 
 function cleanJson(raw: string): string {
@@ -46,7 +46,8 @@ export class AiCommitComposerService {
       branch: options.source.branch,
       units: unitPayload,
     });
-    if (userMessage.length > MAX_CONTEXT_CHARS) {
+    const maxInputTokens = await this.provider.getMaxInputTokens();
+    if (estimateTokenCount(userMessage) > getContextTokenBudget(maxInputTokens)) {
       throw new Error(t('AI Commit Composer context is too large. Select fewer changes and try again.'));
     }
     const result = await this.provider.generate({

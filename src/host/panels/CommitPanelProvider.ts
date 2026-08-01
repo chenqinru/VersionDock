@@ -9,7 +9,7 @@ import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent } from '../utils/ShelveDocumentProvider';
 import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../types/messages';
-import type { DiffLine, FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
+import type { FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { CHANGELIST_UNVERSIONED_ID } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
 import type { MergeEditorProvider } from './MergeEditorProvider';
@@ -28,13 +28,12 @@ import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageS
 import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
 import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
+import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
+import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
+import { getContextTokenBudget } from '../ai/tokenBudget';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-const AI_COMMIT_CONTEXT_MAX_FILES = 100;
-const AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE = 80;
-const AI_COMMIT_CONTEXT_MAX_HUNKS_PER_FILE = 8;
 const AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE = 3;
-const AI_COMMIT_CONTEXT_MAX_CHARS = 64_000;
 const SUBTREE_STATE_KEY = 'versiondock.subtrees';
 const CUSTOM_SUBTREE_PREFIX_ID = '__custom_prefix__';
 const SUBTREE_STATUS_CACHE_TTL_MS = 60_000;
@@ -719,63 +718,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return this.globalState?.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
   }
 
-  private formatAiDiffLine(line: DiffLine): string {
-    if (line.type === 'add') return `+${line.content}`;
-    if (line.type === 'remove') return `-${line.content}`;
-    return ` ${line.content}`;
-  }
-
-  private summarizeAiDiff(diff: FileDiff | null): { lines: string[]; truncated: boolean } {
-    if (!diff) return { lines: [], truncated: false };
-    const lines: string[] = [];
-    if (diff.isBinary) return { lines: ['  binary file'], truncated: false };
-    let truncated = diff.hunks.length > AI_COMMIT_CONTEXT_MAX_HUNKS_PER_FILE;
-    for (const hunk of diff.hunks.slice(0, AI_COMMIT_CONTEXT_MAX_HUNKS_PER_FILE)) {
-      const includedLineIndexes = new Set<number>();
-      for (let index = 0; index < hunk.lines.length; index++) {
-        if (hunk.lines[index].type === 'context') continue;
-        const start = Math.max(0, index - AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE);
-        const end = Math.min(hunk.lines.length - 1, index + AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE);
-        for (let includedIndex = start; includedIndex <= end; includedIndex++) {
-          includedLineIndexes.add(includedIndex);
-        }
-      }
-      if (includedLineIndexes.size === 0) continue;
-      if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
-        truncated = true;
-        break;
-      }
-      lines.push(`  ${hunk.header}`);
-      let previousIndex: number | undefined;
-      for (const index of Array.from(includedLineIndexes).sort((left, right) => left - right)) {
-        if (previousIndex !== undefined && index > previousIndex + 1) {
-          if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
-            truncated = true;
-            break;
-          }
-          lines.push('  ...');
-        }
-        if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
-          truncated = true;
-          break;
-        }
-        lines.push(`  ${this.formatAiDiffLine(hunk.lines[index])}`);
-        previousIndex = index;
-      }
-      if (lines.length >= AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE) {
-        truncated = true;
-        break;
-      }
-    }
-    if (lines.length === 0 && diff.modifiedContent && !diff.originalContent) {
-      const contentLines = diff.modifiedContent.split(/\r?\n/);
-      const previewLines = contentLines.slice(0, AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE);
-      lines.push(...previewLines.filter(Boolean).map(line => `  +${line}`));
-      truncated = contentLines.length > AI_COMMIT_CONTEXT_MAX_LINES_PER_FILE;
-    }
-    return { lines, truncated };
-  }
-
   private resolveAiCommitMessageTargets(
     statuses: WorkspaceStatus['repos'],
     targets?: CommitGenerateMessageTarget[],
@@ -836,20 +778,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const normalizedTargets = this.resolveAiCommitMessageTargets(ws.repos, targets, repoIds);
     const repoMetas = new Map(this.manager.getRepoMetas().map(meta => [meta.id, meta]));
     const statusByRepo = new Map(ws.repos.map(status => [status.repoId, status]));
-    const lines: string[] = [];
+    const contextTokenBudget = getContextTokenBudget(await this.aiCommitMessageService.getMaxInputTokens());
+    const preparedGroups: Array<{
+      headingLines: string[];
+      entries: Array<{
+        label: string;
+        summary: string;
+        sources: Array<{ label: string; diff: FileDiff | null }>;
+      }>;
+    }> = [];
     const includedRepoIds = new Set<string>();
     const includedRepoRootPaths = new Set<string>();
     const vcsKinds = new Set<'git' | 'svn'>();
-    let contextCharCount = 0;
-    let fileCount = 0;
-    let truncated = false;
-    const appendContextLines = (nextLines: string[]): void => {
-      for (const line of nextLines) {
-        if (lines.length > 0) contextCharCount++;
-        lines.push(line);
-        contextCharCount += line.length;
-      }
-    };
 
     for (const target of normalizedTargets) {
       throwIfCancellationRequested(cancellationToken);
@@ -866,14 +806,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       includedRepoIds.add(status.repoId);
       includedRepoRootPaths.add(repoMeta?.rootPath ?? service.rootPath);
       vcsKinds.add(service.kind === 'svn' ? 'svn' : 'git');
-      appendContextLines([`[${vcsKind}] ${repoName} (${status.branch.detachedTag ?? status.branch.detachedHash ?? status.branch.name})`]);
+      const groupEntries: typeof preparedGroups[number]['entries'] = [];
       for (const file of files) {
         throwIfCancellationRequested(cancellationToken);
-        if (fileCount >= AI_COMMIT_CONTEXT_MAX_FILES) {
-          truncated = true;
-          break;
-        }
-        fileCount++;
 
         const includeStaged = file.staged;
         const includeUnstaged = file.unstaged && (target.source === 'selected' || target.source === 'working');
@@ -881,40 +816,60 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ...(includeStaged ? [{ label: 'staged' as const, diff: () => service.getStagedDiff(status.repoId, file.path) }] : []),
           ...(includeUnstaged ? [{ label: 'working' as const, diff: () => service.getUnstagedDiff(status.repoId, file.path) }] : []),
         ];
-
+        const sources: typeof groupEntries[number]['sources'] = [];
         for (const source of diffSources) {
           throwIfCancellationRequested(cancellationToken);
-          appendContextLines([`${file.status.toUpperCase()} ${file.path}${service.kind === 'git' ? ` [${source.label}]` : ''}`]);
           const diff = await source.diff().catch(() => null);
           throwIfCancellationRequested(cancellationToken);
-          const summary = this.summarizeAiDiff(diff);
-          appendContextLines(summary.lines);
-          if (summary.truncated) truncated = true;
+          sources.push({ label: source.label, diff });
         }
-        if (contextCharCount >= AI_COMMIT_CONTEXT_MAX_CHARS) {
-          truncated = true;
-          break;
-        }
+        if (!sources.length) continue;
+        const sourceSummary = sources.map(source => (
+          `${service.kind === 'git' ? source.label : 'working'}${formatDiffStats(source.diff, file)}`
+        )).join(', ');
+        const label = `${file.status.toUpperCase()} ${file.path}`;
+        groupEntries.push({
+          label,
+          summary: `${label}${sourceSummary ? ` [${sourceSummary}]` : ''}`,
+          sources,
+        });
       }
-      if (fileCount >= AI_COMMIT_CONTEXT_MAX_FILES || contextCharCount >= AI_COMMIT_CONTEXT_MAX_CHARS) {
-        truncated = true;
-        break;
+      if (groupEntries.length) {
+        preparedGroups.push({
+          headingLines: [
+            `[${vcsKind}] ${repoName} (${status.branch.detachedTag ?? status.branch.detachedHash ?? status.branch.name})`,
+            'Changed files:',
+          ],
+          entries: groupEntries,
+        });
       }
     }
 
-    if (lines.length === 0) throw new Error(t('No changes to generate a commit message from.'));
-    const context = lines.join('\n');
-    const text = context.length > AI_COMMIT_CONTEXT_MAX_CHARS
-      ? `${context.slice(0, AI_COMMIT_CONTEXT_MAX_CHARS)}\n...`
-      : context;
+    const entryCount = preparedGroups.reduce((total, group) => total + group.entries.length, 0);
+    const detailBlockTokenBudget = getFairDetailBlockTokenBudget(contextTokenBudget, entryCount);
+    const groups: FairContextGroup[] = preparedGroups.map(group => ({
+      headingLines: group.headingLines,
+      entries: group.entries.map(entry => ({
+        summary: entry.summary,
+        detailBlocks: entry.sources.flatMap(source => buildDiffDetailBlocks(
+          `${entry.label}${source.label ? ` [${source.label}]` : ''}`,
+          source.diff,
+          detailBlockTokenBudget,
+          { linesAroundChange: AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE },
+        )),
+      })),
+    }));
+    const context = buildFairContext(['# Change summary'], groups, contextTokenBudget);
+    const text = context.text;
+    if (!text) throw new Error(t('No changes to generate a commit message from.'));
     return {
       text,
       repoRootPaths: Array.from(includedRepoRootPaths),
       vcsKinds: Array.from(vcsKinds),
       repositoryCount: includedRepoIds.size,
-      fileCount,
+      fileCount: context.includedEntryCount,
       contextCharCount: text.length,
-      truncated,
+      truncated: context.truncated,
     };
   }
 

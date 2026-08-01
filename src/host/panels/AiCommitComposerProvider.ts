@@ -11,8 +11,7 @@ import type { ComposerToHostMsg, ComposerWorkingCandidate, HostToComposerMsg } f
 import type { FileDiff } from '../types/git';
 import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
 import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
-
-const MESSAGE_CONTEXT_MAX_CHARS = 120_000;
+import { estimateTokenCount, getContextTokenBudget } from '../ai/tokenBudget';
 
 type OpenRequest =
   | { mode: 'working'; candidate: ComposerWorkingCandidate }
@@ -255,7 +254,9 @@ export class AiCommitComposerProvider implements vscode.Disposable {
     this.activeMessageGenerations.set(requestId, cancellation);
     let streamedMessage = '';
     try {
-      const context = this.buildCommitMessageContext(this.session.source, unitIds);
+      const maxInputTokens = await this.aiCommitMessageService.getMaxInputTokens();
+      if (cancellation.token.isCancellationRequested) return;
+      const context = this.buildCommitMessageContext(this.session.source, unitIds, maxInputTokens);
       const result = await this.aiCommitMessageService.generate({
         context,
         cancellationToken: cancellation.token,
@@ -277,7 +278,11 @@ export class AiCommitComposerProvider implements vscode.Disposable {
     }
   }
 
-  private buildCommitMessageContext(source: ComposerPreparedSource, unitIds: string[]): AiCommitMessageGenerationContext {
+  private buildCommitMessageContext(
+    source: ComposerPreparedSource,
+    unitIds: string[],
+    maxInputTokens: number,
+  ): AiCommitMessageGenerationContext {
     const unitsById = new Map(source.units.map(unit => [unit.id, unit]));
     const uniqueIds = Array.from(new Set(unitIds));
     const units = uniqueIds.map(id => unitsById.get(id)).filter((unit): unit is ComposerChangeUnit => Boolean(unit));
@@ -286,7 +291,9 @@ export class AiCommitComposerProvider implements vscode.Disposable {
       `[${source.vcsKind.toUpperCase()}] ${source.repoName} (${source.branch})`,
       ...units.flatMap(unit => [`${unit.status.toUpperCase()} ${unit.filePath}`, unit.diff]),
     ].join('\n');
-    if (text.length > MESSAGE_CONTEXT_MAX_CHARS) throw new Error(t('AI Commit Composer context is too large. Select fewer changes and try again.'));
+    if (estimateTokenCount(text) > getContextTokenBudget(maxInputTokens)) {
+      throw new Error(t('AI Commit Composer context is too large. Select fewer changes and try again.'));
+    }
     return {
       text,
       repoRootPaths: [this.manager.getRepo(source.repoId)?.rootPath ?? ''],
