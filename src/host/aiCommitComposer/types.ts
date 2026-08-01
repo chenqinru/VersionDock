@@ -41,6 +41,7 @@ export interface ComposerAnalysisResult {
   provider: string;
   model?: string;
   promptSource: 'workspace' | 'global' | 'builtin';
+  maxOutputTokens?: number;
 }
 
 export interface ComposerAnalyzeOptions {
@@ -55,4 +56,3 @@ export interface ComposerApplyResult {
   recoveryCommand?: string;
   completedGroups?: number;
 }
-

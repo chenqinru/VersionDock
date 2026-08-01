@@ -575,6 +575,7 @@ function registerCommitExplanationHandlers(
         contextCharCount: context.contextCharCount,
         contextTruncated: context.truncated,
         inputTruncated: result.inputTruncated,
+        maxOutputTokens: result.maxOutputTokens,
         streamChunkCount: result.streamChunkCount,
         firstTokenLatencyMs: result.firstTokenLatencyMs,
         durationMs: result.durationMs,

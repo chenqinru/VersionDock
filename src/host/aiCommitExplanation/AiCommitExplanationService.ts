@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
+import { calculateCommitExplanationOutputTokens } from '../ai/outputTokenBudget';
 import type { AiProvider } from '../ai/types';
 import { t } from '../utils/l10n';
 import { CommitExplanationPromptManager } from './CommitExplanationPromptManager';
@@ -7,8 +8,6 @@ import type {
   AiCommitExplanationGenerateOptions,
   AiCommitExplanationGenerateResult,
 } from './types';
-
-const EXPLANATION_MAX_OUTPUT_TOKENS = 2_048;
 
 function cleanExplanation(raw: string): string {
   let content = raw.trim();
@@ -52,13 +51,19 @@ export class AiCommitExplanationService {
     throwIfCancelled(options.cancellationToken);
     const promptResolution = await this.promptManager.resolve(options.context.repoRootPaths);
     throwIfCancelled(options.cancellationToken);
+    const userMessage = this.buildUserMessage(options.context);
+    const maxOutputTokens = calculateCommitExplanationOutputTokens(
+      `${promptResolution.prompt}\n${userMessage}`,
+      options.context.commitCount,
+      options.context.fileCount,
+    );
 
     const result = await this.aiProviderService.generate({
       systemPrompt: promptResolution.prompt,
-      userMessage: this.buildUserMessage(options.context),
+      userMessage,
       cancellationToken: options.cancellationToken,
       onDelta: options.onDelta,
-      maxOutputTokens: EXPLANATION_MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
     });
     throwIfCancelled(options.cancellationToken);
 

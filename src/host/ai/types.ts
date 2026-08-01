@@ -8,6 +8,7 @@ export interface AiProviderConfig {
   apiUrl: string;
   model: string;
   maxInputTokens: number;
+  maxOutputTokens: number;
 }
 
 export interface AiProviderGenerateOptions {
@@ -26,6 +27,10 @@ export interface AiProviderGenerateResult {
   inputTokenCount?: number;
   inputTokenBudget?: number;
   maxInputTokens?: number;
+  maxOutputTokens?: number;
+  finishReason?: string;
+  outputTokenCount?: number;
+  reasoningTokenCount?: number;
   inputTruncated: boolean;
   streamed: boolean;
   streamChunkCount: number;

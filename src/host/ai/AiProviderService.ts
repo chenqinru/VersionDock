@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { t } from '../utils/l10n';
 import { getAiProviderConfig } from './config';
 import { parseStreamingResponse } from './sse';
-import { estimateTokenCount, getInputTokenBudget, truncateToTokenBudget } from './tokenBudget';
+import { estimateTokenCount, getInputTokenBudget, truncateToTokenBudget } from './inputTokenBudget';
 import type {
   AiProvider,
   AiProviderConfig,
@@ -12,7 +12,6 @@ import type {
 
 const GENERATION_TIMEOUT_MS = 120_000;
 const GENERATION_TEMPERATURE = 0.2;
-const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
 
 type ProviderResponse = {
   text: string;
@@ -22,6 +21,10 @@ type ProviderResponse = {
   inputTokenCount?: number;
   inputTokenBudget?: number;
   maxInputTokens?: number;
+  maxOutputTokens?: number;
+  finishReason?: string;
+  outputTokenCount?: number;
+  reasoningTokenCount?: number;
   inputTruncated?: boolean;
 };
 
@@ -59,6 +62,11 @@ export class AiProviderService {
     return getAiProviderConfig().provider;
   }
 
+  getMaxOutputTokens(): number | undefined {
+    const config = getAiProviderConfig();
+    return config.provider === 'github-copilot' ? undefined : config.maxOutputTokens;
+  }
+
   async getMaxInputTokens(): Promise<number> {
     const config = getAiProviderConfig();
     if (config.provider !== 'github-copilot') return config.maxInputTokens;
@@ -71,6 +79,9 @@ export class AiProviderService {
     const config = getAiProviderConfig();
     if (config.provider !== 'github-copilot') await this.ensureApiConfig(config);
     throwIfCancelled(options.cancellationToken);
+    const maxOutputTokens = config.provider === 'github-copilot'
+      ? undefined
+      : this.resolveMaxOutputTokens(config.maxOutputTokens, options.maxOutputTokens);
 
     const requestStartedAt = Date.now();
     let timedOut = false;
@@ -95,7 +106,14 @@ export class AiProviderService {
     try {
       const response: ProviderResponse = config.provider === 'github-copilot'
         ? await this.generateWithCopilot(config.model, options.systemPrompt, options.userMessage, requestCancellation.token, onDelta)
-        : await this.generateWithApi(config, options.systemPrompt, options.userMessage, requestCancellation.token, onDelta, options.maxOutputTokens);
+        : await this.generateWithApi(
+          config,
+          options.systemPrompt,
+          options.userMessage,
+          requestCancellation.token,
+          onDelta,
+          maxOutputTokens ?? config.maxOutputTokens,
+        );
       throwIfCancelled(requestCancellation.token);
       if (!response.text.trim()) throw new Error(t('AI provider did not return content.'));
 
@@ -107,6 +125,10 @@ export class AiProviderService {
         inputTokenCount: response.inputTokenCount,
         inputTokenBudget: response.inputTokenBudget,
         maxInputTokens: response.maxInputTokens,
+        maxOutputTokens: response.maxOutputTokens,
+        finishReason: response.finishReason,
+        outputTokenCount: response.outputTokenCount,
+        reasoningTokenCount: response.reasoningTokenCount,
         inputTruncated: response.inputTruncated ?? false,
         streamed: response.streamed,
         streamChunkCount,
@@ -150,6 +172,13 @@ export class AiProviderService {
     if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
       throw new Error(t('AI API URL must use HTTP or HTTPS.'));
     }
+  }
+
+  private resolveMaxOutputTokens(configuredMaximum: number, requestedMaximum?: number): number {
+    const requested = typeof requestedMaximum === 'number' && Number.isFinite(requestedMaximum)
+      ? Math.max(1, Math.floor(requestedMaximum))
+      : configuredMaximum;
+    return Math.min(configuredMaximum, requested);
   }
 
   private async generateWithCopilot(
@@ -278,7 +307,7 @@ export class AiProviderService {
     userMessage: string,
     cancellationToken: vscode.CancellationToken,
     onDelta: (delta: string) => void,
-    maxOutputTokens?: number,
+    maxOutputTokens: number,
   ): Promise<ProviderResponse> {
     const fittedPrompt = this.fitApiPrompt(config.maxInputTokens, systemPrompt, userMessage);
     const controller = new AbortController();
@@ -296,7 +325,7 @@ export class AiProviderService {
           },
           body: JSON.stringify({
             model: config.model,
-            max_tokens: maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+            max_tokens: maxOutputTokens,
             system: fittedPrompt.systemPrompt,
             temperature: GENERATION_TEMPERATURE,
             stream: true,
@@ -319,7 +348,10 @@ export class AiProviderService {
             ],
             temperature: GENERATION_TEMPERATURE,
             stream: true,
-            ...(maxOutputTokens === undefined ? {} : { max_tokens: maxOutputTokens }),
+            ...(config.provider === 'openai' ? { stream_options: { include_usage: true } } : {}),
+            ...(config.provider === 'openai'
+              ? { max_completion_tokens: maxOutputTokens }
+              : { max_tokens: maxOutputTokens }),
           }),
         });
 
@@ -336,6 +368,7 @@ export class AiProviderService {
         inputTokenCount: fittedPrompt.inputTokenCount,
         inputTokenBudget: fittedPrompt.inputTokenBudget,
         maxInputTokens: fittedPrompt.maxInputTokens,
+        maxOutputTokens,
         inputTruncated: fittedPrompt.inputTruncated,
       };
     } finally {

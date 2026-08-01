@@ -11,7 +11,7 @@ import type { ComposerToHostMsg, ComposerWorkingCandidate, HostToComposerMsg } f
 import type { FileDiff } from '../types/git';
 import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
 import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
-import { estimateTokenCount, getContextTokenBudget } from '../ai/tokenBudget';
+import { estimateTokenCount, getContextTokenBudget } from '../ai/inputTokenBudget';
 
 type OpenRequest =
   | { mode: 'working'; candidate: ComposerWorkingCandidate }

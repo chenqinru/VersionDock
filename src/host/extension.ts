@@ -237,7 +237,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiCommitMessageService = new AiCommitMessageService(context, aiProviderService);
   const aiMergeConflictService = new AiMergeConflictService(context, aiProviderService);
   const aiCommitExplanationService = new AiCommitExplanationService(context, aiProviderService);
-  const aiCommitComposerService = new AiCommitComposerService(context, aiProviderService);
+  const aiCommitComposerService = new AiCommitComposerService(context, aiProviderService, logger);
 
   const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger);
 

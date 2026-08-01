@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
+import { calculateCommitMessageOutputTokens } from '../ai/outputTokenBudget';
 import type { AiProvider } from '../ai/types';
 import { t } from '../utils/l10n';
 import { CommitPromptManager } from './CommitPromptManager';
@@ -50,12 +51,15 @@ export class AiCommitMessageService {
     throwIfCancelled(options.cancellationToken);
     const promptResolution = await this.commitPromptManager.resolve(options.context.repoRootPaths);
     throwIfCancelled(options.cancellationToken);
+    const userMessage = this.buildUserMessage(options.context.text, options.context.vcsKinds);
+    const maxOutputTokens = calculateCommitMessageOutputTokens(`${promptResolution.prompt}\n${userMessage}`);
 
     const result = await this.aiProviderService.generate({
       systemPrompt: promptResolution.prompt,
-      userMessage: this.buildUserMessage(options.context.text, options.context.vcsKinds),
+      userMessage,
       cancellationToken: options.cancellationToken,
       onDelta: options.onDelta,
+      maxOutputTokens,
     });
     throwIfCancelled(options.cancellationToken);
 

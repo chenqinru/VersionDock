@@ -30,7 +30,7 @@ import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHist
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
-import { getContextTokenBudget } from '../ai/tokenBudget';
+import { getContextTokenBudget } from '../ai/inputTokenBudget';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE = 3;
@@ -943,6 +943,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         promptSource: result.promptSource,
         inputCharCount: result.inputCharCount,
         inputTruncated: result.inputTruncated,
+        maxOutputTokens: result.maxOutputTokens,
         ...(result.inputTokenCount === undefined ? {} : {
           inputTokenCount: result.inputTokenCount,
           inputTokenBudget: result.inputTokenBudget,

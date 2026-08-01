@@ -51,6 +51,7 @@ export interface AiCommitExplanationGenerateResult {
   inputTokenCount?: number;
   inputTokenBudget?: number;
   maxInputTokens?: number;
+  maxOutputTokens?: number;
   inputTruncated: boolean;
   streamed: boolean;
   streamChunkCount: number;

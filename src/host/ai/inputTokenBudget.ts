@@ -1,3 +1,4 @@
+/** Local input-token estimation, budgeting, truncation, and chunking helpers. */
 const INPUT_TOKEN_RESERVE_MAX = 512;
 const INPUT_TOKEN_RESERVE_MIN = 64;
 const CONTEXT_INSTRUCTION_RESERVE_MAX = 8_192;

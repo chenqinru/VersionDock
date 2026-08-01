@@ -6,7 +6,7 @@ import type { VersionDockLogger } from '../utils/Logger';
 import { t } from '../utils/l10n';
 import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
-import { getContextTokenBudget } from '../ai/tokenBudget';
+import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import type { AiCommitMessageService } from './AiCommitMessageService';
 import type { AiCommitMessageGenerationContext } from './types';
 
@@ -140,6 +140,7 @@ export async function generateHistoricalCommitMessage(
       promptSource: result.promptSource,
       inputCharCount: result.inputCharCount,
       inputTruncated: result.inputTruncated,
+      maxOutputTokens: result.maxOutputTokens,
       streamChunkCount: result.streamChunkCount,
       streamCharCount: result.streamCharCount,
       firstTokenLatencyMs: result.firstTokenLatencyMs,

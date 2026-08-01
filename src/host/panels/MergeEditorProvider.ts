@@ -362,6 +362,7 @@ export class MergeEditorProvider implements vscode.Disposable {
             inputTokenCount: result.inputTokenCount,
             inputTokenBudget: result.inputTokenBudget,
             maxInputTokens: result.maxInputTokens,
+            maxOutputTokens: result.maxOutputTokens,
             streamChunkCount: result.streamChunkCount,
             streamCharCount: result.streamCharCount,
             firstTokenLatencyMs: result.firstTokenLatencyMs,

@@ -221,6 +221,10 @@ Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace pro
 
 AI commit and explanation context is allocated in two phases: repository/commit metadata plus every file summary is added first, then diff hunks are included round-robin across files until the active provider's input limit is reached. This prevents an early large file from consuming the entire input budget. GitHub Copilot uses the selected model's own `maxInputTokens`; other providers use `versiondock.ai.maxInputTokens`.
 
+For non-Copilot providers, `versiondock.ai.maxOutputTokens` is the global output ceiling. Each feature calculates a smaller request budget dynamically: commit messages scale with context complexity, explanations with commit and file counts, Composer with change-unit count, and conflict resolution with the expected replacement-code size. GitHub Copilot controls its own output budget.
+
+AI Commit Composer uses compact request-local unit IDs and validates that every selected change is assigned exactly once. Embedded JSON is recovered locally when possible; malformed JSON receives one focused syntax-repair request, and an output-limit finish can retry once with a larger budget. If an otherwise valid plan omits units, Composer makes one focused coverage-repair request and validates the merged plan again before it can be applied.
+
 Open an extended commit detail page and select **AI Explain** to generate a structured explanation from commit metadata and historical diffs. Use **VersionDock: Edit Commit Explanation Prompt** to customize the explanation. Its workspace prompt is stored at `.vscode/ai-commit-explanation.prompt.md`; the workspace, global, and built-in precedence matches the commit-message prompt. Explanations stay in the current detail page and are not cached on disk.
 
 Use the Log panel to browse history, filter commits or SVN revisions, inspect changed files, open diffs, and run supported branch or revision operations.
@@ -280,6 +284,7 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `versiondock.ai.apiUrl` | `""` | Endpoint URL required by non-Copilot providers. |
 | `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers. |
 | `versiondock.ai.maxInputTokens` | `128000` | Maximum locally estimated input tokens for OpenAI, Claude, Gemini, and Custom requests. Changes apply to the next request; Copilot ignores this setting and uses the selected model's own limit. |
+| `versiondock.ai.maxOutputTokens` | `128000` | Global output-token ceiling for OpenAI, Claude, Gemini, and Custom requests. Each feature dynamically chooses a smaller request budget; Copilot ignores this setting. |
 
 Example:
 

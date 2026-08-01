@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
+import { calculateMergeOutputTokens } from '../ai/outputTokenBudget';
 import { t } from '../utils/l10n';
 import { MergePromptManager } from './MergePromptManager';
 import type {
@@ -9,7 +10,6 @@ import type {
 } from './types';
 
 const CONTEXT_LINES_AROUND_CONFLICT = 30;
-const MERGE_OUTPUT_MAX_TOKENS = 8_192;
 const CONFLICT_MARKER_LINE = /^(?:<{7}|\|{7}|={7}|>{7})(?:\s.*)?$/m;
 
 function throwIfCancelled(token: vscode.CancellationToken): void {
@@ -53,12 +53,26 @@ export class AiMergeConflictService {
 
     const promptResolution = await this.promptManager.resolve(options.repoRootPaths);
     throwIfCancelled(options.cancellationToken);
+    const selectedConflicts = requestedIndexes.map(index => {
+      const conflict = options.file.conflicts.find(candidate => candidate.index === index);
+      if (!conflict) throw new Error(t('Conflict {0} is no longer available. Reopen the Merge Editor.', index + 1));
+      return conflict;
+    });
+    const userMessage = this.buildUserMessage(options, requestedIndexes);
+    const maxOutputTokens = calculateMergeOutputTokens(
+      `${promptResolution.prompt}\n${userMessage}`,
+      selectedConflicts.map(conflict => ({
+        currentText: conflict.oursLines.join('\n'),
+        baseText: conflict.baseLines.join('\n'),
+        incomingText: conflict.theirsLines.join('\n'),
+      })),
+    );
     const result = await this.aiProviderService.generate({
       systemPrompt: promptResolution.prompt,
-      userMessage: this.buildUserMessage(options, requestedIndexes),
+      userMessage,
       cancellationToken: options.cancellationToken,
       onDelta: () => undefined,
-      maxOutputTokens: MERGE_OUTPUT_MAX_TOKENS,
+      maxOutputTokens,
     });
     throwIfCancelled(options.cancellationToken);
     if (result.inputTruncated) {

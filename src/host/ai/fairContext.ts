@@ -1,4 +1,4 @@
-import { TokenBudgetTextBuilder } from './tokenBudget';
+import { TokenBudgetTextBuilder } from './inputTokenBudget';
 
 export interface FairContextEntry {
   summary: string;

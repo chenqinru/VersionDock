@@ -1,5 +1,5 @@
 import type { DiffLine, FileDiff } from '../types/git';
-import { estimateTokenCount, splitLinesByTokenBudget } from './tokenBudget';
+import { estimateTokenCount, splitLinesByTokenBudget } from './inputTokenBudget';
 
 export interface DiffContextOptions {
   linesAroundChange?: number;

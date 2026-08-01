@@ -25,6 +25,7 @@ export interface AiMergeConflictGenerateResult {
   inputTokenCount?: number;
   inputTokenBudget?: number;
   maxInputTokens?: number;
+  maxOutputTokens?: number;
   streamed: boolean;
   streamChunkCount: number;
   streamCharCount: number;

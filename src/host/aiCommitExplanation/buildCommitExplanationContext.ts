@@ -1,7 +1,7 @@
 import type * as vscode from 'vscode';
 import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
-import { getContextTokenBudget } from '../ai/tokenBudget';
+import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { FileDiff } from '../types/git';
 import type {

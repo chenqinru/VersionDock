@@ -3,11 +3,19 @@ import * as vscode from 'vscode';
 export type LogDetails = Record<string, unknown>;
 
 const SENSITIVE_KEY = /(?:password|passwd|api[_-]?key|token|secret|credential|authorization|email)/i;
+// Token accounting fields are numeric diagnostics, not authentication secrets.
+// Keep this as an exact allowlist so accessToken and similar keys stay redacted.
 const SAFE_TOKEN_METRIC_KEYS = new Set([
   'firsttokenlatencyms',
   'inputtokencount',
   'inputtokenbudget',
   'maxinputtokens',
+  'outputtokencount',
+  'outputtokenbudget',
+  'maxoutputtokens',
+  'previousmaxoutputtokens',
+  'retrymaxoutputtokens',
+  'reasoningtokencount',
 ]);
 const EMAIL_ADDRESS = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 

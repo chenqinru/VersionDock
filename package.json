@@ -713,6 +713,14 @@
           "minimum": 4096,
           "description": "%configuration.ai.maxInputTokens.description%"
         },
+        "versiondock.ai.maxOutputTokens": {
+          "order": 125,
+          "type": "number",
+          "default": 128000,
+          "minimum": 1024,
+          "maximum": 128000,
+          "description": "%configuration.ai.maxOutputTokens.description%"
+        },
         "versiondock.changesViewMode": {
           "order": 10,
           "type": "string",

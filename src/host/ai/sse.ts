@@ -3,6 +3,58 @@ import { TextDecoder } from 'util';
 export interface StreamParseResult {
   text: string;
   streamed: boolean;
+  finishReason?: string;
+  outputTokenCount?: number;
+  reasoningTokenCount?: number;
+}
+
+interface ResponseMetadata {
+  finishReason?: string;
+  outputTokenCount?: number;
+  reasoningTokenCount?: number;
+}
+
+function asTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function extractResponseMetadata(payload: unknown): ResponseMetadata {
+  if (!payload || typeof payload !== 'object') return {};
+  const value = payload as {
+    choices?: Array<{ finish_reason?: unknown }>;
+    finish_reason?: unknown;
+    stop_reason?: unknown;
+    delta?: { stop_reason?: unknown };
+    usage?: {
+      completion_tokens?: unknown;
+      output_tokens?: unknown;
+      completion_tokens_details?: { reasoning_tokens?: unknown };
+      output_tokens_details?: { reasoning_tokens?: unknown };
+    };
+    message?: {
+      usage?: {
+        completion_tokens?: unknown;
+        output_tokens?: unknown;
+        completion_tokens_details?: { reasoning_tokens?: unknown };
+        output_tokens_details?: { reasoning_tokens?: unknown };
+      };
+    };
+  };
+  const finishReasonCandidate = value.choices?.[0]?.finish_reason
+    ?? value.finish_reason
+    ?? value.stop_reason
+    ?? value.delta?.stop_reason;
+  const usage = value.usage ?? value.message?.usage;
+  return {
+    finishReason: typeof finishReasonCandidate === 'string' ? finishReasonCandidate : undefined,
+    outputTokenCount: asTokenCount(usage?.completion_tokens ?? usage?.output_tokens),
+    reasoningTokenCount: asTokenCount(
+      usage?.completion_tokens_details?.reasoning_tokens
+      ?? usage?.output_tokens_details?.reasoning_tokens,
+    ),
+  };
 }
 
 function extractStreamDelta(payload: unknown): string {
@@ -51,7 +103,7 @@ export async function parseStreamingResponse(
 ): Promise<StreamParseResult> {
   if (!response.body) {
     const payload = await response.json() as unknown;
-    return { text: extractCompleteMessage(payload), streamed: false };
+    return { text: extractCompleteMessage(payload), streamed: false, ...extractResponseMetadata(payload) };
   }
 
   const reader = response.body.getReader();
@@ -61,6 +113,9 @@ export async function parseStreamingResponse(
   let fullText = '';
   let streamed = false;
   let completed = false;
+  let finishReason: string | undefined;
+  let outputTokenCount: number | undefined;
+  let reasoningTokenCount: number | undefined;
 
   const consumeBlock = (block: string): void => {
     const data = block
@@ -76,7 +131,12 @@ export async function parseStreamingResponse(
     }
 
     try {
-      const delta = extractStreamDelta(JSON.parse(data) as unknown);
+      const payload = JSON.parse(data) as unknown;
+      const metadata = extractResponseMetadata(payload);
+      if (metadata.finishReason !== undefined) finishReason = metadata.finishReason;
+      if (metadata.outputTokenCount !== undefined) outputTokenCount = metadata.outputTokenCount;
+      if (metadata.reasoningTokenCount !== undefined) reasoningTokenCount = metadata.reasoningTokenCount;
+      const delta = extractStreamDelta(payload);
       if (!delta) return;
       streamed = true;
       fullText += delta;
@@ -104,12 +164,18 @@ export async function parseStreamingResponse(
   }
 
   if (!completed && buffer.trim()) consumeBlock(buffer);
-  if (streamed) return { text: fullText, streamed: true };
+  if (streamed) return {
+    text: fullText,
+    streamed: true,
+    finishReason,
+    outputTokenCount,
+    reasoningTokenCount,
+  };
 
   try {
     const payload = JSON.parse(rawResponse) as unknown;
-    return { text: extractCompleteMessage(payload), streamed: false };
+    return { text: extractCompleteMessage(payload), streamed: false, ...extractResponseMetadata(payload) };
   } catch {
-    return { text: '', streamed: false };
+    return { text: '', streamed: false, finishReason, outputTokenCount, reasoningTokenCount };
   }
 }
