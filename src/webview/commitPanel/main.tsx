@@ -27,12 +27,25 @@ function generateId() {
 }
 
 const COMMIT_MESSAGE_HISTORY_LIMIT = 50;
+const COMMIT_MESSAGE_HISTORY_FETCH_LIMIT = 100;
+const GENERATED_COMMIT_MESSAGE_PATTERNS = [
+  /^Merge commit ['"][0-9a-f]{7,40}['"](?: .+)?$/i,
+  /^Merge (?:branch|remote-tracking branch|tag) .+$/i,
+  /^Merge pull request #\d+ from .+$/i,
+  /^Merged in .+ \(pull request #\d+\)$/i,
+  /^(?:Squashed|Merged) ['"].+['"] changes from [0-9a-f]{7,40}(?:\.\.[0-9a-f]{7,40})?$/i,
+];
+
+function isGeneratedCommitMessage(message: string): boolean {
+  const subject = message.split('\n', 1)[0]?.trim() ?? '';
+  return GENERATED_COMMIT_MESSAGE_PATTERNS.some(pattern => pattern.test(subject));
+}
 
 function mergeCommitMessageHistory(...groups: string[][]): string[] {
   const seen = new Set<string>();
   return groups.flat().flatMap(message => {
     const normalized = message.replace(/\r\n/g, '\n').trim();
-    if (!normalized || seen.has(normalized)) return [];
+    if (!normalized || isGeneratedCommitMessage(normalized) || seen.has(normalized)) return [];
     seen.add(normalized);
     return [normalized];
   }).slice(0, COMMIT_MESSAGE_HISTORY_LIMIT);
@@ -441,6 +454,7 @@ export function CommitApp() {
   const [generatingMessage, setGeneratingMessage]   = useState(false);
   const activeGenerateRequestIdRef = useRef<string | null>(null);
   const [commitMessageHistory, setCommitMessageHistory] = useState<string[]>([]);
+  const [commitMessageHistoryLoading, setCommitMessageHistoryLoading] = useState(false);
   const activeCommitMessageHistoryRequestIdRef = useRef<string | null>(null);
   const pendingCommitMessagesRef = useRef<Map<string, string>>(new Map());
   const successfulCommitMessagesRef = useRef<string[]>([]);
@@ -610,6 +624,7 @@ export function CommitApp() {
         case 'COMMIT_MESSAGE_HISTORY_RESULT':
           if (activeCommitMessageHistoryRequestIdRef.current !== msg.requestId) break;
           activeCommitMessageHistoryRequestIdRef.current = null;
+          setCommitMessageHistoryLoading(false);
           setCommitMessageHistory(mergeCommitMessageHistory(
             successfulCommitMessagesRef.current,
             msg.messages,
@@ -1014,11 +1029,14 @@ export function CommitApp() {
     if (repoIds.length === 0) {
       activeCommitMessageHistoryRequestIdRef.current = null;
       setCommitMessageHistory([]);
+      setCommitMessageHistoryLoading(false);
       return;
     }
     const requestId = generateId();
     activeCommitMessageHistoryRequestIdRef.current = requestId;
-    send({ type: 'COMMIT_REQUEST_MESSAGE_HISTORY', requestId, repoIds, limit: COMMIT_MESSAGE_HISTORY_LIMIT });
+    setCommitMessageHistory([]);
+    setCommitMessageHistoryLoading(true);
+    send({ type: 'COMMIT_REQUEST_MESSAGE_HISTORY', requestId, repoIds, limit: COMMIT_MESSAGE_HISTORY_FETCH_LIMIT });
     return () => {
       if (activeCommitMessageHistoryRequestIdRef.current === requestId) {
         activeCommitMessageHistoryRequestIdRef.current = null;
@@ -1964,6 +1982,7 @@ export function CommitApp() {
           <UnifiedCommitForm
             message={store.commitMessage}
             messageHistory={commitMessageHistory}
+            messageHistoryLoading={commitMessageHistoryLoading}
             repoStatuses={repos}
             repoMetas={store.repoMetas}
             amendFlags={store.amendFlags}

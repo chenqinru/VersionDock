@@ -4,10 +4,12 @@ import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { CommitMessageHistoryModal } from './CommitMessageHistoryModal';
 
 interface Props {
   message: string;
   messageHistory: string[];
+  messageHistoryLoading: boolean;
   repoStatuses: RepoStatus[];
   repoMetas: RepoMeta[];
   amendFlags: Record<string, boolean>;
@@ -171,7 +173,7 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
 }
 
 export function UnifiedCommitForm({
-  message, messageHistory, repoStatuses, repoMetas, amendFlags,
+  message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
   onAutopilot, onStopAutopilot, onOpenComposer, generatingMessage,
 }: Props) {
@@ -214,6 +216,7 @@ export function UnifiedCommitForm({
   const resizeDragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
   const [manualTextareaHeight, setManualTextareaHeight] = useState<number | null>(null);
   const [resizingTextarea, setResizingTextarea] = useState(false);
+  const [messageHistoryOpen, setMessageHistoryOpen] = useState(false);
 
   messageRef.current = message;
 
@@ -288,6 +291,20 @@ export function UnifiedCommitForm({
     historyDraftRef.current = messageRef.current;
     appliedHistoryMessageRef.current = null;
   }, [messageHistory]);
+
+  const applyMessageFromHistory = useCallback((nextMessage: string) => {
+    historyIndexRef.current = -1;
+    historyDraftRef.current = nextMessage;
+    appliedHistoryMessageRef.current = null;
+    onMessageChange(nextMessage);
+    setMessageHistoryOpen(false);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(nextMessage.length, nextMessage.length);
+    });
+  }, [onMessageChange]);
 
   useEffect(() => {
     window.addEventListener('resize', resizeTextarea);
@@ -448,6 +465,16 @@ export function UnifiedCommitForm({
           >
             <Codicon name="wand" style={{ fontSize: 15 }} />
           </button>
+          <button
+            data-action-btn=""
+            style={styles.commitOptionButton(loading || generatingMessage)}
+            disabled={loading || generatingMessage}
+            aria-label={t('Commit message history')}
+            title={t('View commit message history')}
+            onClick={() => setMessageHistoryOpen(true)}
+          >
+            <Codicon name="history" style={{ fontSize: 15 }} />
+          </button>
         </div>
       </div>
 
@@ -605,6 +632,15 @@ export function UnifiedCommitForm({
           />
         </div>
       </div>
+
+      {messageHistoryOpen && (
+        <CommitMessageHistoryModal
+          messages={messageHistory}
+          loading={messageHistoryLoading}
+          onSelect={applyMessageFromHistory}
+          onClose={() => setMessageHistoryOpen(false)}
+        />
+      )}
 
     </div>
   );
