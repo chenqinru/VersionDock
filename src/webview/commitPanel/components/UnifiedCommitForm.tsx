@@ -352,9 +352,6 @@ export function UnifiedCommitForm({
           filter: brightness(0.7);
         }
       }
-      @media (max-width: 360px) {
-        .versiondock-composer-button-label { display: none; }
-      }
       .gs-commit-textarea::-webkit-scrollbar {
         width: 6px;
         background: var(--vscode-input-background);
@@ -427,18 +424,32 @@ export function UnifiedCommitForm({
         </div>
       )}
 
-      {/* Amend toggle — shown above textarea when a single repo is selected */}
-      {showAmend && (
-        <label style={styles.amendLabel} title={t('Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.')}>
-          <input
-            type="checkbox"
-            checked={amend}
-            onChange={() => onAmendToggle(amendRepoId!)}
-            style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
-          />
-          {t('Amend last commit')}
-        </label>
-      )}
+      {/* Commit options and shortcut actions */}
+      <div style={styles.commitOptionsRow}>
+        {showAmend && (
+          <label style={styles.amendLabel} title={t('Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.')}>
+            <input
+              type="checkbox"
+              checked={amend}
+              onChange={() => onAmendToggle(amendRepoId!)}
+              style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
+            />
+            {t('Amend last commit')}
+          </label>
+        )}
+        <div style={styles.commitOptionActions}>
+          <button
+            data-action-btn=""
+            style={styles.commitOptionButton(commitTargets.length === 0 || loading)}
+            disabled={commitTargets.length === 0 || loading}
+            aria-label={t('AI Split')}
+            title={t('Split selected changes into meaningful commits with AI')}
+            onClick={onOpenComposer}
+          >
+            <Codicon name="wand" style={{ fontSize: 15 }} />
+          </button>
+        </div>
+      </div>
 
       {/* Message textarea — auto-height until manually resized */}
       <div style={styles.textareaWrap}>
@@ -544,18 +555,9 @@ export function UnifiedCommitForm({
         </button>
       </div>
 
-      {/* Amend + actions row */}
+      {/* Save and commit actions */}
       <div style={styles.actionsRow}>
         <div style={styles.leftActions}>
-          <button
-            style={styles.composerButton(commitTargets.length === 0 || loading)}
-            disabled={commitTargets.length === 0 || loading}
-            title={t('Split selected changes into meaningful commits with AI')}
-            onClick={onOpenComposer}
-          >
-            <Codicon name="sparkle-filled" style={{ fontSize: 13 }} />
-            <span className="versiondock-composer-button-label">{t('AI Split')}</span>
-          </button>
           {showGitActions && (
             <DropdownButton
               variant="secondary"
@@ -741,20 +743,32 @@ const styles = {
     gap: '6px',
     flexShrink: 0,
   },
-  composerButton: (disabled: boolean): React.CSSProperties => ({
+  commitOptionsRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    minHeight: '22px',
+  } as React.CSSProperties,
+  commitOptionActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+  } as React.CSSProperties,
+  commitOptionButton: (disabled: boolean): React.CSSProperties => ({
+    width: '22px',
+    height: '22px',
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '5px',
-    padding: '5px 9px',
+    justifyContent: 'center',
+    padding: 0,
     border: 'none',
     borderRadius: '4px',
-    background: 'linear-gradient(125deg, #7657ff, #2f8fff)',
-    color: '#fff',
+    background: 'transparent',
+    color: 'var(--vscode-foreground)',
     boxShadow: 'none',
     cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.42 : 1,
-    whiteSpace: 'nowrap',
-    fontSize: '11px',
+    opacity: disabled ? 0.35 : 0.75,
+    flexShrink: 0,
   }),
   rightActions: {
     flex: 1,
