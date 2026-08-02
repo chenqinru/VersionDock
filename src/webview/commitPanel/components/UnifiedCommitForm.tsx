@@ -31,6 +31,7 @@ interface Props {
   onAutopilot: () => void;
   onStopAutopilot: () => void;
   onOpenComposer: () => void;
+  onOpenCodeReview: () => void;
   generatingMessage: boolean;
 }
 
@@ -175,7 +176,7 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
 export function UnifiedCommitForm({
   message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
-  onAutopilot, onStopAutopilot, onOpenComposer, generatingMessage,
+  onAutopilot, onStopAutopilot, onOpenComposer, onOpenCodeReview, generatingMessage,
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
 
@@ -455,6 +456,16 @@ export function UnifiedCommitForm({
           </label>
         )}
         <div style={styles.commitOptionActions}>
+          <button
+            data-action-btn=""
+            style={styles.commitOptionButton(commitTargets.length === 0 || loading)}
+            disabled={commitTargets.length === 0 || loading}
+            aria-label={t('AI Review')}
+            title={t('Review selected changes with AI')}
+            onClick={onOpenCodeReview}
+          >
+            <Codicon name="sparkle-filled" style={{ fontSize: 15 }} />
+          </button>
           <button
             data-action-btn=""
             style={styles.commitOptionButton(commitTargets.length === 0 || loading)}

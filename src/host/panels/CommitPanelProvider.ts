@@ -28,6 +28,8 @@ import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageS
 import type { AiCommitMessageGenerationContext } from '../aiCommitMessage/types';
 import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
+import type { AiCodeReviewProvider } from './AiCodeReviewProvider';
+import type { CodeReviewDiffSource } from '../aiCodeReview/types';
 import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
@@ -65,6 +67,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private logProvider?: GitLogPanelProvider;
   private undockedPanel?: UndockedPanelProvider;
   private aiCommitComposerProvider?: AiCommitComposerProvider;
+  private aiCodeReviewProvider?: AiCodeReviewProvider;
   private changelistService?: ChangelistService;
   private badgeController?: import('../ui/BadgeController').BadgeController;
   private readonly replyTarget = new AsyncLocalStorage<'sidebar' | 'undocked'>();
@@ -105,6 +108,31 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   setAiCommitComposerProvider(provider: AiCommitComposerProvider): void {
     this.aiCommitComposerProvider = provider;
+  }
+
+  setAiCodeReviewProvider(provider: AiCodeReviewProvider): void {
+    this.aiCodeReviewProvider = provider;
+  }
+
+  async openCodeReviewDiff(repoId: string, filePath: string, source: CodeReviewDiffSource): Promise<void> {
+    const repo = this.manager.getRepo(repoId);
+    if (!repo) throw new Error(t('Repo not found'));
+    if (repo.kind === 'svn') {
+      await this.openSvnWorkingDiffEditor(repo, filePath);
+      return;
+    }
+    const resolved = repo.resolveRepoPath(filePath);
+    const absoluteUri = vscode.Uri.file(resolved.absolutePath);
+    const title = source === 'staged'
+      ? t('{0} (Index ↔ HEAD)', resolved.relativePath)
+      : t('{0} (Working Tree ↔ Index)', resolved.relativePath);
+    const leftUri = toGitUri(resolved.absolutePath, source === 'staged' ? '~' : '');
+    let rightUri = source === 'staged' ? toGitUri(resolved.absolutePath, '') : absoluteUri;
+    if (source === 'working' && !fs.existsSync(resolved.absolutePath)) {
+      rightUri = ShelveDocumentProvider.buildUri(repo.repoId, `review-empty-${Date.now()}`, resolved.relativePath);
+      this.shelveDocProvider.set(rightUri, '');
+    }
+    await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
   }
 
   handleUndockedMessage(msg: CommitToHostMsg, _provider: UndockedPanelProvider): void {
@@ -2827,6 +2855,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         await this.aiCommitComposerProvider.openWorking(msg.candidates);
+        break;
+      }
+
+      case 'COMMIT_OPEN_AI_REVIEW': {
+        if (!this.aiCodeReviewProvider) {
+          vscode.window.showErrorMessage(t('AI Code Review is unavailable.'));
+          return;
+        }
+        this.aiCodeReviewProvider.open(msg.candidates);
         break;
       }
 

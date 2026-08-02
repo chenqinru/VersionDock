@@ -37,6 +37,18 @@ export function calculateCommitExplanationOutputTokens(
   return roundUpOutputTokens(estimated, EXPLANATION_MIN_OUTPUT_TOKENS);
 }
 
+/** Code review reports need room for evidence, impact, and remediation per finding. */
+export function calculateCodeReviewOutputTokens(
+  promptText: string,
+  fileCount: number,
+): number {
+  const inputTokens = estimateTokenCount(promptText);
+  const estimated = 2_048
+    + inputTokens * 0.06
+    + normalizeCount(fileCount) * 192;
+  return roundUpOutputTokens(estimated, EXPLANATION_MIN_OUTPUT_TOKENS);
+}
+
 /** Composer output must carry every unit ID plus messages and rationales for its groups. */
 export function calculateComposerOutputTokens(promptText: string, unitIds: string[]): number {
   const inputTokens = estimateTokenCount(promptText);

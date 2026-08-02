@@ -16,6 +16,13 @@ import type {
   ComposerCommitGroup,
   ComposerPreparedSource,
 } from '../aiCommitComposer/types';
+import type {
+  CodeReviewCandidate,
+  CodeReviewFinding,
+  CodeReviewReport,
+} from '../aiCodeReview/types';
+
+export type { CodeReviewCandidate } from '../aiCodeReview/types';
 
 export interface MergeParentCommit {
   hash: string;
@@ -193,6 +200,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_GENERATE_MESSAGE'; requestId: string; repoIds?: string[]; targets?: CommitGenerateMessageTarget[] }
   | { type: 'COMMIT_CANCEL_GENERATE_MESSAGE'; requestId: string }
   | { type: 'COMMIT_OPEN_AI_COMPOSER'; candidates: ComposerWorkingCandidate[] }
+  | { type: 'COMMIT_OPEN_AI_REVIEW'; candidates: CodeReviewCandidate[] }
   | { type: 'SHELVE_LIST'; requestId: string; repoId: string }
   | { type: 'SHELVE_PUSH'; requestId: string; repoId: string; name: string; paths?: string[] }
   | { type: 'SHELVE_APPLY'; requestId: string; repoId: string; shelveId: string; paths?: string[] }
@@ -424,6 +432,24 @@ export type ComposerToHostMsg =
   | { type: 'COMPOSER_APPLY'; groups: ComposerCommitGroup[] }
   | { type: 'COMPOSER_CLOSE' }
   | { type: 'COMPOSER_WEBVIEW_ERROR'; message: string; stack?: string };
+
+// ─── AI Code Review ─────────────────────────────────────────────────────────
+
+export type CodeReviewPhase = 'scanning' | 'analyzing' | 'validating' | 'completed' | 'error';
+
+export type HostToCodeReviewMsg =
+  | { type: 'CODE_REVIEW_PHASE'; phase: CodeReviewPhase; detail: string; fileCount?: number; repositoryCount?: number; truncated?: boolean; streamCharCount?: number }
+  | { type: 'CODE_REVIEW_RESULT'; report: CodeReviewReport; provider: string; model?: string; promptSource: 'workspace' | 'global' | 'builtin'; durationMs: number; truncated: boolean }
+  | { type: 'CODE_REVIEW_CANCELLED' }
+  | { type: 'CODE_REVIEW_ERROR'; error: string }
+  | { type: 'CODE_REVIEW_STALE'; finding: CodeReviewFinding };
+
+export type CodeReviewToHostMsg =
+  | { type: 'CODE_REVIEW_READY' }
+  | { type: 'CODE_REVIEW_RERUN' }
+  | { type: 'CODE_REVIEW_CANCEL' }
+  | { type: 'CODE_REVIEW_OPEN_DIFF'; finding: CodeReviewFinding }
+  | { type: 'CODE_REVIEW_WEBVIEW_ERROR'; message: string; stack?: string };
 
 // ─── Conflicts: Host → WebView ─────────────────────────────────────────────
 

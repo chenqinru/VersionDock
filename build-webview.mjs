@@ -14,6 +14,7 @@ const apps = [
   { name: 'mergeEditor', entry: 'src/webview/mergeEditor/main.tsx' },
   { name: 'conflicts',   entry: 'src/webview/conflicts/main.tsx' },
   { name: 'aiCommitComposer', entry: 'src/webview/aiCommitComposer/main.tsx' },
+  { name: 'aiCodeReview', entry: 'src/webview/aiCodeReview/main.tsx' },
 ];
 
 /** @returns {import('esbuild').BuildOptions} */

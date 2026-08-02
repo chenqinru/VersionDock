@@ -10,7 +10,7 @@ export function generateNonce(): string {
 export function getWebviewHtml(
   webview: vscode.Webview,
   extensionUri: vscode.Uri,
-  appName: 'commitPanel' | 'gitLog' | 'mergeEditor' | 'conflicts' | 'undockedPanel' | 'aiCommitComposer',
+  appName: 'commitPanel' | 'gitLog' | 'mergeEditor' | 'conflicts' | 'undockedPanel' | 'aiCommitComposer' | 'aiCodeReview',
   title: string,
   initialConfig?: Record<string, unknown>,
 ): string {

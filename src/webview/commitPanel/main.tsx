@@ -1445,6 +1445,26 @@ export function CommitApp() {
     send({ type: 'COMMIT_OPEN_AI_COMPOSER', candidates });
   }, [send, vscodeSelectedRepos]);
 
+  const openCodeReview = useCallback(() => {
+    const freshState = useCommitStore.getState();
+    const currentRepos = freshState.status?.repos ?? [];
+    const metaById = new Map(freshState.repoMetas.map(meta => [meta.id, meta]));
+    const candidates = currentRepos.flatMap(repo => {
+      if (freshState.changesViewMode === 'vscode') {
+        if (!vscodeSelectedRepos.has(repo.repoId)) return [];
+        const isSvn = metaById.get(repo.repoId)?.kind === 'svn';
+        const paths = isSvn
+          ? Array.from(new Set([...repo.stagedFiles, ...repo.unstagedFiles].map(file => file.path)))
+          : repo.stagedFiles.map(file => file.path);
+        return paths.length ? [{ repoId: repo.repoId, paths, stagedOnly: !isSvn }] : [];
+      }
+      if (freshState.repoSelections[repo.repoId] === false) return [];
+      const paths = freshState.getSelectedFilesForRepo(repo.repoId);
+      return paths.length ? [{ repoId: repo.repoId, paths, stagedOnly: false }] : [];
+    });
+    send({ type: 'COMMIT_OPEN_AI_REVIEW', candidates });
+  }, [send, vscodeSelectedRepos]);
+
   // ── Loading / empty states ────────────────────────────────────────────────
 
   if (repos.length === 0 && !store.status) {
@@ -2011,6 +2031,7 @@ export function CommitApp() {
             onAutopilot={doAutopilot}
             onStopAutopilot={stopAutopilot}
             onOpenComposer={openComposer}
+            onOpenCodeReview={openCodeReview}
             generatingMessage={generatingMessage}
             onShelve={() => {
               const name = store.commitMessage.trim();

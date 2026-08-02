@@ -190,6 +190,14 @@
         "title": "%commands.aiCommitComposer.resetPrompt.title%"
       },
       {
+        "command": "versiondock.aiCodeReview.editPrompt",
+        "title": "%commands.aiCodeReview.editPrompt.title%"
+      },
+      {
+        "command": "versiondock.aiCodeReview.resetPrompt",
+        "title": "%commands.aiCodeReview.resetPrompt.title%"
+      },
+      {
         "command": "versiondock.openGitAnnotations",
         "title": "%commands.openGitAnnotations.title%",
         "icon": "$(git-commit)"

@@ -29,6 +29,8 @@
   "commands.aiCommitExplanation.resetPrompt.title": "VersionDock: Reset Commit Explanation Prompt",
   "commands.aiCommitComposer.editPrompt.title": "VersionDock: Edit AI Commit Composer Prompt",
   "commands.aiCommitComposer.resetPrompt.title": "VersionDock: Reset AI Commit Composer Prompt",
+  "commands.aiCodeReview.editPrompt.title": "VersionDock: Edit AI Code Review Prompt",
+  "commands.aiCodeReview.resetPrompt.title": "VersionDock: Reset AI Code Review Prompt",
   "commands.openGitAnnotations.title": "Enable Git Annotations",
   "commands.closeGitAnnotations.title": "Disable Git Annotations",
   "commands.openGitGhostText.title": "Enable Git ghost text",
