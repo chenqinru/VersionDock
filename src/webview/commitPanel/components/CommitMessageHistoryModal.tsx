@@ -12,11 +12,21 @@ interface Props {
 
 export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose }: Props) {
   useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
+    const keyHandler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    const blurHandler = () => onClose();
+    const visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') onClose();
+    };
+    document.addEventListener('keydown', keyHandler);
+    document.addEventListener('visibilitychange', visibilityHandler);
+    window.addEventListener('blur', blurHandler);
+    return () => {
+      document.removeEventListener('keydown', keyHandler);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.removeEventListener('blur', blurHandler);
+    };
   }, [onClose]);
 
   return createPortal(
