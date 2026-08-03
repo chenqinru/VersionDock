@@ -886,10 +886,9 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       border: none;
       border-radius: 6px; cursor: pointer;
       background: linear-gradient(125deg, #7657ff, #2f8fff);
-      background-size: 100% 100%; background-position: 0 0;
       color: #ffffff; font: inherit; font-size: 12px; font-weight: 600;
       box-shadow: none; white-space: nowrap;
-      transition: filter 140ms ease, transform 140ms ease, background-position 240ms ease;
+      transition: filter 140ms ease, transform 140ms ease;
     }
     .ai-explain-btn > * { position: relative; z-index: 2; }
     .ai-explain-btn::after {
@@ -905,7 +904,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px;
     }
     .ai-explain-btn[data-busy="true"] {
-      background-position: 100% 0;
       animation: aiButtonBreathe 1.8s ease-in-out infinite;
     }
     .ai-explain-btn[data-busy="true"] .codicon { animation: aiStopBreathe 1.1s ease-in-out infinite; }
@@ -1048,7 +1046,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       .ai-explain-btn, .ai-explain-btn .codicon, .ai-explain-btn::after,
       .ai-thinking-dots i, .ai-cursor { animation: none !important; transition: none !important; }
       .ai-explain-btn:hover:not(:disabled) { transform: none; }
-      .ai-explain-btn::after { opacity: 0 !important; }
       .ai-cursor { opacity: 1; }
     }
     .section-label {

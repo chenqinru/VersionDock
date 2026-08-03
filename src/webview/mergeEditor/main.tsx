@@ -89,8 +89,6 @@ const AI_MERGE_STYLES = `
     pointer-events: none;
     opacity: 0;
     z-index: 1;
-  }
-  .versiondock-ai-resolve-button::after {
     top: -55%;
     left: -28%;
     width: 10%;
@@ -137,7 +135,6 @@ const AI_MERGE_STYLES = `
     .versiondock-ai-resolve-button::after,
     .versiondock-ai-status::after,
     .versiondock-ai-orbit { animation: none !important; }
-    .versiondock-ai-resolve-button::after { opacity: 0 !important; }
   }
 `;
 
@@ -785,7 +782,7 @@ function App() {
           type="button"
           className="versiondock-ai-resolve-button"
           data-running={aiBusy || undefined}
-          style={styles.aiResolveButton(aiBusy, unresolved === 0 && !aiBusy)}
+          style={styles.aiResolveButton(unresolved === 0 && !aiBusy)}
           disabled={unresolved === 0 && !aiBusy}
           onClick={aiBusy ? stopAiResolution : startAiResolution}
           title={aiBusy ? t('Stop AI conflict resolution') : t('Resolve all remaining conflicts with AI')}
@@ -909,7 +906,7 @@ const styles = {
   pathHeader: { height: 40, display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px 0 12px', borderBottom: '1px solid var(--vscode-panel-border)', flexShrink: 0 },
   fileIcon: { width: 16, height: 16, flexShrink: 0 } as React.CSSProperties,
   pathText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 },
-  aiResolveButton: (running: boolean, disabled: boolean): React.CSSProperties => ({
+  aiResolveButton: (disabled: boolean): React.CSSProperties => ({
     minWidth: 0,
     height: 28,
     display: 'inline-flex',
@@ -921,8 +918,6 @@ const styles = {
     borderRadius: 6,
     boxSizing: 'border-box',
     background: 'linear-gradient(125deg, #7657ff, #2f8fff)',
-    backgroundSize: '100% 100%',
-    backgroundPosition: running ? '100% 0' : '0 0',
     color: '#ffffff',
     fontFamily: 'var(--vscode-font-family)',
     fontSize: 12,
@@ -930,7 +925,7 @@ const styles = {
     whiteSpace: 'nowrap',
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.5 : 1,
-    transition: 'filter 140ms ease, transform 140ms ease, background-position 240ms ease',
+    transition: 'filter 140ms ease, transform 140ms ease',
   }),
   aiResolveIcon: { fontSize: 15, lineHeight: '15px', color: 'currentColor' },
   error: { padding: '6px 12px', color: 'var(--vscode-inputValidation-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)', borderBottom: '1px solid var(--vscode-inputValidation-errorBorder)', fontSize: 12 },
