@@ -102,3 +102,11 @@ export function calculateMergeOutputTokens(
     + conflicts.length * 256;
   return roundUpOutputTokens(estimated, STRUCTURED_MIN_OUTPUT_TOKENS);
 }
+
+/** Format repair preserves the original resolution text while restoring valid JSON. */
+export function calculateMergeJsonRepairOutputTokens(promptText: string, responseText: string): number {
+  const inputTokens = estimateTokenCount(promptText);
+  const responseTokens = estimateTokenCount(responseText);
+  const estimated = 1_024 + inputTokens * 0.02 + responseTokens * 1.25;
+  return roundUpOutputTokens(estimated, STRUCTURED_MIN_OUTPUT_TOKENS);
+}

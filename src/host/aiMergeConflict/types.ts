@@ -10,6 +10,7 @@ export interface AiMergeConflictResolution {
 }
 
 export interface AiMergeConflictGenerateOptions {
+  requestId: string;
   file: MergeConflictFile;
   conflictIndexes: number[];
   repoRootPaths: string[];
@@ -26,9 +27,15 @@ export interface AiMergeConflictGenerateResult {
   inputTokenBudget?: number;
   maxInputTokens?: number;
   maxOutputTokens?: number;
+  finishReason?: string;
+  outputTokenCount?: number;
+  reasoningTokenCount?: number;
   streamed: boolean;
   streamChunkCount: number;
   streamCharCount: number;
   firstTokenLatencyMs?: number;
   durationMs: number;
+  responseCharCount: number;
+  responseParseMode: 'direct' | 'embedded' | 'repaired';
+  repairResponseCharCount?: number;
 }

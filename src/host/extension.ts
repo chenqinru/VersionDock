@@ -237,7 +237,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const profileService = new GitProfileService(context, logger);
   const aiProviderService = new AiProviderService();
   const aiCommitMessageService = new AiCommitMessageService(context, aiProviderService);
-  const aiMergeConflictService = new AiMergeConflictService(context, aiProviderService);
+  const aiMergeConflictService = new AiMergeConflictService(context, aiProviderService, logger);
   const aiCommitExplanationService = new AiCommitExplanationService(context, aiProviderService);
   const aiCommitComposerService = new AiCommitComposerService(context, aiProviderService, logger);
   const aiCodeReviewService = new AiCodeReviewService(context, aiProviderService);

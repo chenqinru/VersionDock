@@ -336,6 +336,7 @@ export class MergeEditorProvider implements vscode.Disposable {
           }
 
           const result = await this.aiMergeConflictService.generate({
+            requestId: msg.requestId,
             file,
             conflictIndexes: msg.conflictIndexes,
             repoRootPaths: [repo.rootPath],
@@ -363,6 +364,12 @@ export class MergeEditorProvider implements vscode.Disposable {
             inputTokenBudget: result.inputTokenBudget,
             maxInputTokens: result.maxInputTokens,
             maxOutputTokens: result.maxOutputTokens,
+            finishReason: result.finishReason,
+            outputTokenCount: result.outputTokenCount,
+            reasoningTokenCount: result.reasoningTokenCount,
+            responseCharCount: result.responseCharCount,
+            responseParseMode: result.responseParseMode,
+            repairResponseCharCount: result.repairResponseCharCount,
             streamChunkCount: result.streamChunkCount,
             streamCharCount: result.streamCharCount,
             firstTokenLatencyMs: result.firstTokenLatencyMs,

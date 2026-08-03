@@ -67,12 +67,47 @@ const AI_MERGE_STYLES = `
     0%, 100% { transform: scale(1); opacity: 0.85; }
     50% { transform: scale(1.16); opacity: 1; }
   }
+  @keyframes versiondock-ai-slash-edge {
+    0% { transform: translate3d(0, 0, 0) skewX(-22deg); opacity: 0; }
+    22% { opacity: 0.35; }
+    48% { opacity: 1; }
+    100% { transform: translate3d(1550%, 0, 0) skewX(-22deg); opacity: 0; }
+  }
+  .versiondock-ai-resolve-button {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    box-shadow: none;
+  }
+  .versiondock-ai-resolve-button > * {
+    position: relative;
+    z-index: 2;
+  }
+  .versiondock-ai-resolve-button::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 1;
+  }
+  .versiondock-ai-resolve-button::after {
+    top: -55%;
+    left: -28%;
+    width: 10%;
+    height: 210%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.96), transparent);
+    box-shadow: 0 0 5px rgba(222, 239, 255, 0.7);
+  }
   .versiondock-ai-resolve-button:hover:not(:disabled) {
-    filter: brightness(1.1) saturate(1.08);
+    filter: brightness(1.08);
     transform: translateY(-1px);
+  }
+  .versiondock-ai-resolve-button:hover:not(:disabled)::after {
+    animation: versiondock-ai-slash-edge 880ms cubic-bezier(0.22, 0.7, 0.22, 1) both;
   }
   .versiondock-ai-resolve-button:active:not(:disabled) {
     transform: translateY(0);
+    filter: brightness(0.98);
   }
   .versiondock-ai-resolve-button:focus-visible {
     outline: 1px solid var(--vscode-focusBorder);
@@ -99,8 +134,10 @@ const AI_MERGE_STYLES = `
   @media (prefers-reduced-motion: reduce) {
     .versiondock-ai-resolve-button,
     .versiondock-ai-resolve-button .codicon,
+    .versiondock-ai-resolve-button::after,
     .versiondock-ai-status::after,
     .versiondock-ai-orbit { animation: none !important; }
+    .versiondock-ai-resolve-button::after { opacity: 0 !important; }
   }
 `;
 
@@ -883,11 +920,10 @@ const styles = {
     border: 'none',
     borderRadius: 6,
     boxSizing: 'border-box',
-    background: 'linear-gradient(100deg, #7514d7 0%, #7b2ee2 44%, #4058f4 100%)',
-    backgroundSize: '120% 100%',
+    background: 'linear-gradient(125deg, #7657ff, #2f8fff)',
+    backgroundSize: '100% 100%',
     backgroundPosition: running ? '100% 0' : '0 0',
     color: '#ffffff',
-    boxShadow: 'none',
     fontFamily: 'var(--vscode-font-family)',
     fontSize: 12,
     fontWeight: 600,
