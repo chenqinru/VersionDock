@@ -101,7 +101,10 @@ export class AiCommitComposerProvider implements vscode.Disposable {
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.extensionUri] },
     );
-    panel.iconPath = new vscode.ThemeIcon('sparkle-filled');
+    panel.iconPath = {
+      light: vscode.Uri.joinPath(this.extensionUri, 'media', 'icons', 'ai-commit-composer-light.svg'),
+      dark: vscode.Uri.joinPath(this.extensionUri, 'media', 'icons', 'ai-commit-composer-dark.svg'),
+    };
     this.panel = panel;
     panel.webview.onDidReceiveMessage((message: ComposerToHostMsg) => void this.handleMessage(message));
     panel.onDidDispose(() => {

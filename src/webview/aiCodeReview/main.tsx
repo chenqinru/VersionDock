@@ -200,7 +200,7 @@ function App() {
   return (
     <main className="review-shell" data-running={running ? 'true' : 'false'}>
       <header className="review-header">
-        <div className="review-orb" aria-hidden="true"><Codicon name="sparkle-filled" style={{ fontSize: 19 }} /></div>
+        <div className="review-orb" aria-hidden="true"><Codicon name="search-sparkle" style={{ fontSize: 19 }} /></div>
         <div className="review-heading">
           <div className="review-title">{t('AI Code Review')}</div>
           <div className="review-subtitle">

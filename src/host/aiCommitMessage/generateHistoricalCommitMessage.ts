@@ -132,7 +132,6 @@ export async function generateHistoricalCommitMessage(
       options.onMessage(result.message);
     }
 
-    options.logger?.info('AICommitMessage', `Generated historical commit message\n${result.message}`);
     options.logger?.info('AICommitMessage', 'Historical generation completed', {
       requestId: options.requestId,
       provider: result.provider,

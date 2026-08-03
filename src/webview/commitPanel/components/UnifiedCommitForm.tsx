@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { RepoMeta, RepoStatus } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
+import { AiCommitComposerIcon } from '../../shared/AiCommitComposerIcon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
@@ -472,10 +473,7 @@ export function UnifiedCommitForm({
             title={t('Split selected changes into meaningful commits with AI')}
             onClick={onOpenComposer}
           >
-            <span style={styles.aiSplitIcon}>
-              <Codicon name="layers" style={styles.aiSplitLayersIcon} />
-              <Codicon name="sparkle-filled" style={styles.aiSplitSparkleIcon} />
-            </span>
+            <AiCommitComposerIcon />
           </button>
           <button
             data-action-btn=""
@@ -834,25 +832,6 @@ const styles = {
     opacity: disabled ? 0.35 : 0.75,
     flexShrink: 0,
   }),
-  aiSplitIcon: {
-    position: 'relative',
-    display: 'inline-block',
-    width: '16px',
-    height: '16px',
-    pointerEvents: 'none',
-  } as React.CSSProperties,
-  aiSplitLayersIcon: {
-    position: 'absolute',
-    left: 0,
-    bottom: 0,
-    fontSize: '14px',
-  } as React.CSSProperties,
-  aiSplitSparkleIcon: {
-    position: 'absolute',
-    top: '-2px',
-    right: '-2px',
-    fontSize: '10px',
-  } as React.CSSProperties,
   rightActions: {
     flex: 1,
     minWidth: 0,

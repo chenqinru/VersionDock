@@ -8,6 +8,7 @@ import type { RepoMeta } from '../../shared/types';
 import { groupRefs, branchColor, tagColor, headColor } from '../utils/refs';
 import type { RefGroup } from '../utils/refs';
 import { Codicon } from '../../shared/Codicon';
+import { AiCommitComposerIcon } from '../../shared/AiCommitComposerIcon';
 import { getVsCodeApi } from '../../shared/vscodeApi';
 import type { LogToHostMsg } from '../../../host/types/messages';
 import { AuthorAvatar, formatAuthorIdentity } from './AuthorAvatar';
@@ -982,7 +983,7 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
                   hashes: sortedNewestFirst.map(selectedCommit => selectedCommit.hash),
                 })}
               >
-                <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+                <AiCommitComposerIcon style={ctxStyles.icon} />
                 <span>{t('AI Reorganize Commits')}</span>
               </div>
               <div
@@ -1105,7 +1106,7 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
                   hashes: [commit.hash],
                 })}
               >
-                <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+                <AiCommitComposerIcon style={ctxStyles.icon} />
                 <span>{t('AI Reorganize Commits')}</span>
               </div>
             )}

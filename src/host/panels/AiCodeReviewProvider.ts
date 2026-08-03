@@ -41,7 +41,7 @@ export class AiCodeReviewProvider implements vscode.Disposable {
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.extensionUri] },
     );
-    panel.iconPath = new vscode.ThemeIcon('sparkle-filled');
+    panel.iconPath = new vscode.ThemeIcon('search-sparkle');
     this.panel = panel;
     panel.webview.onDidReceiveMessage((message: CodeReviewToHostMsg) => void this.handleMessage(message));
     panel.onDidDispose(() => {

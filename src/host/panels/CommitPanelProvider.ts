@@ -963,7 +963,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         onMessage(result.message);
       }
 
-      this.logger?.info('AICommitMessage', `Generated commit message\n${result.message}`);
       this.logger?.info('AICommitMessage', 'Generation completed', {
         requestId,
         provider: result.provider,

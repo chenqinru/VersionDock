@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import type { ComposerApplyResult, ComposerChangeUnit, ComposerCommitGroup, ComposerPreparedSource } from '../../host/aiCommitComposer/types';
 import type { ComposerToHostMsg, HostToComposerMsg } from '../../host/types/messages';
 import { Codicon } from '../shared/Codicon';
+import { AiCommitComposerIcon } from '../shared/AiCommitComposerIcon';
 import { t } from '../shared/i18n';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
@@ -44,13 +45,12 @@ const css = `
   button, textarea { font: inherit; }
   button:focus-visible, textarea:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
   @keyframes composer-scan { from { transform: translateX(-110%); } to { transform: translateX(410%); } }
-  @keyframes composer-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes composer-pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
   @keyframes composer-ai-slash-edge { 0% { transform: translate3d(0, 0, 0) skewX(-22deg); opacity: 0; } 22% { opacity: .35; } 48% { opacity: 1; } 100% { transform: translate3d(1550%, 0, 0) skewX(-22deg); opacity: 0; } }
   @keyframes composer-message-marquee-run { to { stroke-dashoffset: -100; } }
   @keyframes composer-message-breathe { 0%,100% { opacity: .6; } 50% { opacity: .35; } }
   .composer-status[data-active='true']::after { content: ''; position: absolute; left: 0; bottom: 0; width: 26%; height: 1px; background: linear-gradient(90deg, transparent, #7c5cff, #2f9bff, transparent); animation: composer-scan 1.7s ease-in-out infinite; }
-  .composer-group { animation: composer-enter .28s ease both; transition: transform .16s ease, background .16s ease; }
+  .composer-group { transition: transform .16s ease, background .16s ease; }
   .composer-group[data-drag='true'] { background: color-mix(in srgb, #7457ff 9%, var(--vscode-editor-background)); }
   .composer-ai { position: relative; isolation: isolate; overflow: hidden; background: linear-gradient(125deg, #7657ff, #2f8fff); color: #fff; border: none; box-shadow: none; transition: filter 140ms ease, transform 140ms ease; }
   .composer-ai > * { position: relative; z-index: 2; }
@@ -78,7 +78,7 @@ const css = `
   .composer-message[data-generating='true'] { position: relative; z-index: 1; border-color: transparent !important; background-clip: padding-box !important; animation: composer-message-breathe 1.2s ease-in-out infinite; }
   .composer-diff-line[data-kind='add'] { color: var(--vscode-gitDecoration-addedResourceForeground); background: var(--composer-diff-add-background, color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground) 7%, transparent)); }
   .composer-diff-line[data-kind='remove'] { color: var(--vscode-gitDecoration-deletedResourceForeground); background: var(--composer-diff-remove-background, color-mix(in srgb, var(--vscode-gitDecoration-deletedResourceForeground) 7%, transparent)); }
-  @media (prefers-reduced-motion: reduce) { .composer-status::after, .composer-group, .composer-ai::after, .composer-message { animation: none !important; transition: none !important; } .composer-message[data-generating='true'] { opacity: .6; } }
+  @media (prefers-reduced-motion: reduce) { .composer-status::after, .composer-ai::after, .composer-message { animation: none !important; transition: none !important; } .composer-message[data-generating='true'] { opacity: .6; } }
 `;
 
 function send(message: ComposerToHostMsg): void { getVsCodeApi().postMessage(message); }
@@ -278,6 +278,7 @@ function App() {
   async function typePlan(nextGroups: ComposerCommitGroup[]) {
     const run = ++typingRun.current;
     setPhase('review');
+    setPhaseDetail(t('Review and refine the proposed commits'));
     setGroups(nextGroups.map(group => ({ ...group, message: '' })));
     const messages = new Map(nextGroups.map(group => [group.id, group.message]));
     const maxLength = Math.max(0, ...nextGroups.map(group => group.message.length));
@@ -437,7 +438,7 @@ function App() {
   return (
     <main style={styles.page}>
       <header style={styles.header}>
-        <div style={styles.brandMark}><Codicon name="sparkle-filled" /></div>
+        <div style={styles.brandMark}><AiCommitComposerIcon size={19} /></div>
         <div style={styles.headerText}>
           <h1 style={styles.title}>{t('AI Commit Composer')}</h1>
           <div style={styles.subtitle}>{source ? `${source.repoName} · ${source.branch} · ${source.sourceLabel}` : t('Turning mixed changes into reviewable commits')}</div>
@@ -463,7 +464,7 @@ function App() {
                 className="composer-group"
                 data-drag={dragTarget === group.id}
                 key={group.id}
-                style={{ ...styles.group, animationDelay: `${groupIndex * 55}ms` }}
+                style={styles.group}
                 onDragOver={event => { event.preventDefault(); setDragTarget(group.id); }}
                 onDragLeave={() => { setDragTarget(undefined); setFileDropTarget(undefined); }}
                 onDrop={event => { event.preventDefault(); if (dragSelection) moveUnits(dragSelection, group.id); }}
