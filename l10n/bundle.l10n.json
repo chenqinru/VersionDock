@@ -1429,6 +1429,7 @@
   "Clear staged changes and conflicts before reorganizing commits.": "Clear staged changes and conflicts before reorganizing commits.",
   "Commit composition completed": "Commit composition completed",
   "Commit message for group {0}": "Commit message for group {0}",
+  "Changed code near line {0}": "Changed code near line {0}",
   "Composed commits do not reproduce the expected final tree. No history was changed.": "Composed commits do not reproduce the expected final tree. No history was changed.",
   "Composer could not finish": "Composer could not finish",
   "Confirm and create commits": "Confirm and create commits",

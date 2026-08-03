@@ -1429,6 +1429,7 @@
   "Clear staged changes and conflicts before reorganizing commits.": "重组提交前请清除暂存修改并解决冲突。",
   "Commit composition completed": "提交编排完成",
   "Commit message for group {0}": "第 {0} 组提交信息",
+  "Changed code near line {0}": "修改后第 {0} 行附近",
   "Composed commits do not reproduce the expected final tree. No history was changed.": "编排后的提交无法还原预期文件树，原历史未被修改。",
   "Composer could not finish": "智能编排未能完成",
   "Confirm and create commits": "确认并创建提交",
