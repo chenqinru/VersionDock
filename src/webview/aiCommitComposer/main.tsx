@@ -47,8 +47,8 @@ const css = `
   @keyframes composer-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes composer-pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
   @keyframes composer-ai-slash-edge { 0% { transform: translate3d(0, 0, 0) skewX(-22deg); opacity: 0; } 22% { opacity: .35; } 48% { opacity: 1; } 100% { transform: translate3d(1550%, 0, 0) skewX(-22deg); opacity: 0; } }
-  @keyframes composer-message-marquee-spin { to { transform: rotate(1turn); } }
-  @keyframes composer-message-breathe { 0%,100% { filter: brightness(.82); } 50% { filter: brightness(.55); } }
+  @keyframes composer-message-marquee-run { to { stroke-dashoffset: -100; } }
+  @keyframes composer-message-breathe { 0%,100% { opacity: .6; } 50% { opacity: .35; } }
   .composer-status[data-active='true']::after { content: ''; position: absolute; left: 0; bottom: 0; width: 26%; height: 1px; background: linear-gradient(90deg, transparent, #7c5cff, #2f9bff, transparent); animation: composer-scan 1.7s ease-in-out infinite; }
   .composer-group { animation: composer-enter .28s ease both; transition: transform .16s ease, background .16s ease; }
   .composer-group[data-drag='true'] { background: color-mix(in srgb, #7457ff 9%, var(--vscode-editor-background)); }
@@ -73,13 +73,12 @@ const css = `
   .composer-add-group:disabled { cursor: default !important; opacity: .42; }
   .composer-unit:hover { background: var(--vscode-list-hoverBackground); }
   .composer-hunk:hover > div:first-child { background: var(--vscode-list-hoverBackground); }
-  .composer-message-marquee-border { position: absolute; inset: 0; z-index: 0; overflow: hidden; border-radius: 6px; pointer-events: none; box-shadow: 0 0 8px color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent); }
-  .composer-message-marquee-border::before { content: ''; position: absolute; inset: -220%; background: conic-gradient(from 0deg, transparent 0deg, transparent 250deg, var(--vscode-charts-blue, #3794ff) 285deg, var(--vscode-charts-purple, #a371f7) 315deg, var(--vscode-focusBorder, #007acc) 345deg, transparent 360deg); animation: composer-message-marquee-spin 1.45s linear infinite; }
-  .composer-message-marquee-border::after { content: ''; position: absolute; inset: 1px; border-radius: 5px; background: var(--vscode-input-background); }
+  .composer-message-marquee-border { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; overflow: visible; border-radius: 5px; pointer-events: none; box-shadow: 0 0 8px color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent); }
+  .composer-message-marquee-track { x: .5px; y: .5px; width: calc(100% - 1px); height: calc(100% - 1px); rx: 4.5px; ry: 4.5px; fill: none; stroke: url(#composer-message-marquee-gradient); stroke-width: 1px; stroke-linecap: round; stroke-dasharray: 22 78; animation: composer-message-marquee-run 1.45s linear infinite; }
   .composer-message[data-generating='true'] { position: relative; z-index: 1; border-color: transparent !important; background-clip: padding-box !important; animation: composer-message-breathe 1.2s ease-in-out infinite; }
   .composer-diff-line[data-kind='add'] { color: var(--vscode-gitDecoration-addedResourceForeground); background: var(--composer-diff-add-background, color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground) 7%, transparent)); }
   .composer-diff-line[data-kind='remove'] { color: var(--vscode-gitDecoration-deletedResourceForeground); background: var(--composer-diff-remove-background, color-mix(in srgb, var(--vscode-gitDecoration-deletedResourceForeground) 7%, transparent)); }
-  @media (prefers-reduced-motion: reduce) { .composer-status::after, .composer-group, .composer-ai::after, .composer-message, .composer-message-marquee-border::before { animation: none !important; transition: none !important; } .composer-message[data-generating='true'] { filter: brightness(.7); } }
+  @media (prefers-reduced-motion: reduce) { .composer-status::after, .composer-group, .composer-ai::after, .composer-message { animation: none !important; transition: none !important; } .composer-message[data-generating='true'] { opacity: .6; } }
 `;
 
 function send(message: ComposerToHostMsg): void { getVsCodeApi().postMessage(message); }
@@ -411,6 +410,7 @@ function App() {
       stopMessageGeneration();
       return;
     }
+    if (group.unitIds.length === 0 || phase === 'applying') return;
     if (active) send({ type: 'COMPOSER_CANCEL_MESSAGE', requestId: active.requestId });
     typingRun.current++;
     const request = { requestId: `composer-message-${Date.now()}-${++messageRequestSequence.current}`, groupId: group.id };
@@ -479,7 +479,18 @@ function App() {
                   </div>
                 </div>
                 <div style={styles.messageWrap}>
-                  {messageGeneration?.groupId === group.id && <span className="composer-message-marquee-border" aria-hidden="true" />}
+                  {messageGeneration?.groupId === group.id && (
+                    <svg className="composer-message-marquee-border" aria-hidden="true" focusable="false">
+                      <defs>
+                        <linearGradient id="composer-message-marquee-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor="var(--vscode-charts-blue, #3794ff)" />
+                          <stop offset="55%" stopColor="var(--vscode-charts-purple, #a371f7)" />
+                          <stop offset="100%" stopColor="var(--vscode-focusBorder, #007acc)" />
+                        </linearGradient>
+                      </defs>
+                      <rect className="composer-message-marquee-track" pathLength="100" />
+                    </svg>
+                  )}
                   <textarea
                     className="composer-message"
                     data-generating={messageGeneration?.groupId === group.id}

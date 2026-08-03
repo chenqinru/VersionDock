@@ -201,39 +201,33 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     .ai-marquee-border {
       position: absolute;
       inset: 0;
-      z-index: 0;
-      overflow: hidden;
-      border-radius: 4px;
+      z-index: 2;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      border-radius: 3px;
       pointer-events: none;
       box-shadow: 0 0 8px color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent);
     }
     .ai-marquee-border[hidden] { display: none; }
-    .ai-marquee-border::before {
-      content: '';
-      position: absolute;
-      inset: -220%;
-      background: conic-gradient(
-        from 0deg,
-        transparent 0deg,
-        transparent 250deg,
-        var(--vscode-charts-blue, #3794ff) 285deg,
-        var(--vscode-charts-purple, #a371f7) 315deg,
-        var(--vscode-focusBorder, #007acc) 345deg,
-        transparent 360deg
-      );
-      animation: ai-marquee-spin 1.45s linear infinite;
+    .ai-marquee-track {
+      x: 0.5px;
+      y: 0.5px;
+      width: calc(100% - 1px);
+      height: calc(100% - 1px);
+      rx: 2.5px;
+      ry: 2.5px;
+      fill: none;
+      stroke: url(#ai-marquee-gradient);
+      stroke-width: 1px;
+      stroke-linecap: round;
+      stroke-dasharray: 22 78;
+      animation: ai-marquee-run 1.45s linear infinite;
     }
-    .ai-marquee-border::after {
-      content: '';
-      position: absolute;
-      inset: 1px;
-      border-radius: 3px;
-      background: var(--vscode-editor-background, #1e1e1e);
-    }
-    @keyframes ai-marquee-spin { to { transform: rotate(1turn); } }
+    @keyframes ai-marquee-run { to { stroke-dashoffset: -100; } }
     @keyframes ai-textarea-breathe {
-      0%, 100% { filter: brightness(0.82); }
-      50% { filter: brightness(0.55); }
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 0.35; }
     }
     .btn-ai {
       position: absolute;
@@ -257,7 +251,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     }
     .generation-error.visible { display: block; }
     @media (prefers-reduced-motion: reduce) {
-      textarea[data-generating="true"] { animation: none; filter: brightness(0.7); }
+      textarea[data-generating="true"] { animation: none; opacity: 0.6; }
     }
     .footer {
       display: flex; align-items: center; justify-content: flex-end; gap: 8px;
@@ -307,7 +301,16 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     <div>
       <div class="label" style="margin-bottom:6px">${escapeHtml(t('Commit message'))}</div>
       <div class="message-editor">
-        <span class="ai-marquee-border" id="aiMarquee" aria-hidden="true" hidden></span>
+        <svg class="ai-marquee-border" id="aiMarquee" aria-hidden="true" focusable="false" hidden>
+          <defs>
+            <linearGradient id="ai-marquee-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="var(--vscode-charts-blue, #3794ff)"></stop>
+              <stop offset="55%" stop-color="var(--vscode-charts-purple, #a371f7)"></stop>
+              <stop offset="100%" stop-color="var(--vscode-focusBorder, #007acc)"></stop>
+            </linearGradient>
+          </defs>
+          <rect class="ai-marquee-track" pathLength="100"></rect>
+        </svg>
         <textarea id="msg" autofocus spellcheck="false" data-generating="false"></textarea>
         <button class="btn-ai" id="aiBtn" title="${escapeHtml(t('Generate commit message with AI'))}" aria-label="${escapeHtml(t('Generate commit message with AI'))}">
           <span class="codicon codicon-sparkle" id="aiIcon"></span>
@@ -345,7 +348,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       ta.readOnly = value;
       ta.dataset.generating = value ? 'true' : 'false';
       ta.placeholder = value ? generatingPlaceholder : '';
-      aiMarquee.hidden = !value;
+      aiMarquee.toggleAttribute('hidden', !value);
       aiIcon.className = 'codicon ' + (value ? 'codicon-stop-circle' : 'codicon-sparkle');
       aiBtn.title = value ? stopTitle : generateTitle;
       aiBtn.setAttribute('aria-label', aiBtn.title);

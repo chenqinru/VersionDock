@@ -324,41 +324,35 @@ export function UnifiedCommitForm({
       document.head.appendChild(s);
     }
     s.textContent = `
-      @keyframes gs-ai-marquee-spin { to { transform: rotate(1turn); } }
+      @keyframes gs-ai-marquee-run { to { stroke-dashoffset: -100; } }
       @keyframes gs-ai-textarea-breathe {
-        0%, 100% { filter: brightness(0.82); }
-        50% { filter: brightness(0.55); }
+        0%, 100% { opacity: 0.6; }
+        50% { opacity: 0.35; }
       }
       .gs-ai-marquee-border {
         position: absolute;
         inset: 0;
-        z-index: 0;
-        overflow: hidden;
-        border-radius: 4px;
+        z-index: 2;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+        border-radius: 3px;
         pointer-events: none;
         box-shadow: 0 0 8px color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent);
       }
-      .gs-ai-marquee-border::before {
-        content: '';
-        position: absolute;
-        inset: -220%;
-        background: conic-gradient(
-          from 0deg,
-          transparent 0deg,
-          transparent 250deg,
-          var(--vscode-charts-blue, #3794ff) 285deg,
-          var(--vscode-charts-purple, #a371f7) 315deg,
-          var(--vscode-focusBorder, #007acc) 345deg,
-          transparent 360deg
-        );
-        animation: gs-ai-marquee-spin 1.45s linear infinite;
-      }
-      .gs-ai-marquee-border::after {
-        content: '';
-        position: absolute;
-        inset: 1px;
-        border-radius: 3px;
-        background: var(--vscode-editor-background, #1e1e1e);
+      .gs-ai-marquee-track {
+        x: 0.5px;
+        y: 0.5px;
+        width: calc(100% - 1px);
+        height: calc(100% - 1px);
+        rx: 2.5px;
+        ry: 2.5px;
+        fill: none;
+        stroke: url(#gs-ai-marquee-gradient);
+        stroke-width: 1px;
+        stroke-linecap: round;
+        stroke-dasharray: 22 78;
+        animation: gs-ai-marquee-run 1.45s linear infinite;
       }
       .gs-commit-textarea[data-generating='true'] {
         position: relative;
@@ -370,7 +364,7 @@ export function UnifiedCommitForm({
       @media (prefers-reduced-motion: reduce) {
         .gs-commit-textarea[data-generating='true'] {
           animation: none;
-          filter: brightness(0.7);
+          opacity: 0.6;
         }
       }
       .gs-commit-textarea::-webkit-scrollbar {
@@ -498,7 +492,18 @@ export function UnifiedCommitForm({
 
       {/* Message textarea — auto-height until manually resized */}
       <div style={styles.textareaWrap}>
-        {generatingMessage && <span className="gs-ai-marquee-border" aria-hidden="true" />}
+        {generatingMessage && (
+          <svg className="gs-ai-marquee-border" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="gs-ai-marquee-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="var(--vscode-charts-blue, #3794ff)" />
+                <stop offset="55%" stopColor="var(--vscode-charts-purple, #a371f7)" />
+                <stop offset="100%" stopColor="var(--vscode-focusBorder, #007acc)" />
+              </linearGradient>
+            </defs>
+            <rect className="gs-ai-marquee-track" pathLength="100" />
+          </svg>
+        )}
         <textarea
           ref={textareaRef}
           className="gs-commit-textarea"
@@ -592,9 +597,14 @@ export function UnifiedCommitForm({
         />
         <button
           data-action-btn=""
-          style={styles.autopilotBtn(generatingMessage)}
+          style={styles.autopilotBtn(generatingMessage, commitTargets.length === 0 || loading)}
           onClick={generatingMessage ? onStopAutopilot : onAutopilot}
-          title={generatingMessage ? t('Stop generating commit message') : t('Generate commit message with AI')}
+          disabled={!generatingMessage && (commitTargets.length === 0 || loading)}
+          title={generatingMessage
+            ? t('Stop generating commit message')
+            : commitTargets.length === 0
+              ? t('No changes to generate a commit message from.')
+              : t('Generate commit message with AI')}
         >
           <Codicon name={generatingMessage ? 'stop-circle' : 'sparkle'} style={{ fontSize: '16px' }} />
         </button>
@@ -771,15 +781,15 @@ const styles = {
     opacity: 1,
     cursor: generating ? 'default' : 'text',
   }),
-  autopilotBtn: (_generating: boolean): React.CSSProperties => ({
+  autopilotBtn: (generating: boolean, disabled: boolean): React.CSSProperties => ({
     position: 'absolute' as const,
     top: '4px',
     right: '4px',
     background: 'transparent',
     border: 'none',
-    cursor: 'pointer',
+    cursor: disabled && !generating ? 'not-allowed' : 'pointer',
     color: 'var(--vscode-foreground)',
-    opacity: 0.7,
+    opacity: disabled && !generating ? 0.35 : 0.7,
     padding: '2px',
     display: 'flex',
     alignItems: 'center',

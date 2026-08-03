@@ -1386,35 +1386,40 @@ export function CommitApp() {
     const freshState = useCommitStore.getState();
     const currentRepos = freshState.status?.repos ?? [];
     if (freshState.changesViewMode === 'vscode') {
+      const metaById = new Map(freshState.repoMetas.map(meta => [meta.id, meta]));
       return {
         repoIds: currentRepos
-          .filter(repo => vscodeSelectedRepos.has(repo.repoId))
+          .filter(repo => {
+            if (!vscodeSelectedRepos.has(repo.repoId)) return false;
+            return metaById.get(repo.repoId)?.kind === 'svn'
+              ? repo.stagedFiles.length + repo.unstagedFiles.length > 0
+              : repo.stagedFiles.length > 0;
+          })
           .map(repo => repo.repoId),
         targets: [],
       };
     }
 
-    const repoIds = currentRepos
-      .filter(repo => freshState.repoSelections[repo.repoId] !== false)
-      .map(repo => repo.repoId);
     const selectedTargets = currentRepos
-      .filter(repo => repoIds.includes(repo.repoId))
+      .filter(repo => freshState.repoSelections[repo.repoId] !== false)
       .map(repo => ({
         repoId: repo.repoId,
         paths: freshState.getSelectedFilesForRepo(repo.repoId),
       }))
       .filter(target => target.paths.length > 0);
 
-    return { repoIds, targets: selectedTargets };
+    return { repoIds: selectedTargets.map(target => target.repoId), targets: selectedTargets };
   }, [vscodeSelectedRepos]);
 
   const doAutopilot = useCallback(() => {
     if (generatingMessage) return;
+    const selection = buildGenerateMessageSelection();
+    if (selection.repoIds.length === 0 && selection.targets.length === 0) return;
     const requestId = generateId();
     activeGenerateRequestIdRef.current = requestId;
     store.setCommitMessage('');
     setGeneratingMessage(true);
-    send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, ...buildGenerateMessageSelection() });
+    send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, ...selection });
   }, [buildGenerateMessageSelection, generatingMessage, send, store]);
 
   const stopAutopilot = useCallback(() => {
