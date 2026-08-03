@@ -1527,19 +1527,6 @@ export function CommitApp() {
     const freshState = useCommitStore.getState();
     if (!freshState.commitMessage.trim()) return;
     const currentRepos = freshState.status?.repos ?? [];
-    const sanitizeAmendTargets = <T extends { repoId: string; amend: boolean }>(targets: T[]): T[] => {
-      const onlyTarget = targets.length === 1 ? targets[0] : null;
-      const repoStatus = onlyTarget ? currentRepos.find(repo => repo.repoId === onlyTarget.repoId) : null;
-      const amendRepoId = onlyTarget
-        && metaMap.get(onlyTarget.repoId)?.kind !== 'svn'
-        && (repoStatus?.branch.aheadBehind?.ahead ?? 0) > 0
-        ? onlyTarget.repoId
-        : null;
-      return targets.map(target => ({
-        ...target,
-        amend: target.repoId === amendRepoId && target.amend,
-      }));
-    };
 
     // In vscode mode, commit only what's already staged — no stage/unstage manipulation
     if (freshState.changesViewMode === 'vscode') {
@@ -1564,11 +1551,10 @@ export function CommitApp() {
           };
         });
       if (targets.length === 0) return;
-      const safeTargets = sanitizeAmendTargets(targets);
       store.setLoading(true);
       const requestId = generateId();
       pendingCommitMessagesRef.current.set(requestId, freshState.commitMessage.trim());
-      getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: safeTargets, andPush } satisfies CommitToHostMsg);
+      getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush } satisfies CommitToHostMsg);
       return;
     }
 
@@ -1596,12 +1582,11 @@ export function CommitApp() {
         return stagedAfter.size > 0;
       });
     if (targets.length === 0) return;
-    const safeTargets = sanitizeAmendTargets(targets);
     store.setLoading(true);
     store.setError(null);
     const requestId = generateId();
     pendingCommitMessagesRef.current.set(requestId, freshState.commitMessage.trim());
-    getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: safeTargets, andPush } satisfies CommitToHostMsg);
+    getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush } satisfies CommitToHostMsg);
   };
   commitActionRef.current = doCommit;
 

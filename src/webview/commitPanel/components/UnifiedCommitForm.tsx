@@ -205,12 +205,9 @@ export function UnifiedCommitForm({
   const commitLabel = t('Commit');
   const pushLabel = t('Commit & Push');
   const amendTarget = commitTargets.length === 1 ? commitTargets[0] : null;
-  const canAmend = amendTarget !== null
-    && metaMap.get(amendTarget.repoId)?.kind !== 'svn'
-    && (amendTarget.branch.aheadBehind?.ahead ?? 0) > 0;
-  const amendDisabled = !canAmend || loading;
+  const showAmend = amendTarget !== null && (amendTarget.branch.aheadBehind?.ahead ?? 0) > 0;
   const amendRepoId = amendTarget?.repoId;
-  const amend = canAmend && (amendFlags[amendRepoId ?? ''] ?? false);
+  const amend = amendFlags[amendRepoId ?? ''] ?? false;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyIndexRef = useRef(-1);
@@ -442,18 +439,17 @@ export function UnifiedCommitForm({
 
       {/* Commit options and shortcut actions */}
       <div style={styles.commitOptionsRow}>
-        <label style={styles.amendLabel(amendDisabled)} title={t('Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.')}>
-          <input
-            type="checkbox"
-            checked={amend}
-            disabled={amendDisabled}
-            onChange={() => {
-              if (canAmend && amendRepoId) onAmendToggle(amendRepoId);
-            }}
-            style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
-          />
-          {t('Amend last commit')}
-        </label>
+        {showAmend && (
+          <label style={styles.amendLabel} title={t('Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.')}>
+            <input
+              type="checkbox"
+              checked={amend}
+              onChange={() => onAmendToggle(amendRepoId!)}
+              style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
+            />
+            {t('Amend last commit')}
+          </label>
+        )}
         <div style={styles.commitOptionActions}>
           <button
             data-action-btn=""
@@ -849,13 +845,13 @@ const styles = {
     fontFamily: 'var(--vscode-font-family)',
     opacity: 0.75,
   } as React.CSSProperties,
-  amendLabel: (disabled: boolean): React.CSSProperties => ({
+  amendLabel: {
     display: 'flex',
     alignItems: 'center',
     fontSize: '11px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
+    cursor: 'pointer',
     color: 'var(--vscode-foreground)',
-    opacity: disabled ? 0.4 : 0.75,
+    opacity: 0.75,
     userSelect: 'none' as const,
-  }),
+  } as React.CSSProperties,
 };
