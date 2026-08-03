@@ -880,25 +880,35 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     }
     .toolbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .ai-explain-btn {
+      position: relative; isolation: isolate; overflow: hidden;
       height: 28px; padding: 0 11px;
       display: inline-flex; align-items: center; justify-content: center; gap: 7px;
       border: none;
       border-radius: 6px; cursor: pointer;
-      background: linear-gradient(100deg, #7514d7 0%, #7b2ee2 44%, #4058f4 100%);
-      background-size: 120% 100%; background-position: 0 0;
+      background: linear-gradient(125deg, #7657ff, #2f8fff);
+      background-size: 100% 100%; background-position: 0 0;
       color: #ffffff; font: inherit; font-size: 12px; font-weight: 600;
       box-shadow: none; white-space: nowrap;
       transition: filter 140ms ease, transform 140ms ease, background-position 240ms ease;
     }
-    .ai-explain-btn:hover { filter: brightness(1.1) saturate(1.08); transform: translateY(-1px); }
-    .ai-explain-btn:active { transform: translateY(0); }
+    .ai-explain-btn > * { position: relative; z-index: 2; }
+    .ai-explain-btn::after {
+      content: ''; position: absolute; pointer-events: none; opacity: 0; z-index: 1;
+      top: -55%; left: -28%; width: 10%; height: 210%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.96), transparent);
+      box-shadow: 0 0 5px rgba(222, 239, 255, 0.7);
+    }
+    .ai-explain-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+    .ai-explain-btn:hover:not(:disabled)::after { animation: aiSlashEdge 880ms cubic-bezier(0.22, 0.7, 0.22, 1) both; }
+    .ai-explain-btn:active:not(:disabled) { transform: translateY(0); filter: brightness(0.98); }
     .ai-explain-btn:focus-visible {
       outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px;
     }
     .ai-explain-btn[data-busy="true"] {
       background-position: 100% 0;
+      animation: aiButtonBreathe 1.8s ease-in-out infinite;
     }
-    .ai-explain-btn[data-busy="true"] .codicon { animation: aiSparkPulse 1.1s ease-in-out infinite; }
+    .ai-explain-btn[data-busy="true"] .codicon { animation: aiStopBreathe 1.1s ease-in-out infinite; }
 
     /* ── Split layout ── */
     .split { display: flex; flex: 1; overflow: hidden; }
@@ -921,16 +931,18 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       display: flex; flex-direction: column; gap: 11px;
       flex-shrink: 0;
       padding: 14px 15px 12px;
-      border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, #9472ff 30%);
+      border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 68%, #7657ff 32%);
       border-radius: 8px;
-      background: color-mix(in srgb, var(--vscode-editor-background) 92%, #7457d9 8%);
-      box-shadow: 0 8px 24px color-mix(in srgb, #392477 12%, transparent);
+      background: linear-gradient(145deg,
+        color-mix(in srgb, var(--vscode-editor-background) 92%, #7657ff 8%),
+        color-mix(in srgb, var(--vscode-editor-background) 94%, #2f8fff 6%));
+      box-shadow: 0 8px 24px color-mix(in srgb, #4f63df 14%, transparent);
       animation: aiPanelEnter 180ms ease-out both;
     }
     .ai-explanation.hidden { display: none; }
     .ai-explanation::before {
       content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
-      background: linear-gradient(90deg, #6e63ff, #55c8e8, #b66cff, #6e63ff);
+      background: linear-gradient(90deg, #7657ff, #2f8fff, #7657ff);
       background-size: 220% 100%; opacity: 0.82;
     }
     .ai-explanation[data-state="generating"]::before { animation: aiSpectrum 1.8s linear infinite; }
@@ -939,13 +951,13 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ai-orb {
       position: relative; width: 30px; height: 30px; flex-shrink: 0;
       display: inline-flex; align-items: center; justify-content: center;
-      border-radius: 50%; color: #f2edff;
-      background: linear-gradient(145deg, #5d57dd, #9d5ed8);
-      box-shadow: 0 0 0 3px color-mix(in srgb, #8568ee 14%, transparent), 0 4px 12px rgba(76,52,153,0.28);
+      border-radius: 50%; color: #ffffff;
+      background: linear-gradient(125deg, #7657ff, #2f8fff);
+      box-shadow: 0 0 0 3px color-mix(in srgb, #7657ff 14%, transparent), 0 4px 12px color-mix(in srgb, #2f8fff 30%, transparent);
     }
     .ai-orb::after {
       content: ''; position: absolute; inset: -4px; border-radius: inherit;
-      border: 1px solid color-mix(in srgb, #9278ff 48%, transparent); opacity: 0;
+      border: 1px solid color-mix(in srgb, #2f8fff 52%, transparent); opacity: 0;
     }
     .ai-explanation[data-state="generating"] .ai-orb::after { animation: aiOrbRing 1.6s ease-out infinite; }
     .ai-heading { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
@@ -953,7 +965,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ai-status { font-size: 11px; opacity: 0.62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ai-live-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-      background: #70d9ec; box-shadow: 0 0 7px rgba(112,217,236,0.55); opacity: 0;
+      background: #58b6ff; box-shadow: 0 0 7px rgba(47,143,255,0.62); opacity: 0;
     }
     .ai-explanation[data-state="generating"] .ai-live-dot { opacity: 1; animation: aiDotPulse 1s ease-in-out infinite; }
     .ai-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -967,45 +979,60 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       background: var(--vscode-descriptionForeground); transition: transform 160ms ease, background 160ms ease;
     }
     .ai-stage.active { opacity: 1; color: var(--vscode-foreground); }
-    .ai-stage.active::before { transform: scale(1.4); background: #8f78ff; box-shadow: 0 0 6px rgba(143,120,255,0.5); }
+    .ai-stage.active::before { transform: scale(1.4); background: #7657ff; box-shadow: 0 0 6px rgba(118,87,255,0.58); }
     .ai-stage.done { opacity: 0.76; }
-    .ai-stage.done::before { background: #55c8a9; }
+    .ai-stage.done::before { background: #2f8fff; }
     .ai-stage-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ai-output {
       min-height: 42px;
+      padding: 8px 10px;
+      border-left: 2px solid #7657ff;
+      border-radius: 0 6px 6px 0;
+      background: linear-gradient(90deg,
+        color-mix(in srgb, var(--vscode-editor-background) 88%, #7657ff 12%),
+        color-mix(in srgb, var(--vscode-editor-background) 96%, #2f8fff 4%));
       color: var(--vscode-editor-foreground);
       font-size: 12px; line-height: 1.62; word-break: break-word;
     }
     .ai-output:empty { display: none; }
-    .ai-output h3 { margin: 11px 0 4px; font-size: 12px; line-height: 1.45; color: var(--vscode-foreground); }
+    .ai-output h3 { margin: 11px 0 4px; font-size: 12px; line-height: 1.45; color: color-mix(in srgb, var(--vscode-foreground) 72%, #7657ff 28%); }
     .ai-output h3:first-child { margin-top: 0; }
     .ai-output p { margin: 3px 0; }
     .ai-output ul { margin: 4px 0 5px 17px; padding: 0; }
     .ai-output li { margin: 3px 0; padding-left: 1px; }
+    .ai-output li::marker { color: #2f8fff; }
     .ai-output pre {
       margin: 6px 0; padding: 8px 10px; overflow-x: auto;
-      border-radius: 4px; background: var(--vscode-textCodeBlock-background);
+      border: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, #2f8fff 28%);
+      border-radius: 4px; background: color-mix(in srgb, var(--vscode-textCodeBlock-background) 94%, #2f8fff 6%);
       font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; white-space: pre-wrap;
     }
     .ai-cursor {
       display: inline-block; width: 6px; height: 1.05em; margin-left: 2px; vertical-align: -2px;
-      border-radius: 1px; background: #8f78ff; animation: aiCursorBlink 740ms steps(1) infinite;
+      border-radius: 1px; background: #2f8fff; box-shadow: 0 0 5px rgba(47,143,255,0.45); animation: aiCursorBlink 740ms steps(1) infinite;
     }
-    .ai-placeholder { display: flex; align-items: center; gap: 7px; font-size: 11px; opacity: 0.62; }
+    .ai-placeholder { display: flex; align-items: center; gap: 7px; color: color-mix(in srgb, var(--vscode-descriptionForeground) 78%, #2f8fff 22%); font-size: 11px; }
     .ai-thinking-dots { display: inline-flex; gap: 3px; }
     .ai-thinking-dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: aiThinkingDot 1s ease-in-out infinite; }
     .ai-thinking-dots i:nth-child(2) { animation-delay: 120ms; }
     .ai-thinking-dots i:nth-child(3) { animation-delay: 240ms; }
     .ai-error { display: none; color: var(--vscode-errorForeground); font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
     .ai-error.visible { display: block; }
-    .ai-footer { display: none; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, transparent); }
+    .ai-footer { display: none; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid color-mix(in srgb, var(--vscode-panel-border) 72%, #2f8fff 28%); }
     .ai-footer.visible { display: flex; }
     .ai-meta { flex: 1; min-width: 120px; font-size: 10px; color: var(--vscode-descriptionForeground); }
     .ai-warning { display: none; align-items: center; gap: 4px; color: var(--vscode-editorWarning-foreground, #cca700); font-size: 10px; }
     .ai-warning.visible { display: inline-flex; }
     @keyframes aiPanelEnter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes aiSpectrum { to { background-position: -220% 0; } }
-    @keyframes aiSparkPulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.16); opacity: 1; } }
+    @keyframes aiButtonBreathe { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.12); } }
+    @keyframes aiStopBreathe { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.16); opacity: 1; } }
+    @keyframes aiSlashEdge {
+      0% { transform: translate3d(0, 0, 0) skewX(-22deg); opacity: 0; }
+      22% { opacity: 0.35; }
+      48% { opacity: 1; }
+      100% { transform: translate3d(1550%, 0, 0) skewX(-22deg); opacity: 0; }
+    }
     @keyframes aiOrbRing { 0% { opacity: 0.55; transform: scale(0.84); } 70%,100% { opacity: 0; transform: scale(1.22); } }
     @keyframes aiDotPulse { 0%,100% { opacity: 0.4; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.15); } }
     @keyframes aiCursorBlink { 0%,48% { opacity: 1; } 49%,100% { opacity: 0; } }
@@ -1018,9 +1045,10 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     }
     @media (prefers-reduced-motion: reduce) {
       .ai-explanation, .ai-explanation::before, .ai-orb::after, .ai-live-dot,
-      .ai-explain-btn, .ai-explain-btn .codicon,
+      .ai-explain-btn, .ai-explain-btn .codicon, .ai-explain-btn::after,
       .ai-thinking-dots i, .ai-cursor { animation: none !important; transition: none !important; }
-      .ai-explain-btn:hover { transform: none; }
+      .ai-explain-btn:hover:not(:disabled) { transform: none; }
+      .ai-explain-btn::after { opacity: 0 !important; }
       .ai-cursor { opacity: 1; }
     }
     .section-label {
