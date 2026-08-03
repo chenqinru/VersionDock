@@ -10,6 +10,7 @@ import type { ComposerApplyResult, ComposerChangeUnit, ComposerCommitGroup, Comp
 
 const BACKUP_PREFIX = 'refs/versiondock/ai-composer/';
 const BACKUP_LIMIT = 10;
+const COMPOSER_GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
 interface PatchUnit extends ComposerChangeUnit {
   patch: string;
@@ -21,7 +22,6 @@ export interface PreparedGitComposerSession {
   oldHead: string;
   branchRef: string;
   expectedTree: string;
-  sourcePatch: string;
   unselectedIndexPatch: string;
   selectedPaths: string[];
   stagedOnly: boolean;
@@ -31,6 +31,15 @@ export interface PreparedGitComposerSession {
 
 function hash(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function hashParts(...values: string[]): string {
+  const digest = crypto.createHash('sha256');
+  values.forEach((value, index) => {
+    if (index > 0) digest.update('\0');
+    digest.update(value);
+  });
+  return digest.digest('hex');
 }
 
 function patchInput(value: string): string {
@@ -45,6 +54,23 @@ function countChanges(patch: string): { added: number; removed: number } {
     if (line.startsWith('-') && !line.startsWith('---')) removed++;
   }
   return { added, removed };
+}
+
+function summarizeBinaryPatch(chunk: string): string {
+  const headers = chunk.split('\n').filter(line => (
+    line.startsWith('diff --git ')
+    || line.startsWith('new file mode ')
+    || line.startsWith('deleted file mode ')
+    || line.startsWith('old mode ')
+    || line.startsWith('new mode ')
+    || line.startsWith('similarity index ')
+    || line.startsWith('rename from ')
+    || line.startsWith('rename to ')
+    || line.startsWith('copy from ')
+    || line.startsWith('copy to ')
+    || line.startsWith('Binary files ')
+  ));
+  return `${headers.join('\n')}\nBinary content omitted from AI context.\n`;
 }
 
 function splitPatch(rawPatch: string): PatchUnit[] {
@@ -66,13 +92,13 @@ function splitPatch(rawPatch: string): PatchUnit[] {
     if (atomic) {
       const counts = countChanges(chunk);
       units.push({
-        id: `file-${hash(`${filePath}\n${chunk}`).slice(0, 16)}`,
+        id: `file-${hashParts(filePath, chunk).slice(0, 16)}`,
         filePath,
         oldPath: file.oldPath !== file.newPath ? file.oldPath : undefined,
         kind: 'file',
         status,
         title: path.basename(filePath),
-        diff: chunk,
+        diff: file.isBinary ? summarizeBinaryPatch(chunk) : chunk,
         patch: chunk,
         language: detectLanguage(filePath),
         ...counts,
@@ -112,8 +138,18 @@ function splitPatch(rawPatch: string): PatchUnit[] {
 }
 
 export class GitComposerExecutor {
-  private async git(rootPath: string, args: string[], options: { stdin?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {}): Promise<string> {
-    return (await execCli('git', args, { cwd: rootPath, ...options })).stdout.trim();
+  private async git(
+    rootPath: string,
+    args: string[],
+    options: { stdin?: string; env?: NodeJS.ProcessEnv; timeout?: number; trimOutput?: boolean } = {},
+  ): Promise<string> {
+    const { trimOutput = true, ...cliOptions } = options;
+    const stdout = (await execCli('git', args, {
+      cwd: rootPath,
+      maxBuffer: COMPOSER_GIT_MAX_BUFFER,
+      ...cliOptions,
+    })).stdout;
+    return trimOutput ? stdout.trim() : stdout;
   }
 
   async prepareWorking(repo: GitService, repoName: string, paths: string[], stagedOnly: boolean): Promise<PreparedGitComposerSession> {
@@ -143,7 +179,7 @@ export class GitComposerExecutor {
       return [file.oldPath, file.path].filter((value): value is string => Boolean(value));
     })));
     const unselectedIndexPatch = stagedOutside.length > 0
-      ? await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...stagedOutside])
+      ? await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...stagedOutside], { trimOutput: false })
       : '';
 
     let sourcePatch = '';
@@ -154,27 +190,27 @@ export class GitComposerExecutor {
     try {
       await this.git(repo.rootPath, ['read-tree', 'HEAD'], { env });
       if (stagedOnly) {
-        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPaths]);
+        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPaths], { trimOutput: false });
         if (sourcePatch) await this.git(repo.rootPath, ['apply', '--cached', '--binary', '--whitespace=nowarn', '-'], { env, stdin: patchInput(sourcePatch) });
       } else {
         await this.git(repo.rootPath, ['add', '-A', '--', ...selectedPaths], { env });
-        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPaths], { env });
+        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPaths], { env, trimOutput: false });
       }
       expectedTree = await this.git(repo.rootPath, ['write-tree'], { env });
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
     if (!sourcePatch) throw new Error(t('No selected changes are available for AI Commit Composer.'));
-    const units = splitPatch(`${sourcePatch}\n`);
+    const units = splitPatch(sourcePatch);
     if (units.length === 0) throw new Error(t('AI Commit Composer could not build change units from the selected changes.'));
-    const fingerprint = hash([oldHead, expectedTree, sourcePatch, unselectedIndexPatch].join('\0'));
+    const fingerprint = hashParts(oldHead, expectedTree, sourcePatch, unselectedIndexPatch);
     return {
       source: {
         sessionId: crypto.randomUUID(), mode: 'working', repoId: repo.repoId, repoName, vcsKind: 'git',
         branch: branchRef.replace(/^refs\/heads\//, ''), sourceLabel: stagedOnly ? t('Selected staged changes') : t('Selected working changes'),
         units: units.map(({ patch: _patch, ...unit }) => unit),
       },
-      baseHash: oldHead, oldHead, branchRef, expectedTree, sourcePatch, unselectedIndexPatch,
+      baseHash: oldHead, oldHead, branchRef, expectedTree, unselectedIndexPatch,
       selectedPaths, stagedOnly, fingerprint, units,
     };
   }
@@ -192,11 +228,11 @@ export class GitComposerExecutor {
       this.git(repo.rootPath, ['rev-parse', `${validation.oldestHash}^1`]),
     ]);
     if (!branchRef) throw new Error(t('AI Commit Composer requires a checked-out branch.'));
-    const sourcePatch = await this.git(repo.rootPath, ['diff', '--binary', '--full-index', '-M', '-C', baseHash, oldHead]);
+    const sourcePatch = await this.git(repo.rootPath, ['diff', '--binary', '--full-index', '-M', '-C', baseHash, oldHead], { trimOutput: false });
     const expectedTree = await this.git(repo.rootPath, ['rev-parse', `${oldHead}^{tree}`]);
-    const units = splitPatch(`${sourcePatch}\n`);
+    const units = splitPatch(sourcePatch);
     if (units.length === 0) throw new Error(t('The selected commits do not contain reorganizable changes.'));
-    const fingerprint = hash([oldHead, expectedTree, sourcePatch].join('\0'));
+    const fingerprint = hashParts(oldHead, expectedTree, sourcePatch);
     return {
       source: {
         sessionId: crypto.randomUUID(), mode: 'history', repoId: repo.repoId, repoName, vcsKind: 'git',
@@ -204,7 +240,7 @@ export class GitComposerExecutor {
         originalCommitCount: validation.hashes.length,
         units: units.map(({ patch: _patch, ...unit }) => unit),
       },
-      baseHash, oldHead, branchRef, expectedTree, sourcePatch, unselectedIndexPatch: '', selectedPaths: [], stagedOnly: false, fingerprint, units,
+      baseHash, oldHead, branchRef, expectedTree, unselectedIndexPatch: '', selectedPaths: [], stagedOnly: false, fingerprint, units,
     };
   }
 

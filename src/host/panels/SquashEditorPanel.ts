@@ -179,7 +179,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     textarea {
       position: relative; z-index: 1;
       display: block; min-height: 160px;
-      width: 100%; resize: none;
+      width: 100%; resize: vertical;
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
       border: 1px solid var(--vscode-input-border, transparent);

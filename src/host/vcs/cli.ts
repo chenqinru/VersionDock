@@ -8,6 +8,7 @@ export interface CliResult {
 export interface CliOptions {
   cwd: string;
   timeout?: number;
+  maxBuffer?: number;
   stdin?: string;
   env?: NodeJS.ProcessEnv;
 }
@@ -33,7 +34,7 @@ export function execCli(command: string, args: string[], options: CliOptions): P
       {
         cwd: options.cwd,
         timeout: options.timeout ?? 120_000,
-        maxBuffer: 20 * 1024 * 1024,
+        maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
         windowsHide: true,
         env: options.env,
       },
@@ -41,8 +42,10 @@ export function execCli(command: string, args: string[], options: CliOptions): P
         const out = stdout?.toString() ?? '';
         const err = stderr?.toString() ?? '';
         if (error) {
-          const detail = err.trim() || out.trim() || error.message;
-          reject(new CliError(detail, command, args, out, err, (error as NodeJS.ErrnoException & { code?: number | string }).code));
+          const code = (error as NodeJS.ErrnoException & { code?: number | string }).code;
+          const exceededBuffer = code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+          const detail = err.trim() || (exceededBuffer ? error.message : out.trim()) || error.message;
+          reject(new CliError(detail, command, args, out, err, code));
           return;
         }
         resolve({ stdout: out, stderr: err });

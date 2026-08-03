@@ -60,12 +60,16 @@ interface MergedBranch {
   repoIds: string[];
 }
 
-function buildMergedBranches(branches: BranchInfo[], repoKindMap: Record<string, 'git' | 'svn'>): MergedBranch[] {
+function buildMergedBranches(
+  branches: BranchInfo[],
+  repoKindMap: Record<string, 'git' | 'svn'>,
+  sectionKey: string,
+): MergedBranch[] {
   const map = new Map<string, MergedBranch>();
   for (const b of branches) {
     const baseName = getBranchBaseName(b);
     const vcsKind = repoKindMap[b.repoId] ?? 'git';
-    const key = `${vcsKind}:${baseName}`;
+    const key = `${sectionKey}:${vcsKind}:${baseName}`;
     const existing = map.get(key);
     if (existing) {
       existing.instances.push(b);
@@ -148,6 +152,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   const localMerged = sortMerged(buildMergedBranches(
     filtered.filter(b => !b.isRemote && b.name !== 'HEAD'),
     repoKindMap,
+    'local',
   ));
 
   // Group remote branches by remote name (e.g. "origin", "upstream"), sorted alphabetically
@@ -160,7 +165,10 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   }
   const remoteGroups: { name: string; merged: MergedBranch[] }[] = Array.from(remoteGroupsMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, bs]) => ({ name, merged: sortMerged(buildMergedBranches(bs, repoKindMap)) }));
+    .map(([name, bs]) => ({
+      name,
+      merged: sortMerged(buildMergedBranches(bs, repoKindMap, `remote:${name}`)),
+    }));
 
   // Active detached tag name(s) — shown as "current" in the Tags section
   const activeDetachedTags = new Set(
