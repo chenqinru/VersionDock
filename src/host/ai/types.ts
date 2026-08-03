@@ -17,6 +17,7 @@ export interface AiProviderGenerateOptions {
   cancellationToken: vscode.CancellationToken;
   onDelta: (delta: string) => void;
   maxOutputTokens?: number;
+  temperature?: number;
 }
 
 export interface AiProviderGenerateResult {

@@ -468,7 +468,7 @@ export function UnifiedCommitForm({
             title={t('Review selected changes with AI')}
             onClick={onOpenCodeReview}
           >
-            <Codicon name="sparkle-filled" style={{ fontSize: 15 }} />
+            <Codicon name="search-sparkle" style={{ fontSize: 15 }} />
           </button>
           <button
             data-action-btn=""
@@ -478,7 +478,10 @@ export function UnifiedCommitForm({
             title={t('Split selected changes into meaningful commits with AI')}
             onClick={onOpenComposer}
           >
-            <Codicon name="wand" style={{ fontSize: 15 }} />
+            <span style={styles.aiSplitIcon}>
+              <Codicon name="layers" style={styles.aiSplitLayersIcon} />
+              <Codicon name="sparkle-filled" style={styles.aiSplitSparkleIcon} />
+            </span>
           </button>
           <button
             data-action-btn=""
@@ -821,6 +824,25 @@ const styles = {
     opacity: disabled ? 0.35 : 0.75,
     flexShrink: 0,
   }),
+  aiSplitIcon: {
+    position: 'relative',
+    display: 'inline-block',
+    width: '16px',
+    height: '16px',
+    pointerEvents: 'none',
+  } as React.CSSProperties,
+  aiSplitLayersIcon: {
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+    fontSize: '14px',
+  } as React.CSSProperties,
+  aiSplitSparkleIcon: {
+    position: 'absolute',
+    top: '-2px',
+    right: '-2px',
+    fontSize: '10px',
+  } as React.CSSProperties,
   rightActions: {
     flex: 1,
     minWidth: 0,

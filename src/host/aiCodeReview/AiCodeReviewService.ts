@@ -53,6 +53,7 @@ export class AiCodeReviewService {
       cancellationToken: options.cancellationToken,
       onDelta: options.onDelta,
       maxOutputTokens: calculateCodeReviewOutputTokens(`${promptResolution.prompt}\n${userMessage}`, options.context.fileCount),
+      temperature: 0,
     });
     throwIfCancelled(options.cancellationToken);
     if (result.inputTruncated) throw new Error(t('AI input was truncated. Select fewer changes and try again.'));
@@ -109,8 +110,8 @@ export class AiCodeReviewService {
 
   private buildUserMessage(context: string, truncated: boolean): string {
     if (vscode.env.language.toLowerCase().startsWith('zh')) {
-      return `# 任务\n\n审查下面带稳定锚点的未提交变更。${truncated ? '输入已按 Token 预算裁剪，只能评价可见内容。' : ''}\n\n<code_review_context>\n${context}\n</code_review_context>`;
+      return `# 任务\n\n审查下面带稳定锚点的未提交变更。${truncated ? '输入已按 Token 预算裁剪，只能评价可见内容。' : ''}\n\n## 必做检查\n\n1. 逐个检查所有可见的 [A…] 变更锚点，不得只抽查部分变更。\n2. 对改名、标识符、配置值、路由、权限、阶段名和任务名的变化，核对 related unchanged lines 中是否仍存在未同步引用。\n3. related unchanged lines 只作为同文件证据；问题仍必须定位到引入风险的 [A…] 变更锚点。\n4. 返回 pass 前，确认每个可见锚点都已按正确性、安全性、数据完整性和兼容性检查；证据不足时不要猜测。\n\n<code_review_context>\n${context}\n</code_review_context>`;
     }
-    return `# Task\n\nReview the following uncommitted changes with stable anchors.${truncated ? ' The input was trimmed to the token budget; assess only visible evidence.' : ''}\n\n<code_review_context>\n${context}\n</code_review_context>`;
+    return `# Task\n\nReview the following uncommitted changes with stable anchors.${truncated ? ' The input was trimmed to the token budget; assess only visible evidence.' : ''}\n\n## Required checks\n\n1. Inspect every visible [A…] change anchor; do not sample only part of the diff.\n2. For renamed identifiers, configuration values, routes, permissions, stage names, and job names, check related unchanged lines for references that were not updated.\n3. Related unchanged lines are same-file evidence only; every finding must still point to the [A…] change anchor that introduced the risk.\n4. Before returning pass, check every visible anchor for correctness, security, data integrity, and compatibility. Do not speculate when evidence is insufficient.\n\n<code_review_context>\n${context}\n</code_review_context>`;
   }
 }

@@ -82,6 +82,9 @@ export class AiProviderService {
     const maxOutputTokens = config.provider === 'github-copilot'
       ? undefined
       : this.resolveMaxOutputTokens(config.maxOutputTokens, options.maxOutputTokens);
+    const temperature = options.temperature === undefined
+      ? GENERATION_TEMPERATURE
+      : Math.max(0, Math.min(1, options.temperature));
 
     const requestStartedAt = Date.now();
     let timedOut = false;
@@ -113,6 +116,7 @@ export class AiProviderService {
           requestCancellation.token,
           onDelta,
           maxOutputTokens ?? config.maxOutputTokens,
+          temperature,
         );
       throwIfCancelled(requestCancellation.token);
       if (!response.text.trim()) throw new Error(t('AI provider did not return content.'));
@@ -308,6 +312,7 @@ export class AiProviderService {
     cancellationToken: vscode.CancellationToken,
     onDelta: (delta: string) => void,
     maxOutputTokens: number,
+    temperature: number,
   ): Promise<ProviderResponse> {
     const fittedPrompt = this.fitApiPrompt(config.maxInputTokens, systemPrompt, userMessage);
     const controller = new AbortController();
@@ -327,7 +332,7 @@ export class AiProviderService {
             model: config.model,
             max_tokens: maxOutputTokens,
             system: fittedPrompt.systemPrompt,
-            temperature: GENERATION_TEMPERATURE,
+            temperature,
             stream: true,
             messages: [{ role: 'user', content: fittedPrompt.userMessage }],
           }),
@@ -346,7 +351,7 @@ export class AiProviderService {
               { role: 'system', content: fittedPrompt.systemPrompt },
               { role: 'user', content: fittedPrompt.userMessage },
             ],
-            temperature: GENERATION_TEMPERATURE,
+            temperature,
             stream: true,
             ...(config.provider === 'openai' ? { stream_options: { include_usage: true } } : {}),
             ...(config.provider === 'openai'
