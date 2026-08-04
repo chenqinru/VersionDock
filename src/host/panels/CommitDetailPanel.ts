@@ -1042,11 +1042,9 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       .ai-stages { grid-template-columns: repeat(3, 22px); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .ai-explanation, .ai-explanation::before, .ai-orb::after, .ai-live-dot,
-      .ai-explain-btn, .ai-explain-btn .codicon, .ai-explain-btn::after,
-      .ai-thinking-dots i, .ai-cursor { animation: none !important; transition: none !important; }
+      .ai-explanation, .ai-explain-btn::after { animation: none !important; transition: none !important; }
+      .ai-explain-btn { transition: none !important; }
       .ai-explain-btn:hover:not(:disabled) { transform: none; }
-      .ai-cursor { opacity: 1; }
     }
     .section-label {
       font-size: 10px; font-weight: 600;
@@ -1386,7 +1384,6 @@ ${leftPanelContent}
     const aiMeta = document.getElementById('aiMeta');
     const aiWarning = document.getElementById('aiWarning');
     const aiStageElements = Array.from(document.querySelectorAll('[data-ai-stage]'));
-    const reduceAiMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     const readyAiStatus = __d.mode === 'aggregate'
       ? t('Ready to explain the selected commits')
       : t('Ready to explain this commit');
@@ -1514,12 +1511,6 @@ ${leftPanelContent}
     }
 
     function scheduleAiTyping() {
-      if (reduceAiMotion) {
-        aiDisplayedText = aiTargetText;
-        renderAiMarkdown(aiDisplayedText, aiBusy && !pendingAiResult);
-        finishAiTypingIfReady();
-        return;
-      }
       if (aiTypingHandle !== null) return;
       const tick = () => {
         aiTypingHandle = null;

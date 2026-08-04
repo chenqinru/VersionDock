@@ -89,6 +89,7 @@ const css = `
   @media (max-width: 650px) { .review-header,.review-notice { padding-inline:14px; } .review-workspace { padding-inline:16px; } .review-action span,.notice-provider { display:none; } .finding-grid { grid-template-columns:1fr; gap:4px; } .finding-key { margin-top:6px; } .stage-label { display:none; } }
   @media (prefers-reduced-motion: reduce) {
     .review-action,.stage-dot { transition:none !important; }
+    .review-action:hover { transform:none; }
     .review-action:hover::after,.summary,.finding { animation:none !important; }
   }
 `;

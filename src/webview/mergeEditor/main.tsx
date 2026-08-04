@@ -130,11 +130,9 @@ const AI_MERGE_STYLES = `
     animation: versiondock-ai-orbit 1.2s linear infinite;
   }
   @media (prefers-reduced-motion: reduce) {
-    .versiondock-ai-resolve-button,
-    .versiondock-ai-resolve-button .codicon,
-    .versiondock-ai-resolve-button::after,
-    .versiondock-ai-status::after,
-    .versiondock-ai-orbit { animation: none !important; }
+    .versiondock-ai-resolve-button { transition: none !important; }
+    .versiondock-ai-resolve-button:hover:not(:disabled) { transform: none; }
+    .versiondock-ai-resolve-button::after { animation: none !important; }
   }
 `;
 
@@ -469,7 +467,6 @@ function App() {
 
     const resolutions = [...msg.resolutions].sort((left, right) => left.index - right.index);
     const runToken = ++aiRunTokenRef.current;
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     setAiState({
       phase: 'typing',
       current: 0,
@@ -509,7 +506,7 @@ function App() {
               setNonConflictingSelections({ ...animatedSelections });
               setAppliedNonConflictingScope(Object.keys(animatedSelections).length === Object.keys(allSelections).length ? 'all' : null);
             }
-            await waitForDelay(reducedMotion ? 16 : 80);
+            await waitForDelay(80);
           }
         }
 
@@ -532,9 +529,9 @@ function App() {
 
           if (text.length === 0) {
             setAiDraft({ index: resolution.index, content: '' });
-            await waitForDelay(reducedMotion ? 16 : 220);
+            await waitForDelay(220);
           } else {
-            const targetDuration = reducedMotion ? 120 : Math.min(6_000, Math.max(1_100, text.length * 11));
+            const targetDuration = Math.min(6_000, Math.max(1_100, text.length * 11));
             const frameCount = Math.max(1, Math.floor(targetDuration / 16));
             const charactersPerFrame = Math.max(1, Math.ceil(text.length / frameCount));
             for (let cursor = charactersPerFrame; cursor < text.length + charactersPerFrame; cursor += charactersPerFrame) {
@@ -557,7 +554,7 @@ function App() {
           currentState.resolveBlock(resolution.index, customResolution);
           currentState.setResultContent(buildContentFromResolutions(currentState.file, nextResolutions, currentState.normalEdits));
           setAiDraft(null);
-          await waitForDelay(reducedMotion ? 16 : 140);
+          await waitForDelay(140);
         }
 
         if (aiRunTokenRef.current !== runToken) return;

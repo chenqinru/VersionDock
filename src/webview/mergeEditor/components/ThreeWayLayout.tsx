@@ -147,8 +147,6 @@ const MERGE_SCROLLBAR_STYLES = `
     outline-offset: 2px;
   }
   @media (prefers-reduced-motion: reduce) {
-    .versiondock-ai-code-caret,
-    .versiondock-ai-typing-line,
     .versiondock-merge-complete-notice { animation: none !important; }
   }
 `;

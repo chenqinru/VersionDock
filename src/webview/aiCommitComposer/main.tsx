@@ -78,7 +78,11 @@ const css = `
   .composer-message[data-generating='true'] { position: relative; z-index: 1; border-color: transparent !important; background-clip: padding-box !important; animation: composer-message-breathe 1.2s ease-in-out infinite; }
   .composer-diff-line[data-kind='add'] { color: var(--vscode-gitDecoration-addedResourceForeground); background: var(--composer-diff-add-background, color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground) 7%, transparent)); }
   .composer-diff-line[data-kind='remove'] { color: var(--vscode-gitDecoration-deletedResourceForeground); background: var(--composer-diff-remove-background, color-mix(in srgb, var(--vscode-gitDecoration-deletedResourceForeground) 7%, transparent)); }
-  @media (prefers-reduced-motion: reduce) { .composer-status::after, .composer-ai::after, .composer-message { animation: none !important; transition: none !important; } .composer-message[data-generating='true'] { opacity: .6; } }
+  @media (prefers-reduced-motion: reduce) {
+    .composer-ai,.composer-icon-action,.composer-message-ai,.composer-add-group { transition:none !important; }
+    .composer-ai:hover:not(:disabled),.composer-icon-action:hover:not(:disabled),.composer-add-group:hover:not(:disabled) { transform:none; }
+    .composer-ai::after { animation:none !important; }
+  }
 `;
 
 function send(message: ComposerToHostMsg): void { getVsCodeApi().postMessage(message); }

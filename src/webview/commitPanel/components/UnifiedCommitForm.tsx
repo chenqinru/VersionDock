@@ -359,12 +359,6 @@ export function UnifiedCommitForm({
         background-clip: padding-box !important;
         animation: gs-ai-textarea-breathe 1.2s ease-in-out infinite;
       }
-      @media (prefers-reduced-motion: reduce) {
-        .gs-commit-textarea[data-generating='true'] {
-          animation: none;
-          opacity: 0.6;
-        }
-      }
       .gs-commit-textarea::-webkit-scrollbar {
         width: 6px;
         background: var(--vscode-input-background);

@@ -85,14 +85,6 @@ const INTERACTION_STYLE = `
 .versiondock-bg-loading-fill {
   animation: versiondock-indeterminate-progress 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
-@media (prefers-reduced-motion: reduce) {
-  .versiondock-bg-loading-fill {
-    animation: none;
-    transform: none;
-    width: 100% !important;
-    opacity: 0.45 !important;
-  }
-}
 `;
 
 function CommitSkeleton() {

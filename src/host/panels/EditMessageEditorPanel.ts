@@ -224,9 +224,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       overflow-wrap: anywhere;
     }
     .generation-error.visible { display: block; }
-    @media (prefers-reduced-motion: reduce) {
-      textarea[data-generating="true"] { animation: none; opacity: 0.6; }
-    }
     .footer {
       display: flex; align-items: center; justify-content: flex-end; gap: 8px;
       padding: 12px 24px 20px;
