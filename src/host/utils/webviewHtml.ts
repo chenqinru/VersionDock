@@ -106,6 +106,9 @@ export function getWebviewHtml(
       opacity: 0.4;
       cursor: not-allowed;
     }
+    body[data-versiondock-checkbox-low-contrast] input[type="checkbox"]:not(:disabled) {
+      border-color: color-mix(in srgb, var(--vscode-foreground, #cccccc) 62%, transparent);
+    }
 
     /* ── Hover actions in file rows ─────────────────────────────────────────── */
     .file-row:hover .file-actions { opacity: 1 !important; }
@@ -114,7 +117,67 @@ export function getWebviewHtml(
 </head>
 <body>
   <div id="root"></div>
-  <script nonce="${nonce}">window.__VERSIONDOCK_I18N__ = ${i18nPayload}; window.__VERSIONDOCK_COLOR_THEME__ = ${colorThemePayload}; window.__VERSIONDOCK_APP_NAME__ = ${appNamePayload}; window.__INITIAL_CONFIG__ = ${initialConfigPayload}; if (/Cursor/.test(navigator.userAgent)) document.body.classList.add('cursor-host');</script>
+  <script nonce="${nonce}">
+    window.__VERSIONDOCK_I18N__ = ${i18nPayload};
+    window.__VERSIONDOCK_COLOR_THEME__ = ${colorThemePayload};
+    window.__VERSIONDOCK_APP_NAME__ = ${appNamePayload};
+    window.__INITIAL_CONFIG__ = ${initialConfigPayload};
+    if (/Cursor/.test(navigator.userAgent)) document.body.classList.add('cursor-host');
+
+    (() => {
+      const contrastRatio = (foreground, background, fallbackBackground) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 2;
+        canvas.height = 1;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) return Number.POSITIVE_INFINITY;
+
+        context.fillStyle = fallbackBackground;
+        context.fillRect(0, 0, 2, 1);
+        context.fillStyle = background;
+        context.fillRect(0, 0, 2, 1);
+        context.fillStyle = foreground;
+        context.fillRect(1, 0, 1, 1);
+
+        const pixels = context.getImageData(0, 0, 2, 1).data;
+        const luminance = (offset) => {
+          const channels = [pixels[offset], pixels[offset + 1], pixels[offset + 2]].map(channel => {
+            const value = channel / 255;
+            return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+          });
+          return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+        };
+        const backgroundLuminance = luminance(0);
+        const foregroundLuminance = luminance(4);
+        const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+        const darker = Math.min(foregroundLuminance, backgroundLuminance);
+        return (lighter + 0.05) / (darker + 0.05);
+      };
+      const updateCheckboxContrast = () => {
+        const styles = getComputedStyle(document.body);
+        const border = styles.getPropertyValue('--vscode-focusBorder').trim() || '#007fd4';
+        const surfaceToken = window.__VERSIONDOCK_APP_NAME__ === 'commitPanel'
+          ? '--vscode-sideBar-background'
+          : '--vscode-editor-background';
+        const fallbackBackground = document.body.classList.contains('vscode-light')
+          || document.body.classList.contains('vscode-high-contrast-light')
+          ? '#ffffff'
+          : '#1e1e1e';
+        const background = styles.getPropertyValue(surfaceToken).trim()
+          || styles.backgroundColor
+          || fallbackBackground;
+        document.body.toggleAttribute(
+          'data-versiondock-checkbox-low-contrast',
+          contrastRatio(border, background, fallbackBackground) < 2,
+        );
+      };
+      updateCheckboxContrast();
+      new MutationObserver(updateCheckboxContrast).observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style'],
+      });
+    })();
+  </script>
   <script nonce="${nonce}" type="module" src="${jsUri}"></script>
 </body>
 </html>`;
