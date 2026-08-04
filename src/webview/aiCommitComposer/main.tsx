@@ -486,7 +486,7 @@ function App() {
                         <linearGradient id="composer-message-marquee-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
                           <stop offset="0%" stopColor="var(--vscode-charts-blue, #3794ff)" />
                           <stop offset="55%" stopColor="var(--vscode-charts-purple, #a371f7)" />
-                          <stop offset="100%" stopColor="var(--vscode-focusBorder, #007acc)" />
+                          <stop offset="100%" stopColor="var(--vscode-charts-blue, #3794ff)" />
                         </linearGradient>
                       </defs>
                       <rect className="composer-message-marquee-track" pathLength="100" />

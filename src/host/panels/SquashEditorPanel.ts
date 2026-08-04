@@ -306,7 +306,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
             <linearGradient id="ai-marquee-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stop-color="var(--vscode-charts-blue, #3794ff)"></stop>
               <stop offset="55%" stop-color="var(--vscode-charts-purple, #a371f7)"></stop>
-              <stop offset="100%" stop-color="var(--vscode-focusBorder, #007acc)"></stop>
+              <stop offset="100%" stop-color="var(--vscode-charts-blue, #3794ff)"></stop>
             </linearGradient>
           </defs>
           <rect class="ai-marquee-track" pathLength="100"></rect>
