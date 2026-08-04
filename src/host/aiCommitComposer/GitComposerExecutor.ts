@@ -46,6 +46,10 @@ function patchInput(value: string): string {
   return value.endsWith('\n') ? value : `${value}\n`;
 }
 
+function literalPathspec(filePath: string): string {
+  return `:(literal)${filePath}`;
+}
+
 function countChanges(patch: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
@@ -173,14 +177,29 @@ export class GitComposerExecutor {
       if (file.oldPath) selectedPathSet.add(file.oldPath);
     }
     const selectedPaths = Array.from(selectedPathSet).sort();
+    const selectedPathspecs = selectedPaths.map(literalPathspec);
 
     const stagedOutside = Array.from(new Set(status.stagedFiles.flatMap(file => {
       if (selectedPathSet.has(file.path) || (file.oldPath && selectedPathSet.has(file.oldPath))) return [];
       return [file.oldPath, file.path].filter((value): value is string => Boolean(value));
     })));
     const unselectedIndexPatch = stagedOutside.length > 0
-      ? await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...stagedOutside], { trimOutput: false })
+      ? await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...stagedOutside.map(literalPathspec)], { trimOutput: false })
       : '';
+    const selectedIndexPatch = stagedOnly
+      ? await this.git(
+        repo.rootPath,
+        ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPathspecs],
+        { trimOutput: false },
+      )
+      : '';
+    const versionedSelectedPaths = stagedOnly
+      ? new Set<string>()
+      : new Set((await this.git(
+        repo.rootPath,
+        ['ls-files', '-z', '--cached', '--with-tree=HEAD', '--', ...selectedPathspecs],
+        { trimOutput: false },
+      )).split('\0').filter(Boolean));
 
     let sourcePatch = '';
     let expectedTree = '';
@@ -190,11 +209,26 @@ export class GitComposerExecutor {
     try {
       await this.git(repo.rootPath, ['read-tree', 'HEAD'], { env });
       if (stagedOnly) {
-        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPaths], { trimOutput: false });
+        sourcePatch = selectedIndexPatch;
         if (sourcePatch) await this.git(repo.rootPath, ['apply', '--cached', '--binary', '--whitespace=nowarn', '-'], { env, stdin: patchInput(sourcePatch) });
       } else {
-        await this.git(repo.rootPath, ['add', '-A', '--', ...selectedPaths], { env });
-        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPaths], { env, trimOutput: false });
+        const regularPathspecs = selectedPaths
+          .filter(filePath => !versionedSelectedPaths.has(filePath))
+          .map(literalPathspec);
+        const versionedPathspecs = selectedPaths
+          .filter(filePath => versionedSelectedPaths.has(filePath))
+          .map(literalPathspec);
+        if (regularPathspecs.length > 0) {
+          await this.git(repo.rootPath, ['add', '-A', '--', ...regularPathspecs], { env });
+        }
+        if (versionedPathspecs.length > 0) {
+          // Git rejects an explicitly selected path below an ignored directory
+          // even when that path is already in HEAD or the real index. Force is
+          // limited to those versioned paths, so unrelated ignored files stay
+          // excluded from the temporary composer index.
+          await this.git(repo.rootPath, ['add', '-f', '-A', '--', ...versionedPathspecs], { env });
+        }
+        sourcePatch = await this.git(repo.rootPath, ['diff', '--cached', '--binary', '--full-index', '-M', '-C', 'HEAD', '--', ...selectedPathspecs], { env, trimOutput: false });
       }
       expectedTree = await this.git(repo.rootPath, ['write-tree'], { env });
     } finally {
