@@ -228,7 +228,7 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
         onClick={(e) => e.stopPropagation()}
       />
       {isRepoRootChange ? (
-        <Codicon name="repo" style={{ fontSize: `${ICON_SIZE}px`, opacity: 0.75, flexShrink: 0 }} />
+        <Codicon name="repo" style={{ fontSize: `${ICON_SIZE}px`, flexShrink: 0 }} />
       ) : (
         <FileIcon name={fileName} theme={iconTheme} size={ICON_SIZE} />
       )}
@@ -344,7 +344,7 @@ const styles = {
   }),
   dirPath: {
     fontSize: '11px',
-    opacity: 0.45,
+    color: 'var(--vscode-descriptionForeground)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
@@ -358,7 +358,6 @@ const styles = {
     flexShrink: 0,
     width: '14px',
     textAlign: 'center',
-    opacity: 0.9,
     marginLeft: '6px',
   }),
   stagedDot: {
@@ -391,7 +390,7 @@ const styles = {
     userSelect: 'none' as const,
     paddingLeft: '2px',
   },
-  folderChevron: { fontSize: '12px', opacity: 0.7, width: '12px', flexShrink: 0 },
+  folderChevron: { fontSize: '12px', width: '12px', flexShrink: 0 },
   folderName: {
     flex: 1,
     minWidth: 0,
@@ -399,7 +398,7 @@ const styles = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
   },
-  dirCount: { fontSize: '11px', opacity: 0.45, flexShrink: 0, minWidth: '14px', textAlign: 'center' as const, marginLeft: '6px' },
+  dirCount: { fontSize: '11px', color: 'var(--vscode-descriptionForeground)', flexShrink: 0, minWidth: '14px', textAlign: 'center' as const, marginLeft: '6px' },
   rowActions: {
     display: 'flex',
     alignItems: 'center',
@@ -418,6 +417,5 @@ const styles = {
     fontSize: '12px',
     display: 'flex',
     alignItems: 'center',
-    opacity: 0.7,
   } as React.CSSProperties,
 };

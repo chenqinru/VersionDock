@@ -242,7 +242,7 @@ function MenuItem({ icon, label, danger, onClick }: { icon: string; label: strin
       onMouseLeave={event => (event.currentTarget.style.background = 'transparent')}
       onClick={onClick}
     >
-      <Codicon name={icon} style={{ fontSize: '13px', opacity: 0.8 }} />
+      <Codicon name={icon} style={{ fontSize: '13px' }} />
       {label}
     </div>
   );
@@ -867,11 +867,11 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
           />
         )}
         <div style={styles.headerMain} onClick={() => setExpanded(value => !value)}>
-          <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', opacity: 0.65, flexShrink: 0 }} />
+          <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', flexShrink: 0 }} />
           <span style={styles.dot(repoColor)} />
           <span style={styles.repoName}>{repoName}</span>
           <span style={styles.branchBadge(branchClr)} title={branchTitle}>
-            <Codicon name={worktreeBranch ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+            <Codicon name={worktreeBranch ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
             <span style={styles.branchName}>{branchLabel}</span>
           </span>
           {(commitCount > 0 || canTogglePushView || behind > 0 || !hasUpstream) && (
@@ -916,12 +916,12 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
         <div style={styles.repoBody} onClick={handleBodyClick}>
           {hasUpstream && ahead === 0 && behind === 0 ? (
             <div style={styles.upToDate}>
-              <Codicon name="check" style={{ marginRight: '6px', opacity: 0.6 }} />
+              <Codicon name="check" style={{ marginRight: '6px' }} />
               {t('Up to date')}
             </div>
           ) : hasUpstream && ahead === 0 && behind > 0 ? (
             <div style={styles.behindRow}>
-              <Codicon name="arrow-down" style={{ marginRight: '6px', opacity: 0.7, flexShrink: 0 }} />
+              <Codicon name="arrow-down" style={{ marginRight: '6px', flexShrink: 0 }} />
               <span>{behind === 1 ? t('{0} commit to pull from {1}', behind, repoStatus.branch.upstream ?? '') : t('{0} commits to pull from {1}', behind, repoStatus.branch.upstream ?? '')}</span>
             </div>
           ) : unpushed?.loading ? (
@@ -973,7 +973,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
             )
           ) : !hasUpstream ? (
             <div style={styles.unpublishedRow}>
-              <Codicon name="cloud-upload" style={{ marginRight: '6px', opacity: 0.7, flexShrink: 0 }} />
+              <Codicon name="cloud-upload" style={{ marginRight: '6px', flexShrink: 0 }} />
               <span>{t('Local branch — not published to any remote yet')}</span>
             </div>
           ) : (
@@ -1246,7 +1246,7 @@ const styles = {
     width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0,
   }),
   repoName: {
-    fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9,
+    fontSize: '11px', fontWeight: 'bold' as const,
     textTransform: 'uppercase' as const, letterSpacing: 0, minWidth: 0,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, flexShrink: 1,
   },
@@ -1263,7 +1263,7 @@ const styles = {
   } as React.CSSProperties,
   aheadBadge: {
     display: 'inline-flex', alignItems: 'center',
-    background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)', color: 'var(--versiondock-badge-foreground)',
     borderRadius: '8px', padding: '1px 6px', fontSize: '10px', fontWeight: 'bold' as const,
     flexShrink: 0,
   } as React.CSSProperties,
@@ -1275,7 +1275,7 @@ const styles = {
   } as React.CSSProperties,
   publishBadge: {
     display: 'inline-flex', alignItems: 'center',
-    background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)', color: 'var(--versiondock-badge-foreground)',
     borderRadius: '8px', padding: '1px 6px', fontSize: '10px', fontWeight: 500 as const,
     flexShrink: 0,
   } as React.CSSProperties,
@@ -1291,25 +1291,25 @@ const styles = {
     width: 22, height: 22, padding: 0, border: 'none', borderRadius: '3px',
     background: 'transparent', color: 'var(--vscode-icon-foreground)',
     cursor: disabled ? 'default' : 'pointer',
-    opacity: visible ? (disabled ? 0.35 : 0.8) : 0,
+    opacity: visible ? (disabled ? 0.35 : 1) : 0,
     pointerEvents: visible && !disabled ? 'auto' : 'none',
     transition: 'opacity 0.1s',
     flexShrink: 0,
   }),
   repoBody: { background: 'var(--vscode-sideBar-background)' } as React.CSSProperties,
   upToDate: {
-    display: 'flex', alignItems: 'center', padding: '8px 12px', fontSize: '12px', opacity: 0.5,
+    display: 'flex', alignItems: 'center', padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   behindRow: {
     display: 'flex', alignItems: 'center',
-    padding: '12px 8px', fontSize: '12px', opacity: 0.75,
+    padding: '12px 8px', fontSize: '12px',
     color: 'var(--vscode-inputValidation-warningForeground, #cca700)',
   } as React.CSSProperties,
   unpublishedRow: {
     display: 'flex', alignItems: 'center',
-    padding: '12px 8px', fontSize: '12px', opacity: 0.5,
+    padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
-  loadingRow: { padding: '8px 12px', fontSize: '12px', opacity: 0.45, fontStyle: 'italic' as const } as React.CSSProperties,
+  loadingRow: { padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const } as React.CSSProperties,
   errorRow: {
     display: 'flex', alignItems: 'flex-start', padding: '6px 10px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)',
@@ -1332,7 +1332,7 @@ const styles = {
   } as React.CSSProperties,
   commitHash: {
     fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: '10px',
-    opacity: 0.55, gridRow: '1', gridColumn: '1',
+    color: 'var(--vscode-descriptionForeground)', gridRow: '1', gridColumn: '1',
     display: 'flex', alignItems: 'center',
   } as React.CSSProperties,
   commitMessage: {
@@ -1340,7 +1340,7 @@ const styles = {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
   } as React.CSSProperties,
   commitMeta: {
-    fontSize: '10px', opacity: 0.45, gridRow: '2', gridColumn: '2',
+    fontSize: '10px', color: 'var(--vscode-descriptionForeground)', gridRow: '2', gridColumn: '2',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
     display: 'flex', alignItems: 'center',
   } as React.CSSProperties,
@@ -1360,7 +1360,7 @@ const styles = {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     background: 'transparent', border: 'none',
     color: 'var(--vscode-foreground)',
-    cursor: 'pointer', padding: '2px', borderRadius: '3px', opacity: 0.65,
+    cursor: 'pointer', padding: '2px', borderRadius: '3px',
   } as React.CSSProperties,
   commitDetails: {
     paddingBottom: '6px',
@@ -1379,7 +1379,6 @@ const styles = {
     wordBreak: 'break-word',
     fontSize: '11px',
     lineHeight: 1.45,
-    opacity: 0.9,
   } as React.CSSProperties,
   footerText: (withTopBorder: boolean): React.CSSProperties => ({
     margin: withTopBorder ? '8px 0 0' : 0,
@@ -1390,7 +1389,6 @@ const styles = {
     fontFamily: 'var(--vscode-editor-font-family)',
     fontSize: '11px',
     lineHeight: 1.45,
-    opacity: 0.8,
   }),
   fileListRoot: {
     background: 'var(--vscode-sideBar-background)',
@@ -1439,9 +1437,11 @@ const styles = {
     border: 'none',
     borderRadius: '3px',
     background: active ? 'var(--vscode-toolbar-activeBackground)' : 'transparent',
-    color: 'var(--vscode-foreground)',
+    color: disabled
+      ? 'var(--vscode-disabledForeground, var(--vscode-descriptionForeground))'
+      : active ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
     cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.3 : active ? 1 : 0.5,
+    opacity: disabled ? 0.3 : 1,
   }),
   treeRoot: {
     padding: '2px 0',
@@ -1459,7 +1459,6 @@ const styles = {
   }),
   folderChevron: {
     fontSize: '12px',
-    opacity: 0.65,
     flexShrink: 0,
   } as React.CSSProperties,
   folderName: {
@@ -1469,16 +1468,15 @@ const styles = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
     fontSize: '12px',
-    opacity: 0.85,
+    color: 'var(--vscode-descriptionForeground)',
   },
   fileCountBadge: {
     marginLeft: 'auto',
     fontSize: '10px',
     padding: '0 6px',
     borderRadius: '999px',
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
-    opacity: 0.85,
+    background: 'var(--versiondock-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
     flexShrink: 0,
   } as React.CSSProperties,
   fileRow: (depth: number, hovered: boolean): React.CSSProperties => ({
@@ -1508,7 +1506,6 @@ const styles = {
   }),
   dirPath: {
     color: 'var(--vscode-descriptionForeground)',
-    opacity: 0.65,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,

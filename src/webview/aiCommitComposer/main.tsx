@@ -26,9 +26,9 @@ const css = `
     --composer-hunk-header-background: color-mix(in srgb, var(--vscode-editor-foreground) 3%, var(--composer-code-background));
     --composer-hunk-location-background: color-mix(in srgb, var(--vscode-textLink-foreground, #0969da) 11%, var(--vscode-editor-background));
     --composer-hunk-location-border: color-mix(in srgb, var(--vscode-textLink-foreground, #0969da) 34%, var(--vscode-editor-background));
-    --composer-hunk-badge-foreground: #fff;
-    --composer-hunk-badge-background: color-mix(in srgb, var(--vscode-textLink-foreground, #0969da) 84%, #003f73);
-    --composer-hunk-badge-border: color-mix(in srgb, var(--vscode-textLink-foreground, #0969da) 68%, #002b50);
+    --composer-hunk-badge-foreground: var(--versiondock-badge-foreground);
+    --composer-hunk-badge-background: var(--versiondock-badge-background);
+    --composer-hunk-badge-border: color-mix(in srgb, var(--versiondock-badge-foreground) 26%, transparent);
     --composer-atomic-foreground: color-mix(in srgb, var(--vscode-editorWarning-foreground, #9a6700) 72%, #211400);
     --composer-atomic-background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #9a6700) 24%, var(--vscode-editor-background));
     --composer-atomic-border: color-mix(in srgb, var(--vscode-editorWarning-foreground, #9a6700) 78%, var(--vscode-editor-background));
@@ -511,7 +511,7 @@ function App() {
                   />
                   <button
                     className="composer-message-ai"
-                    style={{ ...styles.messageAiButton, opacity: group.unitIds.length === 0 ? 0.35 : 0.7, cursor: group.unitIds.length === 0 ? 'not-allowed' : 'pointer' }}
+                    style={{ ...styles.messageAiButton, opacity: group.unitIds.length === 0 ? 0.35 : 1, cursor: group.unitIds.length === 0 ? 'not-allowed' : 'pointer' }}
                     disabled={group.unitIds.length === 0 || phase === 'applying'}
                     title={messageGeneration?.groupId === group.id ? t('Stop generating commit message') : t('Generate commit message with AI')}
                     onClick={() => toggleMessageGeneration(group)}
@@ -650,24 +650,24 @@ const styles: Record<string, React.CSSProperties> = {
   dropBefore: { boxShadow: 'inset 0 2px var(--vscode-focusBorder)' },
   dropAfter: { boxShadow: 'inset 0 -2px var(--vscode-focusBorder)' },
   filePath: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
-  hunkCount: { flexShrink: 0, padding: '2px 7px', borderRadius: 4, color: 'var(--composer-hunk-badge-foreground, var(--vscode-badge-foreground, #fff))', background: 'var(--composer-hunk-badge-background, color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 78%, var(--vscode-badge-background, #1f6feb)))', border: '1px solid var(--composer-hunk-badge-border, color-mix(in srgb, var(--vscode-badge-foreground, #fff) 26%, transparent))', fontSize: 10, lineHeight: 1.25, fontWeight: 700, whiteSpace: 'nowrap' },
+  hunkCount: { flexShrink: 0, padding: '2px 7px', borderRadius: 4, color: 'var(--composer-hunk-badge-foreground, var(--versiondock-badge-foreground))', background: 'var(--composer-hunk-badge-background, var(--versiondock-badge-background))', border: '1px solid var(--composer-hunk-badge-border, color-mix(in srgb, var(--versiondock-badge-foreground) 26%, transparent))', fontSize: 10, lineHeight: 1.25, fontWeight: 700, whiteSpace: 'nowrap' },
   changeStats: { marginLeft: 'auto', display: 'flex', gap: 7, fontSize: 11, fontFamily: 'var(--vscode-editor-font-family)' },
   changeAdded: { color: 'var(--vscode-gitDecoration-addedResourceForeground, #3fb950)', fontStyle: 'normal', fontWeight: 700 },
   changeRemoved: { color: 'var(--vscode-gitDecoration-deletedResourceForeground, #f85149)', fontStyle: 'normal', fontWeight: 700 },
-  atomic: { flexShrink: 0, padding: '2px 7px', borderRadius: 4, color: 'var(--composer-atomic-foreground, var(--vscode-badge-foreground, #fff))', background: 'var(--composer-atomic-background, color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 76%, var(--vscode-badge-background, #3b3b3b)))', border: '1px solid var(--composer-atomic-border, color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 78%, transparent))', fontSize: 10, lineHeight: 1.25, fontWeight: 700, whiteSpace: 'nowrap' },
+  atomic: { flexShrink: 0, padding: '2px 7px', borderRadius: 4, color: 'var(--composer-atomic-foreground, var(--versiondock-badge-foreground))', background: 'var(--composer-atomic-background, color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 76%, var(--versiondock-badge-background)))', border: '1px solid var(--composer-atomic-border, color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 78%, transparent))', fontSize: 10, lineHeight: 1.25, fontWeight: 700, whiteSpace: 'nowrap' },
   hunks: { borderTop: '1px solid var(--composer-code-border, var(--vscode-panel-border))', background: 'var(--composer-code-background, color-mix(in srgb, var(--vscode-textCodeBlock-background) 78%, transparent))' },
   hunk: { borderBottom: '1px solid var(--vscode-panel-border)' },
   hunkHeader: { minHeight: 34, display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px 5px 27px', color: 'var(--vscode-foreground)', background: 'var(--composer-hunk-header-background, transparent)', fontFamily: 'var(--vscode-font-family)', fontSize: 11, cursor: 'grab' },
-  hunkGrabber: { flexShrink: 0, color: 'var(--vscode-descriptionForeground)', opacity: 0.75 },
+  hunkGrabber: { flexShrink: 0, color: 'var(--vscode-descriptionForeground)' },
   hunkTitle: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   hunkLocation: { flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 7px', borderRadius: 4, color: 'var(--vscode-textLink-foreground)', background: 'var(--composer-hunk-location-background, transparent)', border: '1px solid var(--composer-hunk-location-border, var(--vscode-panel-border))', fontWeight: 600, whiteSpace: 'nowrap' },
   hunkLocationIcon: { fontSize: 11 },
   hunkContext: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--vscode-descriptionForeground)', fontFamily: 'var(--vscode-editor-font-family)', fontSize: 10 },
   diff: { margin: 0, padding: '8px 0 12px', maxHeight: 280, overflow: 'auto', background: 'var(--composer-code-background, var(--vscode-textCodeBlock-background))', boxShadow: 'inset 0 1px var(--composer-code-border, var(--vscode-panel-border)), inset 0 -1px var(--composer-code-border, var(--vscode-panel-border))', fontFamily: 'var(--vscode-editor-font-family)', fontSize: 11, lineHeight: 1.55 },
   diffLine: { width: 'max-content', minWidth: '100%', display: 'grid', gridTemplateColumns: '42px 42px 18px max-content', whiteSpace: 'pre' },
-  diffLineNumber: { padding: '0 7px 0 4px', textAlign: 'right', color: 'var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))', borderRight: '1px solid color-mix(in srgb, var(--composer-code-border, var(--vscode-panel-border)) 58%, transparent)', opacity: 0.78, userSelect: 'none' },
+  diffLineNumber: { padding: '0 7px 0 4px', textAlign: 'right', color: 'var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground))', borderRight: '1px solid color-mix(in srgb, var(--composer-code-border, var(--vscode-panel-border)) 58%, transparent)', userSelect: 'none' },
   diffNewLineNumber: { marginRight: 3 },
-  diffPrefix: { display: 'block', textAlign: 'center', userSelect: 'none', opacity: 0.82 },
+  diffPrefix: { display: 'block', textAlign: 'center', userSelect: 'none' },
   diffCode: { display: 'block', paddingRight: 12 },
   emptyDiff: { padding: '12px 38px', color: 'var(--vscode-descriptionForeground)', background: 'var(--composer-code-background, var(--vscode-textCodeBlock-background))', fontSize: 11 },
   dropHint: { marginTop: 8, padding: 14, textAlign: 'center', border: '1px dashed var(--vscode-panel-border)', color: 'var(--vscode-descriptionForeground)' }, addGroup: { display: 'flex', alignItems: 'center', gap: 6, marginLeft: -7, padding: '6px 9px', border: 'none', borderRadius: 4, background: 'var(--composer-add-group-background, transparent)', color: 'var(--vscode-textLink-foreground)', cursor: 'pointer' },

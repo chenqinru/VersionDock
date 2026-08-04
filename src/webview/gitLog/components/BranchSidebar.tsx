@@ -758,9 +758,8 @@ const styles = {
   } as React.CSSProperties,
   searchIcon: {
     fontSize: '13px',
-    opacity: 0.5,
     flexShrink: 0,
-    color: 'var(--vscode-input-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   searchInput: {
     flex: 1,
@@ -785,8 +784,7 @@ const styles = {
     cursor: 'pointer',
     padding: '0 5px',
     borderRadius: 0,
-    color: 'var(--vscode-foreground)',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   collapseBtnInner: {
     display: 'flex',
@@ -833,21 +831,19 @@ const styles = {
     fontWeight: 'bold',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-    color: 'var(--vscode-badge-foreground)',
-    background: 'var(--vscode-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
     borderRadius: '3px',
     padding: '1px 4px',
     flexShrink: 0,
-    opacity: 0.75,
     marginLeft: '4px',
   } as React.CSSProperties,
   iconBtn: {
     background: 'transparent',
     border: 'none',
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     cursor: 'pointer',
     padding: '1px 2px',
-    opacity: 0.6,
     display: 'flex',
     alignItems: 'center',
   } as React.CSSProperties,
@@ -865,7 +861,7 @@ const styles = {
   vcsBadge: (kind: 'git' | 'svn'): React.CSSProperties => ({
     fontSize: '9px',
     fontWeight: 'bold' as const,
-    color: 'var(--vscode-badge-foreground)',
+    color: 'var(--versiondock-badge-foreground)',
     background: kind === 'svn'
       ? 'var(--vscode-charts-purple, #8957e5)'
       : 'var(--vscode-charts-orange, #f05033)',
@@ -876,13 +872,11 @@ const styles = {
   }),
   chevron: {
     fontSize: '9px',
-    opacity: 0.5,
     width: '10px',
     flexShrink: 0,
   },
   sectionIcon: {
     fontSize: '13px',
-    opacity: 0.7,
     flexShrink: 0,
   } as React.CSSProperties,
   sectionLabel: {
@@ -894,8 +888,8 @@ const styles = {
     color: 'var(--vscode-foreground)',
   },
   count: {
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
     borderRadius: '8px',
     padding: '0 5px',
     fontSize: '10px',
@@ -930,7 +924,6 @@ const styles = {
       : isHead
         ? 'var(--vscode-gitDecoration-addedResourceForeground)'
         : 'var(--vscode-foreground)',
-    opacity: isPrimary ? 1 : isHead ? 1 : 0.55,
   }),
   branchName: (isHead: boolean, isPrimary: boolean): React.CSSProperties => ({
     flex: 1,
@@ -949,8 +942,8 @@ const styles = {
     height: '14px',
     padding: '0 4px',
     borderRadius: '3px',
-    color: 'var(--vscode-badge-foreground)',
-    background: 'var(--vscode-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
     flexShrink: 0,
     letterSpacing: '0.02em',
   } as React.CSSProperties,
@@ -969,7 +962,6 @@ const styles = {
   pushIndicator: {
     color: PUSH_COLOR,
     fontWeight: 600,
-    opacity: 0.75,
   } as React.CSSProperties,
   pullIndicator: {
     color: PULL_COLOR,
@@ -1005,7 +997,6 @@ const styles = {
   menuIcon: {
     fontSize: '14px',
     flexShrink: 0,
-    opacity: 0.8,
   } as React.CSSProperties,
   menuItemDisabled: {
     padding: '4px 12px',

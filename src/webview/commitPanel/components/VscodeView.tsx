@@ -234,7 +234,7 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
         onContextMenu={e => { e.preventDefault(); onFolderContextMenu(e, node.path, allFiles); }}
       >
         <div style={treeDirInnerStyle} onClick={() => toggleCollapsed(collapseKey)} title={node.path}>
-          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', opacity: 0.7, flexShrink: 0 }} />
+          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', flexShrink: 0 }} />
           <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
           <span style={folderNameStyle}>{node.name}</span>
         </div>
@@ -365,7 +365,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
             />
           )}
           <div style={repoHeaderMainStyle} onClick={() => toggleCollapsed(collapseKey)}>
-            <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '12px', opacity: 0.7, flexShrink: 0 }} />
+            <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '12px', flexShrink: 0 }} />
             <span style={repoDotStyle(repoColor)} />
             <span style={repoNameStyle}>
               {isWorktree && mainWorktreePath ? baseNameFromPath(mainWorktreePath) ?? repoName : repoName}
@@ -387,7 +387,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
               onClick={e => { e.stopPropagation(); onBranchClick(repoId); }}
               title={repoStatus.branch.detachedTag ? t('Tag: {0} (detached HEAD)', repoStatus.branch.detachedTag) : repoStatus.branch.detachedHash ? t('Detached HEAD at {0}', repoStatus.branch.detachedHash) : repoStatus.branch.name}
             >
-              <Codicon name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+            <Codicon name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
               <span style={branchNameStyle}>{repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name}</span>
             </span>
           </div>
@@ -427,7 +427,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
         </div>
       )}
       {!collapsed && isEmpty && (
-        <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-foreground)', opacity: 0.4, textAlign: 'center' }}>{t('No changes')}</div>
+        <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>{t('No changes')}</div>
       )}
       {!collapsed && !isEmpty && <div style={{ paddingBottom: '2px' }}>{renderFiles()}</div>}
       <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
@@ -465,8 +465,8 @@ function SectionHeader({ title, icon, count, collapsed, onToggle, onContextMenu,
       onContextMenu={e => { e.preventDefault(); onContextMenu(e); }}
     >
       <div style={sectionHeaderMainStyle} onClick={onToggle}>
-        <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '12px', opacity: 0.7, flexShrink: 0 }} />
-        <Codicon name={icon} style={{ fontSize: '13px', opacity: 0.8, flexShrink: 0 }} />
+        <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '12px', flexShrink: 0 }} />
+        <Codicon name={icon} style={{ fontSize: '13px', flexShrink: 0 }} />
         <span style={sectionTitleStyle}>{title}</span>
       </div>
       {/* Right side always rendered to avoid layout shift */}
@@ -717,8 +717,8 @@ const sectionTitleStyle: React.CSSProperties = {
 };
 
 const sectionCountStyle: React.CSSProperties = {
-  background: 'var(--vscode-badge-background)',
-  color: 'var(--vscode-badge-foreground)',
+  background: 'var(--versiondock-badge-background)',
+  color: 'var(--versiondock-badge-foreground)',
   borderRadius: '10px',
   padding: '1px 6px',
   fontSize: '10px',
@@ -778,7 +778,7 @@ const branchNameStyle: React.CSSProperties = {
 };
 
 const repoCountStyle: React.CSSProperties = {
-  fontSize: '10px', opacity: 0.5, fontWeight: 'normal',
+  fontSize: '10px', color: 'var(--vscode-descriptionForeground)', fontWeight: 'normal',
   textTransform: 'none', letterSpacing: 0, flexShrink: 0,
   minWidth: '14px', textAlign: 'center', marginLeft: '6px',
 };
@@ -806,13 +806,13 @@ const fileNameStyle: React.CSSProperties = {
 };
 
 const dirPathStyle: React.CSSProperties = {
-  fontSize: '11px', opacity: 0.5, overflow: 'hidden',
+  fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden',
   textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0,
 };
 
 const statusLetterStyle = (color: string): React.CSSProperties => ({
   fontSize: '11px', fontWeight: 'bold', color, flexShrink: 0, width: '14px',
-  textAlign: 'center', opacity: 0.9, marginLeft: '6px',
+  textAlign: 'center', marginLeft: '6px',
 });
 
 const rowActionsStyle: React.CSSProperties = {
@@ -825,7 +825,7 @@ const repoActionsStyle: React.CSSProperties = {
 
 const actionBtnStyle: React.CSSProperties = {
   background: 'transparent', border: 'none', cursor: 'pointer',
-  color: 'var(--vscode-foreground)', opacity: 0.7,
+  color: 'var(--vscode-descriptionForeground)',
   padding: '2px 2px', borderRadius: '3px', display: 'flex', alignItems: 'center',
 };
 
@@ -845,25 +845,24 @@ const folderNameStyle: React.CSSProperties = {
 };
 
 const dirCountStyle: React.CSSProperties = {
-  fontSize: '11px', opacity: 0.5, marginLeft: '6px', flexShrink: 0, minWidth: '14px', textAlign: 'center',
+  fontSize: '11px', color: 'var(--vscode-descriptionForeground)', marginLeft: '6px', flexShrink: 0, minWidth: '14px', textAlign: 'center',
 };
 
 const submoduleBadgeStyle: React.CSSProperties = {
   fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.04em',
-  color: 'var(--vscode-badge-foreground)', background: 'var(--vscode-badge-background)',
-  borderRadius: '3px', padding: '1px 4px', flexShrink: 0, opacity: 0.75,
+  color: 'var(--versiondock-badge-foreground)', background: 'var(--versiondock-badge-background)',
+  borderRadius: '3px', padding: '1px 4px', flexShrink: 0,
 };
 
 const vcsBadgeStyle = (kind: 'git' | 'svn'): React.CSSProperties => ({
   fontSize: '9px',
   fontWeight: 'bold',
   letterSpacing: 0,
-  color: 'var(--vscode-badge-foreground)',
+  color: 'var(--versiondock-badge-foreground)',
   background: kind === 'svn'
     ? 'var(--vscode-charts-purple, #8957e5)'
     : 'var(--vscode-charts-orange, #f05033)',
   borderRadius: '3px',
   padding: '1px 4px',
   flexShrink: 0,
-  opacity: 0.9,
 });

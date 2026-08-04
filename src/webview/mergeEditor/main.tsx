@@ -898,8 +898,8 @@ function App() {
 
 const styles = {
   app: { height: '100vh', display: 'flex', flexDirection: 'column' as const, background: 'var(--vscode-editor-background)', color: 'var(--vscode-foreground)', fontFamily: 'var(--vscode-font-family)', overflow: 'hidden' },
-  loading: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.65, background: 'var(--vscode-editor-background)', color: 'var(--vscode-foreground)' },
-  loadingError: { maxWidth: 720, padding: 24, color: 'var(--vscode-errorForeground)', whiteSpace: 'pre-wrap' as const, textAlign: 'center' as const, opacity: 1 },
+  loading: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--vscode-editor-background)', color: 'var(--vscode-descriptionForeground)' },
+  loadingError: { maxWidth: 720, padding: 24, color: 'var(--vscode-errorForeground)', whiteSpace: 'pre-wrap' as const, textAlign: 'center' as const },
   pathHeader: { height: 40, display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px 0 12px', borderBottom: '1px solid var(--vscode-panel-border)', flexShrink: 0 },
   fileIcon: { width: 16, height: 16, flexShrink: 0 } as React.CSSProperties,
   pathText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, fontSize: 13 },
@@ -930,12 +930,12 @@ const styles = {
   toolbarLeft: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 } as React.CSSProperties,
   navButton: (disabled?: boolean): React.CSSProperties => ({ border: '1px solid var(--vscode-panel-border)', borderRadius: 3, background: 'transparent', color: disabled ? 'var(--vscode-disabledForeground)' : 'var(--vscode-foreground)', padding: '1px 7px', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.55 : 1 }),
   separator: { width: 1, height: 18, background: 'var(--vscode-panel-border)', flexShrink: 0 } as React.CSSProperties,
-  toolbarLabel: { opacity: 0.78, whiteSpace: 'nowrap' as const },
+  toolbarLabel: { color: 'var(--vscode-descriptionForeground)', whiteSpace: 'nowrap' as const },
   scopeButton: (disabled?: boolean, active?: boolean): React.CSSProperties => ({ display: 'inline-flex', alignItems: 'center', gap: 4, border: `1px solid ${active ? 'var(--vscode-focusBorder)' : 'var(--vscode-panel-border)'}`, borderRadius: 3, background: active ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent', color: disabled ? 'var(--vscode-disabledForeground)' : active ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)', padding: '2px 8px', fontSize: 12, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.65 : 1 }),
   scopeIcon: { color: 'var(--vscode-textLink-foreground)', fontSize: 13, lineHeight: '16px' },
   syncLabel: { display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' as const },
   syncInput: { margin: 0 },
-  toolbarStats: { opacity: 0.7, whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis' } as React.CSSProperties,
+  toolbarStats: { color: 'var(--vscode-descriptionForeground)', whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis' } as React.CSSProperties,
   aiStatus: (phase: AiPhase): React.CSSProperties => ({
     position: 'relative',
     minHeight: 28,

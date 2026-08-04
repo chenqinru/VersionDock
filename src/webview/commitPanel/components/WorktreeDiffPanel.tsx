@@ -498,7 +498,6 @@ const styles = {
   } as React.CSSProperties,
   chevron: {
     fontSize: '12px',
-    opacity: 0.7,
     flexShrink: 0,
   },
   fileLeadingSpacer: {
@@ -523,8 +522,8 @@ const styles = {
     fontWeight: 600,
     lineHeight: '18px',
     textAlign: 'center' as const,
-    color: 'var(--vscode-badge-foreground, #ffffff)',
-    background: 'var(--vscode-badge-background, #0e639c)',
+    color: 'var(--versiondock-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
     flexShrink: 0,
   } as React.CSSProperties,
   fileRow: (selected: boolean): React.CSSProperties => ({

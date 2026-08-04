@@ -318,7 +318,7 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
       >
         <div style={{ width: indent + 18, flexShrink: 0 }} />
         {isRepoRootChange ? (
-          <Codicon name="repo" style={{ fontSize: '14px', opacity: 0.75, flexShrink: 0 }} />
+          <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
         ) : (
           <FileIcon name={node.name} theme={iconTheme} size={14} style={styles.fileIconBase} />
         )}
@@ -974,7 +974,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
               >
                 <div style={{ width: 4, flexShrink: 0 }} />
                 {isRepoRootChange ? (
-                  <Codicon name="repo" style={{ fontSize: '14px', opacity: 0.75, flexShrink: 0 }} />
+                <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
                 ) : (
                   <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
                 )}
@@ -1027,7 +1027,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 <button
                   className="versiondock-detail-icon-row"
                   data-top-action-btn=""
-                  style={{ ...styles.topActionBtn, opacity: commitMessagesExpandedByDefault ? 1 : 0.55 }}
+                  style={styles.topActionBtn}
                   title={commitMessagesExpandedByDefault ? t('Collapse commit messages by default') : t('Expand commit messages by default')}
                   aria-pressed={commitMessagesExpandedByDefault}
                   onClick={toggleCommitMessagesExpandedByDefault}
@@ -1175,7 +1175,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                   <button
                     className="versiondock-detail-icon-row"
                     data-top-action-btn=""
-                    style={{ ...styles.topActionBtn, opacity: commitMessagesExpandedByDefault ? 1 : 0.55 }}
+                    style={styles.topActionBtn}
                     title={commitMessagesExpandedByDefault ? t('Collapse commit messages by default') : t('Expand commit messages by default')}
                     aria-pressed={commitMessagesExpandedByDefault}
                     onClick={toggleCommitMessagesExpandedByDefault}
@@ -1353,7 +1353,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
             {(commit.parents.length >= 2 || loadingMerge || mergeCommits.length > 0) && (
               <div style={styles.mergeSection}>
                 <div style={styles.mergeSectionTitle}>
-                  <Codicon name="git-merge" style={{ fontSize: '11px', opacity: 0.7 }} />
+                  <Codicon name="git-merge" style={{ fontSize: '11px' }} />
                   <span>{t('Merged commits')}</span>
                 </div>
                 {loadingMerge && <div style={styles.mergeLoading}>{t('Loading...')}</div>}
@@ -1394,7 +1394,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                                 title={file.path}
                                 onClick={() => handleOpenDiff(file)}
                               >
-                                <FileIcon name={fileName} theme={iconTheme} size={13} style={{ opacity: 0.85, flexShrink: 0 }} />
+                                <FileIcon name={fileName} theme={iconTheme} size={13} style={{ flexShrink: 0 }} />
                                 <span style={{ ...styles.mergeMessage, color: statusColor }}>{fileName}</span>
                                 {(file.added != null || file.removed != null) && (
                                   <span style={styles.lineStats}>
@@ -1476,7 +1476,6 @@ const styles = {
     padding: 0,
     borderRadius: '3px',
     color: 'var(--vscode-foreground)',
-    opacity: 0.55,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1567,7 +1566,7 @@ const styles = {
     justifyContent: 'space-between',
     gap: '8px',
     fontSize: '11px',
-    opacity: 0.7,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   summaryList: {
     display: 'flex',
@@ -1614,7 +1613,7 @@ const styles = {
     gap: '6px',
     minWidth: 0,
     fontSize: '11px',
-    opacity: 0.65,
+    color: 'var(--vscode-descriptionForeground)',
     alignItems: 'center',
     flexWrap: 'wrap' as const,
     whiteSpace: 'nowrap' as const,
@@ -1640,7 +1639,7 @@ const styles = {
     justifyContent: 'center',
     height: '100%',
     fontSize: '13px',
-    opacity: 0.45,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   repoRow: {
     display: 'flex',
@@ -1651,13 +1650,12 @@ const styles = {
   } as React.CSSProperties,
   repoIcon: {
     fontSize: '11px',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   repoName: (color?: string): React.CSSProperties => ({
     fontSize: '11px',
     fontWeight: 600,
     color: color ?? 'var(--vscode-foreground)',
-    opacity: 0.85,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.04em',
     minWidth: 0,
@@ -1669,16 +1667,16 @@ const styles = {
     fontSize: '10px',
     padding: '0 6px',
     borderRadius: '999px',
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
     flexShrink: 0,
   } as React.CSSProperties,
   hash: {
     fontFamily: 'monospace',
     fontSize: '11px',
-    color: 'var(--vscode-badge-foreground)',
+    color: 'var(--versiondock-badge-foreground)',
     padding: '1px 4px',
-    background: 'var(--vscode-badge-background)',
+    background: 'var(--versiondock-badge-background)',
     borderRadius: '3px',
     flexShrink: 0,
   } as React.CSSProperties,
@@ -1722,7 +1720,6 @@ const styles = {
   } as React.CSSProperties,
   messageExpandIcon: {
     fontSize: '12px',
-    opacity: 0.55,
     flexShrink: 0,
   } as React.CSSProperties,
   messageTitleExpanded: {
@@ -1760,8 +1757,7 @@ const styles = {
     display: 'flex',
     gap: '6px',
     fontSize: '11px',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.7,
+    color: 'var(--vscode-descriptionForeground)',
     flexWrap: 'wrap' as const,
     alignItems: 'center',
   },
@@ -1779,7 +1775,7 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   dot: {
-    opacity: 0.4,
+    color: 'var(--vscode-descriptionForeground)',
   },
   refsRow: {
     display: 'flex',
@@ -1803,8 +1799,7 @@ const styles = {
   } as React.CSSProperties,
   refsLoadingLabel: {
     fontSize: '10px',
-    opacity: 0.4,
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     alignSelf: 'center',
   } as React.CSSProperties,
   refBadge: (color: string, isHead = false): React.CSSProperties => ({
@@ -1845,13 +1840,13 @@ const styles = {
     alignItems: 'center',
     gap: '5px',
     fontSize: '11px',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
     marginBottom: '2px',
     userSelect: 'none' as const,
   } as React.CSSProperties,
   mergeLoading: {
     fontSize: '11px',
-    opacity: 0.45,
+    color: 'var(--vscode-descriptionForeground)',
     padding: '2px 0',
   } as React.CSSProperties,
   mergeCommitRow: (active: boolean): React.CSSProperties => ({
@@ -1867,7 +1862,7 @@ const styles = {
   }),
   mergeChevron: {
     fontSize: '10px',
-    opacity: 0.5,
+    color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
   } as React.CSSProperties,
   mergeFileList: {
@@ -1900,7 +1895,7 @@ const styles = {
   } as React.CSSProperties,
   mergeMeta: {
     fontSize: '10px',
-    opacity: 0.5,
+    color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
     maxWidth: '80px',
     overflow: 'hidden',
@@ -1917,8 +1912,7 @@ const styles = {
   fileCount: {
     flex: 1,
     fontSize: '11px',
-    opacity: 0.55,
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   expandBtns: {
     display: 'flex',
@@ -1936,8 +1930,7 @@ const styles = {
     border: 'none',
     borderRadius: '3px',
     cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: active ? 1 : 0.5,
+    color: active ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-descriptionForeground)',
     padding: '2px 4px',
     display: 'flex',
     alignItems: 'center',
@@ -1980,12 +1973,11 @@ const styles = {
   } as React.CSSProperties,
   chevron: {
     fontSize: '10px',
-    opacity: 0.5,
+    color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
     width: '14px',
   } as React.CSSProperties,
   fileIconBase: {
-    opacity: 0.9,
   } as React.CSSProperties,
   folderIconBase: {
     color: 'var(--vscode-symbolIcon-folderForeground, #dcb67a)',
@@ -1995,15 +1987,13 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
-    opacity: 0.85,
     flex: 1,
     minWidth: 0,
   },
   fileCountBadge: {
     fontSize: '10px',
-    opacity: 0.5,
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
     borderRadius: '8px',
     padding: '0 5px',
     minWidth: '16px',
@@ -2026,7 +2016,7 @@ const styles = {
   }),
   dirPath: {
     fontSize: '10px',
-    opacity: 0.5,
+    color: 'var(--vscode-descriptionForeground)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
@@ -2048,8 +2038,7 @@ const styles = {
   loading: {
     padding: '8px',
     fontSize: '11px',
-    opacity: 0.6,
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     textAlign: 'center' as const,
   },
 };

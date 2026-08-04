@@ -36,12 +36,10 @@ interface Props {
   disableBranchFilter?: boolean;
 }
 
-const FILTER_PLACEHOLDER_OPACITY = 0.54;
-
 export const FILTER_INPUT_STYLE = `
 .versiondock-filter-input::placeholder {
-  color: var(--vscode-input-foreground);
-  opacity: ${FILTER_PLACEHOLDER_OPACITY};
+  color: var(--vscode-descriptionForeground);
+  opacity: 1;
 }
 [data-filter-picker-btn][data-active="false"]:not(:disabled):hover,
 [data-filter-calendar-nav]:hover {
@@ -210,7 +208,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
             style={styles.moreItem}
             onClick={() => { onFetchAll(); setOpen(false); }}
           >
-            <Codicon name="sync" style={{ fontSize: '13px', opacity: 0.7 }} />
+            <Codicon name="sync" style={{ fontSize: '13px' }} />
             <span>{t('Fetch and Refresh')}</span>
           </div>
           {showRepoNameToggle && (
@@ -219,7 +217,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
               style={styles.moreItem}
               onClick={() => { onToggleRepoNames?.(); setOpen(false); }}
             >
-              <Codicon name={repoNamesExpanded ? 'collapse-all' : 'expand-all'} style={{ fontSize: '13px', opacity: 0.7 }} />
+              <Codicon name={repoNamesExpanded ? 'collapse-all' : 'expand-all'} style={{ fontSize: '13px' }} />
               <span>{t(repoNamesExpanded ? 'Collapse project names' : 'Expand project names')}</span>
             </div>
           )}
@@ -231,7 +229,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
                 style={styles.moreItem}
                 onClick={() => { onUndock?.('pick'); setOpen(false); }}
               >
-                <Codicon name="multiple-windows" style={{ fontSize: '13px', opacity: 0.7 }} />
+                <Codicon name="multiple-windows" style={{ fontSize: '13px' }} />
                 <span>{t('Undock…')}</span>
               </div>
             </>
@@ -290,13 +288,13 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
         <span style={value ? styles.pickerLabelActive : styles.pickerLabelPlaceholder}>
           {displayValue || t('Author…')}
         </span>
-        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', opacity: 0.5, flexShrink: 0 }} />
+        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', flexShrink: 0 }} />
       </button>
 
       {open && (
         <div style={styles.dropdown}>
           <div style={styles.dropdownSearch}>
-            <Codicon name="search" style={{ fontSize: '11px', opacity: 0.5, flexShrink: 0 }} />
+            <Codicon name="search" style={{ fontSize: '11px', flexShrink: 0 }} />
             <input
               autoFocus
               className="versiondock-filter-input"
@@ -320,8 +318,8 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(''); setOpen(false); }}
             >
-              <span style={{ opacity: 0.5, fontSize: '12px' }}>{t('All authors')}</span>
-              {!value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+              <span style={{ color: 'var(--vscode-descriptionForeground)', fontSize: '12px' }}>{t('All authors')}</span>
+              {!value && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
             </div>
             {displayed.map(option => (
               <div
@@ -332,13 +330,13 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
                 onClick={() => { onChange(option.value); setOpen(false); }}
                 title={formatAuthorIdentity(option.name, option.email)}
               >
-                <Codicon name="person" style={{ fontSize: '12px', opacity: 0.55, flexShrink: 0 }} />
+                <Codicon name="person" style={{ fontSize: '12px', flexShrink: 0 }} />
                 <span style={styles.authorOption}>
                   <span style={styles.authorName}>{option.name}</span>
                   {option.email.trim() && <span style={styles.authorEmail}>{option.email}</span>}
                 </span>
                 {option.count > 0 && <span style={styles.authorCount}>{option.count}</span>}
-                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, flexShrink: 0 }} />}
+                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', flexShrink: 0 }} />}
               </div>
             ))}
             {displayed.length === 0 && (
@@ -453,13 +451,13 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
         <span style={value ? styles.pickerLabelActive : styles.pickerLabelPlaceholder}>
           {active?.label || value || t('Branch / Tag…')}
         </span>
-        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', opacity: 0.5, flexShrink: 0 }} />
+        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', flexShrink: 0 }} />
       </button>
 
       {open && !disabled && (
         <div style={styles.dropdown}>
           <div style={styles.dropdownSearch}>
-            <Codicon name="search" style={{ fontSize: '11px', opacity: 0.5, flexShrink: 0 }} />
+            <Codicon name="search" style={{ fontSize: '11px', flexShrink: 0 }} />
             <input
               autoFocus
               className="versiondock-filter-input"
@@ -477,7 +475,7 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(''); setOpen(false); }}
             >
-              <span style={{ opacity: 0.5, fontSize: '12px' }}>{t('All branches & tags')}</span>
+              <span style={{ color: 'var(--vscode-descriptionForeground)', fontSize: '12px' }}>{t('All branches & tags')}</span>
             </div>
             {displayedBranches.length > 0 && (
               <div style={styles.dropdownGroupLabel}>{t('Branches')}</div>
@@ -490,9 +488,9 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
                 style={styles.dropdownItem(value === option.value)}
                 onClick={() => { onChange(option.value); setOpen(false); }}
               >
-                <Codicon name="git-branch" style={{ fontSize: '12px', opacity: 0.55, flexShrink: 0 }} />
+                <Codicon name="git-branch" style={{ fontSize: '12px', flexShrink: 0 }} />
                 <span style={styles.dropdownItemLabel}>{option.label}</span>
-                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
               </div>
             ))}
             {displayedTags.length > 0 && (
@@ -506,9 +504,9 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
                 style={styles.dropdownItem(value === option.value)}
                 onClick={() => { onChange(option.value); setOpen(false); }}
               >
-                <Codicon name="tag" style={{ fontSize: '12px', opacity: 0.55, flexShrink: 0 }} />
+                <Codicon name="tag" style={{ fontSize: '12px', flexShrink: 0 }} />
                 <span style={styles.dropdownItemLabel}>{option.label}</span>
-                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+                {value === option.value && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
               </div>
             ))}
             {isEmpty && (
@@ -556,7 +554,7 @@ function RepoPicker({ value, repos, onChange, style }: {
         <span style={value ? styles.pickerLabelActive : styles.pickerLabelPlaceholder}>
           {active?.name ?? t('Repository…')}
         </span>
-        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', opacity: 0.5, flexShrink: 0 }} />
+        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', flexShrink: 0 }} />
       </button>
 
       {open && (
@@ -568,8 +566,8 @@ function RepoPicker({ value, repos, onChange, style }: {
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(null); setOpen(false); }}
             >
-              <span style={{ opacity: 0.5, fontSize: '12px' }}>{t('All repositories')}</span>
-              {!value && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+              <span style={{ color: 'var(--vscode-descriptionForeground)', fontSize: '12px' }}>{t('All repositories')}</span>
+              {!value && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
             </div>
             {repos.map(repo => (
               <div
@@ -581,7 +579,7 @@ function RepoPicker({ value, repos, onChange, style }: {
               >
                 <span style={{ ...styles.repoDot, background: repo.color }} />
                 <span style={styles.dropdownItemLabel}>{repo.name}</span>
-                {value === repo.id && <Codicon name="check" style={{ fontSize: '11px', opacity: 0.8, marginLeft: 'auto', flexShrink: 0 }} />}
+                {value === repo.id && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
               </div>
             ))}
           </div>
@@ -823,8 +821,7 @@ const calStyles = {
     background: 'transparent',
     border: 'none',
     cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
     padding: '2px 4px',
     display: 'flex',
     alignItems: 'center',
@@ -851,8 +848,7 @@ const calStyles = {
   dayHeader: {
     fontSize: '10px',
     textAlign: 'center' as const,
-    opacity: 0.4,
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     padding: '2px 0',
     fontWeight: 600,
   },
@@ -872,7 +868,6 @@ const calStyles = {
       ? 'var(--vscode-list-activeSelectionForeground)'
       : 'var(--vscode-foreground)',
     fontWeight: isEdge ? 700 : 'normal',
-    opacity: 1,
   }),
 };
 
@@ -909,8 +904,8 @@ const styles = {
   },
   fieldIcon: {
     fontSize: '13px',
-    opacity: 0.45,
     flexShrink: 0,
+    color: 'var(--vscode-descriptionForeground)',
     lineHeight: 1,
   } as React.CSSProperties,
   fieldInput: {
@@ -928,8 +923,7 @@ const styles = {
     border: 'none',
     padding: '1px',
     cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.4,
+    color: 'var(--vscode-descriptionForeground)',
     display: 'flex',
     alignItems: 'center',
     lineHeight: 1,
@@ -969,8 +963,7 @@ const styles = {
     whiteSpace: 'nowrap' as const,
     fontSize: '12px',
     fontWeight: 'normal',
-    color: 'var(--vscode-input-foreground)',
-    opacity: FILTER_PLACEHOLDER_OPACITY,
+    color: 'var(--vscode-descriptionForeground)',
     textAlign: 'left' as const,
   },
   dropdown: {
@@ -1038,14 +1031,14 @@ const styles = {
   } as React.CSSProperties,
   authorEmail: {
     fontSize: '10px',
-    opacity: 0.5,
+    color: 'var(--vscode-descriptionForeground)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
   } as React.CSSProperties,
   authorCount: {
     fontSize: '10px',
-    opacity: 0.55,
+    color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
     minWidth: '18px',
     textAlign: 'right' as const,
@@ -1053,8 +1046,7 @@ const styles = {
   dropdownEmpty: {
     padding: '6px 10px',
     fontSize: '11px',
-    opacity: 0.5,
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     fontStyle: 'italic',
   },
   dropdownGroupLabel: {
@@ -1063,8 +1055,7 @@ const styles = {
     fontWeight: 600,
     textTransform: 'uppercase' as const,
     letterSpacing: 0,
-    opacity: 0.45,
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
   },
   dateRange: {
     display: 'flex',
@@ -1088,7 +1079,7 @@ const styles = {
   } as React.CSSProperties,
   dateSep: {
     fontSize: '11px',
-    opacity: 0.35,
+    color: 'var(--vscode-descriptionForeground)',
     userSelect: 'none' as const,
     padding: '0 2px',
   },
@@ -1108,7 +1099,7 @@ const styles = {
     flexShrink: 1,
   } as React.CSSProperties,
   historyPrefix: {
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
   } as React.CSSProperties,
   historyLabel: {
@@ -1134,7 +1125,6 @@ const styles = {
     border: 'none',
     borderRadius: '4px',
     cursor: 'pointer',
-    opacity: 0.8,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1147,12 +1137,11 @@ const styles = {
     width: '26px',
     height: '26px',
     background: 'none',
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     border: 'none',
     borderRadius: '4px',
     cursor: 'pointer',
     flexShrink: 0,
-    opacity: 0.7,
   } as React.CSSProperties,
   moreDropdown: {
     position: 'absolute' as const,

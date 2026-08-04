@@ -1475,7 +1475,7 @@ export function CommitApp() {
   if (repos.length === 0 && !store.status) {
     return (
       <div style={css.fullCenter}>
-        <span style={{ opacity: 0.5, fontSize: '13px' }}>{t('Loading repositories…')}</span>
+          <span style={{ color: 'var(--vscode-descriptionForeground)', fontSize: '13px' }}>{t('Loading repositories…')}</span>
       </div>
     );
   }
@@ -1484,7 +1484,7 @@ export function CommitApp() {
     if (!store.hasWorkspaceFolder) {
       return (
         <div style={{ ...css.fullCenter, flexDirection: 'column', gap: '12px', padding: '24px' }}>
-          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5', opacity: 0.8 }}>
+          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5' }}>
             {t('You have not yet opened a folder.')}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '200px' }}>
@@ -1497,7 +1497,7 @@ export function CommitApp() {
     if (store.repoMetas.length === 0) {
       return (
         <div style={{ ...css.fullCenter, flexDirection: 'column', gap: '12px', padding: '24px' }}>
-          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5', opacity: 0.8 }}>
+          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5' }}>
             {t("The folder currently open doesn't have a Git repository. You can initialize a repository which will enable source control features powered by Git.")}
           </div>
           <button
@@ -1512,7 +1512,7 @@ export function CommitApp() {
     }
     return (
       <div style={css.fullCenter}>
-        <div style={{ textAlign: 'center', opacity: 0.45 }}>
+        <div style={{ textAlign: 'center', color: 'var(--vscode-descriptionForeground)' }}>
           <div style={{ fontSize: '22px' }}>✓</div>
           <div style={{ fontSize: '13px', marginTop: '6px' }}>{t('No changes in workspace')}</div>
         </div>
@@ -1717,7 +1717,7 @@ export function CommitApp() {
               <Codicon name="eye-closed" />
               <span style={{
                 position: 'absolute', top: '1px', right: '1px',
-                background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)',
+                background: 'var(--versiondock-badge-background)', color: 'var(--versiondock-badge-foreground)',
                 borderRadius: '8px', fontSize: '9px', lineHeight: '14px',
                 minWidth: '14px', height: '14px', textAlign: 'center', padding: '0 3px',
               }}>{hiddenRepoIds.length}</span>
@@ -1907,7 +1907,7 @@ export function CommitApp() {
                   <React.Fragment key={repoId}>
                     {detachedCommit && (
                       <div style={css.detachedBanner}>
-                        <Codicon name="git-commit" style={{ flexShrink: 0, opacity: 0.8 }} />
+                        <Codicon name="git-commit" style={{ flexShrink: 0 }} />
                         <span style={{ flex: 1 }}>
                           {t('{0} is in detached HEAD ({1}). Checkout a branch to commit.', repoName, detachedCommit)}
                         </span>
@@ -1921,7 +1921,7 @@ export function CommitApp() {
                         </button>
                         <button
                           data-action-btn=""
-                          style={{ ...css.detachedBannerBtn, background: 'transparent', opacity: 0.5 }}
+                          style={{ ...css.detachedBannerBtn, background: 'transparent' }}
                           onClick={() => setDetachedWarnings(prev => { const n = { ...prev }; delete n[repoId]; return n; })}
                           title={t('Dismiss')}
                         >
@@ -1976,7 +1976,7 @@ export function CommitApp() {
           {/* Shelve name prompt — appears above commit form */}
           {shelvePrompt && (
             <div style={css.shelvePromptBar}>
-              <Codicon name="archive" style={{ flexShrink: 0, opacity: 0.65, fontSize: '14px' }} />
+              <Codicon name="archive" style={{ flexShrink: 0, fontSize: '14px' }} />
               <input
                 ref={shelvePromptRef}
                 style={css.shelvePromptInput}
@@ -2434,9 +2434,9 @@ const css = {
   },
   toolbarLeft:  { display: 'flex', alignItems: 'center', gap: '1px' } as React.CSSProperties,
   iconBtn: {
-    background: 'transparent', border: 'none', color: 'var(--vscode-foreground)',
+    background: 'transparent', border: 'none', color: 'var(--vscode-descriptionForeground)',
     cursor: 'pointer', padding: '4px 5px', borderRadius: '3px',
-    fontSize: '14px', display: 'flex', alignItems: 'center', opacity: 0.8,
+    fontSize: '14px', display: 'flex', alignItems: 'center', opacity: 1,
   } as React.CSSProperties,
   dropdownPanel: {
     position: 'absolute' as const, top: '100%', left: 0, zIndex: 1000,
@@ -2446,7 +2446,7 @@ const css = {
     minWidth: '200px', maxWidth: '280px', padding: '4px 0', fontSize: '12px',
   },
   dropdownTitle: {
-    padding: '4px 12px', fontSize: '10px', opacity: 0.5,
+    padding: '4px 12px', fontSize: '10px', color: 'var(--vscode-descriptionForeground)',
     textTransform: 'uppercase' as const, letterSpacing: '0.05em',
   },
   dropdownItem: {
@@ -2467,7 +2467,7 @@ const css = {
   } as React.CSSProperties,
   notificationClose: {
     background: 'transparent', border: 'none', cursor: 'pointer', padding: '1px 2px',
-    color: 'inherit', opacity: 0.7, display: 'flex', alignItems: 'center', flexShrink: 0,
+    color: 'var(--vscode-descriptionForeground)', display: 'flex', alignItems: 'center', flexShrink: 0,
     fontSize: '13px', borderRadius: '2px',
   } as React.CSSProperties,
   tabBar: {
@@ -2480,13 +2480,15 @@ const css = {
     fontSize: '12px',
     cursor: 'pointer', background: 'transparent', border: 'none',
     borderBottom: active ? '2px solid var(--vscode-focusBorder)' : '2px solid transparent',
-    opacity: active ? 1 : 0.6, fontFamily: 'var(--vscode-font-family)',
+    opacity: 1,
+    color: active ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
+    fontFamily: 'var(--vscode-font-family)',
     fontWeight: active ? '600' : 'normal', whiteSpace: 'nowrap' as const,
-    transition: 'opacity 0.1s, border-color 0.1s', color: 'var(--vscode-foreground)',
+    transition: 'color 0.1s, border-color 0.1s',
   }),
   tabBadge: {
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
     borderRadius: '8px',
     padding: '0 5px',
     fontSize: '10px',
@@ -2530,7 +2532,7 @@ const css = {
   shelvePromptCancel: {
     background: 'transparent', color: 'var(--vscode-foreground)', border: 'none',
     borderRadius: '3px', padding: '3px 5px', cursor: 'pointer',
-    fontSize: '13px', display: 'flex', alignItems: 'center', opacity: 0.6,
+    fontSize: '13px', display: 'flex', alignItems: 'center',
   } as React.CSSProperties,
   fullCenter: {
     height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',

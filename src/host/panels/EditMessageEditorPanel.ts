@@ -118,12 +118,12 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       flex-shrink: 0;
     }
     .header-icon {
-      font-size: 18px; opacity: 0.7;
+      font-size: 18px;
       color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
     }
     .header-title { font-size: 15px; font-weight: 600; }
     .header-sub {
-      font-size: 12px; opacity: 0.55; margin-top: 1px;
+      font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 1px;
       font-family: var(--vscode-editor-font-family, monospace);
     }
     .body {
@@ -131,7 +131,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       padding: 20px 24px; gap: 10px; overflow: auto;
     }
     .label {
-      font-size: 11px; opacity: 0.55;
+      font-size: 11px; color: var(--vscode-descriptionForeground);
       text-transform: uppercase; letter-spacing: 0.06em;
       margin-bottom: 6px;
     }
@@ -211,7 +211,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       padding: 3px;
       background: transparent;
       color: var(--vscode-foreground);
-      opacity: 0.72;
       line-height: 1;
     }
     .btn-ai:hover { background: var(--vscode-toolbar-hoverBackground); opacity: 1; }

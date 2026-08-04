@@ -2047,7 +2047,6 @@ const styles = {
     color: kind === 'accept'
       ? 'var(--vscode-foreground)'
       : 'var(--vscode-descriptionForeground, var(--vscode-foreground))',
-    opacity: kind === 'accept' ? 0.9 : 0.78,
     cursor: 'pointer',
     transition: 'background-color 80ms ease, color 80ms ease, opacity 80ms ease',
   }),

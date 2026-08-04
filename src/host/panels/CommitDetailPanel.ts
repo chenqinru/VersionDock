@@ -862,6 +862,10 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       font-size: var(--vscode-font-size, 13px);
       display: flex; flex-direction: column;
     }
+    :root {
+      --versiondock-badge-background: var(--vscode-badge-background, var(--vscode-button-background, #0078d4));
+      --versiondock-badge-foreground: var(--vscode-badge-foreground, var(--vscode-button-foreground, #ffffff));
+    }
 
     /* ── Top toolbar ── */
     .toolbar {
@@ -872,7 +876,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     }
     .toolbar-hash {
       font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 12px; opacity: 0.6;
+      font-size: 12px; color: var(--vscode-descriptionForeground);
     }
     .toolbar-message {
       flex: 1; font-weight: 500;
@@ -941,7 +945,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ai-explanation::before {
       content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
       background: linear-gradient(90deg, #7657ff, #2f8fff, #7657ff);
-      background-size: 220% 100%; opacity: 0.82;
+      background-size: 220% 100%;
     }
     .ai-explanation[data-state="generating"]::before { animation: aiSpectrum 1.8s linear infinite; }
     .ai-explanation[data-state="error"]::before { background: var(--vscode-errorForeground); }
@@ -960,7 +964,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ai-explanation[data-state="generating"] .ai-orb::after { animation: aiOrbRing 1.6s ease-out infinite; }
     .ai-heading { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
     .ai-title { font-size: 12px; font-weight: 700; letter-spacing: 0.01em; }
-    .ai-status { font-size: 11px; opacity: 0.62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ai-status { font-size: 11px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ai-live-dot {
       width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
       background: #58b6ff; box-shadow: 0 0 7px rgba(47,143,255,0.62); opacity: 0;
@@ -969,16 +973,16 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ai-stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .ai-stage {
       position: relative; display: flex; align-items: center; gap: 5px;
-      min-width: 0; color: var(--vscode-descriptionForeground); font-size: 10px; opacity: 0.48;
-      transition: opacity 160ms ease, color 160ms ease;
+      min-width: 0; color: var(--vscode-descriptionForeground); font-size: 10px;
+      transition: color 160ms ease;
     }
     .ai-stage::before {
       content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
       background: var(--vscode-descriptionForeground); transition: transform 160ms ease, background 160ms ease;
     }
-    .ai-stage.active { opacity: 1; color: var(--vscode-foreground); }
+    .ai-stage.active { color: var(--vscode-foreground); }
     .ai-stage.active::before { transform: scale(1.4); background: #7657ff; box-shadow: 0 0 6px rgba(118,87,255,0.58); }
-    .ai-stage.done { opacity: 0.76; }
+    .ai-stage.done { color: var(--vscode-foreground); }
     .ai-stage.done::before { background: #2f8fff; }
     .ai-stage-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ai-output {
@@ -1049,7 +1053,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .section-label {
       font-size: 10px; font-weight: 600;
       text-transform: uppercase; letter-spacing: 0.06em;
-      opacity: 0.5; margin-bottom: 6px;
+      color: var(--vscode-descriptionForeground); margin-bottom: 6px;
     }
     .author-row { display: flex; align-items: center; gap: 10px; }
     .avatar {
@@ -1062,12 +1066,12 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     }
     .author-meta { display: flex; flex-direction: column; gap: 2px; }
     .author-name { font-weight: 500; }
-    .author-email { font-size: 11px; opacity: 0.55; }
+    .author-email { font-size: 11px; color: var(--vscode-descriptionForeground); }
     .meta-grid {
       display: grid; grid-template-columns: max-content 1fr;
       gap: 4px 14px; align-items: start;
     }
-    .meta-key { opacity: 0.55; font-size: 12px; white-space: nowrap; }
+    .meta-key { color: var(--vscode-descriptionForeground); font-size: 12px; white-space: nowrap; }
     .meta-val { font-size: 12px; font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
     .meta-val.normal { font-family: var(--vscode-font-family); word-break: normal; }
     .refs-row { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -1075,7 +1079,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       display: inline-flex; align-items: center; gap: 4px;
       padding: 2px 7px; border-radius: 10px;
       font-size: 11px; font-weight: 500;
-      border: 1px solid currentColor; opacity: 0.9;
+      border: 1px solid currentColor;
     }
     .ref-badge .codicon { font-size: 10px; }
     .ref-local  { color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b); }
@@ -1101,7 +1105,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       font-size: 11px; font-weight: 600;
       text-transform: uppercase; letter-spacing: 0.04em;
     }
-    .commit-summary-repo .codicon { font-size: 11px; opacity: 0.65; }
+    .commit-summary-repo .codicon { font-size: 11px; color: var(--vscode-descriptionForeground); }
     .commit-summary-card {
       border: 1px solid var(--vscode-panel-border);
       border-radius: 4px;
@@ -1121,7 +1125,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     }
     .commit-summary-meta {
       display: flex; align-items: center; gap: 6px;
-      margin-top: 8px; font-size: 11px; opacity: 0.65;
+      margin-top: 8px; font-size: 11px; color: var(--vscode-descriptionForeground);
       flex-wrap: wrap;
     }
     .commit-summary-avatar {
@@ -1132,13 +1136,13 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       font-size: 9px; font-weight: 600; line-height: 1;
       flex-shrink: 0; overflow: hidden; user-select: none;
     }
-    .commit-summary-dot { opacity: 0.55; }
+    .commit-summary-dot { color: var(--vscode-descriptionForeground); }
     .commit-summary-meta-hash {
       display: inline-flex; align-items: center; gap: 3px;
       font-family: var(--vscode-editor-font-family, monospace);
       font-size: 10px; white-space: nowrap;
     }
-    .commit-summary-meta-hash .codicon { font-size: 11px; opacity: 0.75; }
+    .commit-summary-meta-hash .codicon { font-size: 11px; color: var(--vscode-descriptionForeground); }
     .commit-summary-refs { margin-top: 6px; }
 
     /* ── Right panel ── */
@@ -1149,11 +1153,11 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       border-bottom: 1px solid var(--vscode-panel-border);
       flex-shrink: 0;
     }
-    .file-count { font-size: 11px; opacity: 0.55; flex: 1; padding-left: 4px; }
+    .file-count { font-size: 11px; color: var(--vscode-descriptionForeground); flex: 1; padding-left: 4px; }
     .tb-btn {
       background: none; border: none; cursor: pointer;
       padding: 3px 4px; border-radius: 3px;
-      color: var(--vscode-foreground); opacity: 0.6;
+      color: var(--vscode-descriptionForeground);
       display: flex; align-items: center;
       font-size: 13px;
     }
@@ -1170,12 +1174,12 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .file-row:hover { background: var(--vscode-list-hoverBackground); }
     .file-row.ctx-active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
     .row-indent { flex-shrink: 0; }
-    .row-icon { font-size: 14px; flex-shrink: 0; opacity: 0.85; }
+    .row-icon { font-size: 14px; flex-shrink: 0; }
     .row-name { font-size: 12px; white-space: nowrap; font-weight: 500; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .row-dir { font-size: 11px; opacity: 0.45; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .row-dir { font-size: 11px; color: var(--vscode-descriptionForeground); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .row-tail { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; }
     .row-stats { display: flex; gap: 3px; font-size: 11px; font-family: var(--vscode-editor-font-family, monospace); flex-shrink: 0; }
-    .row-status { font-size: 10px; font-weight: 700; flex-shrink: 0; opacity: 0.85; margin-right: 6px; }
+    .row-status { font-size: 10px; font-weight: 700; flex-shrink: 0; margin-right: 6px; }
     .added   { color: var(--vscode-gitDecoration-addedResourceForeground, #81b88b); }
     .removed { color: var(--vscode-gitDecoration-deletedResourceForeground, #c74e39); }
 
@@ -1185,11 +1189,11 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       padding: 3px 8px 3px 0; cursor: pointer; user-select: none;
     }
     .dir-row:hover { background: var(--vscode-list-hoverBackground); }
-    .dir-name { font-size: 12px; white-space: nowrap; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .dir-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .dir-badge {
-      font-size: 10px; opacity: 0.45;
-      background: var(--vscode-badge-background);
-      color: var(--vscode-badge-foreground);
+      font-size: 10px;
+      background: var(--versiondock-badge-background);
+      color: var(--versiondock-badge-foreground);
       border-radius: 8px; padding: 0 5px; flex-shrink: 0; margin-left: auto;
     }
 
@@ -1223,9 +1227,9 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       display: flex; align-items: center; gap: 5px;
       font-size: 10px; font-weight: 600;
       text-transform: uppercase; letter-spacing: 0.06em;
-      opacity: 0.5; margin-bottom: 4px;
+      color: var(--vscode-descriptionForeground); margin-bottom: 4px;
     }
-    .merge-loading { font-size: 11px; opacity: 0.5; padding: 4px 0; }
+    .merge-loading { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 0; }
     .merge-commit-row {
       display: flex; align-items: center; gap: 5px;
       padding: 3px 6px; border-radius: 3px; cursor: pointer;
@@ -1233,9 +1237,9 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     }
     .merge-commit-row:hover { background: var(--vscode-list-hoverBackground); }
     .merge-commit-row.active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
-    .merge-hash { font-family: var(--vscode-editor-font-family, monospace); opacity: 0.6; flex-shrink: 0; }
+    .merge-hash { font-family: var(--vscode-editor-font-family, monospace); color: var(--vscode-descriptionForeground); flex-shrink: 0; }
     .merge-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .merge-author { opacity: 0.45; flex-shrink: 0; font-size: 10px; }
+    .merge-author { color: var(--vscode-descriptionForeground); flex-shrink: 0; font-size: 10px; }
     .merge-files { padding-left: 16px; display: flex; flex-direction: column; gap: 1px; margin-bottom: 2px; }
     .merge-file-row {
       display: flex; align-items: center; gap: 5px;
@@ -1248,7 +1252,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
 </head>
 <body>
   <div class="toolbar">
-    <span class="codicon codicon-git-commit" style="opacity:0.6"></span>
+    <span class="codicon codicon-git-commit" style="color:var(--vscode-descriptionForeground)"></span>
     <span class="toolbar-hash">${escHtml(data.shortHash)}</span>
     <span class="toolbar-message">${escHtml(data.message)}</span>
     <div class="toolbar-actions">
@@ -1757,7 +1761,7 @@ ${leftPanelContent}
     function themedIconHtml(name, isFolder, isOpen, size = 14) {
       if (!ICON_THEME || ICON_THEME.type === 'none') {
         const icon = fallbackCodicon(name, isFolder, isOpen);
-        return '<span class="codicon codicon-' + icon + '" style="font-size:' + size + 'px;opacity:0.75;flex-shrink:0;" aria-hidden="true"></span>';
+        return '<span class="codicon codicon-' + icon + '" style="font-size:' + size + 'px;flex-shrink:0;" aria-hidden="true"></span>';
       }
       const iconName = resolveIconName(ICON_THEME, name, isFolder, isOpen);
       if (ICON_THEME.type === 'svg' && iconName) {
@@ -1774,7 +1778,7 @@ ${leftPanelContent}
         }
       }
       const icon = fallbackCodicon(name, isFolder, isOpen);
-      return '<span class="codicon codicon-' + icon + '" style="font-size:' + size + 'px;opacity:0.75;flex-shrink:0;" aria-hidden="true"></span>';
+      return '<span class="codicon codicon-' + icon + '" style="font-size:' + size + 'px;flex-shrink:0;" aria-hidden="true"></span>';
     }
     function fileIconHtml(name) {
       return themedIconHtml(name, false, false, 14);
@@ -1930,7 +1934,7 @@ ${leftPanelContent}
         buf.push(
           '<div class="dir-row" data-dir="' + escAttr(node.fullPath) + '">' +
           '<div class="row-indent" style="width:2px"></div>' +
-          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;opacity:0.6;flex-shrink:0;"></span>' +
+          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;flex-shrink:0;"></span>' +
           '<span style="width:8px;height:8px;border-radius:50%;background:' + escAttr(node.repoColor || __d.repoColor || '#4ec9b0') + ';flex-shrink:0;"></span>' +
           '<span class="dir-name" style="font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">' + escText(node.name) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
@@ -1941,7 +1945,7 @@ ${leftPanelContent}
         buf.push(
           '<div class="dir-row" data-dir="' + escAttr(node.fullPath) + '">' +
           '<div class="row-indent" style="width:' + (depth * 14 + 2) + 'px"></div>' +
-          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;opacity:0.6;flex-shrink:0;"></span>' +
+          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;flex-shrink:0;"></span>' +
           folderIconHtml(folderBase, open) +
           '<span class="dir-name">' + escText(node.name) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
@@ -2116,10 +2120,8 @@ ${leftPanelContent}
           avatarEl.textContent = authorInitials(authorName);
           avatarEl.style.background = avatarColor(avatarSeed);
           avatarEl.style.color = '#fff';
-          avatarEl.style.opacity = authorEmail.trim() ? '0.4' : '1';
 
           const url = await resolveAvatarUrl(authorEmail, size);
-          avatarEl.style.opacity = '1';
           if (!url) return;
 
           const img = document.createElement('img');
@@ -2251,7 +2253,7 @@ ${leftPanelContent}
             const isActive = selectedMergeHash === c.hash;
             buf.push(
               '<div class="merge-commit-row' + (isActive ? ' active' : '') + '" data-hash="' + escAttr(c.hash) + '" title="' + escAttr(c.hash) + '">' +
-              '<span class="codicon codicon-' + (isActive ? 'chevron-down' : 'chevron-right') + '" style="font-size:10px;opacity:0.5;flex-shrink:0"></span>' +
+              '<span class="codicon codicon-' + (isActive ? 'chevron-down' : 'chevron-right') + '" style="font-size:10px;flex-shrink:0"></span>' +
               '<span class="merge-hash">' + escText(c.shortHash) + '</span>' +
               '<span class="merge-msg">' + escText(c.message) + '</span>' +
               '<span class="merge-author">' + escText(c.authorName) + '</span>' +

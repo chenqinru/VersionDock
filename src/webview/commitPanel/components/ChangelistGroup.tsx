@@ -100,7 +100,10 @@ export function ChangelistGroup({
         />
         <div style={styles.headerMain} onClick={() => toggleCollapsed(collapseKey)}>
           <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
-          <Codicon name={headerIcon} style={{ ...styles.clIcon, opacity: isUnversioned ? 0.6 : 0.8 }} />
+          <Codicon
+            name={headerIcon}
+            style={{ ...styles.clIcon, color: isUnversioned ? 'var(--vscode-descriptionForeground)' : 'var(--vscode-foreground)' }}
+          />
           <span style={styles.clName}>{changelist.name}</span>
           <div style={styles.rightGroup}>
             {totalFiles > 0 && (
@@ -269,7 +272,7 @@ function RepoSubGroup({
               >
                 <Codicon
                   name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'}
-                  style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }}
+                  style={{ fontSize: '10px', flexShrink: 0 }}
                 />
                 <span style={styles.branchName}>
                   {repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name}
@@ -295,7 +298,7 @@ function RepoSubGroup({
         </div>
       )}
       {files.length === 0 && (!multiRepo || singleRepo || !collapsed) && (
-        <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-foreground)', opacity: 0.4, textAlign: 'center' }}>{t('No changes')}</div>
+        <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>{t('No changes')}</div>
       )}
       {files.length > 0 && (!multiRepo || singleRepo || !collapsed) && (
         <FileTree
@@ -370,7 +373,6 @@ const styles = {
   },
   chevron: {
     fontSize: '12px',
-    opacity: 0.7,
     flexShrink: 0,
   },
   clIcon: {
@@ -392,14 +394,13 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   countBadge: (hasSelected: boolean): React.CSSProperties => ({
-    background: hasSelected ? 'var(--vscode-badge-background)' : 'transparent',
-    color: hasSelected ? 'var(--vscode-badge-foreground)' : 'var(--vscode-foreground)',
+    background: hasSelected ? 'var(--versiondock-badge-background)' : 'transparent',
+    color: hasSelected ? 'var(--versiondock-badge-foreground)' : 'var(--vscode-descriptionForeground)',
     borderRadius: '8px',
     padding: hasSelected ? '1px 5px' : '0',
     fontSize: '10px',
     fontWeight: 'bold',
     flexShrink: 0,
-    opacity: hasSelected ? 1 : 0.4,
   }),
   body: {
     display: 'flex',
@@ -408,8 +409,7 @@ const styles = {
   empty: {
     padding: '12px 8px',
     fontSize: '12px',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.4,
+    color: 'var(--vscode-descriptionForeground)',
     textAlign: 'center' as const,
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
@@ -449,7 +449,6 @@ const styles = {
   },
   repoChevron: {
     fontSize: '12px',
-    opacity: 0.7,
     flexShrink: 0,
   },
   repoDot: (color: string): React.CSSProperties => ({
@@ -503,34 +502,31 @@ const styles = {
     background: 'transparent',
     border: 'none',
     cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.7,
+    color: 'var(--vscode-descriptionForeground)',
     padding: '2px 2px',
     display: 'flex',
     alignItems: 'center',
     flexShrink: 0,
     borderRadius: '3px',
   } as React.CSSProperties,
-  repoCountBadge: (hasSelected: boolean): React.CSSProperties => ({
+  repoCountBadge: (_hasSelected: boolean): React.CSSProperties => ({
     background: 'transparent',
-    color: 'var(--vscode-foreground)',
+    color: 'var(--vscode-descriptionForeground)',
     borderRadius: '8px',
     padding: '0',
     fontSize: '10px',
     fontWeight: 'bold',
     flexShrink: 0,
-    opacity: hasSelected ? 0.8 : 0.35,
   }),
   submoduleBadge: {
     fontSize: '9px',
     fontWeight: 'bold',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-    color: 'var(--vscode-badge-foreground)',
-    background: 'var(--vscode-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
     borderRadius: '3px',
     padding: '1px 4px',
     flexShrink: 0,
-    opacity: 0.75,
   } as React.CSSProperties,
 };

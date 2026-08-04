@@ -135,7 +135,7 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
             <span style={row.badge}>{entry.defaultSquash ? t('squash') : t('full history')}</span>
             {entry.lastSplitBranch && (
               <span style={row.branchBadge(branchColor(entry.lastSplitBranch))} title={entry.lastSplitBranch}>
-                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0 }} />
                 <span style={row.branchBadgeLabel}>{entry.lastSplitBranch}</span>
               </span>
             )}
@@ -151,7 +151,7 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
             <span style={row.ref} title={entry.ref}>{entry.ref}</span>
           </div>
         </div>
-        <div style={{ ...row.actions, opacity: hovered || activeLabel ? 1 : 0.55 }}>
+        <div style={{ ...row.actions }}>
           {activeLabel ? (
             <span style={row.busyBadge} title={activeLabel}>
               <Codicon name="sync" style={{ fontSize: '11px' }} />
@@ -337,7 +337,7 @@ const css = {
     boxSizing: 'border-box',
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
-  repoName: { fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9, textTransform: 'uppercase' as const, letterSpacing: '0.04em', flex: 1 },
+  repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em', flex: 1 },
   repoStatus: {
     flexShrink: 0,
     maxWidth: '92px',
@@ -359,8 +359,7 @@ const css = {
     borderRadius: '3px',
     display: 'flex',
     alignItems: 'center',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.7,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   singleRepoActions: {
     display: 'flex',
@@ -379,7 +378,7 @@ const css = {
     padding: '3px 8px',
     cursor: 'pointer',
   } as React.CSSProperties,
-  empty: { padding: '16px 12px', fontSize: '12px', opacity: 0.45, fontStyle: 'italic' as const, textAlign: 'center' as const },
+  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const, textAlign: 'center' as const },
   errorRow: {
     display: 'flex',
     alignItems: 'flex-start',
@@ -409,10 +408,9 @@ const row = {
     fontSize: '9px',
     padding: '1px 5px',
     borderRadius: '3px',
-    background: 'var(--vscode-badge-background)',
-    color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
     flexShrink: 0,
-    opacity: 0.75,
   } as React.CSSProperties,
   branchBadge: (color: string): React.CSSProperties => ({
     display: 'inline-flex',
@@ -454,9 +452,9 @@ const row = {
       background: `color-mix(in srgb, ${color} 12%, transparent)`,
     };
   },
-  pathLine: { display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, fontSize: '11px', color: 'var(--vscode-foreground)', opacity: 0.78 } as React.CSSProperties,
+  pathLine: { display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, fontSize: '11px', color: 'var(--vscode-descriptionForeground)' } as React.CSSProperties,
   remoteLine: { display: 'flex', alignItems: 'center', gap: '5px', minWidth: 0, fontSize: '11px', color: 'var(--vscode-descriptionForeground)' } as React.CSSProperties,
-  metaIcon: { fontSize: '11px', flexShrink: 0, opacity: 0.75 } as React.CSSProperties,
+  metaIcon: { fontSize: '11px', flexShrink: 0 } as React.CSSProperties,
   prefix: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 },
   repository: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0, flex: 1 },
   ref: {
@@ -468,8 +466,7 @@ const row = {
     padding: '0 4px',
     border: '1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent)',
     borderRadius: '3px',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.75,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   actions: { display: 'flex', alignItems: 'center', gap: '1px', flexShrink: 0, transition: 'opacity 0.12s ease', marginTop: '-1px' },
   btn: {
@@ -479,8 +476,7 @@ const row = {
     height: '20px',
     padding: '0',
     cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.65,
+    color: 'var(--vscode-descriptionForeground)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

@@ -112,7 +112,7 @@ export function FileIcon({ name, isFolder = false, isOpen = false, theme, size =
   const base: React.CSSProperties = { flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...style };
 
   if (!theme || theme.type === 'none') {
-    return <Codicon name={fallbackCodicon(name, isFolder, isOpen)} style={{ fontSize: `${size}px`, opacity: 0.75, ...base }} />;
+    return <Codicon name={fallbackCodicon(name, isFolder, isOpen)} style={{ fontSize: `${size}px`, ...base }} />;
   }
 
   const iconName = resolveIconName(theme, name, isFolder, isOpen);
@@ -137,7 +137,7 @@ export function FileIcon({ name, isFolder = false, isOpen = false, theme, size =
   }
 
   // Fallback to codicon
-  return <Codicon name={fallbackCodicon(name, isFolder, isOpen)} style={{ fontSize: `${size}px`, opacity: 0.75, ...base }} />;
+  return <Codicon name={fallbackCodicon(name, isFolder, isOpen)} style={{ fontSize: `${size}px`, ...base }} />;
 }
 
 function fallbackCodicon(name: string, isFolder: boolean, isOpen: boolean): string {

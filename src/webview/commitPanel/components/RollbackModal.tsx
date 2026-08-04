@@ -129,7 +129,7 @@ function FileNode({ file, depth, selected, onToggle }: {
       onClick={() => onToggle(file.path)}
     >
       <Checkbox checked={checked} onChange={() => onToggle(file.path)} onClick={e => e.stopPropagation()} />
-      <Codicon name="file" style={{ fontSize: '13px', opacity: 0.7, flexShrink: 0 }} />
+      <Codicon name="file" style={{ fontSize: '13px', flexShrink: 0 }} />
       <span style={{ ...s.fileName, color }}>{fileName}</span>
       <span style={s.statusLetter(color)}>{letter}</span>
     </div>
@@ -243,7 +243,7 @@ export function RollbackModal({ repos, repoMetas, onConfirm, onClose }: Props) {
       <div style={s.modal} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={s.header}>
-          <Codicon name="discard" style={{ fontSize: '14px', opacity: 0.8 }} />
+          <Codicon name="discard" style={{ fontSize: '14px' }} />
           <span style={s.title}>{t('Rollback changes')}</span>
           <button data-action-btn="" style={s.closeBtn} onClick={onClose}>
             <Codicon name="close" />
@@ -341,10 +341,9 @@ const s = {
   closeBtn: {
     background: 'transparent',
     border: 'none',
-    color: 'var(--vscode-foreground)',
     cursor: 'pointer',
     padding: '2px 4px',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
     fontSize: '14px',
     display: 'flex',
     alignItems: 'center',
@@ -352,7 +351,6 @@ const s = {
   subtitle: {
     padding: '7px 12px',
     fontSize: '11px',
-    opacity: 0.55,
     borderBottom: '1px solid var(--vscode-panel-border)',
     flexShrink: 0,
     color: 'var(--vscode-errorForeground)',
@@ -380,7 +378,7 @@ const s = {
     width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0,
   }),
   repoName: { flex: 1 },
-  count: { fontSize: '10px', opacity: 0.45, flexShrink: 0 },
+  count: { fontSize: '10px', color: 'var(--vscode-descriptionForeground)', flexShrink: 0 },
   dirRow: {
     display: 'flex',
     alignItems: 'center',
@@ -402,7 +400,7 @@ const s = {
     userSelect: 'none' as const,
     paddingLeft: '2px',
   },
-  chevron: { fontSize: '12px', opacity: 0.7, width: '12px', flexShrink: 0 },
+  chevron: { fontSize: '12px', width: '12px', flexShrink: 0 },
   folderIcon: { fontSize: '14px', flexShrink: 0, color: 'var(--vscode-symbolIcon-folderForeground, #dcb67a)' },
   dirName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
   fileRow: {
@@ -422,7 +420,7 @@ const s = {
     minWidth: 0,
   } as React.CSSProperties,
   statusLetter: (color: string): React.CSSProperties => ({
-    fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center', opacity: 0.9,
+    fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center',
   }),
   checkbox: { flexShrink: 0, margin: '0 3px 0 0' } as React.CSSProperties,
   footer: {
@@ -433,7 +431,7 @@ const s = {
     borderTop: '1px solid var(--vscode-panel-border)',
     flexShrink: 0,
   },
-  footerCount: { flex: 1, fontSize: '11px', opacity: 0.5 },
+  footerCount: { flex: 1, fontSize: '11px', color: 'var(--vscode-descriptionForeground)' },
   cancelBtn: {
     background: 'transparent',
     border: '1px solid var(--vscode-button-border, var(--vscode-panel-border))',

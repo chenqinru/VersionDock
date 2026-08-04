@@ -84,7 +84,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
       >
         <Codicon
           name={entry.isMain ? 'repo' : 'repo-clone'}
-          style={{ fontSize: '13px', opacity: entry.isMain ? 0.9 : 0.55, flexShrink: 0 }}
+          style={{ fontSize: '13px', flexShrink: 0 }}
         />
         <div style={row.info}>
           <span style={row.name}>
@@ -92,12 +92,12 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
             {entry.isMain && <span style={row.mainBadge}>{t('main')}</span>}
             {!entry.isMain && entry.isInWorkspace && <span style={row.workspaceBadge}>{t('in workspace')}</span>}
             {entry.isLocked && (
-              <Codicon name="lock" style={{ fontSize: '11px', opacity: 0.6 }} />
+              <Codicon name="lock" style={{ fontSize: '11px' }} />
             )}
           </span>
           <span style={row.meta}>
             <span style={row.branch(branchClr)} title={branchLabel}>
-              <Codicon name={entry.isDetached ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', opacity: 0.8, flexShrink: 0 }} />
+              <Codicon name={entry.isDetached ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
               <span style={row.branchName}>{branchLabel}</span>
             </span>
             {entry.isPrunable && (
@@ -327,11 +327,11 @@ const css = {
     boxSizing: 'border-box',
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
-  repoName: { fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
+  repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
   headerBtn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
     padding: '2px 4px', borderRadius: '3px', display: 'flex', alignItems: 'center',
-    color: 'var(--vscode-foreground)', opacity: 0.7,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   singleRepoActions: {
     display: 'flex', gap: '4px', padding: '6px 8px',
@@ -343,7 +343,7 @@ const css = {
     color: 'var(--vscode-button-secondaryForeground)',
     border: 'none', borderRadius: '3px', padding: '3px 8px', cursor: 'pointer',
   } as React.CSSProperties,
-  empty: { padding: '16px 12px', fontSize: '12px', opacity: 0.45, fontStyle: 'italic' as const, textAlign: 'center' as const },
+  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const, textAlign: 'center' as const },
   errorRow: {
     display: 'flex', alignItems: 'flex-start', padding: '4px 8px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)',
@@ -365,13 +365,13 @@ const row = {
   } as React.CSSProperties,
   mainBadge: {
     fontSize: '9px', padding: '1px 5px', borderRadius: '3px', flexShrink: 0,
-    background: 'var(--vscode-badge-background)', color: 'var(--vscode-badge-foreground)',
+    background: 'var(--versiondock-badge-background)', color: 'var(--versiondock-badge-foreground)',
     fontWeight: 'normal', letterSpacing: '0.03em',
   } as React.CSSProperties,
   workspaceBadge: {
     fontSize: '9px', padding: '1px 5px', borderRadius: '3px', flexShrink: 0,
     background: 'var(--vscode-statusBarItem-remoteBackground)', color: 'var(--vscode-statusBarItem-remoteForeground)',
-    fontWeight: 'normal', letterSpacing: '0.03em', opacity: 0.85,
+    fontWeight: 'normal', letterSpacing: '0.03em',
   } as React.CSSProperties,
   meta: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '1px' } as React.CSSProperties,
   branch: (color: string): React.CSSProperties => ({
@@ -390,7 +390,7 @@ const row = {
   btn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
     padding: '2px 4px', borderRadius: '3px', fontSize: '13px',
-    display: 'flex', alignItems: 'center', opacity: 0.65,
+    display: 'flex', alignItems: 'center',
     color: 'var(--vscode-foreground)',
   } as React.CSSProperties,
 };

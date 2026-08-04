@@ -159,9 +159,9 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff }: {
       <FileIcon name={fname} theme={iconTheme} size={ICON_SIZE} />
       <span style={{ color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{fname}</span>
       {depth === 0 && dir && (
-        <span style={{ fontSize: '11px', opacity: 0.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>{dir}</span>
+        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>{dir}</span>
       )}
-      <span style={{ fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center', opacity: 0.9 }}>{letter}</span>
+      <span style={{ fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center' }}>{letter}</span>
     </div>
   );
 }
@@ -201,10 +201,10 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
           onClick={() => toggleDir(node.path)}
           title={node.path}
         >
-          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', opacity: 0.7, width: '12px', flexShrink: 0 }} />
+          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', width: '12px', flexShrink: 0 }} />
           <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
-          <span style={{ fontSize: '10px', opacity: 0.45, flexShrink: 0 }}>{fc}</span>
+          <span style={{ fontSize: '10px', color: 'var(--vscode-descriptionForeground)', flexShrink: 0 }}>{fc}</span>
         </div>
       </div>
       {open && node.children.map(child =>
@@ -271,9 +271,9 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
         title={t('{0} — double-click to pop', entry.ref)}
       >
         <button data-action-btn="" style={row.chevronBtn} onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}>
-          <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', opacity: 0.65 }} />
+          <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px' }} />
         </button>
-        <Codicon name="save" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
+        <Codicon name="save" style={{ fontSize: '13px', flexShrink: 0 }} />
         <div style={row.info}>
           <span style={row.name}>
             <span style={row.message} title={fullMessage}>
@@ -281,7 +281,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
             </span>
             {entry.branch && (
               <span style={row.branchBadge(branchColor(entry.branch))} title={entry.branch}>
-                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0 }} />
                 <span style={row.branchBadgeLabel}>{entry.branch}</span>
               </span>
             )}
@@ -298,7 +298,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
             <button data-action-btn="" style={row.btn} title={t('Pop (apply and drop)')} onClick={e => { e.stopPropagation(); onPop(repoId, entry.ref); }}>
               <Codicon name="desktop-download" />
             </button>
-            <button data-action-btn="" style={{ ...row.btn, opacity: 0.5 }} title={t('Apply (keep stash)')} onClick={e => { e.stopPropagation(); onApply(repoId, entry.ref); }}>
+            <button data-action-btn="" style={row.btn} title={t('Apply (keep stash)')} onClick={e => { e.stopPropagation(); onApply(repoId, entry.ref); }}>
               <Codicon name="arrow-down" />
             </button>
             <button data-action-btn="" style={{ ...row.btn, color: 'var(--vscode-errorForeground)' }} title={t('Drop stash')} onClick={e => { e.stopPropagation(); onDrop(repoId, entry.ref); }}>
@@ -361,7 +361,7 @@ export function StashTab({
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
             <span style={css.worktreeBadge(worktreeBranchColor ?? branchColor(worktreeBranch))} title={worktreeBranch}>
-              <Codicon name="repo-clone" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+              <Codicon name="repo-clone" style={{ fontSize: '10px', flexShrink: 0 }} />
               <span style={css.branchBadgeLabel}>{worktreeBranch}</span>
             </span>
           )}
@@ -408,7 +408,7 @@ const css = {
     boxSizing: 'border-box',
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
-  repoName: { fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
+  repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
   worktreeBadge: (color: string): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', gap: '3px',
     fontSize: '10px', fontWeight: 600, background: `${color}33`, color,
@@ -420,7 +420,7 @@ const css = {
     display: 'flex', alignItems: 'flex-start', padding: '4px 8px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)',
   } as React.CSSProperties,
-  empty: { padding: '16px 12px', fontSize: '12px', opacity: 0.45, fontStyle: 'italic' as const, textAlign: 'center' as const },
+  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const, textAlign: 'center' as const },
 };
 
 const row = {
@@ -446,13 +446,13 @@ const row = {
   }),
   branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   meta: { display: 'flex', gap: '8px', marginTop: '2px' } as React.CSSProperties,
-  fileCount: { fontSize: '10px', opacity: 0.5 },
-  date: { fontSize: '10px', opacity: 0.4, whiteSpace: 'nowrap' as const },
+  fileCount: { fontSize: '10px', color: 'var(--vscode-descriptionForeground)' },
+  date: { fontSize: '10px', color: 'var(--vscode-descriptionForeground)', whiteSpace: 'nowrap' as const },
   actions: { display: 'flex', gap: '2px', flexShrink: 0 } as React.CSSProperties,
   btn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
     padding: '2px 4px', borderRadius: '3px', fontSize: '13px',
-    display: 'flex', alignItems: 'center', opacity: 0.65,
+    display: 'flex', alignItems: 'center',
     color: 'var(--vscode-foreground)',
   } as React.CSSProperties,
   fileList: {
@@ -460,5 +460,5 @@ const row = {
     borderTop: '1px solid var(--vscode-panel-border)',
     background: 'var(--vscode-sideBar-background)',
   } as React.CSSProperties,
-  emptyFiles: { padding: '6px 24px', fontSize: '11px', opacity: 0.4, fontStyle: 'italic' as const },
+  emptyFiles: { padding: '6px 24px', fontSize: '11px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const },
 };

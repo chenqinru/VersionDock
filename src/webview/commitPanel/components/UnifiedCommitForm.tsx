@@ -126,7 +126,7 @@ function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, f
         {hasItems && (
           <>
             <div style={{ width: '1px', alignSelf: 'stretch', padding: '4px 0', flexShrink: 0, display: 'flex', backgroundColor: 'inherit' }}>
-              <div style={{ flex: 1, backgroundColor: variant === 'primary' ? 'var(--vscode-button-foreground)' : 'var(--vscode-button-secondaryForeground, var(--vscode-foreground))', opacity: 0.3 }} />
+              <div style={{ flex: 1, backgroundColor: 'var(--vscode-button-border, var(--vscode-panel-border))' }} />
             </div>
             <button
               style={{ ...childStyle, padding: '5px 7px', backgroundColor: hoverChevron && enabled ? bgHover : bg }}
@@ -691,7 +691,7 @@ const styles = {
     height: '2px',
     borderRadius: '2px',
     background: active ? 'var(--vscode-focusBorder)' : 'var(--vscode-panel-border)',
-    opacity: active ? 1 : 0.8,
+    opacity: 1,
     pointerEvents: 'none',
   }),
   targets: {
@@ -702,7 +702,7 @@ const styles = {
   },
   noTargets: {
     fontSize: '11px',
-    opacity: 0.5,
+    color: 'var(--vscode-descriptionForeground)',
     fontStyle: 'italic' as const,
   },
   targetPill: (color: string): React.CSSProperties => ({
@@ -737,7 +737,6 @@ const styles = {
     cursor: 'pointer',
     padding: '0',
     margin: '0',
-    opacity: 0.7,
     flexShrink: 0,
     lineHeight: 1,
     width: '12px',
@@ -766,7 +765,6 @@ const styles = {
     outline: 'none',
     boxSizing: 'border-box' as const,
     backgroundClip: 'padding-box',
-    opacity: 1,
     cursor: generating ? 'default' : 'text',
   }),
   autopilotBtn: (generating: boolean, disabled: boolean): React.CSSProperties => ({
@@ -777,7 +775,7 @@ const styles = {
     border: 'none',
     cursor: disabled && !generating ? 'not-allowed' : 'pointer',
     color: 'var(--vscode-foreground)',
-    opacity: disabled && !generating ? 0.35 : 0.7,
+    opacity: disabled && !generating ? 0.35 : 1,
     padding: '2px',
     display: 'flex',
     alignItems: 'center',
@@ -819,7 +817,7 @@ const styles = {
     color: 'var(--vscode-foreground)',
     boxShadow: 'none',
     cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.35 : 0.75,
+    opacity: disabled ? 0.35 : 1,
     flexShrink: 0,
   }),
   rightActions: {
@@ -837,7 +835,6 @@ const styles = {
     cursor: 'pointer',
     fontSize: '11px',
     fontFamily: 'var(--vscode-font-family)',
-    opacity: 0.75,
   } as React.CSSProperties,
   amendLabel: {
     display: 'flex',
@@ -845,7 +842,6 @@ const styles = {
     fontSize: '11px',
     cursor: 'pointer',
     color: 'var(--vscode-foreground)',
-    opacity: 0.75,
     userSelect: 'none' as const,
   } as React.CSSProperties,
 };

@@ -52,6 +52,12 @@ export function getWebviewHtml(
     #root { height: 100vh; display: flex; flex-direction: column; }
     body.cursor-host { max-width: calc(100vw - 1px); }
 
+    /* Keep compact VersionDock badges on one theme-controlled color. */
+    :root {
+      --versiondock-badge-background: var(--vscode-badge-background, var(--vscode-button-background, #0078d4));
+      --versiondock-badge-foreground: var(--vscode-badge-foreground, var(--vscode-button-foreground, #ffffff));
+    }
+
     /* ── Themed checkboxes ──────────────────────────────────────────────────── */
     input[type="checkbox"] {
       appearance: none;

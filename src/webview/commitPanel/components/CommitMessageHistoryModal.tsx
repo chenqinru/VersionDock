@@ -39,7 +39,7 @@ export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose
         onClick={event => event.stopPropagation()}
       >
         <div style={styles.header}>
-          <Codicon name="history" style={{ fontSize: '15px', opacity: 0.8 }} />
+          <Codicon name="history" style={{ fontSize: '15px' }} />
           <span style={styles.title}>{t('Commit message history')}</span>
           <button data-action-btn="" style={styles.closeButton} onClick={onClose} title={t('Cancel')}>
             <Codicon name="close" />
@@ -56,7 +56,7 @@ export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose
             </div>
           ) : messages.length === 0 ? (
             <div style={styles.emptyState}>
-              <Codicon name="history" style={{ fontSize: '18px', opacity: 0.6 }} />
+              <Codicon name="history" style={{ fontSize: '18px' }} />
               <span>{t('No commit message history')}</span>
             </div>
           ) : (
@@ -93,7 +93,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'rgba(0,0,0,0.55)',
+    background: 'rgba(0,0,0,0.16)',
   },
   modal: {
     width: '440px',
@@ -105,7 +105,7 @@ const styles = {
     background: 'var(--vscode-editor-background)',
     border: '1px solid var(--vscode-panel-border)',
     borderRadius: '6px',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
     color: 'var(--vscode-foreground)',
     fontFamily: 'var(--vscode-font-family)',
     fontSize: '12px',
@@ -130,14 +130,13 @@ const styles = {
     padding: '2px 4px',
     border: 'none',
     background: 'transparent',
-    color: 'var(--vscode-foreground)',
     cursor: 'pointer',
-    opacity: 0.65,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   subtitle: {
     padding: '7px 12px',
     borderBottom: '1px solid var(--vscode-panel-border)',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
     fontSize: '11px',
     flexShrink: 0,
   },
@@ -154,7 +153,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '8px',
-    opacity: 0.55,
+    color: 'var(--vscode-descriptionForeground)',
   },
   messageButton: {
     width: '100%',
@@ -185,7 +184,7 @@ const styles = {
     WebkitBoxOrient: 'vertical' as const,
     WebkitLineClamp: 2,
     whiteSpace: 'pre-wrap' as const,
-    opacity: 0.65,
+    color: 'var(--vscode-descriptionForeground)',
     fontSize: '11px',
     lineHeight: 1.4,
   },

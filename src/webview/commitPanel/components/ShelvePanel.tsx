@@ -159,13 +159,13 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
       <FileIcon name={fname} theme={iconTheme} size={ICON_SIZE} />
       <span style={{ color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{fname}</span>
       {depth === 0 && dir && (
-        <span style={{ fontSize: '11px', opacity: 0.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>{dir}</span>
+        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>{dir}</span>
       )}
       {hovered ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '1px', marginLeft: 'auto', flexShrink: 0 }}>
           <button
             data-action-btn=""
-            style={{ background: 'transparent', border: 'none', color: 'var(--vscode-foreground)', cursor: 'pointer', padding: '2px 4px', borderRadius: '3px', fontSize: '12px', display: 'flex', alignItems: 'center', opacity: 0.7 }}
+            style={{ background: 'transparent', border: 'none', color: 'var(--vscode-descriptionForeground)', cursor: 'pointer', padding: '2px 4px', borderRadius: '3px', fontSize: '12px', display: 'flex', alignItems: 'center' }}
             title={t('Unshelve this file only')}
             onClick={e => { e.stopPropagation(); onUnshelveFile(repoId, entry.id, file.path); }}
           >
@@ -173,7 +173,7 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
           </button>
         </div>
       ) : (
-        <span style={{ fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center', opacity: 0.9 }}>{letter}</span>
+        <span style={{ fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center' }}>{letter}</span>
       )}
     </div>
   );
@@ -223,10 +223,10 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
           onClick={() => toggleShelveCollapsed(key)}
           title={node.path}
         >
-          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', opacity: 0.7, width: '12px', flexShrink: 0 }} />
+          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', width: '12px', flexShrink: 0 }} />
           <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
-          <span style={{ fontSize: '10px', opacity: 0.45, flexShrink: 0 }}>{fileCount}</span>
+          <span style={{ fontSize: '10px', color: 'var(--vscode-descriptionForeground)', flexShrink: 0 }}>{fileCount}</span>
         </div>
       </div>
       {open && node.children.map(child =>
@@ -271,15 +271,15 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
         title={t('{0} — double-click to unshelve', entry.name)}
       >
         <button data-action-btn="" style={rowStyle.chevronBtn} onClick={e => { e.stopPropagation(); toggleShelveCollapsed(entryKey); }}>
-          <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', opacity: 0.65 }} />
+          <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px' }} />
         </button>
-        <Codicon name="archive" style={{ fontSize: '13px', opacity: 0.4, flexShrink: 0 }} />
+        <Codicon name="archive" style={{ fontSize: '13px', flexShrink: 0 }} />
         <div style={rowStyle.info}>
           <span style={rowStyle.name}>
             <span style={rowStyle.message} title={fullMessage}>{messageTitle}</span>
             {entry.branch && (
               <span style={rowStyle.branchBadge(branchColor(entry.branch))} title={entry.branch}>
-                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+                <Codicon name="git-branch" style={{ fontSize: '10px', flexShrink: 0 }} />
                 <span style={rowStyle.branchBadgeLabel}>{entry.branch}</span>
               </span>
             )}
@@ -358,13 +358,13 @@ const rowStyle = {
   }),
   branchBadgeLabel: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0 } as React.CSSProperties,
   meta: { display: 'flex', gap: '8px', marginTop: '2px' } as React.CSSProperties,
-  fileCount: { fontSize: '10px', opacity: 0.5 },
-  date: { fontSize: '10px', opacity: 0.4, whiteSpace: 'nowrap' as const },
+  fileCount: { fontSize: '10px', color: 'var(--vscode-descriptionForeground)' },
+  date: { fontSize: '10px', color: 'var(--vscode-descriptionForeground)', whiteSpace: 'nowrap' as const },
   actions: { display: 'flex', gap: '2px', flexShrink: 0 } as React.CSSProperties,
   btn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
     padding: '2px 4px', borderRadius: '3px', fontSize: '13px',
-    display: 'flex', alignItems: 'center', opacity: 0.65,
+    display: 'flex', alignItems: 'center',
     color: 'var(--vscode-foreground)',
   } as React.CSSProperties,
   fileList: {
@@ -387,7 +387,7 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBr
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
             <span style={css.worktreeBadge(worktreeBranchColor ?? branchColor(worktreeBranch))} title={worktreeBranch}>
-              <Codicon name="repo-clone" style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+              <Codicon name="repo-clone" style={{ fontSize: '10px', flexShrink: 0 }} />
               <span style={css.branchBadgeLabel}>{worktreeBranch}</span>
             </span>
           )}
@@ -431,7 +431,7 @@ const css = {
     boxSizing: 'border-box',
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
-  repoName: { fontSize: '11px', fontWeight: 'bold' as const, opacity: 0.9, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
+  repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
   worktreeBadge: (color: string): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', gap: '3px',
     fontSize: '10px', fontWeight: 600, background: `${color}33`, color,
@@ -443,5 +443,5 @@ const css = {
     display: 'flex', alignItems: 'flex-start', padding: '4px 8px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)',
   } as React.CSSProperties,
-  empty: { padding: '16px 12px', fontSize: '12px', opacity: 0.45, fontStyle: 'italic' as const, textAlign: 'center' as const },
+  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const, textAlign: 'center' as const },
 };

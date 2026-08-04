@@ -54,7 +54,7 @@ const css = `
   .thinking-lines i { display: block; height: 2px; border-radius: 2px; background: linear-gradient(90deg,transparent,#7657ff,#2f8fff,transparent); animation: review-line 1.4s ease-in-out infinite; }
   .thinking-lines i:nth-child(2) { width: 78%; animation-delay: 150ms; }
   .thinking-lines i:nth-child(3) { width: 58%; animation-delay: 300ms; }
-  .thinking-meta { font-size: 11px; opacity: .78; }
+  .thinking-meta { font-size: 11px; color: var(--vscode-descriptionForeground); }
   .summary { padding-bottom: 22px; border-bottom: 1px solid var(--vscode-panel-border); animation: review-enter 220ms ease-out both; }
   .summary-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .verdict { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }

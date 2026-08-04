@@ -129,21 +129,20 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     }
     .header-icon {
       font-size: 18px;
-      opacity: 0.7;
       color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
     }
     .header-title {
       font-size: 15px; font-weight: 600;
     }
     .header-sub {
-      font-size: 12px; opacity: 0.55; margin-top: 1px;
+      font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 1px;
     }
     .body {
       flex: 1; display: flex; flex-direction: column;
       padding: 20px 24px; gap: 10px; overflow: auto;
     }
     .label {
-      font-size: 11px; opacity: 0.55;
+      font-size: 11px; color: var(--vscode-descriptionForeground);
       text-transform: uppercase; letter-spacing: 0.06em;
     }
     .commit-list {
@@ -163,14 +162,13 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     .commit-row:last-child { border-bottom: none; }
     .commit-hash {
       font-family: var(--vscode-editor-font-family, monospace);
-      font-size: 11px; opacity: 0.5; flex-shrink: 0;
+      font-size: 11px; color: var(--vscode-descriptionForeground); flex-shrink: 0;
     }
     .commit-msg {
       min-width: 0;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       line-height: 1.5;
-      opacity: 0.85;
     }
     .message-editor {
       position: relative;
@@ -237,7 +235,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       padding: 3px;
       background: transparent;
       color: var(--vscode-foreground);
-      opacity: 0.72;
       line-height: 1;
     }
     .btn-ai:hover { background: var(--vscode-toolbar-hoverBackground); opacity: 1; }

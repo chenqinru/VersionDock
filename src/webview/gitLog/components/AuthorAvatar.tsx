@@ -169,7 +169,7 @@ export function AuthorAvatar({ authorName, authorEmail, size = 20 }: Props) {
     // Show initials as placeholder while fetching
     return (
       <div
-        style={{ ...containerStyle, background: avatarColor(avatarSeed), color: '#fff', opacity: 0.4 }}
+        style={{ ...containerStyle, background: avatarColor(avatarSeed), color: '#fff' }}
         title={authorTitle}
       >
         {initials(authorName)}

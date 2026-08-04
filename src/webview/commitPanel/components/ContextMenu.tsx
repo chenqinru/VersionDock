@@ -115,7 +115,6 @@ const styles = {
   }),
   icon: {
     fontSize: '14px',
-    opacity: 0.8,
     flexShrink: 0,
   },
   separator: {

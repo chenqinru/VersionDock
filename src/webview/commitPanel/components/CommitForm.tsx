@@ -143,8 +143,7 @@ const styles = {
     display: 'flex',
     gap: '4px',
     fontSize: '11px',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.7,
+    color: 'var(--vscode-descriptionForeground)',
   },
   pullBtn: {
     marginLeft: 'auto',
@@ -175,7 +174,6 @@ const styles = {
     justifyContent: 'space-between',
     fontSize: '11px',
     color: 'var(--vscode-foreground)',
-    opacity: 0.8,
   },
   amendLabel: {
     display: 'flex',
@@ -184,7 +182,7 @@ const styles = {
   },
   stagedCount: {
     fontSize: '11px',
-    opacity: 0.6,
+    color: 'var(--vscode-descriptionForeground)',
   },
   buttons: {
     display: 'flex',

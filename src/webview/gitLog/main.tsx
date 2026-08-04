@@ -568,7 +568,7 @@ export function GitLogApp() {
     <div style={noRepoOverlayStyle}>
       {!store.hasWorkspaceFolder ? (
         <>
-          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5', opacity: 0.8 }}>
+          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5' }}>
             {t('You have not yet opened a folder.')}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '200px' }}>
@@ -578,7 +578,7 @@ export function GitLogApp() {
         </>
       ) : (
         <>
-          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5', opacity: 0.8 }}>
+          <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5' }}>
             {t("The folder currently open doesn't have a Git repository. You can initialize a repository which will enable source control features powered by Git.")}
           </div>
           <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_INIT_REPO' })}>
@@ -818,8 +818,7 @@ const expandSidebarBtn: React.CSSProperties = {
   border: 'none',
   borderRadius: '3px',
   background: 'transparent',
-  color: 'var(--vscode-foreground)',
-  opacity: 0.65,
+  color: 'var(--vscode-descriptionForeground)',
   cursor: 'pointer',
 };
 

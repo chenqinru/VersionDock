@@ -758,7 +758,6 @@ const popoverStyles = {
   } as React.CSSProperties,
   icon: {
     fontSize: '12px',
-    opacity: 0.6,
     flexShrink: 0,
   } as React.CSSProperties,
   hash: {
@@ -770,7 +769,7 @@ const popoverStyles = {
   fullHash: {
     fontFamily: 'var(--vscode-editor-font-family, monospace)',
     fontSize: '10px',
-    opacity: 0.45,
+    color: 'var(--vscode-descriptionForeground)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
@@ -783,9 +782,9 @@ const popoverStyles = {
     whiteSpace: 'nowrap' as const,
     minWidth: 0,
   } as React.CSSProperties,
-  dot: { opacity: 0.4, flexShrink: 0 } as React.CSSProperties,
-  date: { opacity: 0.6, flexShrink: 0, fontSize: '11px' } as React.CSSProperties,
-  statText: { opacity: 0.75 } as React.CSSProperties,
+  dot: { color: 'var(--vscode-descriptionForeground)', flexShrink: 0 } as React.CSSProperties,
+  date: { color: 'var(--vscode-descriptionForeground)', flexShrink: 0, fontSize: '11px' } as React.CSSProperties,
+  statText: { color: 'var(--vscode-descriptionForeground)' } as React.CSSProperties,
   added: {
     color: 'var(--vscode-gitDecoration-addedResourceForeground)',
     fontWeight: 600,
@@ -830,7 +829,7 @@ const popoverStyles = {
   } as React.CSSProperties,
   hint: {
     fontSize: '10px',
-    opacity: 0.4,
+    color: 'var(--vscode-descriptionForeground)',
     textAlign: 'center',
     marginTop: '2px',
   } as React.CSSProperties,
@@ -1153,7 +1152,6 @@ const ctxStyles = {
   header: {
     padding: '4px 12px',
     fontSize: '11px',
-    opacity: 0.55,
     color: 'var(--vscode-menu-foreground)',
     whiteSpace: 'nowrap' as const,
   } as React.CSSProperties,
@@ -1190,7 +1188,6 @@ const ctxStyles = {
   icon: {
     fontSize: '14px',
     flexShrink: 0,
-    opacity: 0.8,
   } as React.CSSProperties,
   separator: {
     height: '1px',
@@ -1299,11 +1296,11 @@ function RefBadgeIcon({ group }: { group: RefGroup }) {
   if (group.isLocal && group.isRemote) return (
     <>
       <Codicon name="git-branch" style={s} />
-      <Codicon name="cloud" style={{ ...s, opacity: 0.7 }} />
+      <Codicon name="cloud" style={s} />
     </>
   );
   if (group.isRemote) return <Codicon name="cloud" style={s} />;
-  if (group.isHead) return <Codicon name="git-branch" style={{ ...s, opacity: 1 }} />;
+  if (group.isHead) return <Codicon name="git-branch" style={s} />;
   return <Codicon name="git-branch" style={s} />;
 }
 
@@ -1369,11 +1366,11 @@ const emptyStyles = {
   } as React.CSSProperties,
   icon: {
     fontSize: '28px',
-    opacity: 0.22,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   title: {
     fontSize: '13px',
-    opacity: 0.55,
+    color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
 };
 
@@ -1421,7 +1418,6 @@ const styles = {
     minWidth: REPO_LABEL_WIDTH,
     height: '100%',
     background: color,
-    opacity: 0.85,
     flexShrink: 0,
   }),
   repoStripName: (offset: number): React.CSSProperties => ({
@@ -1437,7 +1433,6 @@ const styles = {
     textTransform: 'uppercase' as const,
     letterSpacing: '0.06em',
     color: 'var(--vscode-foreground)',
-    opacity: 0.8,
     whiteSpace: 'nowrap' as const,
     padding: '0 6px',
     display: 'block',
@@ -1543,7 +1538,6 @@ const styles = {
     background: isRowSelected ? color : `${color}33`,
     border: `1px solid ${isRowSelected ? color : `${color}88`}`,
     transform: `translateX(${shift}px)`,
-    opacity: isRowSelected ? 0.7 : 1,
   }),
   overflowLabel: (color: string, isRowSelected = false): React.CSSProperties => ({
     position: 'relative',
@@ -1576,7 +1570,6 @@ const styles = {
     maxWidth: '300px',
     minWidth: '20px',
     fontSize: '11px',
-    opacity: 0.65,
     overflow: 'hidden',
   },
   incomingIcon: {
@@ -1586,7 +1579,6 @@ const styles = {
   } as React.CSSProperties,
   unpushedIcon: {
     fontSize: '12px',
-    opacity: 0.75,
     color: 'var(--vscode-gitDecoration-addedResourceForeground)',
     flexShrink: 0,
   } as React.CSSProperties,
@@ -1601,7 +1593,7 @@ const styles = {
     whiteSpace: 'nowrap' as const,
     flexShrink: 0,
     fontSize: '11px',
-    opacity: 0.65,
+    color: 'var(--vscode-descriptionForeground)',
     marginLeft: '8px',
   },
   inlineActions: {
@@ -1618,7 +1610,6 @@ const styles = {
     border: 'none',
     cursor: 'pointer',
     color: 'var(--vscode-foreground)',
-    opacity: 0.7,
     padding: 0,
     borderRadius: '3px',
     display: 'flex',
@@ -1640,7 +1631,6 @@ const styles = {
     height: '100%',
     width: '34%',
     background: 'var(--vscode-progressBar-background)',
-    opacity: 0.85,
     borderRadius: '999px',
     willChange: 'transform',
   } as React.CSSProperties,

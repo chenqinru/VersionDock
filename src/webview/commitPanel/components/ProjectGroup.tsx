@@ -127,7 +127,7 @@ export function ProjectGroup({
                 ? t('Detached HEAD at {0}', repoStatus.branch.detachedHash)
                 : repoStatus.branch.name}
           >
-            <Codicon name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+            <Codicon name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
             <span style={styles.branchName}>{repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name}</span>
           </span>
           {totalFiles > 0 && (
@@ -229,7 +229,7 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
               ? t('Detached HEAD at {0}', repoStatus.branch.detachedHash)
               : repoStatus.branch.name}
         >
-          <Codicon name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0, opacity: 0.8 }} />
+          <Codicon name={isWorktree ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
           <span style={styles.branchName}>{repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name}</span>
         </span>
         {!hideOpenChanges && (
@@ -281,7 +281,6 @@ const styles = {
   },
   chevron: {
     fontSize: '12px',
-    opacity: 0.7,
     flexShrink: 0,
   },
   dot: (color: string): React.CSSProperties => ({
@@ -303,25 +302,23 @@ const styles = {
     fontWeight: 'bold',
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
-    color: 'var(--vscode-badge-foreground)',
-    background: 'var(--vscode-badge-background)',
+    color: 'var(--versiondock-badge-foreground)',
+    background: 'var(--versiondock-badge-background)',
     borderRadius: '3px',
     padding: '1px 4px',
     flexShrink: 0,
-    opacity: 0.75,
   } as React.CSSProperties,
   vcsBadge: (kind: 'git' | 'svn'): React.CSSProperties => ({
     fontSize: '9px',
     fontWeight: 'bold',
     letterSpacing: 0,
-    color: 'var(--vscode-badge-foreground)',
+    color: 'var(--versiondock-badge-foreground)',
     background: kind === 'svn'
       ? 'var(--vscode-charts-purple, #8957e5)'
       : 'var(--vscode-charts-orange, #f05033)',
     borderRadius: '3px',
     padding: '1px 4px',
     flexShrink: 0,
-    opacity: 0.9,
   }),
   branchBadge: (color: string): React.CSSProperties => ({
     display: 'inline-flex',
@@ -357,14 +354,13 @@ const styles = {
     flexShrink: 0,
   } as React.CSSProperties,
   countBadge: (hasSelected: boolean): React.CSSProperties => ({
-    background: hasSelected ? 'var(--vscode-badge-background)' : 'transparent',
-    color: hasSelected ? 'var(--vscode-badge-foreground)' : 'var(--vscode-foreground)',
+    background: hasSelected ? 'var(--versiondock-badge-background)' : 'transparent',
+    color: hasSelected ? 'var(--versiondock-badge-foreground)' : 'var(--vscode-descriptionForeground)',
     borderRadius: '8px',
     padding: hasSelected ? '1px 5px' : '0',
     fontSize: '10px',
     fontWeight: 'bold',
     flexShrink: 0,
-    opacity: hasSelected ? 1 : 0.4,
     minWidth: '18px',
     textAlign: 'center',
   }),
@@ -372,8 +368,7 @@ const styles = {
     background: 'transparent',
     border: 'none',
     cursor: 'pointer',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.45,
+    color: 'var(--vscode-descriptionForeground)',
     padding: '2px 4px',
     display: 'flex',
     alignItems: 'center',
@@ -387,8 +382,7 @@ const styles = {
   noChanges: {
     padding: '12px 8px',
     fontSize: '12px',
-    color: 'var(--vscode-foreground)',
-    opacity: 0.4,
+    color: 'var(--vscode-descriptionForeground)',
     textAlign: 'center' as const,
   },
 };
