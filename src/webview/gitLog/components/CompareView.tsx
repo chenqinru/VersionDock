@@ -5,6 +5,7 @@ import { CommitList } from './CommitList';
 import type { LaidOutCommit } from '../utils/graphLayout';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
+import { readableAccentColor } from '../../shared/branchColors';
 import {
   AuthorPicker,
   ClearFiltersButton,
@@ -60,7 +61,7 @@ export function CompareView({
 }: Props) {
   const [topPaneHeight, setTopPaneHeight] = useState<number | null>(null);
   const stackRef = useRef<HTMLDivElement>(null);
-  const repoColor = repoColors[compareState.repoId] ?? repos.find(repo => repo.id === compareState.repoId)?.color ?? '#888';
+  const repoColor = readableAccentColor(repoColors[compareState.repoId] ?? repos.find(repo => repo.id === compareState.repoId)?.color ?? '#888');
   const baseLabel = formatRefLabel(compareState.baseRef);
   const targetLabel = formatRefLabel(compareState.targetRef);
 

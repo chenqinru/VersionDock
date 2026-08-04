@@ -7,7 +7,7 @@ import { FileIcon } from '../../shared/FileIcon';
 import { SingleRepoHeader } from './ProjectGroup';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
-import { branchInfoColor } from '../../shared/branchColors';
+import { branchInfoColor, readableAccentColor } from '../../shared/branchColors';
 import { scopedKey } from '../../shared/scopedKey';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
@@ -321,6 +321,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   // Empty repos default to collapsed; key presence means "explicitly opened"
   const collapsed = isEmpty ? !isCollapsed(collapseKey) : isCollapsed(collapseKey);
   const branchClr = branchInfoColor(repoStatus.branch);
+  const projectColor = readableAccentColor(repoColor);
   const [hovered, setHovered] = useState(false);
   const isSvn = kind === 'svn';
   const canAddToSvn = isSvn && !staged && files.some(file => file.status === 'untracked');
@@ -348,7 +349,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
     <div style={repoGroupStyle(isFirst)}>
       {!singleRepo && (
         <div
-          style={repoHeaderStyle(repoColor)}
+          style={repoHeaderStyle(projectColor)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e); }}
@@ -366,7 +367,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
           )}
           <div style={repoHeaderMainStyle} onClick={() => toggleCollapsed(collapseKey)}>
             <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '12px', flexShrink: 0 }} />
-            <span style={repoDotStyle(repoColor)} />
+            <span style={repoDotStyle(projectColor)} />
             <span style={repoNameStyle}>
               {isWorktree && mainWorktreePath ? baseNameFromPath(mainWorktreePath) ?? repoName : repoName}
             </span>
@@ -735,7 +736,7 @@ const repoGroupStyle = (_isFirst: boolean): React.CSSProperties => ({
 const repoHeaderStyle = (color: string): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
-  background: color + '14',
+  background: color + '22',
   height: '26px',
   boxSizing: 'border-box',
 });

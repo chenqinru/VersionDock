@@ -3,7 +3,7 @@ import type { WorktreeEntry } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
-import { branchColor, headColor } from '../../shared/branchColors';
+import { branchColor, headColor, readableAccentColor } from '../../shared/branchColors';
 
 interface RepoWorktrees {
   repoId: string;
@@ -204,12 +204,13 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
   onRequestCreate: Props['onRequestCreate'];
 }) {
   const hasPrunable = repo.worktrees.some(w => w.isPrunable);
+  const projectColor = readableAccentColor(repo.repoColor);
 
   return (
     <div style={css.repoSection}>
       {multiRepo && (
-        <div style={css.repoHeader(repo.repoColor)}>
-          <span style={css.dot(repo.repoColor)} />
+        <div style={css.repoHeader(projectColor)}>
+          <span style={css.dot(projectColor)} />
           <span style={css.repoName}>{repo.repoName}</span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '2px' }}>
             {hasPrunable && (
@@ -323,7 +324,7 @@ const css = {
   repoSection: { borderBottom: '1px solid var(--vscode-panel-border)' } as React.CSSProperties,
   repoHeader: (color: string): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', minHeight: '26px',
-    background: color + '14', borderBottom: '1px solid var(--vscode-panel-border)',
+    background: color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
     boxSizing: 'border-box',
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),

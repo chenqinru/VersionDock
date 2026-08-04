@@ -4,6 +4,7 @@ import { isPrimaryBranch } from '../../shared/branchUtils';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
+import { readableAccentColor } from '../../shared/branchColors';
 import { branchRevisionRef } from '../utils/refs';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
@@ -139,7 +140,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
     });
   }
 
-  const repoColorMap = Object.fromEntries(repos.map(r => [r.id, r.color]));
+  const repoColorMap = Object.fromEntries(repos.map(r => [r.id, readableAccentColor(r.color)]));
   const repoKindMap: Record<string, 'git' | 'svn'> = Object.fromEntries(
     repos.map(r => [r.id, r.kind ?? 'git']),
   );
@@ -257,7 +258,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
                     onRepoFilterSelect(repo.id);
                   }}
                 >
-                  <span style={styles.repoDot(repo.color)} />
+                  <span style={styles.repoDot(readableAccentColor(repo.color))} />
                   <span style={styles.repoName}>{displayName}</span>
                   {repo.isSubmodule && (
                     <span style={styles.submoduleBadge} title={repo.submodulePath ? t('Submodule: {0}', repo.submodulePath) : t('Submodule')}>

@@ -4,6 +4,7 @@ import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { formatAuthorIdentity } from './AuthorAvatar';
+import { readableAccentColor } from '../../shared/branchColors';
 import { branchRevisionRef, tagRevisionRef } from '../utils/refs';
 
 export interface AuthorOption {
@@ -577,7 +578,7 @@ function RepoPicker({ value, repos, onChange, style }: {
                 style={styles.dropdownItem(value === repo.id)}
                 onClick={() => { onChange(repo.id); setOpen(false); }}
               >
-                <span style={{ ...styles.repoDot, background: repo.color }} />
+                <span style={{ ...styles.repoDot, background: readableAccentColor(repo.color) }} />
                 <span style={styles.dropdownItemLabel}>{repo.name}</span>
                 {value === repo.id && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
               </div>

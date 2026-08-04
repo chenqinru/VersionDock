@@ -790,7 +790,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
             const initials = getAuthorInitials(commit.authorName);
             return `
             <div class="commit-summary-item${index === allCommits.length - 1 ? ' last' : ''}">
-              <div class="commit-summary-repo" style="color:${escHtml(commit.repoColor)}">
+              <div class="commit-summary-repo" style="--versiondock-project-color:${escHtml(commit.repoColor)}">
                 <span class="codicon codicon-repo"></span>
                 <span>${escHtml(commit.repoName)}</span>
               </div>
@@ -1104,6 +1104,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       margin-bottom: 6px; min-width: 0;
       font-size: 11px; font-weight: 600;
       text-transform: uppercase; letter-spacing: 0.04em;
+      color: color-mix(in srgb, var(--versiondock-project-color) 70%, var(--vscode-foreground));
     }
     .commit-summary-repo .codicon { font-size: 11px; color: var(--vscode-descriptionForeground); }
     .commit-summary-card {
@@ -1935,7 +1936,7 @@ ${leftPanelContent}
           '<div class="dir-row" data-dir="' + escAttr(node.fullPath) + '">' +
           '<div class="row-indent" style="width:2px"></div>' +
           '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;flex-shrink:0;"></span>' +
-          '<span style="width:8px;height:8px;border-radius:50%;background:' + escAttr(node.repoColor || __d.repoColor || '#4ec9b0') + ';flex-shrink:0;"></span>' +
+          '<span style="width:8px;height:8px;border-radius:50%;background:color-mix(in srgb, ' + escAttr(node.repoColor || __d.repoColor || '#4ec9b0') + ' 70%, var(--vscode-foreground));flex-shrink:0;"></span>' +
           '<span class="dir-name" style="font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">' + escText(node.name) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
           '</div>'

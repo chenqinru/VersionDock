@@ -6,6 +6,7 @@ import type { IconThemeData } from '../../../host/types/messages';
 import type { WorktreeDiffState } from '../store/commitStore';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
+import { readableAccentColor } from '../../shared/branchColors';
 
 interface Props {
   state: WorktreeDiffState;
@@ -105,7 +106,7 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
       <div style={styles.header}>
         <div style={styles.headerText}>
           <div style={styles.titleRow}>
-            <span style={styles.repoDot(state.repoColor)} />
+            <span style={styles.repoDot(readableAccentColor(state.repoColor))} />
             <span style={styles.repoNameInline}>{state.repoName}</span>
             <span style={styles.title}>{t('{0} vs Working Tree', state.baseRef)}</span>
           </div>

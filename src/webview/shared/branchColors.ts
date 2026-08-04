@@ -89,6 +89,11 @@ export function primaryBranchColor(): string {
   return isDarkTheme() ? lightenToThreshold(raw, 0.18) : darkenToThreshold(raw, 0.3);
 }
 
+/** Keep repository accents readable when their stored palette was authored for a different theme. */
+export function readableAccentColor(raw: string): string {
+  return isDarkTheme() ? lightenToThreshold(raw, 0.18) : darkenToThreshold(raw, 0.3);
+}
+
 export function headColor(): string {
   return isDarkTheme() ? HEAD_COLOR_DARK : HEAD_COLOR_LIGHT;
 }

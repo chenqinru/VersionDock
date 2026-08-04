@@ -1,6 +1,7 @@
 import React from 'react';
 import { t } from '../../shared/i18n';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { readableAccentColor } from '../../shared/branchColors';
 
 interface Props {
   repoName: string;
@@ -23,11 +24,12 @@ export function CommitForm({
   onMessageChange, onAmendChange, onCommit, onCommitAndPush, onPull, loading,
 }: Props) {
   const canCommit = (message.trim().length > 0 || amend) && (stagedCount > 0 || amend);
+  const projectColor = readableAccentColor(repoColor);
 
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <span style={styles.dot(repoColor)} />
+        <span style={styles.dot(projectColor)} />
         <span style={styles.repoName}>{repoName}</span>
         <span style={styles.branch}>
           <span style={styles.branchIcon}>⎇</span>

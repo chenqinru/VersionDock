@@ -13,6 +13,7 @@ import { t } from '../../shared/i18n';
 import type { LogViewFileEntry } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
 import { isSameHistoryFilePath } from '../utils/historyPath';
+import { readableAccentColor } from '../../shared/branchColors';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -411,7 +412,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
 
   const repoNameById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.name])), [repos]);
   const repoRootPathById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.rootPath])), [repos]);
-  const repoColorById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.color])), [repos]);
+  const repoColorById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, readableAccentColor(repo.color)])), [repos]);
   const repoKindById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.kind ?? 'git'])), [repos]);
   const involvedRepoIds = useMemo(() => Array.from(new Set(commits.map(selectedCommit => selectedCommit.repoId))), [commits]);
   const showRepoGrouping = repos.length > 1;
@@ -1152,7 +1153,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
             {repoName && (
               <div style={styles.repoRow}>
                 <Codicon name="repo" style={styles.repoIcon} />
-                <span style={styles.repoName(repoColor)}>{repoName}</span>
+                <span style={styles.repoName(repoColor ? readableAccentColor(repoColor) : undefined)}>{repoName}</span>
                 <div style={styles.detailActions}>
                   <button
                     className="versiondock-detail-icon-row"

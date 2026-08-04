@@ -4,7 +4,7 @@ import type { RepoStatus, RepoMeta } from '../../shared/types';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
-import { branchInfoColor } from '../../shared/branchColors';
+import { branchInfoColor, readableAccentColor } from '../../shared/branchColors';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
@@ -670,7 +670,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   const repoName = worktreeBranch ? (mainRepoName ?? rawName) : rawName;
   const branchLabel = repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name;
   const branchClr = branchInfoColor(repoStatus.branch);
-  const repoColor = repoMeta?.color ?? '#4ec9b0';
+  const repoColor = readableAccentColor(repoMeta?.color ?? '#4ec9b0');
   const ahead = repoStatus.branch.aheadBehind?.ahead ?? 0;
   const behind = repoStatus.branch.aheadBehind?.behind ?? 0;
   const hasUpstream = !!repoStatus.branch.upstream;
@@ -1119,7 +1119,7 @@ export function PushTab(props: Props) {
           <div style={css.pills}>
             {checkedRepos.map(repo => {
               const meta = metaMap.get(repo.repoId);
-              const color = meta?.color ?? '#4ec9b0';
+              const color = readableAccentColor(meta?.color ?? '#4ec9b0');
               const rawName = meta?.name ?? baseNameFromPath(repo.repoId) ?? repo.repoId;
               const wtBranch = meta?.isWorktree
                 ? (repo.branch.detachedTag ?? repo.branch.detachedHash ?? repo.branch.name)
@@ -1231,7 +1231,7 @@ const styles = {
   repoHeader: (color: string): React.CSSProperties => ({
     display: 'flex', alignItems: 'center',
     padding: '4px 8px', minHeight: '26px',
-    background: color + '14', borderBottom: '1px solid var(--vscode-panel-border)',
+    background: color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
     boxSizing: 'border-box',
   }),
   checkbox: {

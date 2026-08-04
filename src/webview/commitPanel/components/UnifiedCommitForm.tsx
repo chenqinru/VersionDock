@@ -5,6 +5,7 @@ import { AiCommitComposerIcon } from '../../shared/AiCommitComposerIcon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { readableAccentColor } from '../../shared/branchColors';
 import { CommitMessageHistoryModal } from './CommitMessageHistoryModal';
 
 interface Props {
@@ -403,7 +404,7 @@ export function UnifiedCommitForm({
           ) : (
             commitTargets.map(r => {
               const meta = metaMap.get(r.repoId);
-              const color = meta?.color ?? '#4ec9b0';
+              const color = readableAccentColor(meta?.color ?? '#4ec9b0');
               const rawName = meta?.name ?? baseNameFromPath(r.repoId) ?? r.repoId;
               const repoStatus = repoStatuses.find(rs => rs.repoId === r.repoId);
               const wtBranch = meta?.isWorktree && repoStatus

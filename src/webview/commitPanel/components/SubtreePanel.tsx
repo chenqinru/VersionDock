@@ -4,7 +4,7 @@ import type { SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../../shared/ms
 import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
-import { branchColor } from '../../shared/branchColors';
+import { branchColor, readableAccentColor } from '../../shared/branchColors';
 
 interface Props {
   entries: SubtreeEntry[];
@@ -107,6 +107,7 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
   const disabled = Boolean(activeOp);
   const statusLabel = subtreeStatusLabel(status);
   const statusTone = subtreeStatusTone(status);
+  const projectColor = readableAccentColor(repoColor);
 
   const runAction = (id: string) => {
     if (disabled) return;
@@ -128,7 +129,7 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
         onMouseLeave={() => setHovered(false)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
       >
-        <Codicon name="repo" style={{ fontSize: '13px', color: repoColor, flexShrink: 0, marginTop: '2px' }} />
+        <Codicon name="repo" style={{ fontSize: '13px', color: projectColor, flexShrink: 0, marginTop: '2px' }} />
         <div style={row.info}>
           <div style={row.titleLine}>
             <span style={row.name}>{entry.name}</span>
@@ -332,7 +333,7 @@ const css = {
     gap: '6px',
     padding: '4px 8px',
     minHeight: '26px',
-    background: color + '14',
+    background: color + '22',
     borderBottom: '1px solid var(--vscode-panel-border)',
     boxSizing: 'border-box',
   }),

@@ -16,6 +16,7 @@ import { formatDateTime } from '../../shared/dateUtils';
 import { t } from '../../shared/i18n';
 import { getCommitKey, type CommitSelectionMode } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
+import { readableAccentColor } from '../../shared/branchColors';
 
 interface Props {
   commits: LaidOutCommit[];
@@ -187,7 +188,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
       const c = commits[i];
       const meta = repoMeta[c.repoId];
       if (!cur || cur.repoId !== c.repoId) {
-        cur = { repoId: c.repoId, name: meta?.name ?? c.repoId, color: meta?.color ?? '#888', startRow: i, rowCount: 1 };
+        cur = { repoId: c.repoId, name: meta?.name ?? c.repoId, color: readableAccentColor(meta?.color ?? '#888'), startRow: i, rowCount: 1 };
         blocks.push(cur);
       } else {
         cur.rowCount++;

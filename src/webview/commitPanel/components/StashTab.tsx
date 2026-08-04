@@ -6,7 +6,7 @@ import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import type { ViewMode } from '../store/commitStore';
 import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
-import { branchColor } from '../../shared/branchColors';
+import { branchColor, readableAccentColor } from '../../shared/branchColors';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
 
 interface Props {
@@ -353,11 +353,12 @@ export function StashTab({
   onApply, onPop, onDrop, onOpenFileDiff,
   expansionCommand,
 }: Props) {
+  const projectColor = readableAccentColor(repoColor);
   return (
     <div style={css.root}>
       {multiRepo && (
-        <div style={css.repoHeader(repoColor)}>
-          <span style={css.dot(repoColor)} />
+        <div style={css.repoHeader(projectColor)}>
+          <span style={css.dot(projectColor)} />
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
             <span style={css.worktreeBadge(worktreeBranchColor ?? branchColor(worktreeBranch))} title={worktreeBranch}>
@@ -404,7 +405,7 @@ const css = {
   root: { display: 'flex', flexDirection: 'column' as const, borderBottom: '1px solid var(--vscode-panel-border)' },
   repoHeader: (color: string): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', minHeight: '26px',
-    background: color + '14', borderBottom: '1px solid var(--vscode-panel-border)',
+    background: color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
     boxSizing: 'border-box',
   }),
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),

@@ -6,7 +6,7 @@ import { FileTree } from './FileTree';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
-import { branchInfoColor } from '../../shared/branchColors';
+import { branchInfoColor, readableAccentColor } from '../../shared/branchColors';
 import { mergeRepoFiles } from '../utils/mergeRepoFiles';
 import { scopedKey } from '../../shared/scopedKey';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
@@ -56,6 +56,7 @@ export function ProjectGroup({
   const repoCollapseKey = scopedKey('repo', repoId);
   const collapsed = isCollapsed(repoCollapseKey);
   const branchClr = branchInfoColor(repoStatus.branch);
+  const projectColor = readableAccentColor(repoColor);
   const { stagedFiles, unstagedFiles } = repoStatus;
 
   const allFiles = useMemo(
@@ -82,7 +83,7 @@ export function ProjectGroup({
   return (
     <div style={styles.container(isFirst)}>
       <div
-        style={styles.header(repoColor)}
+        style={styles.header(projectColor)}
         onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId); }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -100,7 +101,7 @@ export function ProjectGroup({
 
         <div style={styles.headerMain} onClick={() => toggleCollapsed(repoCollapseKey)}>
           <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
-          <span style={styles.dot(repoColor)} />
+          <span style={styles.dot(projectColor)} />
           <span style={styles.name}>
             {isWorktree && mainWorktreePath ? baseNameFromPath(mainWorktreePath) ?? repoName : repoName}
           </span>
@@ -200,17 +201,18 @@ interface SingleRepoHeaderProps {
 export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule, submodulePath, isWorktree, mainWorktreePath, onBranchClick, onRepoContextMenu, onOpenAllChanges, hideOpenChanges }: SingleRepoHeaderProps) {
   const repoId = repoStatus.repoId;
   const branchClr = branchInfoColor(repoStatus.branch);
+  const projectColor = readableAccentColor(repoColor);
   const [hovered, setHovered] = useState(false);
 
   return (
     <div
-      style={styles.header(repoColor)}
+      style={styles.header(projectColor)}
       onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId); }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       <div style={styles.headerMain} onClick={() => onBranchClick(repoId)}>
-        <span style={styles.dot(repoColor)} />
+        <span style={styles.dot(projectColor)} />
         <span style={styles.name}>
           {isWorktree && mainWorktreePath ? baseNameFromPath(mainWorktreePath) ?? repoName : repoName}
         </span>
@@ -255,7 +257,7 @@ const styles = {
   header: (color: string): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
-    background: color + '14',
+    background: color + '22',
     height: '26px',
     boxSizing: 'border-box',
   }),

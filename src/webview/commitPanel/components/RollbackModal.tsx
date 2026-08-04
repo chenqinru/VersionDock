@@ -5,6 +5,7 @@ import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { readableAccentColor } from '../../shared/branchColors';
 
 // ── Tree types (mirrors FileTree logic) ──────────────────────────────────────
 
@@ -152,6 +153,7 @@ function RepoSection({ repoStatus, repoName, repoColor, multiRepo, selected, onT
   const selCount = allPaths.filter(p => selected.has(p)).length;
   const allSel = selCount === allPaths.length && allPaths.length > 0;
   const someSel = selCount > 0 && !allSel;
+  const projectColor = readableAccentColor(repoColor);
 
   const nodes = buildTree(allFiles);
 
@@ -164,7 +166,7 @@ function RepoSection({ repoStatus, repoName, repoColor, multiRepo, selected, onT
             onChange={() => onSetFiles(allPaths, !allSel)}
             onClick={e => e.stopPropagation()}
           />
-          <span style={s.repoDot(repoColor)} />
+          <span style={s.repoDot(projectColor)} />
           <span style={s.repoName}>{repoName}</span>
           <span style={s.count}>{selCount}/{allPaths.length}</span>
         </div>

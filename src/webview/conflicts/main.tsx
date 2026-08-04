@@ -7,6 +7,7 @@ import { t } from '../shared/i18n';
 import { WebviewErrorBoundary } from '../shared/WebviewErrorBoundary';
 import { scopedKey } from '../shared/scopedKey';
 import { nativeCheckboxBorderStyle } from '../shared/nativeCheckboxStyle';
+import { readableAccentColor } from '../shared/branchColors';
 import type { ConflictsToHostMsg, ConflictListFile, HostToConflictsMsg, IconThemeData } from '../../host/types/messages';
 
 function generateId() {
@@ -281,7 +282,7 @@ function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, on
       <div className="versiondock-conflicts-dir-row" style={{ ...rowStyle, paddingLeft: TREE_BASE_PAD + depth * TREE_LEVEL_PAD }} onClick={() => onToggle(node.path)} title={node.name}>
         <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.chevron} />
         {node.isRepoRoot
-          ? <span style={styles.repoRootDot(node.repoColor ?? 'var(--vscode-foreground)')} />
+          ? <span style={styles.repoRootDot(node.repoColor ? readableAccentColor(node.repoColor) : 'var(--vscode-foreground)')} />
           : <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={16} />}
         <span style={node.isRepoRoot ? styles.repoRootName : styles.dirName}>{node.isRepoRoot ? node.name.toUpperCase() : node.name}</span>
         <span style={styles.dirCount}>{node.count}</span>

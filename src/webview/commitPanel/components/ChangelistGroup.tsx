@@ -8,7 +8,7 @@ import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { scopedKey } from '../../shared/scopedKey';
-import { branchColor, branchInfoColor } from '../../shared/branchColors';
+import { branchColor, branchInfoColor, readableAccentColor } from '../../shared/branchColors';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
 export interface RepoFileGroup {
@@ -223,6 +223,7 @@ function RepoSubGroup({
   const branchClr = repoStatus
     ? branchInfoColor(repoStatus.branch)
     : branchColor('main');
+  const projectColor = readableAccentColor(repoColor);
   const [hovered, setHovered] = useState(false);
 
   const checkboxRef = useRef<HTMLInputElement>(null);
@@ -239,7 +240,7 @@ function RepoSubGroup({
     <div style={styles.repoSubGroup(isFirst)}>
       {multiRepo && !singleRepo && (
         <div
-          style={styles.repoHeader(repoColor)}
+          style={styles.repoHeader(projectColor)}
           onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId, changelistId); }}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
@@ -256,7 +257,7 @@ function RepoSubGroup({
           />
           <div style={styles.repoHeaderMain} onClick={() => toggleCollapsed(collapseKey)}>
             <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={styles.repoChevron} />
-            <span style={styles.repoDot(repoColor)} />
+            <span style={styles.repoDot(projectColor)} />
             <span style={styles.repoName}>
               {isWorktree && mainWorktreePath ? baseNameFromPath(mainWorktreePath) ?? repoName : repoName}
             </span>
@@ -419,7 +420,7 @@ const styles = {
   repoHeader: (color: string): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
-    background: color + '14',
+    background: color + '22',
     height: '26px',
     boxSizing: 'border-box',
   }),
