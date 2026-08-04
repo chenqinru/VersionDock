@@ -91,7 +91,12 @@ const INTERACTION_STYLE = `
 function CommitSkeleton() {
   const rows = Math.ceil(window.innerHeight / ROW_HEIGHT) + 2;
   return (
-    <div style={skeletonStyles.container}>
+    <div
+      style={skeletonStyles.container}
+      role="status"
+      aria-live="polite"
+      aria-label={t('Loading commits…')}
+    >
       <style>{SKELETON_ANIM_STYLE}</style>
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} style={skeletonStyles.row(i, rows)}>
@@ -100,6 +105,10 @@ function CommitSkeleton() {
           <div style={skeletonStyles.meta} />
         </div>
       ))}
+      <div style={skeletonStyles.overlay}>
+        <Codicon name="loading~spin" style={skeletonStyles.loadingIcon} />
+        <span>{t('Loading commits…')}</span>
+      </div>
     </div>
   );
 }
@@ -114,8 +123,9 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   const shownSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (commits.length === 0 && (repos.length === 0 || !storeHasMore)) {
-      // No repos, or server confirmed no commits (isLast=true with empty batch) — exit skeleton immediately
+    if (commits.length === 0 && !storeHasMore) {
+      // The server confirmed no commits (isLast=true with an empty batch).
+      // An empty repo list can be a transient state while workspace discovery is still running.
       if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current);
       setShowSkeleton(false);
       return;
@@ -136,7 +146,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     }
 
     return () => { if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current); };
-  }, [commits.length, loading, repos.length, showSkeleton, storeHasMore]);
+  }, [commits.length, loading, showSkeleton, storeHasMore]);
 
   const [localExpandedRepos, setLocalExpandedRepos] = useState<Set<string>>(new Set());
   const expandedRepos = expandedRepoIds ?? localExpandedRepos;
@@ -1310,6 +1320,7 @@ const skeletonStyles = {
   container: {
     flex: 1,
     minHeight: 0,
+    position: 'relative' as const,
     overflowY: 'hidden' as const,
     overflowX: 'hidden' as const,
     background: 'var(--vscode-editor-background)',
@@ -1317,6 +1328,22 @@ const skeletonStyles = {
     flexDirection: 'column' as const,
     alignSelf: 'stretch' as const,
   },
+  overlay: {
+    position: 'absolute' as const,
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    color: 'var(--vscode-descriptionForeground)',
+    background: 'color-mix(in srgb, var(--vscode-editor-background) 78%, transparent)',
+    fontSize: '12px',
+    pointerEvents: 'none' as const,
+  } as React.CSSProperties,
+  loadingIcon: {
+    color: 'var(--vscode-progressBar-background)',
+    fontSize: '15px',
+  } as React.CSSProperties,
   row: (i: number, total: number): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',

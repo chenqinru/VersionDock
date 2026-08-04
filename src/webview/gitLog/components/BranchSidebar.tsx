@@ -449,11 +449,12 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
 }) {
   const { baseName, isPrimary, isHead, repoIds } = merged;
   const isRemote = merged.instances[0].isRemote;
+  const headRepoCount = merged.instances.filter(instance => instance.isHead).length;
   const [hovered, setHovered] = useState(false);
 
   return (
     <div
-      style={styles.branchRow(isFilterSelected, isClickSelected, hovered, isCtxActive)}
+      style={styles.branchRow(isFilterSelected, isClickSelected, hovered, isCtxActive, isHead)}
       className="versiondock-sidebar-row"
       data-selected={isClickSelected}
       role="button"
@@ -472,8 +473,13 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
       title={`${baseName}\n${isSvn ? t('Double-click to filter by this branch · Right-click for SVN actions') : t('Double-click to filter by this branch · Right-click for Git actions')}`}
     >
       <Codicon
-        name={isPrimary ? 'git-branch' : isRemote ? 'cloud' : 'git-branch'}
+        name={isPrimary ? 'star-full' : isRemote ? 'cloud' : 'git-branch'}
         style={styles.branchIcon(isPrimary, isHead)}
+        title={isHead
+          ? (multiRepo
+            ? t('Current HEAD in {0} of {1} repositories', headRepoCount, repoIds.length)
+            : t('Current HEAD'))
+          : isPrimary ? t('Primary branch') : undefined}
       />
 
       <span style={styles.branchName(isHead, isPrimary)}>{baseName}</span>
@@ -485,8 +491,15 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
       )}
 
       {isHead && (
-        <span style={styles.headBadge} title={t('current branch')}>
-          HEAD
+        <span
+          style={styles.headBadge}
+          title={multiRepo
+            ? t('Current HEAD in {0} of {1} repositories', headRepoCount, repoIds.length)
+            : t('current branch')}
+        >
+          {multiRepo && headRepoCount > 0 && headRepoCount < repoIds.length
+            ? `HEAD ${headRepoCount}/${repoIds.length}`
+            : 'HEAD'}
         </span>
       )}
 
@@ -896,11 +909,12 @@ const styles = {
     fontSize: '10px',
     flexShrink: 0,
   },
-  branchRow: (isFilterSelected: boolean, isClickSelected = false, hovered = false, ctxActive = false): React.CSSProperties => ({
+  branchRow: (isFilterSelected: boolean, isClickSelected = false, hovered = false, ctxActive = false, isHead = false): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '5px',
-    padding: '2px 8px 2px 14px',
+    padding: '2px 8px 2px 12px',
+    borderLeft: isHead ? '2px solid var(--vscode-textLink-foreground)' : '2px solid transparent',
     cursor: 'pointer',
     background: isClickSelected
       ? 'var(--vscode-list-activeSelectionBackground)'
@@ -920,21 +934,19 @@ const styles = {
   branchIcon: (isPrimary: boolean, isHead: boolean): React.CSSProperties => ({
     fontSize: '13px',
     flexShrink: 0,
-    color: isPrimary
-      ? 'var(--vscode-gitDecoration-untrackedResourceForeground)'
-      : isHead
-        ? 'var(--vscode-gitDecoration-addedResourceForeground)'
+    color: isHead
+      ? 'var(--vscode-textLink-foreground)'
+      : isPrimary
+        ? 'var(--vscode-descriptionForeground)'
         : 'var(--vscode-foreground)',
+    opacity: isPrimary || isHead ? 1 : 0.7,
   }),
   branchName: (isHead: boolean, isPrimary: boolean): React.CSSProperties => ({
     flex: 1,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
-    fontWeight: (isHead || isPrimary) ? 'bold' : 'normal',
-    color: isPrimary && !isHead
-      ? 'var(--vscode-gitDecoration-untrackedResourceForeground)'
-      : undefined,
+    fontWeight: isHead ? 600 : isPrimary ? 500 : 'normal',
   }),
   headBadge: {
     fontSize: '9px',

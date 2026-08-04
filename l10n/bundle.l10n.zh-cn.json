@@ -583,6 +583,8 @@
   "New Branch in {0}": "在 {0} 中新建分支",
   "current branch": "当前分支",
   "Current HEAD": "当前 HEAD",
+  "Current HEAD in {0} of {1} repositories": "当前有 {0}/{1} 个仓库处于此分支",
+  "Primary branch": "主线分支",
   "New Branch in {0} — Base": "在 {0} 中新建分支 - 基础分支",
   "New Branch in {0} — Checkout?": "在 {0} 中新建分支 - 是否检出？",
   "Rename branch '{0}' in {1}": "在 {1} 中重命名分支 '{0}'",
