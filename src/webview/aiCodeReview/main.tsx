@@ -87,7 +87,10 @@ const css = `
   @keyframes review-enter { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:translateY(0); } }
   @keyframes review-cursor { 0%,48% { opacity:1; } 49%,100% { opacity:0; } }
   @media (max-width: 650px) { .review-header,.review-notice { padding-inline:14px; } .review-workspace { padding-inline:16px; } .review-action span,.notice-provider { display:none; } .finding-grid { grid-template-columns:1fr; gap:4px; } .finding-key { margin-top:6px; } .stage-label { display:none; } }
-  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } .cursor { opacity:1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .review-action,.stage-dot { transition:none !important; }
+    .review-action:hover::after,.summary,.finding { animation:none !important; }
+  }
 `;
 
 const severityColor: Record<CodeReviewSeverity, string> = {
@@ -163,8 +166,6 @@ function App() {
 
   async function typeReport(next: CodeReviewReport) {
     const run = ++typingRun.current;
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduced) { setReport(next); return; }
     setReport({ ...next, summary: '', findings: next.findings.map(emptyFinding) });
     const typeField = async (value: string, update: (visible: string) => void) => {
       const step = Math.max(1, Math.ceil(value.length / 180));
