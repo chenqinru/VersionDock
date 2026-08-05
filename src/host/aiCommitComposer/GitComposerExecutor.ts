@@ -322,8 +322,10 @@ export class GitComposerExecutor {
       if (actualTree !== session.expectedTree) throw new Error(t('Composed commits do not reproduce the expected final tree. No history was changed.'));
 
       if (session.unselectedIndexPatch) await this.preflightIndexPatch(repo.rootPath, newHead, session.unselectedIndexPatch);
-      backupRef = `${BACKUP_PREFIX}${Date.now()}-${session.oldHead.slice(0, 8)}`;
-      await this.git(repo.rootPath, ['update-ref', backupRef, session.oldHead]);
+      if (session.source.mode === 'working') {
+        backupRef = `${BACKUP_PREFIX}${Date.now()}-${session.oldHead.slice(0, 8)}`;
+        await this.git(repo.rootPath, ['update-ref', backupRef, session.oldHead]);
+      }
       await this.git(repo.rootPath, ['update-ref', session.branchRef, newHead, session.oldHead]);
       branchUpdated = true;
       if (session.source.mode === 'working') {
@@ -332,13 +334,15 @@ export class GitComposerExecutor {
           await this.git(repo.rootPath, ['apply', '--cached', '--binary', '--whitespace=nowarn', '-'], { stdin: patchInput(session.unselectedIndexPatch) });
         }
       }
-      await this.pruneBackupRefs(repo.rootPath).catch(() => undefined);
+      if (backupRef) await this.pruneBackupRefs(repo.rootPath).catch(() => undefined);
       onProgress(groups.length, groups.length, t('AI Commit Composer completed'));
       return {
         commitCount: groups.length,
         commitHashes,
-        backupRef,
-        recoveryCommand: `git reset --mixed ${backupRef}`,
+        ...(backupRef ? {
+          backupRef,
+          recoveryCommand: `git reset --mixed ${backupRef}`,
+        } : {}),
       };
     } catch (error: unknown) {
       if (branchUpdated && backupRef) {
