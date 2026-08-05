@@ -264,11 +264,23 @@ function CommitContextMenu({ state, onSquash, onDropCommits, onRevertCommits, on
   const n = state.selectedHashes.length;
 
   useEffect(() => {
-    const handler = (event: MouseEvent) => {
+    const outsideHandler = (event: MouseEvent) => {
       if (ref.current && !ref.current.contains(event.target as Node)) onClose();
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const blurHandler = () => onClose();
+    const visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') onClose();
+    };
+    document.addEventListener('mousedown', outsideHandler, true);
+    document.addEventListener('visibilitychange', visibilityHandler);
+    window.addEventListener('blur', blurHandler);
+    window.addEventListener('pagehide', blurHandler);
+    return () => {
+      document.removeEventListener('mousedown', outsideHandler, true);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.removeEventListener('blur', blurHandler);
+      window.removeEventListener('pagehide', blurHandler);
+    };
   }, [onClose]);
 
   const [pos, setPos] = useState({ x: state.x, y: state.y });
@@ -1298,21 +1310,26 @@ const styles = {
   }),
   repoBody: { background: 'var(--vscode-sideBar-background)' } as React.CSSProperties,
   upToDate: {
-    display: 'flex', alignItems: 'center', padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
   behindRow: {
-    display: 'flex', alignItems: 'center',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: '12px 8px', fontSize: '12px',
     color: 'var(--vscode-inputValidation-warningForeground, #cca700)',
   } as React.CSSProperties,
   unpublishedRow: {
-    display: 'flex', alignItems: 'center',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
-  loadingRow: { padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const } as React.CSSProperties,
+  loadingRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const,
+    textAlign: 'center' as const,
+  } as React.CSSProperties,
   errorRow: {
-    display: 'flex', alignItems: 'flex-start', padding: '6px 10px', fontSize: '11px',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '6px 10px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)',
+    textAlign: 'center' as const,
   } as React.CSSProperties,
   commitList: { display: 'flex', flexDirection: 'column' as const } as React.CSSProperties,
   commitCard: (_expanded: boolean, selected: boolean): React.CSSProperties => ({

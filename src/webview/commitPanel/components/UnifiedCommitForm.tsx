@@ -66,11 +66,23 @@ function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, f
 
   useEffect(() => {
     if (!open) return;
-    const h = (e: MouseEvent) => {
+    const outsideHandler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', h, true);
-    return () => document.removeEventListener('mousedown', h, true);
+    const blurHandler = () => setOpen(false);
+    const visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') setOpen(false);
+    };
+    document.addEventListener('mousedown', outsideHandler, true);
+    document.addEventListener('visibilitychange', visibilityHandler);
+    window.addEventListener('blur', blurHandler);
+    window.addEventListener('pagehide', blurHandler);
+    return () => {
+      document.removeEventListener('mousedown', outsideHandler, true);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.removeEventListener('blur', blurHandler);
+      window.removeEventListener('pagehide', blurHandler);
+    };
   }, [open]);
 
   const bg = variant === 'primary'
@@ -127,7 +139,15 @@ function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, f
         {hasItems && (
           <>
             <div style={{ width: '1px', alignSelf: 'stretch', padding: '4px 0', flexShrink: 0, display: 'flex', backgroundColor: 'inherit' }}>
-              <div style={{ flex: 1, backgroundColor: 'var(--vscode-button-border, var(--vscode-panel-border))' }} />
+              <div
+                style={{
+                  flex: 1,
+                  backgroundColor: variant === 'primary'
+                    ? 'var(--vscode-button-foreground)'
+                    : 'var(--vscode-button-secondaryForeground, var(--vscode-foreground))',
+                  opacity: 0.3,
+                }}
+              />
             </div>
             <button
               style={{ ...childStyle, padding: '5px 7px', backgroundColor: hoverChevron && enabled ? bgHover : bg }}
@@ -607,7 +627,7 @@ export function UnifiedCommitForm({
               variant="secondary"
               enabled={!!message.trim() && commitTargets.length > 0}
               icon={primarySaveAction === 'stash' ? 'save' : 'archive'}
-              label={t('Save')}
+              label={primarySaveAction === 'stash' ? t('Stash') : t('Shelve')}
               title={t('Shelve or stash changes')}
               disabledTitle={t('Enter a commit message first')}
               items={primarySaveAction === 'stash'
