@@ -69,6 +69,38 @@ function buildRepoId(rootPath: string, kind: RepoKind): string {
   return `${path.normalize(rootPath)}::${kind}`;
 }
 
+function compareLogHeads(a: CommitNode, b: CommitNode): number {
+  const byDate = new Date(b.committerDate).getTime() - new Date(a.committerDate).getTime();
+  if (byDate !== 0) return byDate;
+  const byRepo = a.repoId.localeCompare(b.repoId);
+  if (byRepo !== 0) return byRepo;
+  return b.hash.localeCompare(a.hash);
+}
+
+function interleaveCommitLogs(logs: CommitNode[][]): CommitNode[] {
+  const positions = logs.map(() => 0);
+  const commits: CommitNode[] = [];
+  const totalCommits = logs.reduce((total, log) => total + log.length, 0);
+
+  while (commits.length < totalCommits) {
+    let selectedLog = -1;
+    let selectedCommit: CommitNode | undefined;
+    for (let index = 0; index < logs.length; index++) {
+      const candidate = logs[index][positions[index]];
+      if (!candidate) continue;
+      if (!selectedCommit || compareLogHeads(candidate, selectedCommit) < 0) {
+        selectedLog = index;
+        selectedCommit = candidate;
+      }
+    }
+    if (selectedLog < 0 || !selectedCommit) break;
+    commits.push(selectedCommit);
+    positions[selectedLog]++;
+  }
+
+  return commits;
+}
+
 type RepositoryScanIgnore = (candidatePath: string) => boolean;
 
 function findNestedRepoPaths(
@@ -1236,17 +1268,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const results = await Promise.allSettled(
       targets.map(r => r.getLog(pageEnd, 0, { ...opts, worktreeServices: worktreesByMainRepo.get(r.rootPath) ?? [] }))
     );
-    const allCommits = results
+    const commitLogs = results
       .filter((r): r is PromiseFulfilledResult<CommitNode[]> => r.status === 'fulfilled')
-      .flatMap(r => r.value);
-
-    allCommits.sort((a, b) => {
-      const byDate = new Date(b.committerDate).getTime() - new Date(a.committerDate).getTime();
-      if (byDate !== 0) return byDate;
-      const byRepo = a.repoId.localeCompare(b.repoId);
-      if (byRepo !== 0) return byRepo;
-      return b.hash.localeCompare(a.hash);
-    });
+      .map(r => r.value);
+    // Each service already returns Git's topological order. Merge only the
+    // current head of each repository so interleaving cannot reorder parents
+    // ahead of their children when several commits share a timestamp.
+    const allCommits = interleaveCommitLogs(commitLogs);
     return allCommits.slice(skip, skip + limit);
   }
 
