@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
+import { isDarkTheme } from '../../shared/branchColors';
 
 interface Props {
   messages: string[];
@@ -11,6 +12,8 @@ interface Props {
 }
 
 export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose }: Props) {
+  const darkTheme = isDarkTheme();
+
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -30,12 +33,21 @@ export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose
   }, [onClose]);
 
   return createPortal(
-    <div style={styles.backdrop} onClick={onClose}>
+    <div
+      style={{
+        ...styles.backdrop,
+        background: darkTheme ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.16)',
+      }}
+      onClick={onClose}
+    >
       <div
         role="dialog"
         aria-modal="true"
         aria-label={t('Commit message history')}
-        style={styles.modal}
+        style={{
+          ...styles.modal,
+          boxShadow: darkTheme ? '0 8px 32px rgba(0,0,0,0.5)' : styles.modal.boxShadow,
+        }}
         onClick={event => event.stopPropagation()}
       >
         <div style={styles.header}>

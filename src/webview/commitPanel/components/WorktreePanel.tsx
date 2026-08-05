@@ -374,7 +374,7 @@ const row = {
     background: 'var(--vscode-statusBarItem-remoteBackground)', color: 'var(--vscode-statusBarItem-remoteForeground)',
     fontWeight: 'normal', letterSpacing: '0.03em',
   } as React.CSSProperties,
-  meta: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '1px' } as React.CSSProperties,
+  meta: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' } as React.CSSProperties,
   branch: (color: string): React.CSSProperties => ({
     fontSize: '10px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px',
     background: `${color}33`, color, border: `1px solid ${color}88`,

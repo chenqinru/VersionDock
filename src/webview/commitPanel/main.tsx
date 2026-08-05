@@ -1768,7 +1768,7 @@ export function CommitApp() {
             {visibleTabs.map(tab => {
               const changesLabel = (store.changesViewMode === 'changelists' || store.changesViewMode === 'vscode') ? t('Commit') : t('Changes');
               const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Push');
-              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'worktree' ? 'repo-clone' : tab === 'subtree' ? 'repo' : 'cloud-upload';
+              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'cloud-upload';
               const count = tabCounts[tab];
               return (
                 <button
