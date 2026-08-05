@@ -1475,12 +1475,15 @@ export class SvnService extends GitService {
   async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }): Promise<CommitNode[]> {
     const info = await this.getInfo();
     if (!this.matchesRefFilter(info, opts?.filterBranch)) return [];
+    const filterText = opts?.filterText?.trim() ?? '';
+    const revisionSearch = filterText ? parseRevisionNumber(filterText) : undefined;
     const incoming = await this.getIncomingState(info).catch(() => undefined);
     const localRevision = incoming?.localRevision ?? this.getEffectiveLocalRevision(info);
     const selectionRevisions = opts?.filterPath && opts.lineRange
       ? await this.getSelectionHistoryRevisions(opts.filterPath, opts.lineRange)
       : undefined;
     if (selectionRevisions && selectionRevisions.size === 0) return [];
+    if (revisionSearch !== undefined && selectionRevisions && !selectionRevisions.has(String(revisionSearch))) return [];
 
     const numericSelectionRevisions = selectionRevisions
       ? Array.from(selectionRevisions)
@@ -1492,16 +1495,37 @@ export class SvnService extends GitService {
     if (selectionRevisions) {
       if (numericSelectionRevisions.length === 0) return [];
       args.push('-r', `${numericSelectionRevisions[0]}:${numericSelectionRevisions[numericSelectionRevisions.length - 1]}`);
+    } else if (revisionSearch !== undefined) {
+      args.push('-r', String(revisionSearch));
     } else {
-      args.push('-r', 'HEAD:1', '--limit', String(Math.max(limit + skip, limit)));
+      args.push('-r', 'HEAD:1');
+      const hasPostFetchFilters = !!(
+        filterText
+        || opts?.filterAuthor?.trim()
+        || opts?.filterDateFrom
+        || opts?.filterDateTo
+      );
+      // Apply filters to the complete history before paginating. SVN's
+      // --limit truncates the source entries, so limiting here would hide
+      // matching older revisions.
+      if (!hasPostFetchFilters) args.push('--limit', String(Math.max(limit + skip, limit)));
     }
     if (opts?.filterPath) args.push('--', this.workingCopyTarget(opts.filterPath));
-    const raw = await this.svn(args);
+    let raw: string;
+    try {
+      raw = await this.svn(args);
+    } catch (error: unknown) {
+      // Searching an unknown SVN revision should behave like an empty result,
+      // matching Git's unresolved-hash behavior instead of surfacing a CLI error.
+      if (revisionSearch !== undefined && this.errorText(error).toLowerCase().includes('e160006')) return [];
+      throw error;
+    }
     const allEntries = this.parseLogEntries(raw);
     const headRevision = selectionRevisions ? undefined : allEntries[0]?.revision ?? info.revision;
     const entries = allEntries
       .filter(entry => !selectionRevisions || selectionRevisions.has(entry.revision))
-      .filter(entry => !opts?.filterText || entry.message.toLowerCase().includes(opts.filterText.toLowerCase()))
+      .filter(entry => revisionSearch === undefined || entry.revision === String(revisionSearch))
+      .filter(entry => revisionSearch !== undefined || !filterText || entry.message.toLowerCase().includes(filterText.toLowerCase()))
       .filter(entry => !opts?.filterAuthor || entry.author.toLowerCase().includes(opts.filterAuthor.toLowerCase()))
       .filter(entry => !opts?.filterDateFrom || new Date(entry.date) >= new Date(opts.filterDateFrom))
       .filter(entry => !opts?.filterDateTo || new Date(entry.date) <= new Date(opts.filterDateTo))

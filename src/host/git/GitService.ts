@@ -202,14 +202,6 @@ function parseSubmoduleStatusLine(line: string): { flag: string; path: string } 
   return submodulePath ? { flag: match[1], path: submodulePath } : undefined;
 }
 
-function isSameFsPath(left: string, right: string): boolean {
-  const normalize = (value: string) => {
-    const resolved = path.resolve(value).replace(/[\\/]+$/, '');
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  return normalize(left) === normalize(right);
-}
-
 function gitErrorDetail(error: unknown): string {
   const value = error as { stderr?: unknown; gitErrorCode?: unknown; message?: unknown } | undefined;
   const stderr = typeof value?.stderr === 'string' ? value.stderr.trim() : '';
@@ -279,6 +271,27 @@ export class GitService {
       throw new Error(`Invalid Git reference: ${ref}`);
     }
     return value;
+  }
+
+  /** Resolve a hash-like search term without treating it as a commit-message regexp. */
+  private async resolveRevisionSearch(filterText?: string): Promise<string | null | undefined> {
+    const query = filterText?.trim().toLowerCase() ?? '';
+    if (!/^[0-9a-f]{7,64}$/.test(query)) return undefined;
+    try {
+      const resolved = (await this.git.raw(['rev-parse', '--verify', `${query}^{commit}`])).trim();
+      return resolved || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    try {
+      await this.git.raw(['merge-base', '--is-ancestor', ancestor, this.safeRevisionArg(descendant)]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private readWorkingTreeFile(filePath: string): { content: string; isBinary: boolean } | undefined {
@@ -901,27 +914,36 @@ export class GitService {
 
   // Log uses raw git format for graph rendering — VS Code API's log() lacks graph parents/refs.
   async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange; worktreeServices?: GitService[] }): Promise<CommitNode[]> {
+    const revisionSearch = await this.resolveRevisionSearch(opts?.filterText);
+    if (revisionSearch !== undefined && (skip > 0 || !revisionSearch)) return [];
+    if (revisionSearch !== undefined && opts?.filterBranch && !(await this.isAncestor(revisionSearch, opts.filterBranch))) {
+      return [];
+    }
+
     const args: string[] = [
       'log',
       '--topo-order',
-      `--max-count=${limit}`, `--skip=${skip}`,
+      `--max-count=${revisionSearch ? 1 : limit}`, `--skip=${revisionSearch ? 0 : skip}`,
       LOG_RECORD_FORMAT,
       '--date=iso-strict',
     ];
     const lineRangeFilterPath = opts?.filterPath;
     const lineRange = lineRangeFilterPath && opts?.lineRange ? opts.lineRange : undefined;
     if (lineRange) args.push('--no-patch');
-    if (opts?.filterText) args.push(`--grep=${opts.filterText}`, '--regexp-ignore-case');
+    if (revisionSearch) args.push(this.safeRevisionArg(revisionSearch));
+    else if (opts?.filterText) args.push(`--grep=${opts.filterText}`, '--regexp-ignore-case');
     if (opts?.filterAuthor) args.push(`--author=${opts.filterAuthor}`, '--regexp-ignore-case');
     if (opts?.filterDateFrom) args.push(`--after=${opts.filterDateFrom}`);
     if (opts?.filterDateTo) args.push(`--before=${opts.filterDateTo}`);
-    if (lineRange) {
+    if (revisionSearch) {
+      // The resolved hash is already the exact revision to display.
+    } else if (lineRange) {
       args.push('-L', `${lineRange.start},${lineRange.end}:${lineRangeFilterPath}`);
       args.push(this.safeRevisionArg(opts?.filterBranch || 'HEAD'));
     } else if (opts?.filterBranch) {
       args.push(this.safeRevisionArg(opts.filterBranch));
     } else {
-      args.push('--exclude=refs/stash', '--all');
+      args.push('--exclude=refs/stash', '--exclude=refs/versiondock/ai-composer/*', '--all');
     }
     if (opts?.filterPath && !lineRange) args.push('--', this.literalPathspec(opts.filterPath));
     const [raw, refsByHash] = await Promise.all([
@@ -976,21 +998,34 @@ export class GitService {
   ): Promise<CommitNode[]> {
     const baseRef = this.safeRevisionArg(opts.baseRef);
     const targetRef = this.safeRevisionArg(opts.targetRef);
+    const revisionSearch = await this.resolveRevisionSearch(opts.filterText);
+    if (revisionSearch !== undefined) {
+      if (!revisionSearch || skip > 0) return [];
+      const [inBase, inTarget] = await Promise.all([
+        this.isAncestor(revisionSearch, baseRef),
+        this.isAncestor(revisionSearch, targetRef),
+      ]);
+      const matchesSide = opts.side === 'baseOnly'
+        ? inBase && !inTarget
+        : inTarget && !inBase;
+      if (!matchesSide) return [];
+    }
     const range = opts.side === 'baseOnly'
       ? `${targetRef}..${baseRef}`
       : `${baseRef}..${targetRef}`;
     const args: string[] = [
       'log',
-      `--max-count=${limit}`,
-      `--skip=${skip}`,
+      `--max-count=${revisionSearch ? 1 : limit}`,
+      `--skip=${revisionSearch ? 0 : skip}`,
       LOG_RECORD_FORMAT,
       '--date=iso-strict',
     ];
-    if (opts.filterText) args.push(`--grep=${opts.filterText}`, '--regexp-ignore-case');
+    if (revisionSearch) args.push(this.safeRevisionArg(revisionSearch));
+    else if (opts.filterText) args.push(`--grep=${opts.filterText}`, '--regexp-ignore-case');
     if (opts.filterAuthor) args.push(`--author=${opts.filterAuthor}`, '--regexp-ignore-case');
     if (opts.filterDateFrom) args.push(`--after=${opts.filterDateFrom}`);
     if (opts.filterDateTo) args.push(`--before=${opts.filterDateTo}`);
-    args.push(range);
+    if (!revisionSearch) args.push(range);
     if (opts.filterPath) args.push('--', this.literalPathspec(opts.filterPath));
     const [raw, refsByHash] = await Promise.all([
       this.git.raw(args),
@@ -2766,7 +2801,7 @@ export class GitService {
 
   async getWorktrees(): Promise<WorktreeEntry[]> {
     const raw = await this.git.raw(['worktree', 'list', '--porcelain']);
-    return parseWorktreePorcelain(raw, this.rootPath);
+    return parseWorktreePorcelain(raw);
   }
 
   async createWorktree(worktreePath: string, opts: { branch?: string; newBranch?: string; commitish?: string; noTrack?: boolean }): Promise<void> {
@@ -2822,7 +2857,7 @@ export interface WorktreeEntry {
   isInWorkspace: boolean; // path is inside a VS Code workspace folder
 }
 
-function parseWorktreePorcelain(raw: string, mainPath: string): WorktreeEntry[] {
+function parseWorktreePorcelain(raw: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = [];
   const blocks = raw.trim().split(/\n\n+/);
   for (const block of blocks) {
@@ -2839,10 +2874,12 @@ function parseWorktreePorcelain(raw: string, mainPath: string): WorktreeEntry[] 
       else if (line.startsWith('prunable'))  entry.isPrunable = true;
     }
     if (!entry.path) continue;
-    // Compare against the service root instead of inferring ownership from the
-    // shape of .git. Separate-git-dir and bare repositories do not have a .git
-    // directory but are still the main worktree/repository.
-    entry.isMain = isSameFsPath(entry.path, mainPath);
+    // The main worktree has a .git directory; linked worktrees have a .git file.
+    // Checking the entry itself avoids macOS path aliases such as /var vs /private/var.
+    const gitDir = path.join(entry.path, '.git');
+    entry.isMain = (() => {
+      try { return fs.statSync(gitDir).isDirectory(); } catch { return false; }
+    })();
     entry.isBare = entry.isBare ?? false;
     entry.isDetached = entry.isDetached ?? false;
     entry.isInWorkspace = false;
