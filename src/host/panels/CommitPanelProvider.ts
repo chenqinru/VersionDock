@@ -1933,6 +1933,21 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       }
 
+      case 'COMMIT_GET_LAST_COMMIT_MESSAGE': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo) {
+          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, message: '', error: t('Repo not found') });
+          return;
+        }
+        try {
+          const message = await repo.getLastCommitMessage();
+          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, message });
+        } catch (e: unknown) {
+          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, message: '', error: String(e) });
+        }
+        break;
+      }
+
       case 'COMMIT_ACTIVE_TAB_CHANGED': {
         this.activeTab = msg.tab;
         break;

@@ -630,6 +630,11 @@ export function CommitApp() {
             msg.messages,
           ));
           break;
+        case 'COMMIT_LAST_COMMIT_MESSAGE_RESULT':
+          if (msg.message && !useCommitStore.getState().commitMessage.trim()) {
+            store.setCommitMessage(msg.message);
+          } else if (msg.error) notifyError(msg.error);
+          break;
         case 'COMMIT_GENERATE_MESSAGE_RESULT':
           if (activeGenerateRequestIdRef.current !== msg.requestId) break;
           activeGenerateRequestIdRef.current = null;
@@ -2028,7 +2033,13 @@ export function CommitApp() {
               }
             }}
             onMessageChange={msg => store.setCommitMessage(msg)}
-            onAmendToggle={repoId => store.setAmend(repoId, !(store.amendFlags[repoId] ?? false))}
+            onAmendToggle={repoId => {
+              const newValue = !(store.amendFlags[repoId] ?? false);
+              store.setAmend(repoId, newValue);
+              if (newValue) {
+                send({ type: 'COMMIT_GET_LAST_COMMIT_MESSAGE', requestId: generateId(), repoId });
+              }
+            }}
             onCommit={() => doCommit(false)}
             onCommitAndPush={() => doCommit(true)}
             onPush={doPush}
