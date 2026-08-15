@@ -944,7 +944,9 @@ export class GitService {
 
     const args: string[] = [
       'log',
-      '--topo-order',
+      // Match JetBrains' history ordering: prioritize commit dates while
+      // still respecting the parent/child relationship between commits.
+      '--date-order',
       `--max-count=${revisionSearch ? 1 : limit}`, `--skip=${revisionSearch ? 0 : skip}`,
       LOG_RECORD_FORMAT,
       '--date=iso-strict',

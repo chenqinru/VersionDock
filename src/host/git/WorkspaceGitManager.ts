@@ -1433,9 +1433,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const commitLogs = results
       .filter((r): r is PromiseFulfilledResult<CommitNode[]> => r.status === 'fulfilled')
       .map(r => r.value);
-    // Each service already returns Git's topological order. Merge only the
-    // current head of each repository so interleaving cannot reorder parents
-    // ahead of their children when several commits share a timestamp.
+    // Each service already returns Git's date order. Merge only the current
+    // head of each repository so the workspace log remains date-ordered when
+    // several repositories are shown together.
     const allCommits = interleaveCommitLogs(commitLogs);
     return allCommits.slice(skip, skip + limit);
   }

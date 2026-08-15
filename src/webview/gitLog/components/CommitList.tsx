@@ -354,6 +354,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
           const commitKey = getCommitKey(commit.repoId, commit.hash);
           const isSelected = commitKey === primarySelectedHash;
           const isMultiSelected = selectedHashSet.has(commitKey) && !isSelected;
+          const isMergeCommit = commit.parents.length > 1;
           const repoKind = repoMeta[commit.repoId]?.kind ?? 'git';
 
           return (
@@ -481,7 +482,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                 );
               })()}
               <div style={styles.info}>
-                <span style={styles.message}>{commit.message}</span>
+                <span style={styles.message(isMergeCommit, isSelected || isMultiSelected)}>{commit.message}</span>
               </div>
 
               {hoveredIndex === vrow.index && (
@@ -1583,13 +1584,20 @@ const styles = {
     display: 'inline-flex',
     alignItems: 'center',
   }),
-  message: {
+  message: (isMergeCommit = false, isSelected = false): React.CSSProperties => ({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
     flex: '1 1 0',
     minWidth: 0,
-  },
+    // JetBrains de-emphasizes automatically generated merge commit messages.
+    // Keep the selection foreground so selected rows remain readable.
+    color: isSelected
+      ? 'var(--vscode-list-activeSelectionForeground)'
+      : isMergeCommit
+      ? 'var(--vscode-descriptionForeground)'
+      : 'inherit',
+  }),
   meta: {
     display: 'flex',
     gap: '6px',
