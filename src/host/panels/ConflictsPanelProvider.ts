@@ -11,13 +11,19 @@ import type { VersionDockLogger } from '../utils/Logger';
 export class ConflictsPanelProvider implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private disposables: vscode.Disposable[] = [];
+  private refreshGeneration = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
     private readonly mergeEditorProvider: MergeEditorProvider,
     private readonly logger: VersionDockLogger,
-  ) {}
+  ) {
+    this.disposables.push(this.manager.onStatusChange(() => {
+      if (!this.panel) return;
+      void this.refresh().catch(error => this.logger.error('ConflictsPanel', 'Failed to refresh after repository status change', error));
+    }));
+  }
 
   open(): void {
     if (this.panel) {
@@ -65,6 +71,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
 
   async refresh(): Promise<void> {
     if (!this.panel) return;
+    const generation = ++this.refreshGeneration;
     const startedAt = Date.now();
     const [status, states, iconTheme] = await Promise.all([
       this.manager.getAllStatusesFresh(),
@@ -97,6 +104,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
       }
     }
 
+    if (!this.panel || generation !== this.refreshGeneration) return;
     this.post({
       type: 'CONFLICTS_DATA',
       files,

@@ -211,6 +211,9 @@ function gitErrorDetail(error: unknown): string {
   return 'Unknown error';
 }
 
+type StatusOperationKind = 'checkout' | 'squash';
+type SuppressStatusUpdates = <T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string) => Promise<T>;
+
 export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
   private git: SimpleGit;
@@ -218,7 +221,11 @@ export class GitService {
   // Set immediately after a tag checkout, cleared when VS Code API confirms the update.
   private _pendingDetachedTag: string | undefined;
 
-  constructor(public readonly repoId: string, public readonly rootPath: string) {
+  constructor(
+    public readonly repoId: string,
+    public readonly rootPath: string,
+    private readonly suppressStatusUpdates?: SuppressStatusUpdates,
+  ) {
     this.git = simpleGit(rootPath);
   }
 
@@ -238,6 +245,10 @@ export class GitService {
 
   private vsRepo() {
     return getVscodeRepository(this.rootPath);
+  }
+
+  private runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
+    return this.suppressStatusUpdates ? this.suppressStatusUpdates(operation, kind, label) : operation();
   }
 
   private rawPathSafe(args: string[]): Promise<string> {
@@ -1986,58 +1997,60 @@ export class GitService {
 
   async checkout(branchName: string, createNew?: boolean, from?: string): Promise<void> {
     await this.assertCheckoutAllowed();
-    this._pendingDetachedTag = undefined;
-    const vsRepo = this.vsRepo();
-    if (vsRepo) {
-      if (createNew) {
-        await vsRepo.createBranch(branchName, true, from);
-        return;
-      }
-      const locals = await vsRepo.getBranches({ remote: false });
-      // Local branch names commonly contain slashes (feature/foo). Check exact
-      // local refs before interpreting a slash as a remote/name separator.
-      if (locals.some(branch => branch.name === branchName)) {
+    await this.runStatusSensitiveOperation(async () => {
+      this._pendingDetachedTag = undefined;
+      const vsRepo = this.vsRepo();
+      if (vsRepo) {
+        if (createNew) {
+          await vsRepo.createBranch(branchName, true, from);
+          return;
+        }
+        const locals = await vsRepo.getBranches({ remote: false });
+        // Local branch names commonly contain slashes (feature/foo). Check exact
+        // local refs before interpreting a slash as a remote/name separator.
+        if (locals.some(branch => branch.name === branchName)) {
+          await vsRepo.checkout(branchName);
+          return;
+        }
+        const remoteRefs = await vsRepo.getBranches({ remote: true });
+        const remoteRef = remoteRefs.find(branch => branch.type === RefType.RemoteHead && branch.name === branchName);
+        if (remoteRef) {
+          const remoteNames = vsRepo.state.remotes.map(remote => remote.name).sort((a, b) => b.length - a.length);
+          const remoteName = remoteNames.find(name => branchName.startsWith(`${name}/`));
+          const localName = remoteName ? branchName.slice(remoteName.length + 1) : branchName.slice(branchName.indexOf('/') + 1);
+          if (!localName) throw new Error(t('Cannot determine a local branch name for {0}.', branchName));
+          if (!locals.some(branch => branch.name === localName)) {
+            await vsRepo.createBranch(localName, false, branchName);
+          }
+          await vsRepo.checkout(localName);
+          return;
+        }
         await vsRepo.checkout(branchName);
         return;
       }
-      const remoteRefs = await vsRepo.getBranches({ remote: true });
-      const remoteRef = remoteRefs.find(branch => branch.type === RefType.RemoteHead && branch.name === branchName);
-      if (remoteRef) {
-        const remoteNames = vsRepo.state.remotes.map(remote => remote.name).sort((a, b) => b.length - a.length);
+      // Fallback: simple-git
+      if (createNew) {
+        if (from) await this.git.checkout(['-b', branchName, from]);
+        else await this.git.checkoutLocalBranch(branchName);
+        return;
+      }
+      const branches = await this.getBranches();
+      if (branches.some(branch => !branch.isRemote && branch.name === branchName)) {
+        await this.git.checkout(branchName);
+        return;
+      }
+      if (branches.some(branch => branch.isRemote && branch.name === branchName)) {
+        const remoteNames = (await this.getRemotes()).sort((a, b) => b.length - a.length);
         const remoteName = remoteNames.find(name => branchName.startsWith(`${name}/`));
         const localName = remoteName ? branchName.slice(remoteName.length + 1) : branchName.slice(branchName.indexOf('/') + 1);
         if (!localName) throw new Error(t('Cannot determine a local branch name for {0}.', branchName));
-        if (!locals.some(branch => branch.name === localName)) {
-          await vsRepo.createBranch(localName, false, branchName);
-        }
-        await vsRepo.checkout(localName);
+        const localExists = branches.some(branch => !branch.isRemote && branch.name === localName);
+        if (localExists) await this.git.checkout(localName);
+        else await this.git.checkout(['-b', localName, '--track', branchName]);
         return;
       }
-      await vsRepo.checkout(branchName);
-      return;
-    }
-    // Fallback: simple-git
-    if (createNew) {
-      if (from) await this.git.checkout(['-b', branchName, from]);
-      else await this.git.checkoutLocalBranch(branchName);
-      return;
-    }
-    const branches = await this.getBranches();
-    if (branches.some(branch => !branch.isRemote && branch.name === branchName)) {
       await this.git.checkout(branchName);
-      return;
-    }
-    if (branches.some(branch => branch.isRemote && branch.name === branchName)) {
-      const remoteNames = (await this.getRemotes()).sort((a, b) => b.length - a.length);
-      const remoteName = remoteNames.find(name => branchName.startsWith(`${name}/`));
-      const localName = remoteName ? branchName.slice(remoteName.length + 1) : branchName.slice(branchName.indexOf('/') + 1);
-      if (!localName) throw new Error(t('Cannot determine a local branch name for {0}.', branchName));
-      const localExists = branches.some(branch => !branch.isRemote && branch.name === localName);
-      if (localExists) await this.git.checkout(localName);
-      else await this.git.checkout(['-b', localName, '--track', branchName]);
-      return;
-    }
-    await this.git.checkout(branchName);
+    }, 'checkout', branchName);
   }
 
   async createBranch(branchName: string, from?: string): Promise<void> {
@@ -2099,7 +2112,7 @@ export class GitService {
   async checkoutForce(branchName: string): Promise<void> {
     await this.assertCheckoutAllowed();
     // VS Code API has no force checkout — use simple-git
-    await this.git.checkout(['-f', branchName]);
+    await this.runStatusSensitiveOperation(() => this.git.checkout(['-f', branchName]), 'checkout', branchName);
   }
 
   async renameBranch(oldName: string, newName: string): Promise<void> {
@@ -2180,8 +2193,10 @@ export class GitService {
       throw new Error(t('Commit message cannot be empty'));
     }
     const validation = await this.validateCommitRewriteHashes(hashes, 'squash');
-    await this.git.raw(['reset', '--soft', `${validation.oldestHash}^`]);
-    await this.git.raw(['commit', '-m', normalized]);
+    await this.runStatusSensitiveOperation(async () => {
+      await this.git.raw(['reset', '--soft', `${validation.oldestHash}^`]);
+      await this.git.raw(['commit', '-m', normalized]);
+    }, 'squash');
   }
 
   async cherryPickMulti(hashes: string[]): Promise<void> {
@@ -2238,7 +2253,7 @@ export class GitService {
   }
 
   async createBranchFromCommit(name: string, hash: string): Promise<void> {
-    await this.git.raw(['checkout', '-b', name, hash]);
+    await this.runStatusSensitiveOperation(() => this.git.raw(['checkout', '-b', name, hash]), 'checkout', name);
   }
 
   async createTag(name: string, hash: string): Promise<void> {
@@ -2345,8 +2360,10 @@ export class GitService {
 
   async checkoutTag(name: string): Promise<void> {
     await this.assertCheckoutAllowed();
-    await this.git.raw(['checkout', '--detach', `refs/tags/${name}`]);
-    this._pendingDetachedTag = name;
+    await this.runStatusSensitiveOperation(async () => {
+      await this.git.raw(['checkout', '--detach', `refs/tags/${name}`]);
+      this._pendingDetachedTag = name;
+    }, 'checkout', name);
   }
 
   async mergeTag(name: string): Promise<void> {

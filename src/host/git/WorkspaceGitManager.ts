@@ -16,6 +16,8 @@ const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
 const DEFAULT_REPOSITORY_SCAN_IGNORED_FOLDERS = ['node_modules'];
 
 type StatusListener = (status: WorkspaceStatus) => void;
+type StatusOperationListener = (inProgress: boolean) => void;
+type StatusOperationKind = 'checkout' | 'squash';
 type BranchListener = () => void;
 type WorktreeListener = (repoId: string) => void;
 type RepoKind = NonNullable<RepoMeta['kind']>;
@@ -25,6 +27,26 @@ type ResolveServiceOptions = {
   placeHolder?: string;
   notFoundMessage?: string;
 };
+
+function getWorkspaceStatusSignature(status: WorkspaceStatus): string {
+  return status.repos
+    .map(repo => {
+      const files = [...repo.stagedFiles, ...repo.unstagedFiles]
+        .map(file => `${file.path}\u0000${file.oldPath ?? ''}\u0000${file.status}\u0000${file.staged ? '1' : '0'}\u0000${file.unstaged ? '1' : '0'}`)
+        .sort()
+        .join('\u0001');
+      return [
+        repo.repoId,
+        repo.branch.name,
+        repo.isDetachedHead ? '1' : '0',
+        repo.conflictCount,
+        repo.operationState ?? '',
+        files,
+      ].join('\u0002');
+    })
+    .sort()
+    .join('\u0003');
+}
 
 function gitErrorDetail(error: unknown): string {
   const value = error as { stderr?: unknown; gitErrorCode?: unknown; message?: unknown } | undefined;
@@ -184,6 +206,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   /** Global workspace listeners — created once in constructor, disposed in dispose(). */
   private globalListeners: vscode.Disposable[] = [];
   private statusListeners: StatusListener[] = [];
+  private statusOperationListeners: StatusOperationListener[] = [];
   private branchListeners: BranchListener[] = [];
   private reposListeners: BranchListener[] = [];
   private worktreeListeners: WorktreeListener[] = [];
@@ -200,6 +223,12 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private repositoryGeneration = 0;
   private refreshInFlight = false;
   private refreshPending = false;
+  private statusUpdateSuppressionDepth = 0;
+  private lastPublishedStatus: WorkspaceStatus | null = null;
+  private statusOperationSettled: Promise<void> | null = null;
+  private resolveStatusOperationSettled: (() => void) | null = null;
+  /** Set after a branch/HEAD change so intermediate checkout states are never published. */
+  private statusStabilizationSignature: string | null | undefined;
   private disposed = false;
 
   constructor(
@@ -445,7 +474,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     discoveredGitRepoPaths.forEach((repoPath) => {
       const meta = this.buildRepoMeta(repoPath, colorIdx.value++, folders, customColors);
       this.repoMetas.set(meta.id, meta);
-      this.repos.set(meta.id, new GitService(meta.id, meta.rootPath));
+      this.repos.set(meta.id, new GitService(meta.id, meta.rootPath, (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label)));
       this.setupWatcher(meta.rootPath, meta.id);
       if ((meta.depth ?? 0) === 0 && !meta.isWorktree) {
         this.discoverSubmodules(meta.rootPath, meta.id, 1, colorIdx, customColors);
@@ -651,7 +680,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       kind: 'git',
     };
     this.repoMetas.set(repoId, meta);
-    this.repos.set(repoId, new GitService(repoId, normalizedRepoPath));
+    this.repos.set(repoId, new GitService(repoId, normalizedRepoPath, (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label)));
     this.setupWatcher(normalizedRepoPath, repoId);
     this.discoverSubmodules(normalizedRepoPath, repoId, 1, colorIdx, customColors);
     this.setupRepositoryAuxWatchers(normalizedRepoPath, repoId);
@@ -709,7 +738,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
         kind: 'git',
       };
       this.repoMetas.set(subRepoId, meta);
-      this.repos.set(subRepoId, new GitService(subRepoId, subAbsPath));
+      this.repos.set(subRepoId, new GitService(subRepoId, subAbsPath, (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label)));
 
       // Only set up watcher if the submodule is initialized (has .git)
       if (fs.existsSync(subGitDir)) {
@@ -737,12 +766,14 @@ export class WorkspaceGitManager implements vscode.Disposable {
           // Branch checkout — fire both refresh and branch listeners.
           this.prevHeads.set(repoId, currentHead);
           this.prevCommits.set(repoId, currentCommit);
+          this.beginStatusStabilization();
           this.scheduleRefresh();
           this.scheduleBranchRefresh();
         } else if (currentCommit !== prevCommit) {
           // New commit / pull / rebase — branch name unchanged but commit moved.
           // Fire branch listeners so the log panel refreshes.
           this.prevCommits.set(repoId, currentCommit);
+          this.beginStatusStabilization();
           this.scheduleRefresh();
           this.scheduleBranchRefresh();
         } else {
@@ -824,13 +855,35 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private async refreshStatuses(): Promise<void> {
+    if (this.statusUpdateSuppressionDepth > 0) return;
     const generation = this.repositoryGeneration;
     const status = await this.getAllStatusesFresh();
+    if (this.statusUpdateSuppressionDepth > 0) return;
     // Repository discovery can be rebuilt while Git/SVN commands are still in
     // flight. Never publish results produced by services from the old repo set.
     if (this.disposed || generation !== this.repositoryGeneration) return;
+
+    if (this.statusStabilizationSignature !== undefined) {
+      const signature = getWorkspaceStatusSignature(status);
+      if (this.statusStabilizationSignature === null || this.statusStabilizationSignature !== signature) {
+        this.statusStabilizationSignature = signature;
+        this.scheduleRefresh();
+        return;
+      }
+      this.statusStabilizationSignature = undefined;
+    }
+
     this.detectNewUntrackedFiles(status);
+    this.lastPublishedStatus = status;
+    const resolveStatusOperationSettled = this.resolveStatusOperationSettled;
+    this.statusOperationSettled = null;
+    this.resolveStatusOperationSettled = null;
     this.statusListeners.forEach(l => l(status));
+    resolveStatusOperationSettled?.();
+  }
+
+  private beginStatusStabilization(): void {
+    this.statusStabilizationSignature = null;
   }
 
   private setupAutoRefreshTimer(): void {
@@ -980,6 +1033,61 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.statusListeners.push(listener);
     return new vscode.Disposable(() => {
       this.statusListeners = this.statusListeners.filter(l => l !== listener);
+    });
+  }
+
+  onStatusOperationChange(listener: StatusOperationListener): vscode.Disposable {
+    this.statusOperationListeners.push(listener);
+    return new vscode.Disposable(() => {
+      this.statusOperationListeners = this.statusOperationListeners.filter(l => l !== listener);
+    });
+  }
+
+  async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
+    if (this.statusUpdateSuppressionDepth === 0) {
+      this.beginStatusStabilization();
+      this.statusOperationSettled = new Promise<void>(resolve => {
+        this.resolveStatusOperationSettled = resolve;
+      });
+      this.statusOperationListeners.forEach(listener => listener(true));
+    }
+    this.statusUpdateSuppressionDepth += 1;
+    const execute = async (): Promise<T> => {
+      try {
+        return await operation();
+      } finally {
+        this.statusUpdateSuppressionDepth -= 1;
+        if (this.statusUpdateSuppressionDepth === 0) {
+          const settled = this.statusOperationSettled;
+          this.scheduleRefresh();
+          if (settled) await this.waitForStatusOperationSettled(settled);
+          this.statusOperationListeners.forEach(listener => listener(false));
+        }
+      }
+    };
+
+    if (kind === 'checkout') {
+      return vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: t('VersionDock: Checking out "{0}"…', label ?? t('branch')),
+          cancellable: false,
+        },
+        () => execute(),
+      );
+    }
+    return execute();
+  }
+
+  private async waitForStatusOperationSettled(settled: Promise<void>): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    await new Promise<void>(resolve => {
+      const finish = () => {
+        if (timer) clearTimeout(timer);
+        resolve();
+      };
+      timer = setTimeout(finish, 30_000);
+      void settled.then(finish, finish);
     });
   }
 
@@ -1174,6 +1282,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   async getAllStatuses(): Promise<WorkspaceStatus> {
+    if (this.statusUpdateSuppressionDepth > 0 && this.lastPublishedStatus) return this.lastPublishedStatus;
     const results = await Promise.allSettled(
       Array.from(this.repos.values()).map(r => r.getStatus())
     );
@@ -1188,6 +1297,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
   /** Like getAllStatuses but forces VSCode's git extension to re-read from disk first. */
   async getAllStatusesFresh(): Promise<WorkspaceStatus> {
+    if (this.statusUpdateSuppressionDepth > 0 && this.lastPublishedStatus) return this.lastPublishedStatus;
     const results = await Promise.allSettled(
       Array.from(this.repos.values()).map(r => r.getStatusFresh())
     );

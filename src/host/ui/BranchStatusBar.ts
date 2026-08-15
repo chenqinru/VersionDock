@@ -29,6 +29,7 @@ type SvnIgnoreCandidatePickItem = vscode.QuickPickItem & { filePath?: string; cu
 export class BranchStatusBar implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
   private statusDisposable?: vscode.Disposable;
+  private statusOperationDisposable?: vscode.Disposable;
   private branchDisposable?: vscode.Disposable;
   private configDisposable?: vscode.Disposable;
   private hasBehind = false;
@@ -42,6 +43,7 @@ export class BranchStatusBar implements vscode.Disposable {
   private totalConflicts = 0;
   private conflictRepoCount = 0;
   private refreshVersion = 0;
+  private statusOperationInProgress = false;
 
   constructor(
     private readonly manager: WorkspaceGitManager,
@@ -60,6 +62,18 @@ export class BranchStatusBar implements vscode.Disposable {
       void this.refresh(status).catch(error => {
         this.logger.error('BranchStatus', 'Failed to refresh status', error);
       });
+    });
+    this.statusOperationDisposable = this.manager.onStatusOperationChange(inProgress => {
+      this.statusOperationInProgress = inProgress;
+      if (inProgress) {
+        // Show feedback immediately, before the first repository refresh arrives.
+        this.statusBarItem.text = this.statusBarItem.text.replace(
+          /\$\((?:git-branch|tag|git-commit)\)/,
+          '$(loading~spin)',
+        );
+      } else {
+        this.refreshFromManager();
+      }
     });
     // Also refresh on branch change: the status change fires at 300ms and may catch
     // a transient HEAD state during checkout. The branch change fires at 400ms when
@@ -172,7 +186,9 @@ export class BranchStatusBar implements vscode.Disposable {
     // Icon: git-branch on a named branch, tag on detached tag, git-commit on detached hash
     const anyOnNamedBranch = branches.some(b => !b.detachedTag && !b.detachedHash && b.name !== 'HEAD');
     const anyOnTag = !anyOnNamedBranch && branches.some(b => !!b.detachedTag);
-    const headIcon = anyOnNamedBranch ? '$(git-branch)' : anyOnTag ? '$(tag)' : '$(git-commit)';
+    const headIcon = this.statusOperationInProgress
+      ? '$(loading~spin)'
+      : anyOnNamedBranch ? '$(git-branch)' : anyOnTag ? '$(tag)' : '$(git-commit)';
 
     const suppressDiverged = vscode.workspace.getConfiguration('versiondock').get<boolean>('suppressDivergedBranchWarning') === true;
     const showDivergedWarning = this.branchesDiverged && !suppressDiverged;
@@ -2454,6 +2470,7 @@ export class BranchStatusBar implements vscode.Disposable {
   dispose(): void {
     this.statusBarItem.dispose();
     this.statusDisposable?.dispose();
+    this.statusOperationDisposable?.dispose();
     this.branchDisposable?.dispose();
     this.configDisposable?.dispose();
   }
