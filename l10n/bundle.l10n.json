@@ -4,6 +4,8 @@
   "VersionDock: No conflict markers found in {0}": "VersionDock: No conflict markers found in {0}",
   "VersionDock: File is not inside a known Git repository": "VersionDock: File is not inside a known Git repository",
   "VersionDock: File resolved and staged: {0}": "VersionDock: File resolved and staged: {0}",
+  "VersionDock: Merged \"{0}\" into \"{1}\" and committed.": "VersionDock: Merged \"{0}\" into \"{1}\" and committed.",
+  "the incoming branch": "the incoming branch",
   "VersionDock: No active file": "VersionDock: No active file",
   "VersionDock: No conflict markers found in the current file": "VersionDock: No conflict markers found in the current file",
   "VersionDock: loading…": "VersionDock: loading…",

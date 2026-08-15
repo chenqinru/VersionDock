@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService } from './GitService';
+import { GitService, type MergeCommitResult } from './GitService';
 import { SvnService } from '../svn/SvnService';
 import type { WorktreeEntry } from './GitService';
 import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
@@ -17,7 +17,7 @@ const DEFAULT_REPOSITORY_SCAN_IGNORED_FOLDERS = ['node_modules'];
 
 type StatusListener = (status: WorkspaceStatus) => void;
 type StatusOperationListener = (inProgress: boolean) => void;
-type StatusOperationKind = 'checkout' | 'squash';
+type StatusOperationKind = 'checkout' | 'squash' | 'merge';
 type BranchListener = () => void;
 type WorktreeListener = (repoId: string) => void;
 type RepoKind = NonNullable<RepoMeta['kind']>;
@@ -227,6 +227,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private lastPublishedStatus: WorkspaceStatus | null = null;
   private statusOperationSettled: Promise<void> | null = null;
   private resolveStatusOperationSettled: (() => void) | null = null;
+  private mergeCompletionTasks = new Map<string, Promise<MergeCommitResult | undefined>>();
   /** Set after a branch/HEAD change so intermediate checkout states are never published. */
   private statusStabilizationSignature: string | null | undefined;
   private disposed = false;
@@ -311,6 +312,15 @@ export class WorkspaceGitManager implements vscode.Disposable {
       });
       this.globalListeners.push(d);
     }
+  }
+
+  private createGitService(repoId: string, rootPath: string): GitService {
+    return new GitService(
+      repoId,
+      rootPath,
+      (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
+      async () => { await this.refreshStatusNow(); },
+    );
   }
 
   private attachGitApiRepoListeners(): void {
@@ -474,7 +484,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     discoveredGitRepoPaths.forEach((repoPath) => {
       const meta = this.buildRepoMeta(repoPath, colorIdx.value++, folders, customColors);
       this.repoMetas.set(meta.id, meta);
-      this.repos.set(meta.id, new GitService(meta.id, meta.rootPath, (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label)));
+      this.repos.set(meta.id, this.createGitService(meta.id, meta.rootPath));
       this.setupWatcher(meta.rootPath, meta.id);
       if ((meta.depth ?? 0) === 0 && !meta.isWorktree) {
         this.discoverSubmodules(meta.rootPath, meta.id, 1, colorIdx, customColors);
@@ -680,7 +690,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       kind: 'git',
     };
     this.repoMetas.set(repoId, meta);
-    this.repos.set(repoId, new GitService(repoId, normalizedRepoPath, (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label)));
+    this.repos.set(repoId, this.createGitService(repoId, normalizedRepoPath));
     this.setupWatcher(normalizedRepoPath, repoId);
     this.discoverSubmodules(normalizedRepoPath, repoId, 1, colorIdx, customColors);
     this.setupRepositoryAuxWatchers(normalizedRepoPath, repoId);
@@ -738,7 +748,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
         kind: 'git',
       };
       this.repoMetas.set(subRepoId, meta);
-      this.repos.set(subRepoId, new GitService(subRepoId, subAbsPath, (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label)));
+      this.repos.set(subRepoId, this.createGitService(subRepoId, subAbsPath));
 
       // Only set up watcher if the submodule is initialized (has .git)
       if (fs.existsSync(subGitDir)) {
@@ -873,6 +883,14 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.statusStabilizationSignature = undefined;
     }
 
+    this.publishStatus(status);
+  }
+
+  private beginStatusStabilization(): void {
+    this.statusStabilizationSignature = null;
+  }
+
+  private publishStatus(status: WorkspaceStatus): void {
     this.detectNewUntrackedFiles(status);
     this.lastPublishedStatus = status;
     const resolveStatusOperationSettled = this.resolveStatusOperationSettled;
@@ -880,10 +898,33 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.resolveStatusOperationSettled = null;
     this.statusListeners.forEach(l => l(status));
     resolveStatusOperationSettled?.();
+
+    for (const repoStatus of status.repos) {
+      if (repoStatus.operationState !== 'merge' || repoStatus.conflictCount > 0) continue;
+      void this.completeMergeIfResolved(repoStatus.repoId).catch(error => {
+        this.logger.error('Repositories', 'Failed to auto-commit resolved merge', error, { repoId: repoStatus.repoId });
+      });
+    }
   }
 
-  private beginStatusStabilization(): void {
-    this.statusStabilizationSignature = null;
+  async completeMergeIfResolved(repoId: string): Promise<MergeCommitResult | undefined> {
+    const existingTask = this.mergeCompletionTasks.get(repoId);
+    if (existingTask) return existingTask;
+
+    const repo = this.repos.get(repoId);
+    if (!repo) return undefined;
+    const task = repo.commitMergeIfResolved().then(result => {
+      if (result) {
+        vscode.window.showInformationMessage(
+          t('VersionDock: Merged "{0}" into "{1}" and committed.', result.sourceBranch ?? t('the incoming branch'), result.targetBranch)
+        );
+      }
+      return result;
+    }).finally(() => {
+      if (this.mergeCompletionTasks.get(repoId) === task) this.mergeCompletionTasks.delete(repoId);
+    });
+    this.mergeCompletionTasks.set(repoId, task);
+    return task;
   }
 
   private setupAutoRefreshTimer(): void {
@@ -1066,11 +1107,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
       }
     };
 
-    if (kind === 'checkout') {
+    if (kind === 'checkout' || kind === 'merge') {
       return vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: t('VersionDock: Checking out "{0}"…', label ?? t('branch')),
+          title: kind === 'merge'
+            ? t('VersionDock: Merging "{0}"…', label ?? t('branch'))
+            : t('VersionDock: Checking out "{0}"…', label ?? t('branch')),
           cancellable: false,
         },
         () => execute(),
@@ -1308,6 +1351,15 @@ export class WorkspaceGitManager implements vscode.Disposable {
           .map(r => r.value)
       )),
     };
+  }
+
+  async refreshStatusNow(): Promise<WorkspaceStatus> {
+    const generation = this.repositoryGeneration;
+    const status = await this.getAllStatusesFresh();
+    if (this.disposed || generation !== this.repositoryGeneration) return status;
+    this.statusStabilizationSignature = undefined;
+    this.publishStatus(status);
+    return status;
   }
 
   async getAllBranches(): Promise<BranchInfo[]> {

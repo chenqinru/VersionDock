@@ -37,6 +37,11 @@ export interface CommitMessageHistoryEntry {
   timestamp: number;
 }
 
+export interface MergeCommitResult {
+  sourceBranch?: string;
+  targetBranch: string;
+}
+
 type ConflictSideStatus = 'modified' | 'added' | 'deleted';
 
 function mapConflictSideStatuses(code: string): { currentStatus: ConflictSideStatus; incomingStatus: ConflictSideStatus } | undefined {
@@ -211,8 +216,9 @@ function gitErrorDetail(error: unknown): string {
   return 'Unknown error';
 }
 
-type StatusOperationKind = 'checkout' | 'squash';
+type StatusOperationKind = 'checkout' | 'squash' | 'merge';
 type SuppressStatusUpdates = <T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string) => Promise<T>;
+type RefreshStatus = () => Promise<void>;
 
 export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
@@ -225,6 +231,7 @@ export class GitService {
     public readonly repoId: string,
     public readonly rootPath: string,
     private readonly suppressStatusUpdates?: SuppressStatusUpdates,
+    private readonly refreshStatus?: RefreshStatus,
   ) {
     this.git = simpleGit(rootPath);
   }
@@ -249,6 +256,10 @@ export class GitService {
 
   private runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
     return this.suppressStatusUpdates ? this.suppressStatusUpdates(operation, kind, label) : operation();
+  }
+
+  private async refreshStatusAfterOperation(): Promise<void> {
+    await this.refreshStatus?.().catch(() => {});
   }
 
   private rawPathSafe(args: string[]): Promise<string> {
@@ -1837,17 +1848,50 @@ export class GitService {
     return result.summary.changes.toString();
   }
 
-  async getOperationState(): Promise<'merge' | 'rebase' | 'cherry-pick' | 'revert' | null> {
+  private async getAbsoluteGitDir(): Promise<string | undefined> {
     const rawGitDir = await this.git.raw(['rev-parse', '--absolute-git-dir'])
       .catch(() => this.git.raw(['rev-parse', '--git-dir']).catch(() => ''));
     const gitDirValue = rawGitDir.trim();
-    if (!gitDirValue) return null;
-    const gitDir = path.isAbsolute(gitDirValue) ? gitDirValue : path.resolve(this.rootPath, gitDirValue);
+    if (!gitDirValue) return undefined;
+    return path.isAbsolute(gitDirValue) ? gitDirValue : path.resolve(this.rootPath, gitDirValue);
+  }
+
+  private async getMergeMessageDetails(): Promise<{ sourceBranch?: string; targetBranch?: string }> {
+    const gitDir = await this.getAbsoluteGitDir();
+    if (!gitDir) return {};
+    try {
+      const firstLine = fs.readFileSync(path.join(gitDir, 'MERGE_MSG'), 'utf8')
+        .split(/\r?\n/, 1)[0]
+        .trim();
+      const match = firstLine.match(/^Merge (?:branch|remote-tracking branch|tag) '(.+?)' into '?(.+?)'?$/);
+      if (!match) return {};
+      return { sourceBranch: match[1], targetBranch: match[2] };
+    } catch {
+      return {};
+    }
+  }
+
+  async getOperationState(): Promise<'merge' | 'rebase' | 'cherry-pick' | 'revert' | null> {
+    const gitDir = await this.getAbsoluteGitDir();
+    if (!gitDir) return null;
     if (fs.existsSync(path.join(gitDir, 'MERGE_HEAD'))) return 'merge';
     if (fs.existsSync(path.join(gitDir, 'rebase-merge')) || fs.existsSync(path.join(gitDir, 'rebase-apply'))) return 'rebase';
     if (fs.existsSync(path.join(gitDir, 'CHERRY_PICK_HEAD'))) return 'cherry-pick';
     if (fs.existsSync(path.join(gitDir, 'REVERT_HEAD'))) return 'revert';
     return null;
+  }
+
+  async commitMergeIfResolved(): Promise<MergeCommitResult | undefined> {
+    if (this.kind !== 'git' || await this.getOperationState() !== 'merge') return undefined;
+    if ((await this.getConflictFiles()).length > 0) return undefined;
+
+    const currentBranch = await this.getCurrentBranch();
+    const mergeDetails = await this.getMergeMessageDetails();
+    await this.git.raw(['commit', '--no-edit']);
+    return {
+      sourceBranch: mergeDetails.sourceBranch,
+      targetBranch: mergeDetails.targetBranch ?? currentBranch.name,
+    };
   }
 
   async getMergeRebaseState(): Promise<'merge' | 'rebase' | null> {
@@ -2060,32 +2104,36 @@ export class GitService {
   }
 
   async merge(from: string): Promise<void> {
-    await this.assertBranchOperationAllowed();
-    try {
-      await this.git.merge([from]);
-    } catch (e: unknown) {
-      const isDirty = (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree'
-        || String(e).includes('overwritten by merge')
-        || String(e).includes('Your local changes');
-      if (!isDirty) throw e;
-      // Stash uncommitted changes, retry merge, then restore stash.
-      // If the merge produces conflicts the stash pop will also conflict —
-      // the user resolves both sets in the normal conflict flow.
-      const stashRef = `VersionDock WIP before merge of ${from} (${Date.now()})`;
-      const previousStash = (await this.git.raw(['rev-parse', '--verify', 'refs/stash']).catch(() => '')).trim();
-      await this.git.stash(['push', '--include-untracked', '-m', stashRef]);
-      const createdStash = (await this.git.raw(['rev-parse', '--verify', 'refs/stash']).catch(() => '')).trim();
-      if (!createdStash || createdStash === previousStash) throw e;
+    await this.runStatusSensitiveOperation(async () => {
+      await this.assertBranchOperationAllowed();
       try {
         await this.git.merge([from]);
-      } catch (mergeErr: unknown) {
-        // Merge failed (e.g. conflicts) — pop stash on top so the user
-        // ends up with both the merge conflicts and their original changes.
-        await this.restoreAutoStash(createdStash).catch(() => {});
-        throw mergeErr;
+      } catch (e: unknown) {
+        const isDirty = (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree'
+          || String(e).includes('overwritten by merge')
+          || String(e).includes('Your local changes');
+        if (!isDirty) throw e;
+        // Stash uncommitted changes, retry merge, then restore stash.
+        // If the merge produces conflicts the stash pop will also conflict —
+        // the user resolves both sets in the normal conflict flow.
+        const stashRef = `VersionDock WIP before merge of ${from} (${Date.now()})`;
+        const previousStash = (await this.git.raw(['rev-parse', '--verify', 'refs/stash']).catch(() => '')).trim();
+        await this.git.stash(['push', '--include-untracked', '-m', stashRef]);
+        const createdStash = (await this.git.raw(['rev-parse', '--verify', 'refs/stash']).catch(() => '')).trim();
+        if (!createdStash || createdStash === previousStash) throw e;
+        try {
+          await this.git.merge([from]);
+        } catch (mergeErr: unknown) {
+          // Merge failed (e.g. conflicts) — pop stash on top so the user
+          // ends up with both the merge conflicts and their original changes.
+          await this.restoreAutoStash(createdStash).catch(() => {});
+          throw mergeErr;
+        }
+        await this.restoreAutoStash(createdStash);
+      } finally {
+        if (!this.suppressStatusUpdates) await this.refreshStatusAfterOperation();
       }
-      await this.restoreAutoStash(createdStash);
-    }
+    }, 'merge', from);
   }
 
   private async restoreAutoStash(stashHash: string): Promise<void> {
@@ -2367,7 +2415,13 @@ export class GitService {
   }
 
   async mergeTag(name: string): Promise<void> {
-    await this.git.raw(['merge', `refs/tags/${name}`]);
+    await this.runStatusSensitiveOperation(async () => {
+      try {
+        await this.git.raw(['merge', `refs/tags/${name}`]);
+      } finally {
+        if (!this.suppressStatusUpdates) await this.refreshStatusAfterOperation();
+      }
+    }, 'merge', name);
   }
 
   async getBranchesContaining(hash: string): Promise<{ local: string[]; remote: string[]; tags: string[] }> {

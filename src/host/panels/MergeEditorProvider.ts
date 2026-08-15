@@ -421,6 +421,7 @@ export class MergeEditorProvider implements vscode.Disposable {
           if (msg.deleteFile) await repo.deleteMergedFile(relativePath);
           else await repo.saveMergedContent(relativePath, msg.resolvedContent);
           await repo.stageFiles([relativePath]);
+          const mergeCommit = await this.manager.completeMergeIfResolved(repoId);
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: true });
           this.logger.info('MergeEditor', 'Resolved file saved and staged', {
             repoId,
@@ -428,7 +429,9 @@ export class MergeEditorProvider implements vscode.Disposable {
             deleted: Boolean(msg.deleteFile),
             durationMs: Date.now() - startedAt,
           });
-          vscode.window.showInformationMessage(t('VersionDock: File resolved and staged: {0}', path.basename(relativePath)));
+          if (!mergeCommit) {
+            vscode.window.showInformationMessage(t('VersionDock: File resolved and staged: {0}', path.basename(relativePath)));
+          }
           await this.refreshCommitPanel();
           vscode.commands.executeCommand('versiondock.commitPanel.focus');
           this.closePanel(panelKey);
@@ -453,6 +456,7 @@ export class MergeEditorProvider implements vscode.Disposable {
           if (!repo) throw new Error(t('Repo not found'));
           if (msg.type === 'MERGE_ACCEPT_OURS') await repo.acceptOurs(relativePath);
           else await repo.acceptTheirs(relativePath);
+          await this.manager.completeMergeIfResolved(repoId);
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: true });
           this.logger.info('MergeEditor', 'Conflict side accepted', {
             repoId,
