@@ -1008,13 +1008,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.commitPanel?.prefillCommitMessage(mergeMsg, commitTarget);
             }).catch(() => {});
             const warning = t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
-            if (commitTarget === 'undocked') {
-              void vscode.window.showWarningMessage(warning);
-            } else {
-              void vscode.window.showWarningMessage(warning, t('Open Commit Panel')).then(choice => {
-                if (choice) void this.commitPanel?.focus();
-              });
-            }
+            void vscode.window.showWarningMessage(warning, t('Open Merge List')).then(choice => {
+              if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
+            });
           } else {
             this.showOperationError(e);
           }

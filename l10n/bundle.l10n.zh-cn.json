@@ -4,6 +4,7 @@
   "VersionDock: No conflict markers found in {0}": "VersionDock：在 {0} 中未找到冲突标记",
   "VersionDock: File is not inside a known Git repository": "VersionDock：文件不在已识别的 Git 仓库中",
   "VersionDock: File resolved and staged: {0}": "VersionDock：文件已解决冲突并暂存：{0}",
+  "Open Merge List": "打开合并列表",
   "VersionDock: Merged \"{0}\" into \"{1}\" and committed.": "VersionDock：已将分支“{0}”合并到“{1}”，并完成提交。",
   "the incoming branch": "传入分支",
   "VersionDock: No active file": "VersionDock：没有活动文件",

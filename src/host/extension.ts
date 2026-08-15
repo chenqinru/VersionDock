@@ -22,6 +22,7 @@ import { AiCommitComposerService } from './aiCommitComposer/AiCommitComposerServ
 import { AiCommitComposerProvider } from './panels/AiCommitComposerProvider';
 import { AiCodeReviewService } from './aiCodeReview/AiCodeReviewService';
 import { AiCodeReviewProvider } from './panels/AiCodeReviewProvider';
+import type { WorkspaceStatus } from './types/git';
 
 async function maybeResetViewLocationsOnStartup(logger: VersionDockLogger): Promise<void> {
   const enabled = vscode.workspace.getConfiguration('versiondock').get<boolean>('resetViewLocationsOnStartup', false);
@@ -180,6 +181,19 @@ async function maybeNotifyIncomingCommits(manager: WorkspaceVcsManager, globalSt
   }
 }
 
+async function maybeNotifyConflicts(status: WorkspaceStatus): Promise<void> {
+  const conflictCount = status.repos.reduce((total, repo) => total + repo.conflictCount, 0);
+  if (conflictCount === 0) return;
+
+  const picked = await vscode.window.showWarningMessage(
+    t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.'),
+    t('Open Merge List'),
+  );
+  if (picked === t('Open Merge List')) {
+    await vscode.commands.executeCommand('versiondock.openConflicts');
+  }
+}
+
 async function runStartupRefresh(
   manager: WorkspaceVcsManager,
   badge: BadgeController,
@@ -198,6 +212,7 @@ async function runStartupRefresh(
 
     const status = await manager.getAllStatusesFresh();
     badge.update(status);
+    await maybeNotifyConflicts(status);
     await maybeNotifyIncomingCommits(manager, globalState);
     await maybeNotifyUnpushedCommits(manager, commitPanel);
     logger.info('Startup', 'Repository refresh completed', {
