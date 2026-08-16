@@ -48,7 +48,7 @@ interface RepoBlock {
 
 const REPO_LABEL_WIDTH = 6;
 const REPO_LABEL_WIDTH_EXPANDED = 110;
-const BLOCK_GAP = 4;
+const REPO_BLOCK_GAP = 4;
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -206,30 +206,16 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     }
     return blocks;
   }, [commits, repoMeta, multiRepo]);
-
-
-  // Last index of each block — the gap is added after these rows.
-  const blockLastIndex = useMemo(() => {
-    const s = new Set<number>();
-    for (const block of repoBlocks) {
-      if (block.startRow > 0) s.add(block.startRow - 1);
-    }
-    return s;
-  }, [repoBlocks]);
-
   const virtualizer = useVirtualizer({
     count: commits.length,
     getScrollElement: () => parentRef.current,
-    // Tell the virtualizer the true height of each row, including the gap
-    // that follows the last row of each block.
-    estimateSize: (i) => ROW_HEIGHT + (multiRepo && blockLastIndex.has(i) ? BLOCK_GAP : 0),
+    // Commit rows stay contiguous so graph segments meet exactly at row
+    // boundaries. Repository separation is drawn only in the label strip.
+    estimateSize: () => ROW_HEIGHT,
     overscan: 10,
   });
 
-  const rawItems = virtualizer.getVirtualItems();
-  // Use the virtualizer's own start positions — they already account for the
-  // variable sizes above, so no manual offset calculation is needed.
-  const items = rawItems;
+  const items = virtualizer.getVirtualItems();
 
   const handleScroll = useCallback(() => {
     const el = parentRef.current;
@@ -275,15 +261,6 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   const anyExpanded = expandedRepos.size > 0;
   const labelColWidth = multiRepo ? (anyExpanded ? REPO_LABEL_WIDTH_EXPANDED : REPO_LABEL_WIDTH + 2) : 0;
 
-  const rowStartByIndex = useMemo(() => {
-    const starts = new Array<number>(commits.length);
-    let top = 0;
-    for (let index = 0; index < commits.length; index++) {
-      starts[index] = top;
-      top += ROW_HEIGHT + (multiRepo && blockLastIndex.has(index) ? BLOCK_GAP : 0);
-    }
-    return starts;
-  }, [blockLastIndex, commits.length, multiRepo]);
   const scrollTop = virtualizer.scrollOffset ?? 0;
 
   function toggleRepo(repoId: string) {
@@ -323,9 +300,11 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
 
         {/* Repo label strips */}
         {multiRepo && repoBlocks.map((block) => {
-          const topPx = rowStartByIndex[block.startRow] ?? block.startRow * ROW_HEIGHT;
-          const lastRowStart = rowStartByIndex[block.startRow + block.rowCount - 1] ?? ((block.startRow + block.rowCount - 1) * ROW_HEIGHT);
-          const heightPx = lastRowStart + ROW_HEIGHT - topPx;
+          const blockTopPx = block.startRow * ROW_HEIGHT;
+          const blockHeightPx = block.rowCount * ROW_HEIGHT;
+          const leadingGap = block.startRow > 0 ? REPO_BLOCK_GAP : 0;
+          const topPx = blockTopPx + leadingGap;
+          const heightPx = Math.max(0, blockHeightPx - leadingGap);
           const expanded = expandedRepos.has(block.repoId);
           const nameOffset = Math.min(
             Math.max(scrollTop - topPx, 0),
