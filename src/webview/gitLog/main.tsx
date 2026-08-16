@@ -23,11 +23,13 @@ function generateId() {
 
 const LOG_PAGE_SIZE = 100;
 
-function hasTopologyFilters(filters: CommitFilters): boolean {
+// A branch or tag hides rows but preserves ancestry and can reuse the
+// permanent --all layout. Content/date/path filters remove intermediate
+// commits, so only those filters break topology.
+function hasTopologyBreakingFilters(filters: CommitFilters): boolean {
   return !!(
     filters.text
     || filters.author
-    || filters.branch
     || filters.dateFrom
     || filters.dateTo
     || filters.path
@@ -131,7 +133,7 @@ export function GitLogApp() {
   }, []);
 
   const requestGraphCommits = useCallback((filters: CommitFilters, generation: number) => {
-    if (hasTopologyFilters(filters)) {
+    if (hasTopologyBreakingFilters(filters)) {
       activeGraphRequestIdRef.current = null;
       return;
     }
@@ -449,16 +451,45 @@ export function GitLogApp() {
     );
   }, [store.branches]);
 
-  const isFiltered = hasTopologyFilters(store.commitFilters);
+  const hasTopologyBreakingFilter = hasTopologyBreakingFilters(store.commitFilters);
+  const hasRevisionFilter = !!store.commitFilters.branch;
   const laidOutGraphCommits = useMemo(
     () => assignLanes(store.graphCommits, false, repoKindById, remoteNamesByRepo),
     [store.graphCommits, remoteNamesByRepo, repoKindById],
   );
   const laidOutCommits = useMemo(
-    () => isFiltered
-      ? assignLanes(store.commits, true, repoKindById, remoteNamesByRepo)
-      : layoutVisibleCommits(store.commits, laidOutGraphCommits, repoKindById, remoteNamesByRepo),
-    [store.commits, laidOutGraphCommits, isFiltered, remoteNamesByRepo, repoKindById],
+    () => {
+      if (hasTopologyBreakingFilter) {
+        return assignLanes(store.commits, true, repoKindById, remoteNamesByRepo);
+      }
+      if (hasRevisionFilter) {
+        // JetBrains filters the visible rows but preserves the permanent
+        // --all graph layout, so hidden branch heads still determine which
+        // side of a merge owns the leftmost lane.
+        return assignLanes(
+          store.commits,
+          false,
+          repoKindById,
+          remoteNamesByRepo,
+          store.graphCommits,
+        );
+      }
+      return layoutVisibleCommits(
+        store.commits,
+        laidOutGraphCommits,
+        repoKindById,
+        remoteNamesByRepo,
+      );
+    },
+    [
+      store.commits,
+      store.graphCommits,
+      laidOutGraphCommits,
+      hasRevisionFilter,
+      hasTopologyBreakingFilter,
+      remoteNamesByRepo,
+      repoKindById,
+    ],
   );
   const laidOutCompareBase = useMemo(() => (
     store.compareState ? assignLanes(store.compareState.baseOnly.commits, true, repoKindById, remoteNamesByRepo) : []

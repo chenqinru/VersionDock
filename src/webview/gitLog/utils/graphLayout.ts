@@ -221,14 +221,17 @@ function compareElements(
     : 0;
 }
 
-export function assignLanes<T extends GraphCommitNode>(
-  commits: readonly T[],
-  isFiltered = false,
-  repoKindById: Readonly<Record<string, 'git' | 'svn'>> = {},
-  remoteNamesByRepo: Readonly<Record<string, readonly string[]>> = {},
-): Array<T & GraphLayoutData> {
-  if (commits.length === 0) return [];
+interface PermanentLayoutData {
+  layoutIndexByKey: Map<string, number>;
+  nodeColorByKey: Map<string, string>;
+  maxLayoutIndex: number;
+}
 
+function buildPermanentLayout(
+  commits: readonly GraphCommitNode[],
+  repoKindById: Readonly<Record<string, 'git' | 'svn'>>,
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>>,
+): PermanentLayoutData {
   const rowByKey = new Map<string, number>();
   commits.forEach((commit, row) => rowByKey.set(commitKey(commit), row));
 
@@ -237,28 +240,13 @@ export function assignLanes<T extends GraphCommitNode>(
     (): number[] => [],
   );
   const childCountByRow = Array.from({ length: commits.length }, () => 0);
-  const edges: LayoutEdge[] = [];
-  let nextEdgeId = 1;
-
   for (let row = 0; row < commits.length; row++) {
     const commit = commits[row];
     for (const parentHash of commit.parents) {
-      const targetRow = rowByKey.get(parentKey(commit, parentHash)) ?? null;
-      if (targetRow === null && isFiltered) continue;
-      if (targetRow !== null && targetRow <= row) continue;
-
-      if (targetRow !== null) {
-        parentsByRow[row].push(targetRow);
-        childCountByRow[targetRow]++;
-      }
-      edges.push({
-        id: nextEdgeId++,
-        repoId: commit.repoId,
-        up: row,
-        down: targetRow,
-        collapsed: targetRow === null
-          || targetRow - row >= LONG_EDGE_MIN_ROWS,
-      });
+      const parentRow = rowByKey.get(parentKey(commit, parentHash));
+      if (parentRow === undefined || parentRow <= row) continue;
+      parentsByRow[row].push(parentRow);
+      childCountByRow[parentRow]++;
     }
   }
 
@@ -331,7 +319,7 @@ export function assignLanes<T extends GraphCommitNode>(
   }
 
   // Natural heads cover every disconnected component, but retain a defensive
-  // fallback for malformed or partially filtered input.
+  // fallback for malformed or partially loaded input.
   for (let row = 0; row < commits.length; row++) {
     if (layoutIndex[row] !== 0) continue;
     layoutIndex[row] = currentLayoutIndex++;
@@ -382,6 +370,75 @@ export function assignLanes<T extends GraphCommitNode>(
       return colorByHead.get(headRow)?.color ?? anonymousLaneColor(layoutIndex[row]);
     }
     return palette[(layoutIndex[row] - 1) % palette.length];
+  };
+
+  return {
+    layoutIndexByKey: new Map(commits.map((commit, row) => [commitKey(commit), layoutIndex[row]])),
+    nodeColorByKey: new Map(commits.map((commit, row) => [commitKey(commit), nodeColor(row)])),
+    maxLayoutIndex: Math.max(0, currentLayoutIndex - 1),
+  };
+}
+
+/**
+ * Lay out visible commits. When topologyCommits is supplied, its permanent
+ * layout indices and colors are projected onto the visible rows, matching how
+ * JetBrains filters branches without rebuilding the graph from that branch.
+ */
+export function assignLanes<T extends GraphCommitNode>(
+  commits: readonly T[],
+  isFiltered = false,
+  repoKindById: Readonly<Record<string, 'git' | 'svn'>> = {},
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>> = {},
+  topologyCommits?: readonly GraphCommitNode[],
+): Array<T & GraphLayoutData> {
+  if (commits.length === 0) return [];
+
+  const rowByKey = new Map<string, number>();
+  commits.forEach((commit, row) => rowByKey.set(commitKey(commit), row));
+
+  const edges: LayoutEdge[] = [];
+  let nextEdgeId = 1;
+
+  for (let row = 0; row < commits.length; row++) {
+    const commit = commits[row];
+    for (const parentHash of commit.parents) {
+      const targetRow = rowByKey.get(parentKey(commit, parentHash)) ?? null;
+      if (targetRow === null && isFiltered) continue;
+      if (targetRow !== null && targetRow <= row) continue;
+
+      edges.push({
+        id: nextEdgeId++,
+        repoId: commit.repoId,
+        up: row,
+        down: targetRow,
+        collapsed: targetRow === null
+          || targetRow - row >= LONG_EDGE_MIN_ROWS,
+      });
+    }
+  }
+
+  const permanentLayout = buildPermanentLayout(
+    topologyCommits ?? commits,
+    repoKindById,
+    remoteNamesByRepo,
+  );
+  const needsFallback = commits.some(commit => (
+    !permanentLayout.layoutIndexByKey.has(commitKey(commit))
+  ));
+  const fallbackLayout = needsFallback
+    ? buildPermanentLayout(commits, repoKindById, remoteNamesByRepo)
+    : permanentLayout;
+  const fallbackOffset = permanentLayout.maxLayoutIndex;
+  const layoutIndex = commits.map(commit => {
+    const key = commitKey(commit);
+    return permanentLayout.layoutIndexByKey.get(key)
+      ?? fallbackOffset + (fallbackLayout.layoutIndexByKey.get(key) ?? 1);
+  });
+  const nodeColor = (row: number): string => {
+    const key = commitKey(commits[row]);
+    return permanentLayout.nodeColorByKey.get(key)
+      ?? fallbackLayout.nodeColorByKey.get(key)
+      ?? anonymousLaneColor(layoutIndex[row]);
   };
   for (const edge of edges) {
     const colorRow = edge.down !== null
