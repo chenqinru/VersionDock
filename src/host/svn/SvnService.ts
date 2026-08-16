@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { GitService, type CommitMessageHistoryEntry } from '../git/GitService';
 import { detectLanguage, parseDiff } from '../git/DiffParser';
 import type { BlameLine } from '../git/BlameService';
-import type { BranchInfo, CommitNode, FileDiff, FileStatus, GitFileStatus, LineRange, RepoStatus } from '../types/git';
+import type { BranchInfo, CommitNode, FileDiff, FileStatus, GitFileStatus, GraphCommitNode, LineRange, RepoStatus } from '../types/git';
 import type { StashEntry, UnpushedCommit } from '../types/messages';
 import { CliError, execCli } from '../vcs/cli';
 import { t } from '../utils/l10n';
@@ -1470,6 +1470,32 @@ export class SvnService extends GitService {
 
   async getStatus(): Promise<RepoStatus> {
     return this.getStatusFresh();
+  }
+
+  async getGraphLog(limit: number): Promise<GraphCommitNode[]> {
+    if (limit <= 0) return [];
+    const info = await this.getInfo();
+    const localRevision = await this.resolveEffectiveLocalRevision(info);
+    const raw = await this.svn([
+      'log',
+      '--xml',
+      '-r',
+      'HEAD:1',
+      '--limit',
+      String(limit),
+    ]);
+    const entries = this.parseLogEntries(raw);
+    const headRevision = entries[0]?.revision ?? info.revision;
+    return entries.map(entry => ({
+      hash: `r${entry.revision}`,
+      repoId: this.repoId,
+      committerDate: entry.date,
+      parents: [],
+      refs: [
+        ...(entry.revision === headRevision ? ['HEAD'] : []),
+        ...(localRevision !== undefined && entry.revision === String(localRevision) ? ['BASE'] : []),
+      ],
+    }));
   }
 
   async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }): Promise<CommitNode[]> {

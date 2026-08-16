@@ -2,6 +2,7 @@ import type {
   BranchInfo,
   ChangelistData,
   CommitNode,
+  GraphCommitNode,
   FileDiff,
   FileStatus,
   MergeConflictFile,
@@ -302,6 +303,7 @@ export type HostToLogMsg =
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }
   | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string }
+  | { type: 'LOG_GRAPH_COMMITS'; commits: GraphCommitNode[]; generation: number; requestId: string }
   | { type: 'LOG_DIFF_RESULT'; requestId: string; files: Array<{ path: string; status: string }>; diff: FileDiff | null; error?: string }
   | { type: 'LOG_COMMIT_FILES'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; error?: string }
   | { type: 'LOG_BRANCH_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string }
@@ -323,6 +325,7 @@ export type HostToLogMsg =
 
 export type LogToHostMsg =
   | { type: 'LOG_REQUEST_COMMITS'; repoIds: string[] | null; limit: number; skip: number; generation?: number; requestId?: string; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }
+  | { type: 'LOG_REQUEST_GRAPH_COMMITS'; repoIds: string[] | null; generation: number; requestId: string }
   | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[] }
   | { type: 'LOG_REQUEST_FILE_DIFF'; requestId: string; repoId: string; hash: string; filePath: string }
   | { type: 'LOG_OPEN_FILE_DIFF'; repoId: string; hash: string; filePath: string; fileStatus?: string; lineRange?: LineRange }

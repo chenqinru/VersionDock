@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BranchInfo, CommitNode, FileDiff, LineRange, RepoMeta, TagInfo } from '../../shared/types';
+import type { BranchInfo, CommitNode, FileDiff, GraphCommitNode, LineRange, RepoMeta, TagInfo } from '../../shared/types';
 import type { CompareSide, IconThemeData } from '../../../host/types/messages';
 import { scopedKey } from '../../shared/scopedKey';
 
@@ -60,6 +60,7 @@ interface LogState {
   iconTheme: IconThemeData | null;
   mode: 'log' | 'compare';
   commits: CommitNode[];
+  graphCommits: GraphCommitNode[];
   hasMore: boolean;
   selectedCommitHashes: string[];
   primarySelectedHash: string | null;
@@ -84,6 +85,7 @@ interface LogState {
   setBranches: (branches: BranchInfo[]) => void;
   updateTags: (repoId: string, tags: TagInfo[]) => void;
   setIconTheme: (theme: IconThemeData | null) => void;
+  setGraphCommits: (commits: GraphCommitNode[]) => void;
   appendCommits: (commits: CommitNode[], isLast: boolean) => void;
   beginCommitsReload: () => void;
   openCompare: (compareState: Omit<CompareState, 'baseOnly' | 'targetOnly'>) => void;
@@ -165,6 +167,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   iconTheme: null,
   mode: 'log',
   commits: [],
+  graphCommits: [],
   hasMore: true,
   selectedCommitHashes: [],
   primarySelectedHash: null,
@@ -207,6 +210,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       repos,
       tags: state.tags.filter(tag => repoIds.has(tag.repoId)),
       commits: visibleCommits,
+      graphCommits: state.graphCommits.filter(commit => repoIds.has(commit.repoId)),
       commitFilters,
       ...(compareRemoved ? {
         mode: 'log' as const,
@@ -238,6 +242,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       : {}
   )),
   setIconTheme: (iconTheme) => set({ iconTheme }),
+  setGraphCommits: (graphCommits) => set({ graphCommits }),
   appendCommits: (commits, isLast) => set(s => {
     const replacing = s.replaceCommitsOnNextBatch;
     const nextCommits = dedupeCommits(replacing ? commits : [...s.commits, ...commits]);
@@ -288,6 +293,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     hasMore: true,
     loadingCommits: true,
     backgroundLoading: false,
+    graphCommits: [],
     replaceCommitsOnNextBatch: true,
     compareState: null,
   }),

@@ -5,7 +5,7 @@ import { GitService, type MergeCommitResult } from './GitService';
 import { SvnService } from '../svn/SvnService';
 import type { WorktreeEntry } from './GitService';
 import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
-import type { BranchInfo, CommitNode, LineRange, RepoMeta, WorkspaceStatus } from '../types/git';
+import type { BranchInfo, CommitNode, GraphCommitNode, LineRange, RepoMeta, WorkspaceStatus } from '../types/git';
 import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
@@ -91,7 +91,7 @@ function buildRepoId(rootPath: string, kind: RepoKind): string {
   return `${path.normalize(rootPath)}::${kind}`;
 }
 
-function compareLogHeads(a: CommitNode, b: CommitNode): number {
+function compareLogHeads(a: GraphCommitNode, b: GraphCommitNode): number {
   const byDate = new Date(b.committerDate).getTime() - new Date(a.committerDate).getTime();
   if (byDate !== 0) return byDate;
   const byRepo = a.repoId.localeCompare(b.repoId);
@@ -99,14 +99,14 @@ function compareLogHeads(a: CommitNode, b: CommitNode): number {
   return b.hash.localeCompare(a.hash);
 }
 
-function interleaveCommitLogs(logs: CommitNode[][]): CommitNode[] {
+function interleaveCommitLogs<T extends GraphCommitNode>(logs: T[][]): T[] {
   const positions = logs.map(() => 0);
-  const commits: CommitNode[] = [];
+  const commits: T[] = [];
   const totalCommits = logs.reduce((total, log) => total + log.length, 0);
 
   while (commits.length < totalCommits) {
     let selectedLog = -1;
-    let selectedCommit: CommitNode | undefined;
+    let selectedCommit: T | undefined;
     for (let index = 0; index < logs.length; index++) {
       const candidate = logs[index][positions[index]];
       if (!candidate) continue;
@@ -1438,6 +1438,20 @@ export class WorkspaceGitManager implements vscode.Disposable {
     // several repositories are shown together.
     const allCommits = interleaveCommitLogs(commitLogs);
     return allCommits.slice(skip, skip + limit);
+  }
+
+  async getInterleavedGraphLog(repoIds: string[], limit: number): Promise<GraphCommitNode[]> {
+    if (limit <= 0) return [];
+    const targets = repoIds.length > 0
+      ? repoIds.map(id => this.repos.get(id)).filter(Boolean) as GitService[]
+      : Array.from(this.repos.values());
+    const results = await Promise.allSettled(
+      targets.map(repo => repo.getGraphLog(limit)),
+    );
+    const graphLogs = results
+      .filter((result): result is PromiseFulfilledResult<GraphCommitNode[]> => result.status === 'fulfilled')
+      .map(result => result.value);
+    return interleaveCommitLogs(graphLogs).slice(0, limit);
   }
 
   async fetchAll(): Promise<void> {

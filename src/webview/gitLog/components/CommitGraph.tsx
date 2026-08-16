@@ -1,15 +1,18 @@
 import React from 'react';
 import type { LaidOutCommit } from '../utils/graphLayout';
-import { LANE_WIDTH, ROW_HEIGHT, DOT_RADIUS } from '../utils/graphLayout';
+import { DOT_RADIUS, LANE_WIDTH, ROW_HEIGHT } from '../utils/graphLayout';
 import { anonymousLaneColor } from '../utils/refs';
 
 function laneX(lane: number): number {
   return lane * LANE_WIDTH + LANE_WIDTH / 2;
 }
 
-const STROKE = 1.5;
-const H = ROW_HEIGHT;
-const cy = H / 2;
+const STROKE_WIDTH = 1.5;
+const ARROW_STROKE_WIDTH = 2;
+const ARROW_SIZE = ROW_HEIGHT * 0.32;
+const HALF_ROW = ROW_HEIGHT / 2;
+const DOWN_ARROW_Y = ROW_HEIGHT * 0.78;
+const UP_ARROW_Y = ROW_HEIGHT * 0.22;
 
 interface RowSvgProps {
   commit: LaidOutCommit;
@@ -17,114 +20,189 @@ interface RowSvgProps {
 }
 
 export const CommitRowSvg = React.memo(function CommitRowSvg({
-  commit, isSelected,
+  commit,
+  isSelected,
 }: RowSvgProps) {
   const lines = commit.graphLines ?? [];
   const dotLane = commit.lane ?? 0;
   const dotColor = commit.dotColor ?? anonymousLaneColor(dotLane);
-
   const activeLanes = lines.reduce(
-    (m, l) => Math.max(m, l.fromLane + 1, l.toLane + 1),
-    dotLane + 1
+    (maximum, line) => Math.max(
+      maximum,
+      line.fromLane + 1,
+      line.toLane + 1,
+    ),
+    dotLane + 1,
   );
   const svgWidth = activeLanes * LANE_WIDTH + 4;
-
   const dotX = laneX(dotLane);
-
-  const segments: React.ReactNode[] = [];
-
-  for (let idx = 0; idx < lines.length; idx++) {
-    const line = lines[idx];
-    const color = line.color ?? anonymousLaneColor(line.fromLane);
-
-    if (line.type === 'pass-through') {
-      const fromX = laneX(line.fromLane);
-      const toX = laneX(line.toLane);
-      if (fromX === toX) {
-        segments.push(
-          <line key={idx} x1={fromX} y1={0} x2={toX} y2={H}
-            stroke={color} strokeWidth={STROKE} />
-        );
-      } else {
-        segments.push(
-          <path key={idx} d={bezier(fromX, 0, toX, H)}
-            stroke={color} strokeWidth={STROKE} fill="none" />
-        );
-      }
-
-    } else if (line.type === 'straight') {
-      const fromX = laneX(line.fromLane);
-      const toX = laneX(line.toLane);
-
-      if (!line.isStart) {
-        segments.push(
-          <line key={`${idx}u`} x1={fromX} y1={0} x2={fromX} y2={cy}
-            stroke={color} strokeWidth={STROKE} />
-        );
-      }
-      if (commit.parents.length > 0) {
-        if (fromX === toX) {
-          segments.push(
-            <line key={`${idx}d`} x1={fromX} y1={cy} x2={toX} y2={H}
-              stroke={color} strokeWidth={STROKE} />
-          );
-        } else {
-          segments.push(
-            <path key={`${idx}d`} d={bezier(fromX, cy, toX, H)}
-              stroke={color} strokeWidth={STROKE} fill="none" />
-          );
-        }
-      }
-
-    } else if (line.type === 'merge-in') {
-      const outerX = laneX(line.toLane);
-
-      if (dotX === outerX) {
-        segments.push(
-          <line key={`${idx}d`} x1={dotX} y1={cy} x2={outerX} y2={H}
-            stroke={color} strokeWidth={STROKE} />
-        );
-      } else {
-        segments.push(
-          <path key={`${idx}d`} d={bezier(dotX, cy, outerX, H)}
-            stroke={color} strokeWidth={STROKE} fill="none" />
-        );
-      }
-    }
-  }
-
-  const r = isSelected ? DOT_RADIUS + 1 : DOT_RADIUS;
-  const isMerge = commit.parents.length > 1;
-  // Merge commits get an outer ring; the halo must be wide enough to clear it.
-  const haloR = isMerge ? r + 4.5 : r + 2.5;
+  const radius = isSelected ? DOT_RADIUS + 1 : DOT_RADIUS;
+  const haloRadius = radius + 1.5;
 
   return (
-    <svg width={svgWidth} height={H}
-      style={{ display: 'block', flexShrink: 0, overflow: 'visible' }}>
-      {segments}
-      {/* Halo — clears lines behind the dot and ring */}
-      <circle cx={dotX} cy={cy} r={haloR}
-        fill="var(--vscode-editor-background)" />
-      {/* Outer ring for merge commits */}
-      {isMerge && (
-        <circle cx={dotX} cy={cy} r={r + 3}
-          fill="none"
-          stroke={isSelected ? '#ffffff' : dotColor}
-          strokeWidth={1.5}
-          strokeOpacity={0.6}
+    <svg
+      width={svgWidth}
+      height={ROW_HEIGHT}
+      style={{ display: 'block', flexShrink: 0, overflow: 'visible' }}
+    >
+      {lines.map((line, index) => {
+        const color = line.color ?? anonymousLaneColor(line.fromLane);
+        const fromX = laneX(line.fromLane);
+        const toX = laneX(line.toLane);
+        const common = {
+          stroke: color,
+          strokeWidth: STROKE_WIDTH,
+          strokeLinecap: 'round' as const,
+          strokeLinejoin: 'round' as const,
+        };
+
+        if (line.type === 'join-in') {
+          return (
+            <line
+              key={index}
+              x1={fromX}
+              y1={0}
+              x2={toX}
+              y2={HALF_ROW}
+              {...common}
+            />
+          );
+        }
+
+        if (line.type === 'fork-out') {
+          return (
+            <line
+              key={index}
+              x1={fromX}
+              y1={HALF_ROW}
+              x2={toX}
+              y2={ROW_HEIGHT}
+              {...common}
+            />
+          );
+        }
+
+        if (line.type === 'pass-through') {
+          return (
+            <line
+              key={index}
+              x1={fromX}
+              y1={0}
+              x2={toX}
+              y2={ROW_HEIGHT}
+              {...common}
+            />
+          );
+        }
+
+        if (line.type === 'collapsed-out') {
+          return (
+            <React.Fragment key={index}>
+              <line
+                x1={fromX}
+                y1={HALF_ROW}
+                x2={toX}
+                y2={DOWN_ARROW_Y}
+                {...common}
+              />
+              <ArrowHead
+                startX={fromX}
+                startY={HALF_ROW}
+                tipX={toX}
+                tipY={DOWN_ARROW_Y}
+                color={color}
+              />
+            </React.Fragment>
+          );
+        }
+
+        return (
+          <React.Fragment key={index}>
+            <line
+              x1={fromX}
+              y1={UP_ARROW_Y}
+              x2={toX}
+              y2={HALF_ROW}
+              {...common}
+            />
+            <ArrowHead
+              startX={toX}
+              startY={HALF_ROW}
+              tipX={fromX}
+              tipY={UP_ARROW_Y}
+              color={color}
+            />
+          </React.Fragment>
+        );
+      })}
+
+      <circle
+        cx={dotX}
+        cy={HALF_ROW}
+        r={haloRadius}
+        fill="var(--vscode-editor-background)"
+      />
+      {isSelected ? (
+        <>
+          <circle
+            cx={dotX}
+            cy={HALF_ROW}
+            r={radius}
+            fill="var(--vscode-editor-background)"
+            stroke={dotColor}
+            strokeWidth={2}
+          />
+          <circle cx={dotX} cy={HALF_ROW} r={2} fill={dotColor} />
+        </>
+      ) : (
+        <circle
+          cx={dotX}
+          cy={HALF_ROW}
+          r={radius}
+          fill={dotColor}
+          stroke="var(--vscode-editor-background)"
+          strokeWidth={1}
         />
       )}
-      {/* Commit dot */}
-      <circle cx={dotX} cy={cy} r={r}
-        fill={isSelected ? '#ffffff' : dotColor}
-        stroke={isSelected ? dotColor : 'var(--vscode-editor-background)'}
-        strokeWidth={isSelected ? 2 : 1}
-      />
     </svg>
   );
 });
 
-function bezier(x1: number, y1: number, x2: number, y2: number): string {
-  const midY = (y1 + y2) / 2;
-  return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+function ArrowHead({
+  startX,
+  startY,
+  tipX,
+  tipY,
+  color,
+}: {
+  startX: number;
+  startY: number;
+  tipX: number;
+  tipY: number;
+  color: string;
+}) {
+  const deltaX = tipX - startX;
+  const deltaY = tipY - startY;
+  const length = Math.hypot(deltaX, deltaY) || 1;
+  const directionX = deltaX / length;
+  const directionY = deltaY / length;
+  const perpendicularX = -directionY;
+  const perpendicularY = directionX;
+  const back = ARROW_SIZE * 0.84;
+  const side = ARROW_SIZE * 0.55;
+  const leftX = tipX - directionX * back + perpendicularX * side;
+  const leftY = tipY - directionY * back + perpendicularY * side;
+  const rightX = tipX - directionX * back - perpendicularX * side;
+  const rightY = tipY - directionY * back - perpendicularY * side;
+
+  return (
+    <path
+      d={`M ${leftX} ${leftY} L ${tipX} ${tipY} L ${rightX} ${rightY}`}
+      fill="none"
+      stroke={color}
+      strokeWidth={ARROW_STROKE_WIDTH}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  );
 }

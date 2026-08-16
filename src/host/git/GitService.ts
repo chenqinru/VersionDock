@@ -5,6 +5,7 @@ import * as path from 'path';
 import type {
   BranchInfo,
   CommitNode,
+  GraphCommitNode,
   FileStatus,
   FileDiff,
   GitFileStatus,
@@ -31,6 +32,7 @@ const STATUS_MAP: Record<string, GitFileStatus> = {
 const SUBTREE_CANDIDATE_SKIP_DIRS = new Set(['.git', '.hg', '.svn', 'node_modules', 'vendor', 'dist', 'build', 'out']);
 const MAX_INLINE_DIFF_FILE_BYTES = 8 * 1024 * 1024;
 const LOG_RECORD_FORMAT = '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%ai%x00%ci%x00%x00%s';
+const GRAPH_LOG_RECORD_FORMAT = '--format=%H%x00%P%x00%ci';
 
 export interface CommitMessageHistoryEntry {
   message: string;
@@ -83,6 +85,27 @@ function parseLogOutput(raw: string, repoId: string, refsByHash: ReadonlyMap<str
       committerDate,
       parents: parentsRaw ? parentsRaw.split(' ').filter(Boolean) : [],
       refs: refsByHash.get(hash) ?? (refsRaw ? refsRaw.split('\x1f').map(r => r.trim()).filter(Boolean) : []),
+    });
+  }
+  return commits;
+}
+
+function parseGraphLogOutput(
+  raw: string,
+  repoId: string,
+  refsByHash: ReadonlyMap<string, string[]>,
+): GraphCommitNode[] {
+  const commits: GraphCommitNode[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const [hash, parentsRaw, committerDateRaw] = line.split('\x00');
+    if (!hash || committerDateRaw === undefined) continue;
+    commits.push({
+      hash,
+      repoId,
+      committerDate: committerDateRaw.trim(),
+      parents: parentsRaw ? parentsRaw.split(' ').filter(Boolean) : [],
+      refs: refsByHash.get(hash) ?? [],
     });
   }
   return commits;
@@ -935,6 +958,27 @@ export class GitService {
   }
 
   // Log uses raw git format for graph rendering — VS Code API's log() lacks graph parents/refs.
+  async getGraphLog(limit: number): Promise<GraphCommitNode[]> {
+    if (limit <= 0) return [];
+    const args = [
+      'log',
+      '--date-order',
+      `--max-count=${limit}`,
+      GRAPH_LOG_RECORD_FORMAT,
+      '--date=iso-strict',
+      '--exclude=refs/stash',
+      '--exclude=refs/versiondock/ai-composer/*',
+      '--all',
+    ];
+    const [raw, refsByHash] = await Promise.all([
+      this.git.raw(args),
+      this.getDecoratedRefsByCommit(),
+    ]);
+    return parseGraphLogOutput(raw, this.repoId, refsByHash);
+  }
+
+  // Full log data stays paginated because it also resolves author/message and
+  // local/remote state. The lightweight graph log above is safe to prefetch.
   async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange; worktreeServices?: GitService[] }): Promise<CommitNode[]> {
     const revisionSearch = await this.resolveRevisionSearch(opts?.filterText);
     if (revisionSearch !== undefined && (skip > 0 || !revisionSearch)) return [];

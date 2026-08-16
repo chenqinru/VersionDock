@@ -1,517 +1,540 @@
-import type { CommitNode, GraphLine } from '../../shared/types';
+import type { CommitNode, GraphCommitNode, GraphLine } from '../../shared/types';
 import { anonymousLaneColor, groupRefs, type RefGroup } from './refs';
-import { headColor, primaryBranchColor, tagColor, currentPalette, branchPaletteIndex } from '../../shared/branchColors';
+import {
+  branchPaletteIndex,
+  currentPalette,
+  headColor,
+  primaryBranchColor,
+  tagColor,
+} from '../../shared/branchColors';
 import { isPrimaryBranch } from '../../shared/branchUtils';
 import { scopedKey } from '../../shared/scopedKey';
 
 export const LANE_WIDTH = 20;
 export const ROW_HEIGHT = 28;
-export const DOT_RADIUS = 4;
+export const DOT_RADIUS = 5;
 
-export interface LaidOutCommit extends CommitNode {
+// JetBrains hides the middle of edges whose endpoints are at least 30 rows
+// apart. The row next to each endpoint remains visible and carries an arrow.
+export const LONG_EDGE_MIN_ROWS = 30;
+
+export interface GraphLayoutData {
   lane: number;
   totalLanes: number;
   graphLines: GraphLine[];
   dotColor: string;
 }
 
-// Extract the ref that "owns" a commit from its refs array.
-// Priority: HEAD → local branch → remote branch → tag.
-// Returns null for commits with no refs (middle-of-branch commits).
-function primaryRef(refs: string[], vcsKind: 'git' | 'svn', remoteNames: readonly string[]): RefGroup | null {
+export type LaidOutCommit = CommitNode & GraphLayoutData;
+export type LaidOutGraphCommit = GraphCommitNode & GraphLayoutData;
+
+interface LaneColor {
+  color: string;
+  paletteIndex: number;
+}
+
+interface LayoutRef {
+  group: RefGroup;
+  priority: number;
+  name: string;
+}
+
+interface LayoutEdge {
+  id: number;
+  repoId: string;
+  up: number;
+  down: number | null;
+  collapsed: boolean;
+  color?: string;
+}
+
+type LayoutElement =
+  | { kind: 'node'; row: number }
+  | { kind: 'edge'; edge: LayoutEdge };
+
+function primaryRef(
+  refs: string[],
+  vcsKind: 'git' | 'svn',
+  remoteNames: readonly string[],
+): RefGroup | null {
   const groups = groupRefs(refs, vcsKind, remoteNames);
-  const primary = groups.find(group => group.isHead && group.isLocal)
+  return groups.find(group => group.isHead && group.isLocal)
     ?? groups.find(group => group.isLocal && !group.isTag)
     ?? groups.find(group => group.isRemote && !group.isRemoteHead)
     ?? groups.find(group => group.isTag)
-    ?? groups.find(group => group.isHead);
-  return primary ?? null;
+    ?? groups.find(group => group.isHead)
+    ?? null;
 }
 
-// Returns true if this commit has a ref that is a primary branch (main/master/…).
-function hasPrimaryBranchRef(refs: string[], vcsKind: 'git' | 'svn', remoteNames: readonly string[]): boolean {
-  return groupRefs(refs, vcsKind, remoteNames).some(group =>
-    !group.isTag
-    && !group.isRemoteHead
-    && (group.isLocal || group.isRemote)
-    && isPrimaryBranch(group.label));
-}
-
-function commitKey(commit: Pick<CommitNode, 'repoId' | 'hash'>): string {
+function commitKey(commit: Pick<GraphCommitNode, 'repoId' | 'hash'>): string {
   return scopedKey(commit.repoId, commit.hash);
 }
 
-function parentKey(commit: Pick<CommitNode, 'repoId'>, parentHash: string): string {
+function parentKey(commit: Pick<GraphCommitNode, 'repoId'>, parentHash: string): string {
   return scopedKey(commit.repoId, parentHash);
 }
 
-// Walk the first-parent chain from a starting commit, returning scoped keys.
-function firstParentChain(startIdx: number, commits: CommitNode[], hashIndex: Map<string, number>): Set<string> {
-  const chain = new Set<string>();
-  let idx = startIdx;
-  while (idx >= 0 && idx < commits.length) {
-    const commit = commits[idx];
-    const key = commitKey(commit);
-    if (chain.has(key)) break; // cycle guard
-    chain.add(key);
-    const p0 = commit.parents[0];
-    if (!p0) break;
-    idx = hashIndex.get(parentKey(commit, p0)) ?? -1;
-  }
-  return chain;
+function paletteDistance(left: number, right: number, size: number): number {
+  const distance = Math.abs(left - right);
+  return Math.min(distance, size - distance);
 }
 
-interface FirstParentIndex {
-  rootOf: Map<string, string>;
-  tin: Map<string, number>;
-  tout: Map<string, number>;
+function pickPaletteIndex(preferred: number, usedIndices: Set<number>): number {
+  const paletteSize = currentPalette().length;
+  if (usedIndices.size === 0) return preferred;
+
+  let bestIndex = preferred;
+  let bestMinimumDistance = -1;
+  for (let index = 0; index < paletteSize; index++) {
+    let minimumDistance = paletteSize;
+    for (const usedIndex of usedIndices) {
+      minimumDistance = Math.min(
+        minimumDistance,
+        paletteDistance(index, usedIndex, paletteSize),
+      );
+    }
+
+    if (
+      minimumDistance > bestMinimumDistance
+      || (
+        minimumDistance === bestMinimumDistance
+        && paletteDistance(index, preferred, paletteSize)
+          < paletteDistance(bestIndex, preferred, paletteSize)
+      )
+    ) {
+      bestMinimumDistance = minimumDistance;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
 }
 
-function buildFirstParentIndex(commits: CommitNode[]): FirstParentIndex {
-  const visibleHashes = new Set(commits.map(commitKey));
-  const childrenByParent = new Map<string, string[]>();
-  const hasVisibleFirstParent = new Set<string>();
+function layoutRefPriority(group: RefGroup): number {
+  if (
+    group.isRemote
+    && !group.isRemoteHead
+    && group.remoteName === 'origin'
+    && isPrimaryBranch(group.label)
+  ) {
+    return 0;
+  }
+  if (group.isRemote && !group.isRemoteHead) return 1;
+  if (group.isLocal && isPrimaryBranch(group.label)) return 2;
+  if (group.isLocal && !group.isTag) return 3;
+  if (group.isTag) return 4;
+  if (group.isHead) return 6;
+  return 7;
+}
 
-  for (const commit of commits) {
-    const firstParent = commit.parents[0];
-    const childKey = commitKey(commit);
-    const firstParentKey = firstParent ? parentKey(commit, firstParent) : '';
-    if (!firstParent || !visibleHashes.has(firstParentKey)) continue;
-    const children = childrenByParent.get(firstParentKey) ?? [];
-    children.push(childKey);
-    childrenByParent.set(firstParentKey, children);
-    hasVisibleFirstParent.add(childKey);
+function bestLayoutRef(
+  commit: GraphCommitNode,
+  repoKindById: Readonly<Record<string, 'git' | 'svn'>>,
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>>,
+): LayoutRef | null {
+  const vcsKind = repoKindById[commit.repoId] ?? 'git';
+  const groups = groupRefs(
+    commit.refs,
+    vcsKind,
+    remoteNamesByRepo[commit.repoId] ?? [],
+  );
+  let best: LayoutRef | null = null;
+  for (const group of groups) {
+    const candidate = {
+      group,
+      priority: layoutRefPriority(group),
+      name: group.isRemote && group.remoteName
+        ? `${group.remoteName}/${group.label}`
+        : group.label,
+    };
+    if (
+      best === null
+      || candidate.priority < best.priority
+      || (
+        candidate.priority === best.priority
+        && candidate.name.localeCompare(best.name, undefined, { numeric: true }) < 0
+      )
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function compareEdgeToNode(
+  edge: LayoutEdge,
+  nodeRow: number,
+  layoutIndex: readonly number[],
+): number {
+  if (edge.down === null) {
+    return layoutIndex[edge.up] - layoutIndex[nodeRow];
+  }
+  const edgeLayoutIndex = Math.max(
+    layoutIndex[edge.up],
+    layoutIndex[edge.down],
+  );
+  const nodeLayoutIndex = layoutIndex[nodeRow];
+  return edgeLayoutIndex !== nodeLayoutIndex
+    ? edgeLayoutIndex - nodeLayoutIndex
+    : edge.up - nodeRow;
+}
+
+// Row-local ordering adapts JetBrains' Apache-2.0 GraphLayoutBuilder and
+// GraphElementComparatorByLayoutIndex model to the Webview's SVG segments.
+function compareEdges(
+  left: LayoutEdge,
+  right: LayoutEdge,
+  layoutIndex: readonly number[],
+): number {
+  if (left.down === null) {
+    return -compareEdgeToNode(right, left.up, layoutIndex);
+  }
+  if (right.down === null) {
+    return compareEdgeToNode(left, right.up, layoutIndex);
   }
 
-  const rootOf = new Map<string, string>();
-  const tin = new Map<string, number>();
-  const tout = new Map<string, number>();
-  const state = new Map<string, 0 | 1 | 2>();
-  let time = 0;
+  if (left.up === right.up) {
+    return left.down < right.down
+      ? -compareEdgeToNode(right, left.down, layoutIndex)
+      : compareEdgeToNode(left, right.down, layoutIndex);
+  }
+  return left.up < right.up
+    ? compareEdgeToNode(left, right.up, layoutIndex)
+    : -compareEdgeToNode(right, left.up, layoutIndex);
+}
 
-  function visit(rootHash: string): void {
-    const stack: Array<{ hash: string; childIndex: number; entered: boolean }> = [
-      { hash: rootHash, childIndex: 0, entered: false },
-    ];
+function compareElements(
+  left: LayoutElement,
+  right: LayoutElement,
+  layoutIndex: readonly number[],
+): number {
+  if (left.kind === 'edge' && right.kind === 'edge') {
+    return compareEdges(left.edge, right.edge, layoutIndex);
+  }
+  if (left.kind === 'edge' && right.kind === 'node') {
+    return compareEdgeToNode(left.edge, right.row, layoutIndex);
+  }
+  if (left.kind === 'node' && right.kind === 'edge') {
+    return -compareEdgeToNode(right.edge, left.row, layoutIndex);
+  }
+  return left.kind === 'node' && right.kind === 'node'
+    ? left.row - right.row
+    : 0;
+}
+
+export function assignLanes<T extends GraphCommitNode>(
+  commits: readonly T[],
+  isFiltered = false,
+  repoKindById: Readonly<Record<string, 'git' | 'svn'>> = {},
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>> = {},
+): Array<T & GraphLayoutData> {
+  if (commits.length === 0) return [];
+
+  const rowByKey = new Map<string, number>();
+  commits.forEach((commit, row) => rowByKey.set(commitKey(commit), row));
+
+  const parentsByRow = Array.from(
+    { length: commits.length },
+    (): number[] => [],
+  );
+  const childCountByRow = Array.from({ length: commits.length }, () => 0);
+  const edges: LayoutEdge[] = [];
+  let nextEdgeId = 1;
+
+  for (let row = 0; row < commits.length; row++) {
+    const commit = commits[row];
+    for (const parentHash of commit.parents) {
+      const targetRow = rowByKey.get(parentKey(commit, parentHash)) ?? null;
+      if (targetRow === null && isFiltered) continue;
+      if (targetRow !== null && targetRow <= row) continue;
+
+      if (targetRow !== null) {
+        parentsByRow[row].push(targetRow);
+        childCountByRow[targetRow]++;
+      }
+      edges.push({
+        id: nextEdgeId++,
+        repoId: commit.repoId,
+        up: row,
+        down: targetRow,
+        collapsed: targetRow === null
+          || targetRow - row >= LONG_EDGE_MIN_ROWS,
+      });
+    }
+  }
+
+  const layoutRefs = commits.map(commit => bestLayoutRef(
+    commit,
+    repoKindById,
+    remoteNamesByRepo,
+  ));
+  const branchHeadRows = new Set<number>();
+  for (let row = 0; row < commits.length; row++) {
+    const ref = layoutRefs[row]?.group;
+    if (
+      ref
+      && !ref.isTag
+      && !ref.isRemoteHead
+      && (ref.isLocal || ref.isRemote)
+    ) {
+      branchHeadRows.add(row);
+    }
+    if (childCountByRow[row] === 0) branchHeadRows.add(row);
+  }
+
+  const sortedHeads = Array.from(branchHeadRows).sort((leftRow, rightRow) => {
+    const leftRef = layoutRefs[leftRow];
+    const rightRef = layoutRefs[rightRow];
+    if (leftRef === null && rightRef === null) return leftRow - rightRow;
+    if (leftRef === null) return 1;
+    if (rightRef === null) return -1;
+    if (leftRef.priority !== rightRef.priority) {
+      return leftRef.priority - rightRef.priority;
+    }
+    const nameOrder = leftRef.name.localeCompare(
+      rightRef.name,
+      undefined,
+      { numeric: true },
+    );
+    if (nameOrder !== 0) return nameOrder;
+    const rootOrder = commits[leftRow].repoId.localeCompare(commits[rightRow].repoId);
+    return rootOrder !== 0 ? rootOrder : leftRow - rightRow;
+  });
+
+  const layoutIndex = Array.from({ length: commits.length }, () => 0);
+  const owningHead = Array.from({ length: commits.length }, () => -1);
+  const importantHeads: number[] = [];
+  let currentLayoutIndex = 1;
+
+  for (const headRow of sortedHeads) {
+    if (layoutIndex[headRow] !== 0) continue;
+    importantHeads.push(headRow);
+    const stack = [headRow];
 
     while (stack.length > 0) {
-      const frame = stack[stack.length - 1];
-      const currentState = state.get(frame.hash) ?? 0;
-
-      if (!frame.entered) {
-        if (currentState === 2) {
-          stack.pop();
-          continue;
-        }
-        if (currentState === 1) {
-          tout.set(frame.hash, time);
-          state.set(frame.hash, 2);
-          stack.pop();
-          continue;
-        }
-        state.set(frame.hash, 1);
-        rootOf.set(frame.hash, rootHash);
-        tin.set(frame.hash, time++);
-        frame.entered = true;
+      const currentRow = stack[stack.length - 1];
+      const firstVisit = layoutIndex[currentRow] === 0;
+      if (firstVisit) {
+        layoutIndex[currentRow] = currentLayoutIndex;
+        owningHead[currentRow] = headRow;
       }
 
-      const children = childrenByParent.get(frame.hash) ?? [];
-      let pushed = false;
-      while (frame.childIndex < children.length) {
-        const child = children[frame.childIndex++];
-        if ((state.get(child) ?? 0) !== 0) continue;
-        stack.push({ hash: child, childIndex: 0, entered: false });
-        pushed = true;
-        break;
-      }
-
-      if (!pushed) {
-        tout.set(frame.hash, time);
-        state.set(frame.hash, 2);
+      const nextParent = parentsByRow[currentRow].find(
+        parentRow => layoutIndex[parentRow] === 0,
+      );
+      if (nextParent !== undefined) {
+        stack.push(nextParent);
+      } else {
+        if (firstVisit) currentLayoutIndex++;
         stack.pop();
       }
     }
   }
 
-  for (const commit of commits) {
-    const key = commitKey(commit);
-    if (!hasVisibleFirstParent.has(key)) visit(key);
-  }
-  for (const commit of commits) {
-    const key = commitKey(commit);
-    if ((state.get(key) ?? 0) === 0) visit(key);
-  }
-
-  return { rootOf, tin, tout };
-}
-
-function firstParentReaches(index: FirstParentIndex, startHash: string, targetHash: string): boolean {
-  const startRoot = index.rootOf.get(startHash);
-  if (!startRoot || startRoot !== index.rootOf.get(targetHash)) return false;
-
-  const startTin = index.tin.get(startHash);
-  const startTout = index.tout.get(startHash);
-  const targetTin = index.tin.get(targetHash);
-  const targetTout = index.tout.get(targetHash);
-  if (startTin === undefined || startTout === undefined || targetTin === undefined || targetTout === undefined) {
-    return false;
+  // Natural heads cover every disconnected component, but retain a defensive
+  // fallback for malformed or partially filtered input.
+  for (let row = 0; row < commits.length; row++) {
+    if (layoutIndex[row] !== 0) continue;
+    layoutIndex[row] = currentLayoutIndex++;
+    owningHead[row] = row;
+    importantHeads.push(row);
   }
 
-  return targetTin <= startTin && startTout <= targetTout;
-}
-
-// Circular distance between two palette indices.
-function paletteDist(a: number, b: number, n: number): number {
-  const d = Math.abs(a - b);
-  return Math.min(d, n - d);
-}
-
-// Given a preferred starting index and the set of palette indices already used
-// by active lanes, return the index that:
-//   1. Maximises the minimum circular distance from all used indices.
-//   2. Breaks ties by preferring the index closest to `preferred` (stable naming).
-function pickPaletteIndex(preferred: number, usedIndices: Set<number>): number {
   const palette = currentPalette();
-  const n = palette.length;
-
-  if (usedIndices.size === 0) return preferred;
-
-  let bestIdx = preferred;
-  let bestMinDist = -1;
-
-  for (let i = 0; i < n; i++) {
-    // Min distance from this candidate to any used index.
-    let minDist = n;
-    for (const u of usedIndices) {
-      const d = paletteDist(i, u, n);
-      if (d < minDist) minDist = d;
-    }
-    // Prefer: larger minDist first; same minDist → closer to preferred.
-    if (
-      minDist > bestMinDist ||
-      (minDist === bestMinDist && paletteDist(i, preferred, n) < paletteDist(bestIdx, preferred, n))
-    ) {
-      bestMinDist = minDist;
-      bestIdx = i;
-    }
-  }
-
-  return bestIdx;
-}
-
-export function assignLanes(
-  commits: CommitNode[],
-  _isFiltered = false,
-  repoKindById: Readonly<Record<string, 'git' | 'svn'>> = {},
-  remoteNamesByRepo: Readonly<Record<string, readonly string[]>> = {},
-): LaidOutCommit[] {
-  // The log is rendered from a finite window: pagination, graphMaxCommits, or
-  // filters can leave parent commits outside the current list. Keeping those
-  // invisible parents reserved in laneOf makes occupied lanes impossible to
-  // close, so the graph keeps allocating lanes to the right.
-  const visibleHashes = new Set(commits.map(commitKey));
-  commits = commits.map(c => ({
-    ...c,
-    parents: c.parents.filter(parent => visibleHashes.has(parentKey(c, parent))),
-  }));
-
-  // Build a repository-scoped hash→index lookup for chain walking.
-  const hashIndex = new Map<string, number>();
-  for (let i = 0; i < commits.length; i++) hashIndex.set(commitKey(commits[i]), i);
-  const firstParentIndex = buildFirstParentIndex(commits);
-
-  // Identify the set of hashes that belong to the primary branch's first-parent
-  // chain. These commits will be forced onto lane 0 when they are first seen,
-  // overriding nextFreeLane() which would otherwise give lane 0 to whoever
-  // happens to appear first in the list (e.g. a feature branch at HEAD).
-  const primaryStartIdx = commits.findIndex(c => hasPrimaryBranchRef(
-    c.refs,
-    repoKindById[c.repoId] ?? 'git',
-    remoteNamesByRepo[c.repoId] ?? [],
-  ));
-  const primaryChain: Set<string> = primaryStartIdx >= 0
-    ? firstParentChain(primaryStartIdx, commits, hashIndex)
-    : new Set();
-
-  // laneOf: parent-hash → lane index reserved by one of its children.
-  const laneOf = new Map<string, number>();
-  // laneColorOf: lane → resolved color string.
-  const laneColorOf = new Map<number, string>();
-  // lanePaletteIdx: lane → palette index currently assigned to that lane.
-  const lanePaletteIdx = new Map<number, number>();
-  // laneTargetHash: lane → next visible commit hash this lane is waiting to reach.
-  const laneTargetHash = new Map<number, string>();
-  // occupied: lane indices that have an active "thread" going downward.
-  const occupied = new Set<number>();
-  const laidOut: LaidOutCommit[] = [];
-
-  // Returns the set of palette indices currently in use by occupied lanes.
-  function usedPaletteIndices(): Set<number> {
-    const s = new Set<number>();
-    for (const l of occupied) {
-      const idx = lanePaletteIdx.get(l);
-      if (idx !== undefined) s.add(idx);
-    }
-    return s;
-  }
-
-  // Assign a color to a lane, choosing the palette index that is maximally
-  // distant from all currently occupied lanes' indices.
-  // For named branches: preferred index comes from the branch name hash.
-  // For anonymous lanes: preferred index is based on lane number.
-  function assignLaneColor(lane: number, ref: RefGroup | null, isHeadCommit: boolean): void {
-    const palette = currentPalette();
-
-    // Fixed colors for primary and HEAD — not from palette.
-    if (ref !== null) {
-      const isBranch = (ref.isLocal || ref.isRemote) && !ref.isTag && !ref.isRemoteHead;
-      if (isBranch && isPrimaryBranch(ref.label)) {
-        laneColorOf.set(lane, primaryBranchColor());
-        // Use a virtual index outside palette range so it doesn't affect spacing.
-        lanePaletteIdx.set(lane, -1);
-        return;
-      }
-      if (isHeadCommit) {
-        laneColorOf.set(lane, headColor());
-        lanePaletteIdx.set(lane, -2);
-        return;
-      }
-      if (ref.isTag) {
-        laneColorOf.set(lane, tagColor());
-        lanePaletteIdx.set(lane, -3);
-        return;
-      }
-    }
-
-    const preferred = ref !== null
-      ? branchPaletteIndex(ref.label)
-      : lane % palette.length;
-
-    // Exclude this lane's own current index so it can shift if needed.
-    const used = usedPaletteIndices();
-    used.delete(lanePaletteIdx.get(lane) ?? -99);
-
-    const chosen = pickPaletteIndex(preferred, used);
-    lanePaletteIdx.set(lane, chosen);
-    laneColorOf.set(lane, palette[chosen]);
-  }
-
-  function nextFreeLane(preferZero = false): number {
-    if (preferZero && !occupied.has(0)) return 0;
-    let i = 0;
-    while (occupied.has(i)) i++;
-    return i;
-  }
-
-  function reserveLane(lane: number, targetHash: string): void {
-    const previousTarget = laneTargetHash.get(lane);
-    if (previousTarget !== undefined) laneOf.delete(previousTarget);
-    laneOf.set(targetHash, lane);
-    laneTargetHash.set(lane, targetHash);
-  }
-
-  function clearLane(lane: number): void {
-    const targetHash = laneTargetHash.get(lane);
-    if (targetHash !== undefined) laneOf.delete(targetHash);
-    laneTargetHash.delete(lane);
-    occupied.delete(lane);
-    laneColorOf.delete(lane);
-    lanePaletteIdx.delete(lane);
-  }
-
-  function consumeLaneTarget(lane: number, targetHash: string): void {
-    laneOf.delete(targetHash);
-    if (laneTargetHash.get(lane) === targetHash) laneTargetHash.delete(lane);
-  }
-
-  function findReachableLane(targetHash: string): number | null {
-    let best: number | null = null;
-    for (const [lane, currentTarget] of laneTargetHash) {
-      if (!occupied.has(lane)) continue;
-      if (!firstParentReaches(firstParentIndex, currentTarget, targetHash)) continue;
-      if (best === null || lane < best) best = lane;
-    }
-    return best;
-  }
-
-  function compactLanes(): Map<number, number> {
-    const lanes = Array.from(occupied).sort((a, b) => a - b);
-    const laneMap = new Map<number, number>();
-    let changed = false;
-
-    for (let i = 0; i < lanes.length; i++) {
-      const oldLane = lanes[i];
-      laneMap.set(oldLane, i);
-      if (oldLane !== i) changed = true;
-    }
-
-    if (!changed) return laneMap;
-
-    const nextOccupied = new Set<number>();
-    const nextLaneTargetHash = new Map<number, string>();
-    const nextLaneColorOf = new Map<number, string>();
-    const nextLanePaletteIdx = new Map<number, number>();
-
-    for (const oldLane of lanes) {
-      const newLane = laneMap.get(oldLane)!;
-      nextOccupied.add(newLane);
-
-      const targetHash = laneTargetHash.get(oldLane);
-      if (targetHash !== undefined) nextLaneTargetHash.set(newLane, targetHash);
-
-      const color = laneColorOf.get(oldLane);
-      if (color !== undefined) nextLaneColorOf.set(newLane, color);
-
-      const paletteIdx = lanePaletteIdx.get(oldLane);
-      if (paletteIdx !== undefined) nextLanePaletteIdx.set(newLane, paletteIdx);
-    }
-
-    occupied.clear();
-    for (const lane of nextOccupied) occupied.add(lane);
-
-    laneTargetHash.clear();
-    for (const [lane, targetHash] of nextLaneTargetHash) laneTargetHash.set(lane, targetHash);
-
-    laneColorOf.clear();
-    for (const [lane, color] of nextLaneColorOf) laneColorOf.set(lane, color);
-
-    lanePaletteIdx.clear();
-    for (const [lane, paletteIdx] of nextLanePaletteIdx) lanePaletteIdx.set(lane, paletteIdx);
-
-    laneOf.clear();
-    for (const [lane, targetHash] of laneTargetHash) laneOf.set(targetHash, lane);
-
-    return laneMap;
-  }
-
-  for (const commit of commits) {
-    // ── Step 1: find this commit's lane ──────────────────────────────────────
-    let lane: number;
-    let isStart: boolean;
-
-    const currentCommitKey = commitKey(commit);
-    if (laneOf.has(currentCommitKey)) {
-      // This commit was already claimed by one of its children.
-      lane = laneOf.get(currentCommitKey)!;
-      isStart = false;
-      consumeLaneTarget(lane, currentCommitKey);
-    } else {
-      // New thread: pick lane 0 if this commit is on the primary chain and
-      // lane 0 is free, otherwise pick the next available lane.
-      const wantPrimary = primaryChain.has(currentCommitKey);
-      lane = nextFreeLane(wantPrimary);
-      isStart = true;
-      occupied.add(lane);
-    }
-
-    // ── Assign / update branch name and color for this lane ──────────────────
+  const usedPaletteIndices = new Set<number>();
+  const colorByHead = new Map<number, LaneColor>();
+  for (const headRow of importantHeads) {
+    const commit = commits[headRow];
     const vcsKind = repoKindById[commit.repoId] ?? 'git';
-    const ref = primaryRef(commit.refs, vcsKind, remoteNamesByRepo[commit.repoId] ?? []);
-    const isHeadCommit = commit.refs.some(r => r.startsWith('HEAD -> ') || r === 'HEAD');
-    if (isStart || ref !== null) {
-      assignLaneColor(lane, ref, isHeadCommit);
+    const ref = primaryRef(
+      commit.refs,
+      vcsKind,
+      remoteNamesByRepo[commit.repoId] ?? [],
+    );
+    const isHeadCommit = commit.refs.some(rawRef => (
+      rawRef.startsWith('HEAD -> ') || rawRef === 'HEAD'
+    ));
+    const isBranch = ref !== null
+      && (ref.isLocal || ref.isRemote)
+      && !ref.isTag
+      && !ref.isRemoteHead;
+
+    let laneColor: LaneColor;
+    if (isBranch && isPrimaryBranch(ref.label)) {
+      laneColor = { color: primaryBranchColor(), paletteIndex: -1 };
+    } else if (isHeadCommit) {
+      laneColor = { color: headColor(), paletteIndex: -2 };
+    } else if (ref?.isTag) {
+      laneColor = { color: tagColor(), paletteIndex: -3 };
+    } else {
+      const preferred = ref === null
+        ? (layoutIndex[headRow] - 1) % palette.length
+        : branchPaletteIndex(ref.label);
+      const paletteIndex = pickPaletteIndex(preferred, usedPaletteIndices);
+      usedPaletteIndices.add(paletteIndex);
+      laneColor = { color: palette[paletteIndex], paletteIndex };
     }
-    const currentLaneColor = laneColorOf.get(lane) ?? anonymousLaneColor(lane);
+    colorByHead.set(headRow, laneColor);
+  }
 
-    // ── Step 2: snapshot lanes active *entering* this row ────────────────────
-    const enteringLanes = new Set(occupied);
+  const nodeColor = (row: number): string => {
+    const headRow = owningHead[row] >= 0 ? owningHead[row] : row;
+    if (layoutIndex[row] === layoutIndex[headRow]) {
+      return colorByHead.get(headRow)?.color ?? anonymousLaneColor(layoutIndex[row]);
+    }
+    return palette[(layoutIndex[row] - 1) % palette.length];
+  };
+  for (const edge of edges) {
+    const colorRow = edge.down !== null
+      && layoutIndex[edge.down] > layoutIndex[edge.up]
+      ? edge.down
+      : edge.up;
+    edge.color = nodeColor(colorRow);
+  }
 
-    // ── Step 3: assign lanes to parents ──────────────────────────────────────
-    const parentLanes: number[] = [];
+  const crossingEdgesByRow = Array.from(
+    { length: commits.length },
+    (): LayoutEdge[] => [],
+  );
+  for (const edge of edges) {
+    if (edge.down === null) {
+      if (edge.up + 1 < commits.length) {
+        crossingEdgesByRow[edge.up + 1].push(edge);
+      }
+      continue;
+    }
 
-    for (let i = 0; i < commit.parents.length; i++) {
-      const parentHash = commit.parents[i];
-      const targetParentKey = parentKey(commit, parentHash);
-
-      if (i === 0) {
-        if (laneOf.has(targetParentKey)) {
-          // Parent already claimed by another child (diamond merge).
-          // Our lane thread ends here.
-          parentLanes.push(laneOf.get(targetParentKey)!);
-          clearLane(lane);
-        } else {
-          reserveLane(lane, targetParentKey);
-          parentLanes.push(lane);
-        }
-      } else {
-        // Secondary (merge) parent.
-        if (laneOf.has(targetParentKey)) {
-          parentLanes.push(laneOf.get(targetParentKey)!);
-        } else {
-          const reachableLane = findReachableLane(targetParentKey);
-          if (reachableLane !== null) {
-            parentLanes.push(reachableLane);
-          } else {
-            // Open a new lane for this merge parent. Prefer lane 0 if the parent
-            // is on the primary chain and lane 0 is free.
-            const wantPrimary = primaryChain.has(targetParentKey);
-            const newLane = nextFreeLane(wantPrimary);
-            occupied.add(newLane);
-            reserveLane(newLane, targetParentKey);
-            parentLanes.push(newLane);
-            assignLaneColor(newLane, null, false);
-          }
-        }
+    const distance = edge.down - edge.up;
+    if (distance <= 1) continue;
+    if (edge.collapsed) {
+      crossingEdgesByRow[edge.up + 1].push(edge);
+      crossingEdgesByRow[edge.down - 1].push(edge);
+    } else {
+      for (let row = edge.up + 1; row < edge.down; row++) {
+        crossingEdgesByRow[row].push(edge);
       }
     }
+  }
 
-    if (commit.parents.length === 0) {
-      clearLane(lane);
-    }
+  const nodeLaneByRow = Array.from({ length: commits.length }, () => 0);
+  const edgeLaneByRow = Array.from(
+    { length: commits.length },
+    (): Map<number, number> => new Map(),
+  );
+  const elementCountByRow = Array.from({ length: commits.length }, () => 1);
 
-    const bottomLaneMap = compactLanes();
-    const bottomParentLanes = parentLanes.map(parentLane => bottomLaneMap.get(parentLane) ?? parentLane);
-
-    // ── Step 4: build graph lines with pre-computed colors ───────────────────
-    const dotColor = currentLaneColor;
-    const graphLines: GraphLine[] = [];
-
-    graphLines.push({
-      fromLane: lane,
-      toLane: bottomParentLanes.length > 0 ? bottomParentLanes[0] : lane,
-      type: 'straight',
-      repoId: commit.repoId,
-      isStart,
-      color: dotColor,
-    });
-
-    for (let p = 1; p < bottomParentLanes.length; p++) {
-      const pl = bottomParentLanes[p];
-      graphLines.push({
-        fromLane: lane,
-        toLane: pl,
-        type: 'merge-in',
-        repoId: commit.repoId,
-        color: laneColorOf.get(pl) ?? dotColor,
-      });
-    }
-
-    for (const l of enteringLanes) {
-      if (l === lane) continue;
-      const bottomLane = bottomLaneMap.get(l);
-      if (bottomLane === undefined) continue;
-      graphLines.push({
-        fromLane: l,
-        toLane: bottomLane,
-        type: 'pass-through',
-        repoId: commit.repoId,
-        color: laneColorOf.get(bottomLane) ?? anonymousLaneColor(bottomLane),
-      });
-    }
-
-    const activeLaneCount = graphLines.reduce(
-      (max, line) => Math.max(max, line.fromLane + 1, line.toLane + 1),
-      lane + 1
-    );
-
-    laidOut.push({
-      ...commit,
-      lane,
-      totalLanes: activeLaneCount,
-      graphLines,
-      dotColor,
+  for (let row = 0; row < commits.length; row++) {
+    const elements: LayoutElement[] = [
+      { kind: 'node', row },
+      ...crossingEdgesByRow[row].map(edge => ({ kind: 'edge' as const, edge })),
+    ];
+    elements.sort((left, right) => compareElements(left, right, layoutIndex));
+    elementCountByRow[row] = elements.length;
+    elements.forEach((element, lane) => {
+      if (element.kind === 'node') nodeLaneByRow[row] = lane;
+      else edgeLaneByRow[row].set(element.edge.id, lane);
     });
   }
 
-  return laidOut;
+  const graphLinesByRow = Array.from(
+    { length: commits.length },
+    (): GraphLine[] => [],
+  );
+
+  const positionAt = (edge: LayoutEdge, row: number): number | null => {
+    if (row < 0 || row >= commits.length) return null;
+    if (row === edge.up || row === edge.down) return nodeLaneByRow[row];
+    return edgeLaneByRow[row].get(edge.id) ?? null;
+  };
+
+  const connectAdjacentRows = (
+    edge: LayoutEdge,
+    upperRow: number,
+    lowerRow: number,
+  ): void => {
+    const upperLane = positionAt(edge, upperRow);
+    const lowerLane = positionAt(edge, lowerRow);
+    if (upperLane === null || lowerLane === null) return;
+    const boundaryLane = (upperLane + lowerLane) / 2;
+    graphLinesByRow[upperRow].push({
+      fromLane: upperLane,
+      toLane: boundaryLane,
+      type: 'fork-out',
+      repoId: edge.repoId,
+      color: edge.color,
+    });
+    graphLinesByRow[lowerRow].push({
+      fromLane: boundaryLane,
+      toLane: lowerLane,
+      type: 'join-in',
+      repoId: edge.repoId,
+      color: edge.color,
+    });
+  };
+
+  for (const edge of edges) {
+    if (edge.down === null) {
+      if (edge.up + 1 >= commits.length) continue;
+      connectAdjacentRows(edge, edge.up, edge.up + 1);
+      const terminalLane = positionAt(edge, edge.up + 1);
+      if (terminalLane !== null) {
+        graphLinesByRow[edge.up + 1].push({
+          fromLane: terminalLane,
+          toLane: terminalLane,
+          type: 'collapsed-out',
+          repoId: edge.repoId,
+          color: edge.color,
+        });
+      }
+      continue;
+    }
+
+    if (!edge.collapsed) {
+      for (let row = edge.up; row < edge.down; row++) {
+        connectAdjacentRows(edge, row, row + 1);
+      }
+      continue;
+    }
+
+    connectAdjacentRows(edge, edge.up, edge.up + 1);
+    const headLane = positionAt(edge, edge.up + 1);
+    if (headLane !== null) {
+      graphLinesByRow[edge.up + 1].push({
+        fromLane: headLane,
+        toLane: headLane,
+        type: 'collapsed-out',
+        repoId: edge.repoId,
+        color: edge.color,
+      });
+    }
+
+    const tailLane = positionAt(edge, edge.down - 1);
+    if (tailLane !== null) {
+      graphLinesByRow[edge.down - 1].push({
+        fromLane: tailLane,
+        toLane: tailLane,
+        type: 'collapsed-in',
+        repoId: edge.repoId,
+        color: edge.color,
+      });
+    }
+    connectAdjacentRows(edge, edge.down - 1, edge.down);
+  }
+
+  return commits.map((commit, row): T & GraphLayoutData => {
+    const graphLines = graphLinesByRow[row];
+    const totalLanes = Math.max(
+      elementCountByRow[row],
+      ...graphLines.flatMap(line => [
+        Math.ceil(line.fromLane + 1),
+        Math.ceil(line.toLane + 1),
+      ]),
+    );
+    return {
+      ...commit,
+      lane: nodeLaneByRow[row],
+      totalLanes,
+      graphLines,
+      dotColor: nodeColor(row),
+    };
+  });
 }

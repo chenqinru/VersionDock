@@ -566,6 +566,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return this.getNonWorktreeRepos().filter(m => !this.hiddenRepoIds.includes(m.id));
   }
 
+  private getRequestedVisibleRepoIds(
+    requestedRepoIds: string[] | null,
+    repos = this.getVisibleRepos(),
+  ): string[] {
+    if (requestedRepoIds === null) return repos.map(repo => repo.id);
+    const visibleRepoIds = new Set(repos.map(repo => repo.id));
+    return requestedRepoIds.filter(repoId => visibleRepoIds.has(repoId));
+  }
+
   private async getFilteredBranches(repos = this.getVisibleRepos()) {
     const ids = new Set(repos.map(r => r.id));
     const all = await this.manager.getAllBranches();
@@ -587,6 +596,30 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private async handleMessage(msg: LogToHostMsg): Promise<void> {
     switch (msg.type) {
+      case 'LOG_REQUEST_GRAPH_COMMITS': {
+        const maxCommits = vscode.workspace.getConfiguration('versiondock').get<number>('graphMaxCommits', 1000);
+        const metadataGeneration = this.managerSyncGeneration;
+        const logRepoIds = this.getRequestedVisibleRepoIds(msg.repoIds);
+        if (logRepoIds.length === 0 || maxCommits <= 0) {
+          this.post({
+            type: 'LOG_GRAPH_COMMITS',
+            commits: [],
+            generation: msg.generation,
+            requestId: msg.requestId,
+          });
+          break;
+        }
+        const commits = await this.manager.getInterleavedGraphLog(logRepoIds, maxCommits);
+        if (metadataGeneration !== this.managerSyncGeneration) break;
+        this.post({
+          type: 'LOG_GRAPH_COMMITS',
+          commits,
+          generation: msg.generation,
+          requestId: msg.requestId,
+        });
+        break;
+      }
+
       case 'LOG_REQUEST_COMMITS': {
         const maxCommits = vscode.workspace.getConfiguration('versiondock').get<number>('graphMaxCommits', 1000);
         if (msg.skip >= maxCommits) {
@@ -615,10 +648,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         }
 
-        const visibleRepoIds = new Set(repos.map(repo => repo.id));
-        const logRepoIds = msg.repoIds === null
-          ? repos.map(repo => repo.id)
-          : msg.repoIds.filter(id => visibleRepoIds.has(id));
+        const logRepoIds = this.getRequestedVisibleRepoIds(msg.repoIds, repos);
         // WorkspaceGitManager treats an empty id list as "all repositories".
         // At this boundary, however, empty means that the requested/visible set
         // is genuinely empty; passing it through would leak hidden, removed, or

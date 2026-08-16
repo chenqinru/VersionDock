@@ -52,17 +52,20 @@ export interface LineRange {
   end: number;
 }
 
-export interface CommitNode {
+export interface GraphCommitNode {
   hash: string;
-  shortHash: string;
   repoId: string;
+  committerDate: string;
+  parents: string[];
+  refs: string[];
+}
+
+export interface CommitNode extends GraphCommitNode {
+  shortHash: string;
   message: string;
   authorName: string;
   authorEmail: string;
   authorDate: string;
-  committerDate: string;
-  parents: string[];
-  refs: string[];
   unpushed?: boolean;
   incoming?: boolean;
   lane?: number;
@@ -73,10 +76,9 @@ export interface CommitNode {
 export interface GraphLine {
   fromLane: number;
   toLane: number;
-  type: 'straight' | 'merge-in' | 'fork-out' | 'pass-through';
+  type: 'join-in' | 'fork-out' | 'pass-through' | 'collapsed-out' | 'collapsed-in';
   repoId: string;
-  isStart?: boolean; // true when this lane opens here (no line arrives from above)
-  color?: string;    // pre-computed color for this line segment
+  color?: string; // pre-computed color for this edge segment
 }
 
 export type GitFileStatus =

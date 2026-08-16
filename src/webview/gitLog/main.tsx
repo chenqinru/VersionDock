@@ -1,12 +1,12 @@
 import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useLogStore, getCommitKey, type CommitFileEntry, type CommitSelectionMode, type CompareSide, type LogViewFileEntry } from './store/logStore';
+import { useLogStore, getCommitKey, type CommitFileEntry, type CommitFilters, type CommitSelectionMode, type CompareSide, type LogViewFileEntry } from './store/logStore';
 import { BranchSidebar } from './components/BranchSidebar';
 import { CommitList } from './components/CommitList';
 import { CommitDetail } from './components/CommitDetail';
 import { CommitFiltersBar, type AuthorOption } from './components/CommitFiltersBar';
 import { CompareView } from './components/CompareView';
-import { assignLanes, type LaidOutCommit } from './utils/graphLayout';
+import { assignLanes, type GraphLayoutData, type LaidOutCommit, type LaidOutGraphCommit } from './utils/graphLayout';
 import { filterFilesForHistoryPath } from './utils/historyPath';
 import { ResizeHandle } from '../shared/ResizeHandle';
 import { useResize } from '../shared/useResize';
@@ -14,6 +14,7 @@ import { getVsCodeApi } from '../shared/vscodeApi';
 import { t } from '../shared/i18n';
 import { Codicon } from '../shared/Codicon';
 import { scopedKey } from '../shared/scopedKey';
+import type { CommitNode } from '../shared/types';
 import type { LogToHostMsg, HostToLogMsg } from '../../host/types/messages';
 
 function generateId() {
@@ -21,6 +22,56 @@ function generateId() {
 }
 
 const LOG_PAGE_SIZE = 100;
+
+function hasTopologyFilters(filters: CommitFilters): boolean {
+  return !!(
+    filters.text
+    || filters.author
+    || filters.branch
+    || filters.dateFrom
+    || filters.dateTo
+    || filters.path
+    || filters.lineRange
+  );
+}
+
+function layoutVisibleCommits(
+  commits: CommitNode[],
+  graphCommits: LaidOutGraphCommit[],
+  repoKindById: Readonly<Record<string, 'git' | 'svn'>>,
+  remoteNamesByRepo: Readonly<Record<string, readonly string[]>>,
+): LaidOutCommit[] {
+  if (commits.length === 0) return [];
+  if (graphCommits.length < commits.length) {
+    return assignLanes(commits, false, repoKindById, remoteNamesByRepo);
+  }
+
+  const graphRowByKey = new Map<string, number>();
+  graphCommits.forEach((commit, row) => {
+    graphRowByKey.set(scopedKey(commit.repoId, commit.hash), row);
+  });
+  const matchesVisiblePrefix = commits.every((commit, row) => (
+    graphRowByKey.get(scopedKey(commit.repoId, commit.hash)) === row
+  ));
+  if (!matchesVisiblePrefix) {
+    return assignLanes(commits, false, repoKindById, remoteNamesByRepo);
+  }
+
+  const layoutByKey = new Map<string, GraphLayoutData>();
+  for (const commit of graphCommits) {
+    layoutByKey.set(scopedKey(commit.repoId, commit.hash), {
+      lane: commit.lane,
+      totalLanes: commit.totalLanes,
+      graphLines: commit.graphLines,
+      dotColor: commit.dotColor,
+    });
+  }
+
+  return commits.map(commit => {
+    const layout = layoutByKey.get(scopedKey(commit.repoId, commit.hash))!;
+    return { ...commit, ...layout };
+  });
+}
 
 function toViewFiles(repoId: string, hash: string, files: CommitFileEntry[]): LogViewFileEntry[] {
   return files.map(file => ({
@@ -63,6 +114,7 @@ export function GitLogApp() {
   const filterRepoRef = useRef<(repoId: string | null, branch?: string | null) => void>(() => {});
   const bgGenRef = useRef(0);
   const activeRequestIdRef = useRef<string | null>(null);
+  const activeGraphRequestIdRef = useRef<string | null>(null);
   const activeCompareRequestIdsRef = useRef<Record<CompareSide, string | null>>({
     baseOnly: null,
     targetOnly: null,
@@ -77,6 +129,21 @@ export function GitLogApp() {
   const send = useCallback((msg: LogToHostMsg) => {
     getVsCodeApi().postMessage(msg);
   }, []);
+
+  const requestGraphCommits = useCallback((filters: CommitFilters, generation: number) => {
+    if (hasTopologyFilters(filters)) {
+      activeGraphRequestIdRef.current = null;
+      return;
+    }
+    const requestId = generateId();
+    activeGraphRequestIdRef.current = requestId;
+    send({
+      type: 'LOG_REQUEST_GRAPH_COMMITS',
+      repoIds: filters.repoId ? [filters.repoId] : filters.repoIds,
+      generation,
+      requestId,
+    });
+  }, [send]);
 
   useEffect(() => {
     const onError = (event: ErrorEvent) => {
@@ -167,6 +234,12 @@ export function GitLogApp() {
           if (msg.generation !== undefined && msg.generation !== bgGenRef.current) break;
           store.appendCommits(msg.commits, msg.isLast);
           break;
+        case 'LOG_GRAPH_COMMITS':
+          if (msg.requestId !== activeGraphRequestIdRef.current) break;
+          if (msg.generation !== bgGenRef.current) break;
+          activeGraphRequestIdRef.current = null;
+          store.setGraphCommits(msg.commits);
+          break;
         case 'LOG_REFS_UPDATE':
           store.updateBranches(msg.repoId, msg.branches);
           break;
@@ -221,6 +294,7 @@ export function GitLogApp() {
       generation: bgGenRef.current,
       requestId,
     });
+    requestGraphCommits(useLogStore.getState().commitFilters, bgGenRef.current);
 
     return () => window.removeEventListener('message', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -267,7 +341,8 @@ export function GitLogApp() {
       filterPath: f.path || undefined,
       lineRange: f.lineRange,
     });
-  }, [send]);
+    requestGraphCommits(f, bgGenRef.current);
+  }, [requestGraphCommits, send]);
 
   const reloadCompare = useCallback(() => {
     if (!useLogStore.getState().compareState) return;
@@ -374,23 +449,22 @@ export function GitLogApp() {
     );
   }, [store.branches]);
 
-  const isFiltered = !!(
-    store.commitFilters.text ||
-    store.commitFilters.author ||
-    store.commitFilters.branch ||
-    store.commitFilters.dateFrom ||
-    store.commitFilters.dateTo ||
-    store.commitFilters.path
+  const isFiltered = hasTopologyFilters(store.commitFilters);
+  const laidOutGraphCommits = useMemo(
+    () => assignLanes(store.graphCommits, false, repoKindById, remoteNamesByRepo),
+    [store.graphCommits, remoteNamesByRepo, repoKindById],
   );
   const laidOutCommits = useMemo(
-    () => assignLanes(store.commits, isFiltered, repoKindById, remoteNamesByRepo),
-    [store.commits, isFiltered, remoteNamesByRepo, repoKindById],
+    () => isFiltered
+      ? assignLanes(store.commits, true, repoKindById, remoteNamesByRepo)
+      : layoutVisibleCommits(store.commits, laidOutGraphCommits, repoKindById, remoteNamesByRepo),
+    [store.commits, laidOutGraphCommits, isFiltered, remoteNamesByRepo, repoKindById],
   );
   const laidOutCompareBase = useMemo(() => (
-    store.compareState ? assignLanes(store.compareState.baseOnly.commits, false, repoKindById, remoteNamesByRepo) : []
+    store.compareState ? assignLanes(store.compareState.baseOnly.commits, true, repoKindById, remoteNamesByRepo) : []
   ), [remoteNamesByRepo, repoKindById, store.compareState]);
   const laidOutCompareTarget = useMemo(() => (
-    store.compareState ? assignLanes(store.compareState.targetOnly.commits, false, repoKindById, remoteNamesByRepo) : []
+    store.compareState ? assignLanes(store.compareState.targetOnly.commits, true, repoKindById, remoteNamesByRepo) : []
   ), [remoteNamesByRepo, repoKindById, store.compareState]);
 
   const currentBranchByRepo = useMemo(() => {
