@@ -79,7 +79,16 @@ function buildTree(files: FileStatus[]): TreeNode[] {
     }
     node.children.push({ kind: 'file', name: parts[parts.length - 1], file });
   }
-  return collapseSingleChildDirs(root.children);
+  return collapseSingleChildDirs(sortTree(root.children));
+}
+
+function sortTree(nodes: TreeNode[]): TreeNode[] {
+  return [...nodes]
+    .sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === 'dir' ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    })
+    .map(node => node.kind === 'dir' ? { ...node, children: sortTree(node.children) } : node);
 }
 
 // Collapse chains of dirs that contain only one child dir (IntelliJ-style path compacting).

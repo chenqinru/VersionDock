@@ -63,7 +63,18 @@ function buildTree(files: FileStatus[]): TreeNode[] {
     }
     nodes.push({ kind: 'file', file });
   }
-  return collapseSingleChildDirs(root);
+  return collapseSingleChildDirs(sortTree(root));
+}
+
+function sortTree(nodes: TreeNode[]): TreeNode[] {
+  return [...nodes]
+    .sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === 'dir' ? -1 : 1;
+      const leftName = left.kind === 'dir' ? left.name : left.file.path;
+      const rightName = right.kind === 'dir' ? right.name : right.file.path;
+      return leftName.localeCompare(rightName);
+    })
+    .map(node => node.kind === 'dir' ? { ...node, children: sortTree(node.children) } : node);
 }
 
 function collapseSingleChildDirs(nodes: TreeNode[]): TreeNode[] {
