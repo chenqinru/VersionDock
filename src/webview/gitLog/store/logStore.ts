@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { BranchInfo, CommitNode, FileDiff, GraphCommitNode, LineRange, RepoMeta, TagInfo } from '../../shared/types';
-import type { CompareSide, IconThemeData } from '../../../host/types/messages';
+import type { CompareSide, IconThemeData, MergeParentChange } from '../../../host/types/messages';
 import { scopedKey } from '../../shared/scopedKey';
 
 export type { CompareSide };
@@ -27,6 +27,7 @@ export interface CommitFileEntry {
 export interface LogViewFileEntry extends CommitFileEntry {
   repoId: string;
   commitHash: string;
+  comparisonBaseHash?: string;
 }
 
 export type CommitSelectionMode = 'single' | 'toggle' | 'range';
@@ -67,6 +68,7 @@ interface LogState {
   selectionAnchorHash: string | null;
   selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
   commitFilesByKey: Record<string, CommitFileEntry[]>;
+  mergeParentChangesByKey: Record<string, MergeParentChange[]>;
   currentDiff: FileDiff | null;
   loadingCommits: boolean;
   backgroundLoading: boolean;
@@ -92,7 +94,7 @@ interface LogState {
   closeCompare: () => void;
   setComparePaneState: (side: CompareSide, pane: Partial<ComparePaneState>, append?: boolean) => void;
   selectCommit: (commit: CommitNode | null, mode?: CommitSelectionMode, sourceCommits?: CommitNode[]) => void;
-  setCommitFiles: (repoId: string, hash: string, files: CommitFileEntry[]) => void;
+  setCommitFiles: (repoId: string, hash: string, files: CommitFileEntry[], mergeParentChanges?: MergeParentChange[]) => void;
   setLoadingFiles: (repoId: string, hash: string, value: boolean) => void;
   selectFile: (file: { repoId: string; path: string; status: string; commitHash?: string } | null) => void;
   setDiff: (diff: FileDiff | null) => void;
@@ -174,6 +176,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   selectionAnchorHash: null,
   selectedFile: null,
   commitFilesByKey: {},
+  mergeParentChangesByKey: {},
   currentDiff: null,
   loadingCommits: false,
   backgroundLoading: false,
@@ -406,21 +409,25 @@ export const useLogStore = create<LogState>((set, get) => ({
       currentDiff: selectionChanged ? null : s.currentDiff,
     };
   }),
-  setCommitFiles: (repoId, hash, files) => set(s => {
+  setCommitFiles: (repoId, hash, files, mergeParentChanges = []) => set(s => {
     const key = commitKey(repoId, hash);
     // Reinsert hits at the end so plain object insertion order acts as a small
     // LRU. Commit file lists can be large and otherwise grow for the lifetime
     // of a retained webview as users browse history.
     const commitFilesByKey = { ...s.commitFilesByKey };
+    const mergeParentChangesByKey = { ...s.mergeParentChangesByKey };
     delete commitFilesByKey[key];
+    delete mergeParentChangesByKey[key];
     commitFilesByKey[key] = files;
+    mergeParentChangesByKey[key] = mergeParentChanges;
     const loadingFilesByKey = { ...s.loadingFilesByKey, [key]: false };
     const keys = Object.keys(commitFilesByKey);
     for (let index = 0; index < keys.length - MAX_COMMIT_FILE_CACHE_ENTRIES; index += 1) {
       delete commitFilesByKey[keys[index]];
+      delete mergeParentChangesByKey[keys[index]];
       delete loadingFilesByKey[keys[index]];
     }
-    return { commitFilesByKey, loadingFilesByKey };
+    return { commitFilesByKey, mergeParentChangesByKey, loadingFilesByKey };
   }),
   setLoadingFiles: (repoId, hash, value) => set(s => ({
     loadingFilesByKey: {

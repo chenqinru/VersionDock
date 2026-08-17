@@ -417,7 +417,7 @@ export function GitLogApp() {
       const requestId = generateId();
       pendingRef.current.set(requestId, (msg) => {
         if (msg.type === 'LOG_COMMIT_FILES') {
-          setCommitFiles(commit.repoId, commit.hash, msg.files);
+          setCommitFiles(commit.repoId, commit.hash, msg.files, msg.mergeParentChanges);
         }
       });
       getVsCodeApi().postMessage({
@@ -426,6 +426,7 @@ export function GitLogApp() {
         repoId: commit.repoId,
         hash: commit.hash,
         parents: commit.parents,
+        includeMergeParentChanges: commit.parents.length >= 2,
       } satisfies LogToHostMsg);
     });
   }, [isCommitListReloading, selectedCommits, setCommitFiles, setLoadingFiles, store.commitFilesByKey, store.loadingFilesByKey]);
@@ -572,6 +573,9 @@ export function GitLogApp() {
   const selectedRepoColor = primarySelectedCommit ? repoColors[primarySelectedCommit.repoId] : undefined;
   const hasSelectedCommit = sortedSelectedCommits.length > 0;
   const isMultiCommitSelection = sortedSelectedCommits.length > 1;
+  const mergeParentChanges = !isMultiCommitSelection && primarySelectedCommit
+    ? store.mergeParentChangesByKey[getCommitKey(primarySelectedCommit.repoId, primarySelectedCommit.hash)] ?? []
+    : [];
   const detailLoading = isCommitListReloading
     || sortedSelectedCommits.some(commit => store.loadingFilesByKey[getCommitKey(commit.repoId, commit.hash)]);
   const filterRepos = useMemo(() => (
@@ -851,6 +855,7 @@ export function GitLogApp() {
               commit={primarySelectedCommit}
               commits={sortedSelectedCommits}
               files={aggregatedFiles}
+              mergeParentChanges={mergeParentChanges}
               groupedEntries={selectedCommitFilesByPath}
               selectedFile={store.selectedFile}
               loadingFiles={detailLoading}

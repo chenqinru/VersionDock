@@ -689,10 +689,32 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_COMMIT_FILES', requestId: msg.requestId, files: [], error: t('Repo not found') }); return; }
         try {
-          const files = await repo.getCommitFiles(msg.hash, msg.parents);
-          this.post({ type: 'LOG_COMMIT_FILES', requestId: msg.requestId, files });
+          const [files, mergeParentChanges] = await Promise.all([
+            repo.getCommitFilesForLogDetail(msg.hash, msg.parents),
+            msg.includeMergeParentChanges
+              ? repo.getMergeParentChanges(msg.hash, msg.parents).catch(() => [])
+              : Promise.resolve(undefined),
+          ]);
+          this.post({
+            type: 'LOG_COMMIT_FILES',
+            requestId: msg.requestId,
+            files,
+            ...(mergeParentChanges ? { mergeParentChanges } : {}),
+          });
         } catch (e: unknown) {
           this.post({ type: 'LOG_COMMIT_FILES', requestId: msg.requestId, files: [], error: String(e) });
+        }
+        break;
+      }
+
+      case 'LOG_REQUEST_MERGE_PARENT_FILES': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo) { this.post({ type: 'LOG_MERGE_PARENT_FILES_RESULT', requestId: msg.requestId, files: [], error: t('Repo not found') }); return; }
+        try {
+          const files = await repo.getMergeParentFiles(msg.hash, msg.parentHash);
+          this.post({ type: 'LOG_MERGE_PARENT_FILES_RESULT', requestId: msg.requestId, files });
+        } catch (e: unknown) {
+          this.post({ type: 'LOG_MERGE_PARENT_FILES_RESULT', requestId: msg.requestId, files: [], error: String(e) });
         }
         break;
       }

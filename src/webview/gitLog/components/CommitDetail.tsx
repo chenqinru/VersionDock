@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import type { CommitNode, LineRange, RepoMeta, MergeParentCommit } from '../../shared/types';
+import type { CommitNode, LineRange, RepoMeta } from '../../shared/types';
 import { getVsCodeApi } from '../../shared/vscodeApi';
-import type { HostToLogMsg, LogCommitPathEntry, LogToHostMsg, IconThemeData } from '../../../host/types/messages';
+import type { HostToLogMsg, LogCommitPathEntry, LogToHostMsg, IconThemeData, MergeParentChange } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
 import { groupRefs, branchColor, tagColor, headColor, splitRemoteRefName } from '../utils/refs';
@@ -62,6 +62,7 @@ interface Props {
   commit: CommitNode | null;
   commits: CommitNode[];
   files: LogViewFileEntry[];
+  mergeParentChanges: MergeParentChange[];
   groupedEntries: Record<string, LogViewFileEntry[]>;
   selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
   loadingFiles: boolean;
@@ -383,7 +384,121 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
   );
 }
 
-export function CommitDetail({ commit, commits, files, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onClose }: Props) {
+function MergeParentChangeGroup({
+  change,
+  files,
+  loading,
+  expanded,
+  viewMode,
+  repoNameById,
+  repoRootPathById,
+  repoColorById,
+  selectedFile,
+  iconTheme,
+  onToggle,
+  onOpen,
+  onFileContextMenu,
+  onDirectoryContextMenu,
+}: {
+  change: MergeParentChange;
+  files: LogViewFileEntry[] | undefined;
+  loading: boolean;
+  expanded: boolean;
+  viewMode: 'tree' | 'flat';
+  repoNameById: Record<string, string>;
+  repoRootPathById: Record<string, string>;
+  repoColorById: Record<string, string>;
+  selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
+  iconTheme?: IconThemeData | null;
+  onToggle: () => void;
+  onOpen: (file: LogViewFileEntry) => void;
+  onFileContextMenu: (event: React.MouseEvent, file: LogViewFileEntry) => void;
+  onDirectoryContextMenu: (event: React.MouseEvent, node: TreeNode) => void;
+}) {
+  const tree = useMemo(() => buildTree(files ?? [], repoNameById, repoRootPathById, repoColorById, false), [files, repoColorById, repoNameById, repoRootPathById]);
+  const visibleTreeChildren = useMemo(() => (
+    Array.from(tree.children.values())
+      .sort((left, right) => {
+        if (!left.file && right.file) return -1;
+        if (left.file && !right.file) return 1;
+        return left.name.localeCompare(right.name);
+      })
+      .map(child => collapseSingleChildDirs(child))
+  ), [tree]);
+
+  return (
+    <div style={styles.mergeParentGroup}>
+      <div
+        style={styles.mergeParentRow(expanded)}
+        className="versiondock-detail-row"
+        data-selected={expanded}
+        title={`${change.hash}\n${change.message}`}
+        onClick={onToggle}
+      >
+        <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={styles.mergeChevron} />
+        <Codicon name="git-commit" style={styles.metaHashIcon} />
+        <span style={styles.mergeParentTitle}>{t('Changes from {0}', change.shortHash)}</span>
+        {change.message && <span style={styles.mergeParentMessage}>{change.message}</span>}
+        <span style={styles.mergeParentCount}>
+          {change.fileCount === 1 ? t('{0} file', change.fileCount) : t('{0} files', change.fileCount)}
+        </span>
+      </div>
+      {expanded && (
+        <div style={styles.mergeParentFileList}>
+          {loading && <div style={styles.mergeLoading}>{t('Loading files...')}</div>}
+          {!loading && files?.length === 0 && <div style={styles.mergeLoading}>{t('No changed files')}</div>}
+          {!loading && viewMode === 'tree' && visibleTreeChildren.map(child => (
+            <TreeDir
+              key={child.fullPath}
+              node={child}
+              depth={0}
+              selectedFile={selectedFile}
+              onOpen={onOpen}
+              onFileContextMenu={onFileContextMenu}
+              onDirectoryContextMenu={onDirectoryContextMenu}
+              allExpanded={null}
+              iconTheme={iconTheme}
+            />
+          ))}
+          {!loading && viewMode === 'flat' && files?.map(file => {
+            const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
+            const status = normalizeStatus(file.status);
+            const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
+            const fileName = file.path.split('/').pop() ?? file.path;
+            const dir = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '';
+            return (
+              <div
+                key={scopedKey(file.repoId, file.commitHash, file.comparisonBaseHash ?? '', file.path)}
+                style={styles.mergeParentFileRow(isSelected)}
+                className="versiondock-detail-row"
+                data-selected={isSelected}
+                title={`${file.path}\n${t('Click to open diff')}`}
+                onClick={() => onOpen(file)}
+                onContextMenu={event => {
+                  event.preventDefault();
+                  onFileContextMenu(event, file);
+                }}
+              >
+                <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
+                <span style={styles.fileName(statusColor, isSelected)}>{fileName}</span>
+                {dir && <span style={styles.dirPath}>{dir}</span>}
+                {(file.added != null || file.removed != null) && (
+                  <span style={styles.lineStats}>
+                    {file.added != null && <span style={styles.added}>+{file.added}</span>}
+                    {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
+                  </span>
+                )}
+                <span style={styles.statusLetter(statusColor)}>{status}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CommitDetail({ commit, commits, files, mergeParentChanges, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onClose }: Props) {
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null);
   const [containingBranches, setContainingBranches] = useState<ContainingBranches>({ local: [], remote: [], tags: [] });
@@ -393,11 +508,9 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   const [refsExpanded, setRefsExpanded] = useState(false);
   const [fullCommitMessages, setFullCommitMessages] = useState<Record<string, string>>({});
   const [loadingCommitMessageKeys, setLoadingCommitMessageKeys] = useState<Set<string>>(() => new Set());
-  const [mergeCommits, setMergeCommits] = useState<MergeParentCommit[]>([]);
-  const [loadingMerge, setLoadingMerge] = useState(false);
-  const [selectedMergeHash, setSelectedMergeHash] = useState<string | null>(null);
-  const [mergeFiles, setMergeFiles] = useState<LogViewFileEntry[]>([]);
-  const [loadingMergeFiles, setLoadingMergeFiles] = useState(false);
+  const [expandedMergeParentKeys, setExpandedMergeParentKeys] = useState<Set<string>>(() => new Set());
+  const [mergeParentFilesByKey, setMergeParentFilesByKey] = useState<Record<string, LogViewFileEntry[]>>({});
+  const [loadingMergeParentKeys, setLoadingMergeParentKeys] = useState<Set<string>>(() => new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [infoSectionHeight, setInfoSectionHeight] = useState<number | null>(null);
   const [expandedCommitMessageKeys, setExpandedCommitMessageKeys] = useState<Set<string>>(() => new Set());
@@ -416,11 +529,8 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   const repoKindById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.kind ?? 'git'])), [repos]);
   const involvedRepoIds = useMemo(() => Array.from(new Set(commits.map(selectedCommit => selectedCommit.repoId))), [commits]);
   const showRepoGrouping = repos.length > 1;
-  const selectedMergeCommit = useMemo(() => (
-    selectedMergeHash ? mergeCommits.find(mergeCommit => mergeCommit.hash === selectedMergeHash) ?? null : null
-  ), [mergeCommits, selectedMergeHash]);
-  const activeFiles = selectedMergeHash ? mergeFiles : files;
-  const activeLoadingFiles = selectedMergeHash ? loadingMergeFiles : loadingFiles;
+  const activeFiles = files;
+  const activeLoadingFiles = loadingFiles;
   const primaryCommitMessageKey = commit ? scopedKey(commit.repoId, commit.hash) : '';
   const fullCommitMessage = primaryCommitMessageKey ? fullCommitMessages[primaryCommitMessageKey] ?? null : null;
   const loadingCommitMessage = primaryCommitMessageKey ? loadingCommitMessageKeys.has(primaryCommitMessageKey) : false;
@@ -614,18 +724,16 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   useEffect(() => {
     if (!commit || isMultiCommitSelection) {
       setContainingBranches({ local: [], remote: [], tags: [] });
-      setMergeCommits([]);
-      setSelectedMergeHash(null);
-      setMergeFiles([]);
+      setExpandedMergeParentKeys(new Set());
+      setMergeParentFilesByKey({});
+      setLoadingMergeParentKeys(new Set());
       setLoadingBranches(false);
-      setLoadingMerge(false);
-      setLoadingMergeFiles(false);
       return;
     }
 
-    setSelectedMergeHash(null);
-    setMergeFiles([]);
-    setLoadingMergeFiles(false);
+    setExpandedMergeParentKeys(new Set());
+    setMergeParentFilesByKey({});
+    setLoadingMergeParentKeys(new Set());
     setLoadingBranches(true);
     const pendingRequests = pendingRef.current;
     const requestIds: string[] = [];
@@ -643,28 +751,6 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
       repoId: commit.repoId,
       hash: commit.hash,
     } satisfies LogToHostMsg);
-
-    if (commit.parents.length >= 2) {
-      setLoadingMerge(true);
-      const mergeRequestId = generateId();
-      requestIds.push(mergeRequestId);
-      pendingRequests.set(mergeRequestId, (msg) => {
-        if (msg.type === 'LOG_MERGE_COMMITS_RESULT') {
-          setMergeCommits(msg.commits);
-          setLoadingMerge(false);
-        }
-      });
-      getVsCodeApi().postMessage({
-        type: 'LOG_REQUEST_MERGE_COMMITS',
-        requestId: mergeRequestId,
-        repoId: commit.repoId,
-        hash: commit.hash,
-        parents: commit.parents,
-      } satisfies LogToHostMsg);
-    } else {
-      setMergeCommits([]);
-      setLoadingMerge(false);
-    }
 
     return () => {
       requestIds.forEach(requestId => pendingRequests.delete(requestId));
@@ -688,6 +774,17 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     const lineRange = activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path)
       ? activeLineRange
       : undefined;
+    if (file.comparisonBaseHash) {
+      getVsCodeApi().postMessage({
+        type: 'LOG_OPEN_FILE_RANGE_DIFF',
+        repoId: file.repoId,
+        fromHash: file.comparisonBaseHash,
+        toHash: file.commitHash,
+        filePath: file.path,
+        lineRange,
+      } satisfies LogToHostMsg);
+      return;
+    }
     const repoCommits = commits.filter(selectedCommit => selectedCommit.repoId === file.repoId);
     if (repoCommits.length > 1) {
       const newest = repoCommits[0];
@@ -818,36 +915,48 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
     } satisfies LogToHostMsg);
   }, [commit, commits, isMultiCommitSelection]);
 
-  const selectMergeCommit = useCallback((mergeCommit: MergeParentCommit) => {
+  const toggleMergeParentChange = useCallback((parentChange: MergeParentChange) => {
     if (!commit || isMultiCommitSelection) return;
-    if (selectedMergeHash === mergeCommit.hash) {
-      setSelectedMergeHash(null);
-      setMergeFiles([]);
-      setLoadingMergeFiles(false);
+    const parentKey = scopedKey(commit.repoId, commit.hash, parentChange.hash);
+    const isExpanded = expandedMergeParentKeys.has(parentKey);
+    setExpandedMergeParentKeys(current => {
+      const next = new Set(current);
+      if (next.has(parentKey)) next.delete(parentKey);
+      else next.add(parentKey);
+      return next;
+    });
+    if (isExpanded || mergeParentFilesByKey[parentKey] || loadingMergeParentKeys.has(parentKey)) {
       return;
     }
 
-    setSelectedMergeHash(mergeCommit.hash);
-    setMergeFiles([]);
-    setLoadingMergeFiles(true);
+    setLoadingMergeParentKeys(current => new Set(current).add(parentKey));
     const requestId = generateId();
     pendingRef.current.set(requestId, (msg) => {
-      if (msg.type === 'LOG_COMMIT_FILES') {
-        setMergeFiles(msg.files.map(file => ({
+      if (msg.type === 'LOG_MERGE_PARENT_FILES_RESULT') {
+        setMergeParentFilesByKey(current => ({
+          ...current,
+          [parentKey]: msg.files.map(file => ({
           ...file,
           repoId: commit.repoId,
-          commitHash: mergeCommit.hash,
-        })));
-        setLoadingMergeFiles(false);
+            commitHash: commit.hash,
+            comparisonBaseHash: parentChange.hash,
+          })),
+        }));
+        setLoadingMergeParentKeys(current => {
+          const next = new Set(current);
+          next.delete(parentKey);
+          return next;
+        });
       }
     });
     getVsCodeApi().postMessage({
-      type: 'LOG_REQUEST_COMMIT_FILES',
+      type: 'LOG_REQUEST_MERGE_PARENT_FILES',
       requestId,
       repoId: commit.repoId,
-      hash: mergeCommit.hash,
+      hash: commit.hash,
+      parentHash: parentChange.hash,
     } satisfies LogToHostMsg);
-  }, [commit, isMultiCommitSelection, selectedMergeHash]);
+  }, [commit, expandedMergeParentKeys, isMultiCommitSelection, loadingMergeParentKeys, mergeParentFilesByKey]);
 
   const handleSectionResizeMouseDown = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -875,6 +984,24 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
   const selectedTimeRange = commits.length > 0
     ? `${formatDateTime(commits[commits.length - 1].authorDate)} - ${formatDateTime(commits[0].authorDate)}`
     : '';
+  const showMergeParentChanges = !isMultiCommitSelection && mergeParentChanges.length > 0;
+  const showNoMergeConflicts = !isMultiCommitSelection && (commit?.parents.length ?? 0) >= 2 && activeFiles.length === 0;
+  const showFileContextMenu = (event: React.MouseEvent, file: LogViewFileEntry) => {
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      files: file.comparisonBaseHash ? [file] : (groupedEntries[scopedKey(file.repoId, file.path)] ?? [file]),
+      file,
+    });
+  };
+  const showDirectoryContextMenu = (event: React.MouseEvent, node: TreeNode) => {
+    if (node.descendantFiles.length === 0) return;
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      files: node.descendantFiles,
+    });
+  };
 
   return (
     <div ref={containerRef} style={styles.container} onContextMenu={event => event.preventDefault()}>
@@ -883,7 +1010,6 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
         <div style={styles.fileListToolbar}>
           <span style={styles.fileCount}>
             {activeFiles.length === 1 ? t('{0} file', activeFiles.length) : t('{0} files', activeFiles.length)}
-            {selectedMergeCommit ? ` · ${selectedMergeCommit.shortHash}` : ''}
           </span>
           {viewMode === 'tree' && (
             <div style={styles.expandBtns}>
@@ -912,15 +1038,16 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
             onEditSource={contextMenu.file ? () => handleOpenSource(contextMenu.file!) : undefined}
             onRevealExplorer={contextMenu.file ? () => handleRevealInExplorer(contextMenu.file!) : undefined}
             onRevealOS={contextMenu.file ? () => handleRevealInOS(contextMenu.file!) : undefined}
-            onRevert={contextMenu.files.every(file => repoKindById[file.repoId] !== 'svn') ? () => handleRestoreFiles(contextMenu.files) : undefined}
-            onCherryPick={contextMenu.files.every(file => repoKindById[file.repoId] !== 'svn') ? () => handleApplyFiles(contextMenu.files) : undefined}
+            onRevert={contextMenu.files.every(file => !file.comparisonBaseHash && repoKindById[file.repoId] !== 'svn') ? () => handleRestoreFiles(contextMenu.files) : undefined}
+            onCherryPick={contextMenu.files.every(file => !file.comparisonBaseHash && repoKindById[file.repoId] !== 'svn') ? () => handleApplyFiles(contextMenu.files) : undefined}
             onClose={() => setContextMenu(null)}
           />
         )}
 
         <div style={styles.fileList}>
           {activeLoadingFiles && <div style={styles.loading}>{t('Loading files...')}</div>}
-          {!activeLoadingFiles && activeFiles.length === 0 && <div style={styles.loading}>{t('No changed files')}</div>}
+          {!activeLoadingFiles && activeFiles.length === 0 && !showMergeParentChanges && !showNoMergeConflicts && <div style={styles.loading}>{t('No changed files')}</div>}
+          {!activeLoadingFiles && showNoMergeConflicts && <div style={styles.noMergeConflicts}>{t('No merge conflicts')}</div>}
 
           {!activeLoadingFiles && viewMode === 'tree' && visibleTreeChildren.map(child => (
             <TreeDir
@@ -929,20 +1056,8 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
               depth={0}
               selectedFile={selectedFile}
               onOpen={handleOpenDiff}
-              onFileContextMenu={(event, file) => setContextMenu({
-                x: event.clientX,
-                y: event.clientY,
-                files: groupedEntries[scopedKey(file.repoId, file.path)] ?? [file],
-                file,
-              })}
-              onDirectoryContextMenu={(event, node) => {
-                if (node.descendantFiles.length === 0) return;
-                setContextMenu({
-                  x: event.clientX,
-                  y: event.clientY,
-                  files: node.descendantFiles,
-                });
-              }}
+              onFileContextMenu={showFileContextMenu}
+              onDirectoryContextMenu={showDirectoryContextMenu}
               allExpanded={allExpanded}
               iconTheme={iconTheme}
             />
@@ -964,12 +1079,7 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 onClick={isRepoRootChange ? undefined : () => handleOpenDiff(file)}
                 onContextMenu={isRepoRootChange ? undefined : (event => {
                   event.preventDefault();
-                  setContextMenu({
-                    x: event.clientX,
-                    y: event.clientY,
-                    files: groupedEntries[scopedKey(file.repoId, file.path)] ?? [file],
-                    file,
-                  });
+                  showFileContextMenu(event, file);
                 })}
                 title={isRepoRootChange ? dir : `${file.path}\n${t('Click to open diff')}`}
               >
@@ -990,6 +1100,29 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 )}
                 <span style={styles.statusLetter(statusColor)}>{status}</span>
               </div>
+            );
+          })}
+
+          {!activeLoadingFiles && showMergeParentChanges && mergeParentChanges.map(parentChange => {
+            const parentKey = commit ? scopedKey(commit.repoId, commit.hash, parentChange.hash) : parentChange.hash;
+            return (
+              <MergeParentChangeGroup
+                key={parentKey}
+                change={parentChange}
+                files={mergeParentFilesByKey[parentKey]}
+                loading={loadingMergeParentKeys.has(parentKey)}
+                expanded={expandedMergeParentKeys.has(parentKey)}
+                viewMode={viewMode}
+                repoNameById={repoNameById}
+                repoRootPathById={repoRootPathById}
+                repoColorById={repoColorById}
+                selectedFile={selectedFile}
+                iconTheme={iconTheme}
+                onToggle={() => toggleMergeParentChange(parentChange)}
+                onOpen={handleOpenDiff}
+                onFileContextMenu={showFileContextMenu}
+                onDirectoryContextMenu={showDirectoryContextMenu}
+              />
             );
           })}
         </div>
@@ -1351,69 +1484,6 @@ export function CommitDetail({ commit, commits, files, groupedEntries, selectedF
                 </div>
               );
             })()}
-            {(commit.parents.length >= 2 || loadingMerge || mergeCommits.length > 0) && (
-              <div style={styles.mergeSection}>
-                <div style={styles.mergeSectionTitle}>
-                  <Codicon name="git-merge" style={{ fontSize: '11px' }} />
-                  <span>{t('Merged commits')}</span>
-                </div>
-                {loadingMerge && <div style={styles.mergeLoading}>{t('Loading...')}</div>}
-                {!loadingMerge && mergeCommits.length === 0 && <div style={styles.mergeLoading}>{t('No commits found')}</div>}
-                {!loadingMerge && mergeCommits.map(mergeCommit => {
-                  const isActive = selectedMergeHash === mergeCommit.hash;
-                  return (
-                    <div key={mergeCommit.hash}>
-                      <div
-                        style={styles.mergeCommitRow(isActive)}
-                        className="versiondock-detail-row"
-                        data-selected={isActive}
-                        title={`${mergeCommit.hash}\n${t('Click to view files')}`}
-                        onClick={() => selectMergeCommit(mergeCommit)}
-                      >
-                        <Codicon name={isActive ? 'chevron-down' : 'chevron-right'} style={styles.mergeChevron} />
-                        <span style={styles.metaHashGroup}>
-                          <Codicon name="git-commit" style={styles.metaHashIcon} />
-                          <span style={styles.metaHash}>{mergeCommit.shortHash}</span>
-                        </span>
-                        <span style={styles.mergeMessage}>{mergeCommit.message}</span>
-                        <span style={styles.mergeMeta}>{mergeCommit.authorName}</span>
-                      </div>
-                      {isActive && (
-                        <div style={styles.mergeFileList}>
-                          {loadingMergeFiles && <div style={styles.mergeLoading}>{t('Loading files...')}</div>}
-                          {!loadingMergeFiles && mergeFiles.length === 0 && <div style={styles.mergeLoading}>{t('No changed files')}</div>}
-                          {!loadingMergeFiles && mergeFiles.map(file => {
-                            const status = normalizeStatus(file.status);
-                            const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
-                            const fileName = file.path.split('/').pop() ?? file.path;
-                            return (
-                              <div
-                                key={scopedKey(file.repoId, file.commitHash, file.path)}
-                                style={styles.mergeFileRow}
-                                className="versiondock-detail-row"
-                                data-selected={false}
-                                title={file.path}
-                                onClick={() => handleOpenDiff(file)}
-                              >
-                                <FileIcon name={fileName} theme={iconTheme} size={13} style={{ flexShrink: 0 }} />
-                                <span style={{ ...styles.mergeMessage, color: statusColor }}>{fileName}</span>
-                                {(file.added != null || file.removed != null) && (
-                                  <span style={styles.lineStats}>
-                                    {file.added != null && <span style={styles.added}>+{file.added}</span>}
-                                    {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
-                                  </span>
-                                )}
-                                <span style={styles.mergeFileStatus(statusColor)}>{status}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </div>
         ) : (
           <div style={styles.emptyInfo}>{t('Select a commit to view details')}</div>
@@ -1828,80 +1898,72 @@ const styles = {
     whiteSpace: 'nowrap',
     minWidth: 0,
   } as React.CSSProperties,
-  mergeSection: {
-    marginTop: '6px',
-    borderTop: '1px solid var(--vscode-panel-border)',
-    paddingTop: '6px',
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '2px',
-  },
-  mergeSectionTitle: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    fontSize: '11px',
-    color: 'var(--vscode-descriptionForeground)',
-    marginBottom: '2px',
-    userSelect: 'none' as const,
-  } as React.CSSProperties,
   mergeLoading: {
     fontSize: '11px',
     color: 'var(--vscode-descriptionForeground)',
-    padding: '2px 0',
+    padding: '4px 8px',
   } as React.CSSProperties,
-  mergeCommitRow: (active: boolean): React.CSSProperties => ({
+  mergeParentGroup: {
+    borderTop: '1px solid var(--vscode-panel-border)',
+  } as React.CSSProperties,
+  mergeParentRow: (expanded: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    padding: '2px 4px',
-    fontSize: '11px',
+    gap: '5px',
+    minHeight: '22px',
+    padding: '2px 10px 2px 4px',
+    fontSize: '12px',
     cursor: 'pointer',
-    borderRadius: '3px',
-    background: active ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent',
-    color: active ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)',
+    background: expanded ? 'var(--vscode-list-inactiveSelectionBackground)' : 'transparent',
+    color: expanded ? 'var(--vscode-list-inactiveSelectionForeground)' : 'var(--vscode-foreground)',
+    userSelect: 'none' as const,
   }),
   mergeChevron: {
     fontSize: '10px',
     color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
   } as React.CSSProperties,
-  mergeFileList: {
-    marginLeft: '16px',
-    marginBottom: '2px',
-    borderLeft: '1px solid var(--vscode-panel-border)',
-    paddingLeft: '6px',
+  mergeParentTitle: {
+    flexShrink: 0,
+    fontSize: '11px',
   } as React.CSSProperties,
-  mergeFileRow: {
+  mergeParentMessage: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+  } as React.CSSProperties,
+  mergeParentCount: {
+    flexShrink: 0,
+    color: 'var(--vscode-descriptionForeground)',
+    fontSize: '11px',
+  } as React.CSSProperties,
+  mergeParentFileList: {
+    marginLeft: '14px',
+    marginBottom: '3px',
+    paddingLeft: '4px',
+  } as React.CSSProperties,
+  mergeParentFileRow: (selected: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '4px',
-    padding: '1px 4px',
-    fontSize: '11px',
+    minHeight: '22px',
+    padding: '2px 10px 2px 4px',
+    fontSize: '12px',
     cursor: 'pointer',
-    borderRadius: '2px',
-  } as React.CSSProperties,
-  mergeFileStatus: (color: string): React.CSSProperties => ({
-    fontSize: '10px',
-    fontWeight: 700,
-    color,
-    flexShrink: 0,
+    background: selected ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent',
+    color: selected ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)',
   }),
-  mergeMessage: {
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap' as const,
-    color: 'var(--vscode-foreground)',
-  } as React.CSSProperties,
-  mergeMeta: {
-    fontSize: '10px',
+  noMergeConflicts: {
+    padding: '8px 10px 7px',
+    fontSize: '12px',
+    fontWeight: 400,
+    textAlign: 'center' as const,
     color: 'var(--vscode-descriptionForeground)',
-    flexShrink: 0,
-    maxWidth: '80px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap' as const,
+    opacity: 0.72,
   } as React.CSSProperties,
   fileListToolbar: {
     display: 'flex',

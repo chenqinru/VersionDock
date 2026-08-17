@@ -164,6 +164,16 @@ function parseNumStatZOutput(output: string): Map<string, { added?: number; remo
   return stats;
 }
 
+function normalizeCombinedDiffStatus(code: string): string {
+  const normalized = code.replace(/\d+$/, '');
+  if (normalized.length <= 1) return normalized || 'M';
+  if (normalized.includes('R')) return 'R';
+  if (normalized.includes('C')) return 'C';
+  if (normalized.includes('D')) return 'D';
+  if (normalized.includes('A')) return 'A';
+  return 'M';
+}
+
 // VS Code Status enum → GitFileStatus
 function vsStatusToGitFileStatus(s: Status): GitFileStatus {
   switch (s) {
@@ -1223,26 +1233,78 @@ export class GitService {
     return result;
   }
 
-  async getCommitFiles(hash: string, knownParents?: string[]): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
-    // For merge commits, diff-tree uses combined diff and omits most files.
-    // Diff against first parent instead to get the full file list.
-    let parents = knownParents;
-    if (!parents) {
-      const raw = await this.git.raw(['log', '-1', '--format=%P', hash]).catch(() => '');
-      parents = raw.trim().split(' ').filter(Boolean);
+  private async getCommitParents(hash: string, knownParents?: string[]): Promise<string[]> {
+    if (knownParents && knownParents.length > 0) {
+      return knownParents.map(parent => this.safeRevisionArg(parent));
     }
+    const raw = await this.git.raw(['log', '-1', '--format=%P', this.safeRevisionArg(hash)]).catch(() => '');
+    return raw.trim().split(' ').filter(Boolean).map(parent => this.safeRevisionArg(parent));
+  }
+
+  private async getFilesBetween(baseHash: string, targetHash: string): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
+    const [nameStatus, numStat] = await Promise.all([
+      this.rawPathSafe(['diff', '--name-status', '-z', '-M', baseHash, targetHash]),
+      this.rawPathSafe(['diff', '--numstat', '-z', '-M', baseHash, targetHash]),
+    ]);
+    const stats = parseNumStatZOutput(numStat);
+    return parseNameStatusZOutput(nameStatus).map(file => {
+      const stat = stats.get(file.path);
+      return {
+        status: file.code.replace(/\d+$/, ''),
+        path: file.path,
+        added: stat?.added,
+        removed: stat?.removed,
+      };
+    });
+  }
+
+  async getMergeParentChanges(hash: string, knownParents?: string[]): Promise<import('../types/messages').MergeParentChange[]> {
+    const safeHash = this.safeRevisionArg(hash);
+    const parents = await this.getCommitParents(safeHash, knownParents);
+    if (parents.length < 2) return [];
+
+    const changes = await Promise.all(parents.map(async (parentHash, parentIndex) => {
+      const [metadata, changedPaths] = await Promise.all([
+        this.git.raw(['show', '-s', '--format=%h%x00%an%x00%ai%x00%s', parentHash]),
+        this.rawPathSafe(['diff', '--name-only', '-z', '-M', parentHash, safeHash]),
+      ]);
+      const [shortHash = parentHash.slice(0, 7), authorName = '', authorDate = '', ...messageParts] = metadata.trimEnd().split('\x00');
+      return {
+        hash: parentHash,
+        shortHash,
+        message: messageParts.join('\x00'),
+        authorName,
+        authorDate,
+        parentIndex,
+        fileCount: changedPaths.split('\x00').filter(Boolean).length,
+      };
+    }));
+
+    return changes.filter(change => change.fileCount > 0);
+  }
+
+  async getMergeParentFiles(hash: string, parentHash: string): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
+    const safeHash = this.safeRevisionArg(hash);
+    const safeParentHash = this.safeRevisionArg(parentHash);
+    const parents = await this.getCommitParents(safeHash);
+    if (!parents.includes(safeParentHash)) {
+      throw new Error(`Commit ${safeParentHash} is not a parent of merge commit ${safeHash}`);
+    }
+    return this.getFilesBetween(safeParentHash, safeHash);
+  }
+
+  async getCommitFiles(hash: string, knownParents?: string[]): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
+    const safeHash = this.safeRevisionArg(hash);
+    const parents = await this.getCommitParents(safeHash, knownParents);
     const isMerge = parents.length >= 2;
 
-    const baseArgs = isMerge
-      ? ['diff', '--name-status', '-z', '-M', parents[0], hash]
-      : ['diff-tree', '--root', '--no-commit-id', '-r', '-z', '-M', '--name-status', hash];
-    const numArgs = isMerge
-      ? ['diff', '--numstat', '-z', '-M', parents[0], hash]
-      : ['diff-tree', '--root', '--no-commit-id', '-r', '-z', '-M', '--numstat', hash];
+    if (isMerge) {
+      return this.getFilesBetween(parents[0], safeHash);
+    }
 
     const [nameStatus, numStat] = await Promise.all([
-      this.rawPathSafe(baseArgs),
-      this.rawPathSafe(numArgs),
+      this.rawPathSafe(['diff-tree', '--root', '--no-commit-id', '-r', '-z', '-M', '--name-status', safeHash]),
+      this.rawPathSafe(['diff-tree', '--root', '--no-commit-id', '-r', '-z', '-M', '--numstat', safeHash]),
     ]);
     const stats = parseNumStatZOutput(numStat);
     const files: Array<{ path: string; status: string; added?: number; removed?: number }> = [];
@@ -1256,6 +1318,25 @@ export class GitService {
       });
     }
     return files;
+  }
+
+  async getCommitFilesForLogDetail(hash: string, knownParents?: string[]): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
+    const safeHash = this.safeRevisionArg(hash);
+    const parents = await this.getCommitParents(safeHash, knownParents);
+    if (parents.length < 2) {
+      return this.getCommitFiles(safeHash, parents);
+    }
+
+    // A combined diff contains only paths changed by the merge resolution
+    // itself. Differences introduced by each parent are exposed separately
+    // through getMergeParentChanges()/getMergeParentFiles().
+    const nameStatus = await this.rawPathSafe([
+      'diff-tree', '--no-commit-id', '-r', '--cc', '-z', '-M', '--name-status', safeHash,
+    ]);
+    return parseNameStatusZOutput(nameStatus).map(file => ({
+      status: normalizeCombinedDiffStatus(file.code),
+      path: file.path,
+    }));
   }
 
   async getFileDiff(repoId: string, hash: string, filePath: string): Promise<FileDiff | null> {

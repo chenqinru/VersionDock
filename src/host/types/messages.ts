@@ -34,6 +34,20 @@ export interface MergeParentCommit {
   parentIndex: number; // which parent branch (1 = first non-main, 2 = second, ...)
 }
 
+/**
+ * A direct parent of a merge commit and the number of files that differ from
+ * that parent. The file list is requested lazily when the row is expanded.
+ */
+export interface MergeParentChange {
+  hash: string;
+  shortHash: string;
+  message: string;
+  authorName: string;
+  authorDate: string;
+  parentIndex: number;
+  fileCount: number;
+}
+
 // ─── Shelve (patch-based, PhpStorm-style) ────────────────────────────────────
 
 export interface ShelveEntry {
@@ -305,7 +319,7 @@ export type HostToLogMsg =
   | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string }
   | { type: 'LOG_GRAPH_COMMITS'; commits: GraphCommitNode[]; generation: number; requestId: string }
   | { type: 'LOG_DIFF_RESULT'; requestId: string; files: Array<{ path: string; status: string }>; diff: FileDiff | null; error?: string }
-  | { type: 'LOG_COMMIT_FILES'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; error?: string }
+  | { type: 'LOG_COMMIT_FILES'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; mergeParentChanges?: MergeParentChange[]; error?: string }
   | { type: 'LOG_BRANCH_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string }
   | { type: 'LOG_REFS_UPDATE'; repoId: string; branches: BranchInfo[] }
   | { type: 'LOG_TAGS_UPDATE'; repoId: string; tags: TagInfo[] }
@@ -313,6 +327,7 @@ export type HostToLogMsg =
   | { type: 'LOG_REMOTES_RESULT'; requestId: string; remotes: string[]; error?: string }
   | { type: 'LOG_REFRESH' }
   | { type: 'LOG_MERGE_COMMITS_RESULT'; requestId: string; commits: MergeParentCommit[]; error?: string }
+  | { type: 'LOG_MERGE_PARENT_FILES_RESULT'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; error?: string }
   | { type: 'LOG_FILE_OP_RESULT'; requestId: string; ok: boolean; error?: string }
   | { type: 'LOG_COMMIT_BRANCHES_RESULT'; requestId: string; branches: { local: string[]; remote: string[]; tags: string[] } }
   | { type: 'LOG_SCROLL_TO_COMMIT'; hash: string; repoId: string }
@@ -326,7 +341,7 @@ export type HostToLogMsg =
 export type LogToHostMsg =
   | { type: 'LOG_REQUEST_COMMITS'; repoIds: string[] | null; limit: number; skip: number; generation?: number; requestId?: string; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }
   | { type: 'LOG_REQUEST_GRAPH_COMMITS'; repoIds: string[] | null; generation: number; requestId: string }
-  | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[] }
+  | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[]; includeMergeParentChanges?: boolean }
   | { type: 'LOG_REQUEST_FILE_DIFF'; requestId: string; repoId: string; hash: string; filePath: string }
   | { type: 'LOG_OPEN_FILE_DIFF'; repoId: string; hash: string; filePath: string; fileStatus?: string; lineRange?: LineRange }
   | { type: 'LOG_OPEN_FILE_RANGE_DIFF'; repoId: string; fromHash: string; toHash: string; filePath: string; lineRange?: LineRange }
@@ -352,6 +367,7 @@ export type LogToHostMsg =
   | { type: 'LOG_RESET_TO'; requestId: string; repoId: string; hash: string; mode: 'soft' | 'mixed' | 'hard' }
   | { type: 'LOG_CREATE_PATCH'; requestId: string; repoId: string; hash: string }
   | { type: 'LOG_REQUEST_MERGE_COMMITS'; requestId: string; repoId: string; hash: string; parents: string[] }
+  | { type: 'LOG_REQUEST_MERGE_PARENT_FILES'; requestId: string; repoId: string; hash: string; parentHash: string }
   | { type: 'LOG_DROP_COMMIT'; requestId: string; repoId: string; hash: string }
   | { type: 'LOG_SQUASH_COMMITS'; requestId: string; repoId: string; hashes: string[]; oldestHash: string; message: string; commits: { hash: string; shortHash: string; message: string }[] }
   | { type: 'LOG_OPEN_AI_COMPOSER'; repoId: string; hashes: string[] }

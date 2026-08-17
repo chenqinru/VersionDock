@@ -84,7 +84,7 @@ export async function openCommitDetailPanel(
     ]);
     commitInfo ??= { hash, shortHash: hash.slice(0, 7), message: '', authorName: '', authorEmail: '', authorDate: '', committerDate: '', parents: [] };
     [files, branches] = await Promise.all([
-      repo.getCommitFiles(hash, commitInfo.parents),
+      repo.getCommitFilesForLogDetail(hash, commitInfo.parents),
       repo.getBranchesContaining(hash).catch(() => ({ local: [], remote: [], tags: [] })),
     ]);
   } catch (e: unknown) {
@@ -179,25 +179,7 @@ export async function openCommitDetailPanel(
     branches,
   });
 
-  panel.webview.onDidReceiveMessage(async (msg: { type: string; filePath?: string; fileStatus?: string; repoId?: string; hash?: string; fromHash?: string; toHash?: string; parents?: string[]; requestId?: string }) => {
-    if (msg.type === 'getMergeCommits' && msg.hash && msg.parents && msg.requestId) {
-      try {
-        const commits = await repo.getMergeCommits(msg.hash, msg.parents);
-        panel.webview.postMessage({ type: 'mergeCommitsResult', requestId: msg.requestId, commits });
-      } catch {
-        panel.webview.postMessage({ type: 'mergeCommitsResult', requestId: msg.requestId, commits: [] });
-      }
-      return;
-    }
-    if (msg.type === 'getMergeFiles' && msg.hash && msg.requestId) {
-      try {
-        const mergeFiles = await repo.getCommitFiles(msg.hash);
-        panel.webview.postMessage({ type: 'mergeFilesResult', requestId: msg.requestId, files: mergeFiles });
-      } catch {
-        panel.webview.postMessage({ type: 'mergeFilesResult', requestId: msg.requestId, files: [] });
-      }
-      return;
-    }
+  panel.webview.onDidReceiveMessage(async (msg: { type: string; filePath?: string; fileStatus?: string; repoId?: string; hash?: string; fromHash?: string; toHash?: string }) => {
     if (msg.type === 'openDiff' && msg.filePath) {
       try {
         const pathMod = await import('path');
@@ -292,7 +274,7 @@ export async function openAggregatedCommitDetailPanel(
       const repoMeta = repoMetaById.get(selection.repoId);
       const repoName = repoMeta?.name ?? selection.repoId;
       const repoColor = repoMeta?.color ?? '#4ec9b0';
-      const files = await repo.getCommitFiles(selection.hash, commitInfo.parents);
+      const files = await repo.getCommitFilesForLogDetail(selection.hash, commitInfo.parents);
       commitSummaries.push({
         repoId: selection.repoId,
         repoName,
@@ -432,7 +414,7 @@ export async function openAggregatedCommitDetailPanel(
     involvedRepoCount: involvedRepoIds.length,
   });
 
-  panel.webview.onDidReceiveMessage(async (msg: { type: string; filePath?: string; fileStatus?: string; repoId?: string; hash?: string; fromHash?: string; toHash?: string; requestId?: string }) => {
+  panel.webview.onDidReceiveMessage(async (msg: { type: string; filePath?: string; fileStatus?: string; repoId?: string; hash?: string; fromHash?: string; toHash?: string }) => {
     const targetRepoId = msg.repoId ?? firstCommit.repoId;
     const targetRepo = manager.getRepo(targetRepoId);
     if (!targetRepo) return;
@@ -1217,38 +1199,6 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ctx-sep { height: 1px; background: var(--vscode-menu-separatorBackground, var(--vscode-panel-border)); margin: 3px 0; }
     .ctx-item.danger { color: var(--vscode-errorForeground); }
 
-    /* ── Merged commits ── */
-    .merge-section {
-      display: flex; flex-direction: column; gap: 2px;
-      flex-shrink: 0; max-height: 200px; overflow-y: auto;
-      padding: 6px 8px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-    .merge-title {
-      display: flex; align-items: center; gap: 5px;
-      font-size: 10px; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.06em;
-      color: var(--vscode-descriptionForeground); margin-bottom: 4px;
-    }
-    .merge-loading { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 0; }
-    .merge-commit-row {
-      display: flex; align-items: center; gap: 5px;
-      padding: 3px 6px; border-radius: 3px; cursor: pointer;
-      font-size: 11px;
-    }
-    .merge-commit-row:hover { background: var(--vscode-list-hoverBackground); }
-    .merge-commit-row.active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
-    .merge-hash { font-family: var(--vscode-editor-font-family, monospace); color: var(--vscode-descriptionForeground); flex-shrink: 0; }
-    .merge-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .merge-author { color: var(--vscode-descriptionForeground); flex-shrink: 0; font-size: 10px; }
-    .merge-files { padding-left: 16px; display: flex; flex-direction: column; gap: 1px; margin-bottom: 2px; }
-    .merge-file-row {
-      display: flex; align-items: center; gap: 5px;
-      padding: 2px 4px; border-radius: 3px; cursor: pointer; font-size: 11px;
-    }
-    .merge-file-row:hover { background: var(--vscode-list-hoverBackground); }
-    .merge-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .merge-file-status { font-size: 10px; font-weight: 700; flex-shrink: 0; }
   </style>
 </head>
 <body>
@@ -1295,10 +1245,6 @@ ${leftPanelContent}
     </div>
 
     <div class="right-panel">
-      ${data.parents.length >= 2 ? `<div class="merge-section" id="mergeSection">
-        <div class="merge-title"><span class="codicon codicon-git-merge" style="font-size:11px"></span>${escHtml(t('Merged commits'))}</div>
-        <div id="mergeList"><div class="merge-loading">${escHtml(t('Loading...'))}</div></div>
-      </div>` : ''}
       <div class="file-toolbar">
         <span class="file-count" id="fileCount"></span>
         <button class="tb-btn" id="btnExpandAll" title="${escHtml(t('Expand all'))}" style="display:none"><span class="codicon codicon-expand-all"></span></button>
@@ -2233,124 +2179,6 @@ ${leftPanelContent}
         if (commit) appendBranchBadges(commitRefsRow, normalizeBranches(commit.branches));
       });
     } catch(e) { /* badges are optional */ }
-
-    // ── Merged commits ──
-    try {
-      const mergeListEl = document.getElementById('mergeList');
-      if (mergeListEl && __d.parents && __d.parents.length >= 2) {
-        const pending = new Map();
-        let selectedMergeHash = null;
-
-        window.addEventListener('message', e => {
-          const cb = pending.get(e.data?.requestId);
-          if (cb) { pending.delete(e.data.requestId); cb(e.data); }
-        });
-
-        function reqId() { return Math.random().toString(36).slice(2); }
-
-        function renderMergeList(commits, mergeFiles) {
-          const buf = [];
-          for (const c of commits) {
-            const isActive = selectedMergeHash === c.hash;
-            buf.push(
-              '<div class="merge-commit-row' + (isActive ? ' active' : '') + '" data-hash="' + escAttr(c.hash) + '" title="' + escAttr(c.hash) + '">' +
-              '<span class="codicon codicon-' + (isActive ? 'chevron-down' : 'chevron-right') + '" style="font-size:10px;flex-shrink:0"></span>' +
-              '<span class="merge-hash">' + escText(c.shortHash) + '</span>' +
-              '<span class="merge-msg">' + escText(c.message) + '</span>' +
-              '<span class="merge-author">' + escText(c.authorName) + '</span>' +
-              '</div>'
-            );
-            if (isActive) {
-              buf.push('<div class="merge-files">');
-              if (!mergeFiles) {
-                buf.push('<div class="merge-loading">' + escText(t('Loading files...')) + '</div>');
-              } else if (mergeFiles.length === 0) {
-                buf.push('<div class="merge-loading">' + escText(t('No changed files')) + '</div>');
-              } else {
-                for (const f of mergeFiles) {
-                  const status = normalizeStatus(f.status);
-                  const col = statusColor(status);
-                  const name = f.path.includes('/') ? f.path.split('/').pop() : f.path;
-                  buf.push(
-                    '<div class="merge-file-row" data-path="' + escAttr(f.path) + '" data-status="' + escAttr(status) + '" data-hash="' + escAttr(c.hash) + '" title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
-                    fileIconHtml(name) +
-                    '<span class="merge-file-name" style="color:' + col + '">' + escText(name) + '</span>' +
-                    statsHtml(f) +
-                    '<span class="merge-file-status" style="color:' + col + '">' + escText(status) + '</span>' +
-                    '</div>'
-                  );
-                }
-              }
-              buf.push('</div>');
-            }
-          }
-          mergeListEl.innerHTML = buf.join('');
-        }
-
-        // Load merge commits
-        const rid = reqId();
-        pending.set(rid, data => {
-          const commits = data.commits || [];
-          if (commits.length === 0) {
-            mergeListEl.innerHTML = '<div class="merge-loading">' + escText(t('No commits found')) + '</div>';
-            return;
-          }
-          renderMergeList(commits, null);
-
-          mergeListEl.addEventListener('click', e => {
-            const row = e.target.closest('.merge-commit-row');
-            const fileRow = e.target.closest('.merge-file-row');
-            if (fileRow) {
-              vscode.postMessage({ type: 'openDiff', filePath: fileRow.dataset.path, fileStatus: fileRow.dataset.status, hash: fileRow.dataset.hash });
-              return;
-            }
-            if (!row) return;
-            const clickedHash = row.dataset.hash;
-            if (selectedMergeHash === clickedHash) {
-              selectedMergeHash = null;
-              renderMergeList(commits, null);
-              // restore main file list
-              document.getElementById('fileCount').textContent = formatFileCount(FILES.length);
-              render();
-              return;
-            }
-            selectedMergeHash = clickedHash;
-            renderMergeList(commits, null);
-            // Load files for this merge commit
-            const frid = reqId();
-            pending.set(frid, fdata => {
-              const mf = fdata.files || [];
-              renderMergeList(commits, mf);
-              // Show merge commit files in right panel
-              document.getElementById('fileCount').textContent = formatFileCount(mf.length) + ' · ' + (commits.find(c => c.hash === selectedMergeHash)?.shortHash || '');
-              const listEl2 = document.getElementById('fileList');
-              const buf2 = [];
-              for (const f of mf) {
-                const status = normalizeStatus(f.status);
-                const col = statusColor(status);
-                const name = f.path.includes('/') ? f.path.split('/').pop() : f.path;
-                const dir  = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
-                buf2.push(
-                  '<div class="file-row" data-path="' + escAttr(f.path) + '" data-status="' + escAttr(status) + '" data-hash="' + escAttr(selectedMergeHash) + '" title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
-                  '<div class="row-indent" style="width:4px"></div>' +
-                  fileIconHtml(name) +
-                  '<span class="row-name" style="color:' + col + '">' + escText(name) + '</span>' +
-                  (dir ? '<span class="row-dir">' + escText(dir) + '</span>' : '') +
-                  '<span class="row-tail">' +
-                  statsHtml(f) +
-                  '<span class="row-status" style="color:' + col + '">' + escText(status) + '</span>' +
-                  '</span>' +
-                  '</div>'
-                );
-              }
-              listEl2.innerHTML = buf2.join('');
-            });
-            vscode.postMessage({ type: 'getMergeFiles', hash: clickedHash, requestId: frid });
-          });
-        });
-        vscode.postMessage({ type: 'getMergeCommits', hash: __d.hash, parents: __d.parents, requestId: rid });
-      }
-    } catch(e) { /* merge section is optional */ }
 
     // ── Revert feedback ──
     window.addEventListener('message', e => {
