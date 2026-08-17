@@ -52,9 +52,30 @@ interface DropdownButtonProps {
 }
 
 const MIN_TEXTAREA_HEIGHT = 52;
+const COMMIT_TEXTAREA_HEIGHT_KEY = 'versiondock:commit-message-textarea-height';
 
 function getMaxTextareaHeight(): number {
   return Math.max(MIN_TEXTAREA_HEIGHT, Math.floor(window.innerHeight / 2));
+}
+
+function loadPersistedTextareaHeight(): number | null {
+  try {
+    const raw = localStorage.getItem(COMMIT_TEXTAREA_HEIGHT_KEY);
+    if (raw === null) return null;
+    const stored = Number(raw);
+    if (!Number.isFinite(stored)) return null;
+    return Math.min(getMaxTextareaHeight(), Math.max(MIN_TEXTAREA_HEIGHT, stored));
+  } catch {
+    return null;
+  }
+}
+
+function persistTextareaHeight(height: number): void {
+  try {
+    localStorage.setItem(COMMIT_TEXTAREA_HEIGHT_KEY, String(height));
+  } catch {
+    // The webview may not allow localStorage; in-memory state still works.
+  }
 }
 
 function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, fullWidth, dropdownAlign = 'left', items, onMainClick }: DropdownButtonProps) {
@@ -235,9 +256,9 @@ export function UnifiedCommitForm({
   const historyDraftRef = useRef(message);
   const messageRef = useRef(message);
   const appliedHistoryMessageRef = useRef<string | null>(null);
-  const manualTextareaHeightRef = useRef<number | null>(null);
+  const [manualTextareaHeight, setManualTextareaHeight] = useState<number | null>(loadPersistedTextareaHeight);
+  const manualTextareaHeightRef = useRef<number | null>(manualTextareaHeight);
   const resizeDragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
-  const [manualTextareaHeight, setManualTextareaHeight] = useState<number | null>(null);
   const [resizingTextarea, setResizingTextarea] = useState(false);
   const [messageHistoryOpen, setMessageHistoryOpen] = useState(false);
 
@@ -246,6 +267,7 @@ export function UnifiedCommitForm({
   const updateManualTextareaHeight = useCallback((height: number) => {
     const nextHeight = Math.min(getMaxTextareaHeight(), Math.max(MIN_TEXTAREA_HEIGHT, height));
     manualTextareaHeightRef.current = nextHeight;
+    persistTextareaHeight(nextHeight);
     setManualTextareaHeight(nextHeight);
   }, []);
 

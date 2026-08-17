@@ -538,6 +538,7 @@ function RepoPicker({ value, repos, onChange, style }: {
   }, [open]);
 
   const active = repos.find(repo => repo.id === value) ?? null;
+  const displayRepoName = (name: string) => name.toUpperCase();
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', ...style }}>
@@ -546,14 +547,14 @@ function RepoPicker({ value, repos, onChange, style }: {
         data-active={value ? 'true' : 'false'}
         style={{ ...styles.pickerBtn(!!value), width: '100%' }}
         onClick={() => setOpen(current => !current)}
-        title={active?.name ?? t('Filter by repository')}
+        title={active ? displayRepoName(active.name) : t('Filter by repository')}
       >
         {active
           ? <span style={{ ...styles.repoDot, background: active.color }} />
           : <Codicon name="repo" style={styles.fieldIcon} />
         }
         <span style={value ? styles.pickerLabelActive : styles.pickerLabelPlaceholder}>
-          {active?.name ?? t('Repository…')}
+          {active ? displayRepoName(active.name) : t('Repository…')}
         </span>
         <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', flexShrink: 0 }} />
       </button>
@@ -579,7 +580,7 @@ function RepoPicker({ value, repos, onChange, style }: {
                 onClick={() => { onChange(repo.id); setOpen(false); }}
               >
                 <span style={{ ...styles.repoDot, background: readableAccentColor(repo.color) }} />
-                <span style={styles.dropdownItemLabel}>{repo.name}</span>
+                <span style={styles.dropdownItemLabel}>{displayRepoName(repo.name)}</span>
                 {value === repo.id && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
               </div>
             ))}
