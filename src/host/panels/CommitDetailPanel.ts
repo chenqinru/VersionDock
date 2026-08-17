@@ -10,6 +10,7 @@ import type { AiCommitExplanationService } from '../aiCommitExplanation/AiCommit
 import { buildCommitExplanationContext } from '../aiCommitExplanation/buildCommitExplanationContext';
 import type { CommitExplanationCommit, CommitExplanationFile } from '../aiCommitExplanation/types';
 import type { VersionDockLogger } from '../utils/Logger';
+import type { MergeParentChange } from '../types/messages';
 
 type CommitDetailFile = {
   repoId?: string;
@@ -57,6 +58,27 @@ type CommitDetailRepo = {
   getFileDiff(repoId: string, hash: string, filePath: string): Promise<{ originalContent?: string; modifiedContent?: string } | null>;
 };
 
+type CommitDetailSelection = { repoId: string; hash: string };
+
+const singleCommitDetailPanels = new Map<string, vscode.WebviewPanel>();
+const aggregatedCommitDetailPanels = new Map<string, vscode.WebviewPanel>();
+const pendingSingleCommitDetails = new Map<string, Promise<void>>();
+const pendingAggregatedCommitDetails = new Map<string, Promise<void>>();
+
+function singleCommitDetailKey(repoId: string, hash: string): string {
+  return scopedKey(repoId, hash);
+}
+
+function aggregatedCommitDetailKey(commits: CommitDetailSelection[]): string {
+  const unique = new Map<string, CommitDetailSelection>();
+  for (const commit of commits) {
+    unique.set(singleCommitDetailKey(commit.repoId, commit.hash), commit);
+  }
+  return JSON.stringify(Array.from(unique.values()).sort((left, right) => (
+    left.repoId.localeCompare(right.repoId) || left.hash.localeCompare(right.hash)
+  )));
+}
+
 export async function openCommitDetailPanel(
   extensionUri: vscode.Uri,
   manager: WorkspaceGitManager,
@@ -66,6 +88,40 @@ export async function openCommitDetailPanel(
   hash: string,
   autoExplain = false,
 ): Promise<void> {
+  const panelKey = singleCommitDetailKey(repoId, hash);
+  const existingPanel = singleCommitDetailPanels.get(panelKey);
+  if (existingPanel) {
+    existingPanel.reveal(vscode.ViewColumn.One);
+    return;
+  }
+
+  const pending = pendingSingleCommitDetails.get(panelKey);
+  if (pending) {
+    await pending;
+    singleCommitDetailPanels.get(panelKey)?.reveal(vscode.ViewColumn.One);
+    return;
+  }
+
+  const opening = createCommitDetailPanel(extensionUri, manager, aiCommitExplanationService, logger, repoId, hash, autoExplain);
+  pendingSingleCommitDetails.set(panelKey, opening);
+  try {
+    await opening;
+  } finally {
+    if (pendingSingleCommitDetails.get(panelKey) === opening) {
+      pendingSingleCommitDetails.delete(panelKey);
+    }
+  }
+}
+
+async function createCommitDetailPanel(
+  extensionUri: vscode.Uri,
+  manager: WorkspaceGitManager,
+  aiCommitExplanationService: AiCommitExplanationService,
+  logger: VersionDockLogger,
+  repoId: string,
+  hash: string,
+  autoExplain: boolean,
+): Promise<void> {
   const repo = manager.getRepo(repoId);
   if (!repo) {
     vscode.window.showErrorMessage(t('VersionDock: Repository not found.'));
@@ -74,6 +130,7 @@ export async function openCommitDetailPanel(
 
   let commitInfo: Awaited<ReturnType<typeof repo.getCommitMeta>> | null = null;
   let files: Array<{ path: string; status: string; added?: number; removed?: number }> = [];
+  let mergeParentChanges: MergeParentChange[] = [];
   let fullMessage = '';
   let branches: { local: string[]; remote: string[]; tags: string[] } = { local: [], remote: [], tags: [] };
 
@@ -83,9 +140,12 @@ export async function openCommitDetailPanel(
       repo.getCommitMeta(hash),
     ]);
     commitInfo ??= { hash, shortHash: hash.slice(0, 7), message: '', authorName: '', authorEmail: '', authorDate: '', committerDate: '', parents: [] };
-    [files, branches] = await Promise.all([
+    [files, branches, mergeParentChanges] = await Promise.all([
       repo.getCommitFilesForLogDetail(hash, commitInfo.parents),
       repo.getBranchesContaining(hash).catch(() => ({ local: [], remote: [], tags: [] })),
+      commitInfo.parents.length >= 2
+        ? repo.getMergeParentChanges(hash, commitInfo.parents).catch(() => [])
+        : Promise.resolve([]),
     ]);
   } catch (e: unknown) {
     vscode.window.showErrorMessage(t('VersionDock: Failed to load commit details: {0}', String(e)));
@@ -95,6 +155,8 @@ export async function openCommitDetailPanel(
   const repoMeta = manager.getRepoMetas().find(r => r.id === repoId);
   const repoName = repoMeta?.name ?? repoId;
   const repoColor = repoMeta?.color ?? '#4ec9b0';
+  // Keep the main file tree aligned with the Git Log change list. Parent
+  // change trees disable this grouping locally to avoid a nested repo root.
   const showRepoGrouping = manager.getRepoMetas().length > 1;
 
   const nonce = generateNonce();
@@ -114,6 +176,13 @@ export async function openCommitDetailPanel(
     }
   );
   panel.iconPath = new vscode.ThemeIcon('git-commit');
+  const panelKey = singleCommitDetailKey(repoId, hash);
+  singleCommitDetailPanels.set(panelKey, panel);
+  panel.onDidDispose(() => {
+    if (singleCommitDetailPanels.get(panelKey) === panel) {
+      singleCommitDetailPanels.delete(panelKey);
+    }
+  });
   const [iconTheme, i18n] = await Promise.all([
     loadIconTheme(panel.webview),
     Promise.resolve(getWebviewI18nPayload()),
@@ -176,10 +245,20 @@ export async function openCommitDetailPanel(
       repoColor,
       hash,
     })),
+    mergeParentChanges,
     branches,
   });
 
-  panel.webview.onDidReceiveMessage(async (msg: { type: string; filePath?: string; fileStatus?: string; repoId?: string; hash?: string; fromHash?: string; toHash?: string }) => {
+  panel.webview.onDidReceiveMessage(async (msg: { type: string; filePath?: string; fileStatus?: string; repoId?: string; hash?: string; fromHash?: string; toHash?: string; parentHash?: string; requestId?: string }) => {
+    if (msg.type === 'getMergeParentFiles' && msg.hash && msg.parentHash && msg.requestId) {
+      try {
+        const parentFiles = await repo.getMergeParentFiles(msg.hash, msg.parentHash);
+        panel.webview.postMessage({ type: 'mergeParentFilesResult', requestId: msg.requestId, files: parentFiles });
+      } catch {
+        panel.webview.postMessage({ type: 'mergeParentFilesResult', requestId: msg.requestId, files: [] });
+      }
+      return;
+    }
     if (msg.type === 'openDiff' && msg.filePath) {
       try {
         const pathMod = await import('path');
@@ -254,6 +333,39 @@ export async function openAggregatedCommitDetailPanel(
   logger: VersionDockLogger,
   commits: Array<{ repoId: string; hash: string }>,
   autoExplain = false,
+): Promise<void> {
+  const panelKey = aggregatedCommitDetailKey(commits);
+  const existingPanel = aggregatedCommitDetailPanels.get(panelKey);
+  if (existingPanel) {
+    existingPanel.reveal(vscode.ViewColumn.One);
+    return;
+  }
+
+  const pending = pendingAggregatedCommitDetails.get(panelKey);
+  if (pending) {
+    await pending;
+    aggregatedCommitDetailPanels.get(panelKey)?.reveal(vscode.ViewColumn.One);
+    return;
+  }
+
+  const opening = createAggregatedCommitDetailPanel(extensionUri, manager, aiCommitExplanationService, logger, commits, autoExplain);
+  pendingAggregatedCommitDetails.set(panelKey, opening);
+  try {
+    await opening;
+  } finally {
+    if (pendingAggregatedCommitDetails.get(panelKey) === opening) {
+      pendingAggregatedCommitDetails.delete(panelKey);
+    }
+  }
+}
+
+async function createAggregatedCommitDetailPanel(
+  extensionUri: vscode.Uri,
+  manager: WorkspaceGitManager,
+  aiCommitExplanationService: AiCommitExplanationService,
+  logger: VersionDockLogger,
+  commits: Array<{ repoId: string; hash: string }>,
+  autoExplain: boolean,
 ): Promise<void> {
   if (commits.length === 0) return;
 
@@ -363,6 +475,13 @@ export async function openAggregatedCommitDetailPanel(
     }
   );
   panel.iconPath = new vscode.ThemeIcon('git-commit');
+  const panelKey = aggregatedCommitDetailKey(commits);
+  aggregatedCommitDetailPanels.set(panelKey, panel);
+  panel.onDidDispose(() => {
+    if (aggregatedCommitDetailPanels.get(panelKey) === panel) {
+      aggregatedCommitDetailPanels.delete(panelKey);
+    }
+  });
   const [iconTheme, i18n] = await Promise.all([
     loadIconTheme(panel.webview),
     Promise.resolve(getWebviewI18nPayload()),
@@ -408,6 +527,7 @@ export async function openAggregatedCommitDetailPanel(
     committerDate: firstCommit.committerDate,
     parents: [],
     files: Array.from(aggregatedMap.values()),
+    mergeParentChanges: [],
     branches: { local: [], remote: [], tags: [] },
     commits: commitSummaries.map(({ repoRootPath: _repoRootPath, vcsKind: _vcsKind, files: _files, ...commit }) => commit),
     selectedTimeRange,
@@ -709,6 +829,7 @@ interface PanelData {
   committerDate: string;
   parents: string[];
   files: CommitDetailFile[];
+  mergeParentChanges?: MergeParentChange[];
   branches: { local: string[]; remote: string[]; tags: string[] };
   commits?: CommitSummaryView[];
   selectedTimeRange?: string;
@@ -1149,10 +1270,35 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
 
     .file-list { flex: 1; overflow-y: auto; padding: 2px 0; }
 
+    .no-merge-conflicts {
+      padding: 8px 10px 7px;
+      font-size: 12px;
+      font-weight: 400;
+      text-align: center;
+      color: var(--vscode-descriptionForeground);
+      opacity: 0.72;
+    }
+
+    .merge-parent-group { border-top: 1px solid var(--vscode-panel-border); }
+    .merge-parent-row {
+      display: flex; align-items: center; gap: 5px;
+      min-height: 22px; padding: 2px 10px 2px 4px;
+      font-size: 12px; cursor: pointer; user-select: none;
+    }
+    .merge-parent-row:hover { background: var(--vscode-list-hoverBackground); }
+    .merge-parent-row.active { background: var(--vscode-list-inactiveSelectionBackground); }
+    .merge-parent-chevron { font-size: 10px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
+    .merge-parent-commit-icon { font-size: 12px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
+    .merge-parent-title { flex-shrink: 0; font-size: 11px; }
+    .merge-parent-message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .merge-parent-count { flex-shrink: 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
+    .merge-parent-files { margin-left: 14px; margin-bottom: 3px; padding-left: 4px; }
+    .merge-parent-loading { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 8px; }
+
     /* Flat rows */
     .file-row {
-      display: flex; align-items: center; gap: 5px;
-      padding: 3px 8px 3px 0; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 4px;
+      min-height: 22px; padding: 2px 10px 2px 0; cursor: pointer; user-select: none;
     }
     .file-row:hover { background: var(--vscode-list-hoverBackground); }
     .file-row.ctx-active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
@@ -1168,8 +1314,8 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
 
     /* Tree dir rows */
     .dir-row {
-      display: flex; align-items: center; gap: 5px;
-      padding: 3px 8px 3px 0; cursor: pointer; user-select: none;
+      display: flex; align-items: center; gap: 3px;
+      min-height: 22px; padding: 2px 10px 2px 0; cursor: pointer; user-select: none;
     }
     .dir-row:hover { background: var(--vscode-list-hoverBackground); }
     .dir-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -1269,6 +1415,7 @@ ${leftPanelContent}
   <script id="__data" type="application/json">${escJson({
     files: data.files,
     parents: data.parents,
+    mergeParentChanges: data.mergeParentChanges ?? [],
     hash: data.hash,
     repoId: data.repoId,
     repoName: data.repoName,
@@ -1766,6 +1913,8 @@ ${leftPanelContent}
       ctxRepoId = row.dataset.repoId || null;
       ctxFromHash = row.dataset.fromHash || null;
       ctxToHash = row.dataset.toHash || null;
+      const revertItem = document.getElementById('ctxRevert');
+      if (revertItem) revertItem.style.display = ctxFromHash ? 'none' : '';
       ctxMenu.classList.remove('hidden');
       requestAnimationFrame(() => {
         const margin = 4;
@@ -1793,17 +1942,18 @@ ${leftPanelContent}
     function makeNode(name, fullPath, isRepoRoot = false, repoColor = '') {
       return { name, fullPath, isRepoRoot, repoColor, children: new Map(), file: null, fileCount: 0 };
     }
-    function buildTree(files) {
+    function buildTree(files, scope = '', groupByRepo = __d.showRepoGrouping) {
       const root = makeNode('', '');
+      const scopePrefix = scope ? scope + ':' : '';
       for (const f of files) {
-        const parts = __d.showRepoGrouping ? [f.repoName || __d.repoName, ...f.path.split('/')] : f.path.split('/');
+        const parts = groupByRepo ? [f.repoName || __d.repoName, ...f.path.split('/')] : f.path.split('/');
         let node = root;
         let acc = '';
         for (let i = 0; i < parts.length; i++) {
           const p = parts[i];
-          const isRepoRoot = __d.showRepoGrouping && i === 0;
+          const isRepoRoot = groupByRepo && i === 0;
           acc = acc ? acc + '/' + p : p;
-          const key = isRepoRoot ? ((f.repoId || __d.repoId) + ':' + p) : ((f.repoId || __d.repoId) + ':' + acc);
+          const key = scopePrefix + (isRepoRoot ? ((f.repoId || __d.repoId) + ':' + p) : ((f.repoId || __d.repoId) + ':' + acc));
           if (!node.children.has(key)) node.children.set(key, makeNode(p, key, isRepoRoot, f.repoColor || __d.repoColor));
           node = node.children.get(key);
           if (i === parts.length - 1) node.file = f;
@@ -1857,6 +2007,61 @@ ${leftPanelContent}
       render();
     }
 
+    const MERGE_PARENT_CHANGES = Array.isArray(__d.mergeParentChanges) ? __d.mergeParentChanges : [];
+    const expandedMergeParentHashes = new Set();
+    const mergeParentFilesByHash = new Map();
+    const loadingMergeParentHashes = new Set();
+    const pendingMergeParentRequests = new Map();
+
+    window.addEventListener('message', event => {
+      const requestId = event.data?.requestId;
+      const callback = requestId ? pendingMergeParentRequests.get(requestId) : null;
+      if (!callback) return;
+      pendingMergeParentRequests.delete(requestId);
+      callback(event.data);
+    });
+
+    function mergeParentRequestId() {
+      return 'merge-parent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    }
+
+    function mergeParentFiles(parent) {
+      const files = mergeParentFilesByHash.get(parent.hash);
+      if (!files) return undefined;
+      return files.map(file => ({
+        ...file,
+        repoId: __d.repoId,
+        repoName: __d.repoName,
+        repoColor: __d.repoColor,
+        hash: __d.hash,
+        fromHash: parent.hash,
+        toHash: __d.hash,
+      }));
+    }
+
+    function toggleMergeParent(parentHash) {
+      if (!parentHash) return;
+      if (expandedMergeParentHashes.has(parentHash)) {
+        expandedMergeParentHashes.delete(parentHash);
+        render();
+        return;
+      }
+      expandedMergeParentHashes.add(parentHash);
+      if (mergeParentFilesByHash.has(parentHash) || loadingMergeParentHashes.has(parentHash)) {
+        render();
+        return;
+      }
+      loadingMergeParentHashes.add(parentHash);
+      render();
+      const requestId = mergeParentRequestId();
+      pendingMergeParentRequests.set(requestId, result => {
+        loadingMergeParentHashes.delete(parentHash);
+        mergeParentFilesByHash.set(parentHash, result.files || []);
+        render();
+      });
+      vscode.postMessage({ type: 'getMergeParentFiles', hash: __d.hash, parentHash, requestId });
+    }
+
     // ── Tree rendering ──
     function renderTreeNode(node, depth, buf) {
       if (node.file) {
@@ -1865,7 +2070,7 @@ ${leftPanelContent}
         const col = statusColor(status);
         buf.push(
           '<div class="file-row"' + fileDatasetAttrs(f, status) + ' title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
-          '<div class="row-indent" style="width:' + (depth * 14 + 4) + 'px"></div>' +
+          '<div class="row-indent" style="width:' + (depth * 14 + 18) + 'px"></div>' +
           fileIconHtml(node.name) +
           '<span class="row-name" style="color:' + col + '">' + escText(node.name) + '</span>' +
           '<span class="row-tail">' +
@@ -1880,8 +2085,8 @@ ${leftPanelContent}
       if (node.isRepoRoot) {
         buf.push(
           '<div class="dir-row" data-dir="' + escAttr(node.fullPath) + '">' +
-          '<div class="row-indent" style="width:2px"></div>' +
-          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;flex-shrink:0;"></span>' +
+          '<div class="row-indent" style="width:0px"></div>' +
+          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:10px;width:14px;flex-shrink:0;"></span>' +
           '<span style="width:8px;height:8px;border-radius:50%;background:color-mix(in srgb, ' + escAttr(node.repoColor || __d.repoColor || '#4ec9b0') + ' 70%, var(--vscode-foreground));flex-shrink:0;"></span>' +
           '<span class="dir-name" style="font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">' + escText(node.name) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
@@ -1891,8 +2096,8 @@ ${leftPanelContent}
         const folderBase = node.name.includes('/') ? node.name.split('/').pop() : node.name;
         buf.push(
           '<div class="dir-row" data-dir="' + escAttr(node.fullPath) + '">' +
-          '<div class="row-indent" style="width:' + (depth * 14 + 2) + 'px"></div>' +
-          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:12px;flex-shrink:0;"></span>' +
+          '<div class="row-indent" style="width:' + (depth * 14) + 'px"></div>' +
+          '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:10px;width:14px;flex-shrink:0;"></span>' +
           folderIconHtml(folderBase, open) +
           '<span class="dir-name">' + escText(node.name) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
@@ -1909,9 +2114,9 @@ ${leftPanelContent}
       }
     }
 
-    function renderFlat() {
+    function renderFlat(files = FILES) {
       const buf = [];
-      for (const f of FILES) {
+      for (const f of files) {
         const status = normalizeStatus(f.status);
         const col  = statusColor(status);
         const name = f.path.includes('/') ? f.path.split('/').pop() : f.path;
@@ -1932,37 +2137,82 @@ ${leftPanelContent}
       return buf.join('');
     }
 
+    function renderMergeParentGroup(parent) {
+      const expanded = expandedMergeParentHashes.has(parent.hash);
+      const files = mergeParentFiles(parent);
+      const loading = loadingMergeParentHashes.has(parent.hash);
+      const buf = [
+        '<div class="merge-parent-group">',
+        '<div class="merge-parent-row' + (expanded ? ' active' : '') + '" data-parent-hash="' + escAttr(parent.hash) + '" title="' + escAttr(parent.hash + '\\n' + (parent.message || '')) + '">',
+        '<span class="codicon codicon-' + (expanded ? 'chevron-down' : 'chevron-right') + ' merge-parent-chevron"></span>',
+        '<span class="codicon codicon-git-commit merge-parent-commit-icon"></span>',
+        '<span class="merge-parent-title">' + escText(t('Changes from {0}', parent.shortHash)) + '</span>',
+        parent.message ? '<span class="merge-parent-message">' + escText(parent.message) + '</span>' : '',
+        '<span class="merge-parent-count">' + escText(formatFileCount(parent.fileCount)) + '</span>',
+        '</div>',
+      ];
+      if (expanded) {
+        buf.push('<div class="merge-parent-files">');
+        if (loading || files === undefined) {
+          buf.push('<div class="merge-parent-loading">' + escText(t('Loading files...')) + '</div>');
+        } else if (files.length === 0) {
+          buf.push('<div class="merge-parent-loading">' + escText(t('No changed files')) + '</div>');
+        } else if (viewMode === 'flat') {
+          buf.push(renderFlat(files));
+        } else {
+          const tree = buildTree(files, 'merge-parent-' + parent.hash, false);
+          const treeBuf = [];
+          const sorted = Array.from(tree.children.values()).sort((a, b) => {
+            if (!a.file && b.file) return -1;
+            if (a.file && !b.file) return 1;
+            return a.name.localeCompare(b.name);
+          });
+          for (const child of sorted) renderTreeNode(collapseDirs(child), 0, treeBuf);
+          buf.push(treeBuf.join(''));
+        }
+        buf.push('</div>');
+      }
+      buf.push('</div>');
+      return buf.join('');
+    }
+
     function render() {
       const listEl = document.getElementById('fileList');
       const fileCountEl = document.getElementById('fileCount');
       const btnExpandAll    = document.getElementById('btnExpandAll');
       const btnCollapseAll  = document.getElementById('btnCollapseAll');
       fileCountEl.textContent = formatFileCount(FILES.length);
+      const buf = [];
+      if (FILES.length === 0 && __d.parents && __d.parents.length >= 2) {
+        buf.push('<div class="no-merge-conflicts">' + escText(t('No merge conflicts')) + '</div>');
+      }
       if (viewMode === 'flat') {
-        listEl.innerHTML = renderFlat();
+        buf.push(renderFlat(FILES));
         btnExpandAll.style.display   = 'none';
         btnCollapseAll.style.display = 'none';
       } else {
         const tree = buildTree(FILES);
         const root = tree;
-        const buf = [];
         const sorted = Array.from(root.children.values()).sort((a, b) => {
           if (!a.file && b.file) return -1;
           if (a.file && !b.file) return 1;
           return a.name.localeCompare(b.name);
         });
         for (const child of sorted) renderTreeNode(collapseDirs(child), 0, buf);
-        listEl.innerHTML = buf.join('');
         btnExpandAll.style.display   = '';
         btnCollapseAll.style.display = '';
       }
+      for (const parent of MERGE_PARENT_CHANGES) buf.push(renderMergeParentGroup(parent));
+      listEl.innerHTML = buf.join('');
     }
 
     // ── Event delegation on file list ──
     const listEl = document.getElementById('fileList');
     listEl.addEventListener('click', e => {
+      const parentRow = e.target.closest('.merge-parent-row');
       const dirRow  = e.target.closest('.dir-row');
       const fileRow = e.target.closest('.file-row');
+      if (parentRow) { toggleMergeParent(parentRow.dataset.parentHash); return; }
       if (dirRow)  { toggleDir(dirRow.dataset.dir); return; }
       if (fileRow) { vscode.postMessage({ type: 'openDiff', filePath: fileRow.dataset.path, fileStatus: fileRow.dataset.status, repoId: fileRow.dataset.repoId, hash: fileRow.dataset.hash, fromHash: fileRow.dataset.fromHash, toHash: fileRow.dataset.toHash }); }
     });
