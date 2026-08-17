@@ -100,6 +100,10 @@ export class ConflictsPanelProvider implements vscode.Disposable {
           absolutePath: file.absolutePath,
           currentStatus: sideStatus.currentStatus,
           incomingStatus: sideStatus.incomingStatus,
+          nodeKind: sideStatus.nodeKind,
+          conflictType: sideStatus.conflictType,
+          conflictTypes: sideStatus.conflictTypes,
+          propertyConflicts: sideStatus.propertyConflicts,
         });
       }
     }
@@ -134,7 +138,16 @@ export class ConflictsPanelProvider implements vscode.Disposable {
       case 'CONFLICTS_OPEN_MERGE_EDITOR': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
-        const resolvedPath = repo.resolveRepoPath(msg.filePath);
+        if (repo.kind === 'svn') {
+          const conflict = (await repo.getConflictFileStatuses().catch(() => new Map())).get(msg.filePath);
+          if (msg.filePath === '.' || (conflict && (conflict.nodeKind === 'directory' || conflict.conflictType !== 'text'))) {
+            vscode.window.showInformationMessage(
+              t('SVN property and directory conflicts cannot be opened in the text merge editor. Use a conflict action instead.'),
+            );
+            return;
+          }
+        }
+        const resolvedPath = repo.resolveRepoPath(msg.filePath, { allowRoot: repo.kind === 'svn' });
         this.mergeEditorProvider.openForFile(resolvedPath.absolutePath, msg.repoId, resolvedPath.relativePath);
         break;
       }
@@ -146,7 +159,8 @@ export class ConflictsPanelProvider implements vscode.Disposable {
           for (const file of msg.files) {
             const repo = this.manager.getRepo(file.repoId);
             if (!repo) throw new Error(t('Repo not found'));
-            const relativePath = repo.resolveRepoPath(file.path).relativePath;
+            const resolvedPath = repo.resolveRepoPath(file.path, { allowRoot: repo.kind === 'svn' });
+            const relativePath = repo.kind === 'svn' && !resolvedPath.relativePath ? '.' : resolvedPath.relativePath;
             if (msg.type === 'CONFLICTS_ACCEPT_OURS') await repo.acceptOurs(relativePath);
             else await repo.acceptTheirs(relativePath);
           }

@@ -9,6 +9,9 @@ import type {
   RepoMeta,
   WorkspaceStatus,
   LineRange,
+  ConflictNodeKind,
+  ConflictPropertyValue,
+  ConflictType,
 } from './git';
 import type { WorktreeEntry } from '../git/WorkspaceGitManager';
 import type { IconThemeData } from '../utils/IconThemeService';
@@ -482,6 +485,10 @@ export interface ConflictListFile {
   absolutePath: string;
   currentStatus: 'modified' | 'added' | 'deleted';
   incomingStatus: 'modified' | 'added' | 'deleted';
+  nodeKind?: ConflictNodeKind;
+  conflictType?: ConflictType;
+  conflictTypes?: ConflictType[];
+  propertyConflicts?: ConflictPropertyValue[];
 }
 
 export type HostToConflictsMsg =

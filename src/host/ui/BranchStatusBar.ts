@@ -427,16 +427,17 @@ export class BranchStatusBar implements vscode.Disposable {
     const fileItems = new Map<string, SvnFileItem>();
     const addFile = (filePath: string, status?: string, description?: string): void => {
       const normalized = filePath.split(path.sep).join('/');
-      if (!normalized || normalized === '.') return;
+      const isConflictTarget = options.conflictsOnly && status === 'conflicted';
+      if (!normalized || (normalized === '.' && !isConflictTarget)) return;
       const absolutePath = path.join(repo.rootPath, normalized);
       try {
-        if (fs.existsSync(absolutePath) && fs.statSync(absolutePath).isDirectory()) return;
+        if (fs.existsSync(absolutePath) && fs.statSync(absolutePath).isDirectory() && !isConflictTarget) return;
       } catch {
         return;
       }
       if (!fileItems.has(normalized)) {
         fileItems.set(normalized, {
-          label: normalized,
+          label: normalized === '.' ? t('Repository root') : normalized,
           description: description ?? status,
           detail: status,
           filePath: normalized,

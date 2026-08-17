@@ -5,7 +5,19 @@ import * as vscode from 'vscode';
 import { GitService, type CommitMessageHistoryEntry } from '../git/GitService';
 import { detectLanguage, parseDiff } from '../git/DiffParser';
 import type { BlameLine } from '../git/BlameService';
-import type { BranchInfo, CommitNode, FileDiff, FileStatus, GitFileStatus, GraphCommitNode, LineRange, RepoStatus } from '../types/git';
+import type {
+  BranchInfo,
+  CommitNode,
+  ConflictFileStatus,
+  ConflictPropertyValue,
+  ConflictType,
+  FileDiff,
+  FileStatus,
+  GitFileStatus,
+  GraphCommitNode,
+  LineRange,
+  RepoStatus,
+} from '../types/git';
 import type { StashEntry, UnpushedCommit } from '../types/messages';
 import { CliError, execCli } from '../vcs/cli';
 import { t } from '../utils/l10n';
@@ -158,6 +170,34 @@ function textTag(source: string, name: string, trim = true): string {
   if (!match) return '';
   const decoded = decodeXml(match[1]);
   return trim ? decoded.trim() : decoded;
+}
+
+function limitConflictPropertyValue(value: string): string {
+  const normalized = value.replace(/\r\n/g, '\n').trim();
+  return normalized.length > 4096 ? `${normalized.slice(0, 4096)}…` : normalized;
+}
+
+function parsePropertyConflictContent(content: string): ConflictPropertyValue[] {
+  const conflicts: ConflictPropertyValue[] = [];
+  for (const block of content.split(/\n(?=Trying to )/)) {
+    const propertyName = block.match(/property '([^']+)'/)?.[1];
+    if (!propertyName || conflicts.some(conflict => conflict.name === propertyName)) continue;
+
+    const localMarker = block.indexOf('<<<<<<<');
+    const separator = localMarker >= 0 ? block.indexOf('=======', localMarker) : -1;
+    const baseMarker = localMarker >= 0 ? block.indexOf('|||||||', localMarker) : -1;
+    const incomingMarker = separator >= 0 ? block.indexOf('>>>>>>>', separator) : -1;
+    const currentEnd = baseMarker >= 0 && (separator < 0 || baseMarker < separator) ? baseMarker : separator;
+    const currentValue = localMarker >= 0 && separator >= 0
+      ? limitConflictPropertyValue(block.slice(block.indexOf('\n', localMarker) + 1, currentEnd))
+      : undefined;
+    const incomingValue = separator >= 0 && incomingMarker >= 0
+      ? limitConflictPropertyValue(block.slice(separator + '======='.length, incomingMarker))
+      : undefined;
+
+    conflicts.push({ name: propertyName, currentValue, incomingValue });
+  }
+  return conflicts;
 }
 
 function normalizeRelPath(filePath: string): string {
@@ -1202,9 +1242,16 @@ export class SvnService extends GitService {
   }
 
   private isConflictArtifact(filePath: string, conflictPaths: string[]): boolean {
-    return conflictPaths.some(conflictPath => new RegExp(
-      `^${escapeRegExp(conflictPath)}(?:\\.mine|\\.working|\\.prej|\\.r\\d+|\\.merge-(?:left|right)\\.r\\d+)$`,
-    ).test(filePath));
+    return conflictPaths.some(conflictPath => {
+      const normalizedConflictPath = conflictPath === '.' ? '' : conflictPath.replace(/\/+$/, '');
+      const directoryPropertyArtifact = normalizedConflictPath
+        ? normalizedConflictPath + '/dir_conflicts.prej'
+        : 'dir_conflicts.prej';
+      if (filePath === directoryPropertyArtifact) return true;
+      return new RegExp(
+        '^' + escapeRegExp(conflictPath) + '(?:\\.mine|\\.working|\\.prej|\\.r\\d+|\\.merge-(?:left|right)\\.r\\d+)$',
+      ).test(filePath);
+    });
   }
 
   private async parseSvnStatus(): Promise<SvnStatusEntry[]> {
@@ -2426,7 +2473,7 @@ export class SvnService extends GitService {
       if (!this.errorText(error).toLowerCase().includes('w195024')) throw error;
       await this.acceptTreeConflictSide(filePath, 'ours');
     }
-    this.blameCache.delete(this.normalizeRepoPath(filePath));
+    this.blameCache.delete(this.normalizeSvnTarget(filePath));
   }
 
   async acceptTheirs(filePath: string): Promise<void> {
@@ -2436,11 +2483,11 @@ export class SvnService extends GitService {
       if (!this.errorText(error).toLowerCase().includes('w195024')) throw error;
       await this.acceptTreeConflictSide(filePath, 'theirs');
     }
-    this.blameCache.delete(this.normalizeRepoPath(filePath));
+    this.blameCache.delete(this.normalizeSvnTarget(filePath));
   }
 
   private async acceptTreeConflictSide(filePath: string, side: 'ours' | 'theirs'): Promise<void> {
-    const relPath = this.normalizeRepoPath(filePath);
+    const relPath = this.normalizeSvnTarget(filePath);
     const target = this.workingCopyTarget(relPath);
     const absolutePath = path.join(this.rootPath, relPath);
     const rawInfo = await this.svn(['info', '--xml', '--', target]).catch(() => '');
@@ -2488,11 +2535,39 @@ export class SvnService extends GitService {
 
   async resolveWorking(filePath: string): Promise<void> {
     await this.svn(['resolve', '--accept', 'working', '--', this.workingCopyTarget(filePath)]);
-    this.blameCache.delete(this.normalizeRepoPath(filePath));
+    this.blameCache.delete(this.normalizeSvnTarget(filePath));
   }
 
-  async getConflictFileStatuses(): Promise<Map<string, { currentStatus: 'modified' | 'added' | 'deleted'; incomingStatus: 'modified' | 'added' | 'deleted' }>> {
-    const statuses = new Map<string, { currentStatus: 'modified' | 'added' | 'deleted'; incomingStatus: 'modified' | 'added' | 'deleted' }>();
+  private readPropertyConflictValues(rawInfo: string, conflictPath: string): ConflictPropertyValue[] {
+    const propertyFile = textTag(rawInfo, 'prop-file', false).trim();
+    const normalizedPath = conflictPath === '.' ? '' : conflictPath.replace(/^\.\//, '');
+    const artifactPath = normalizedPath
+      ? path.join(this.rootPath, normalizedPath, '..', path.basename(normalizedPath) + '.prej')
+      : path.join(this.rootPath, 'dir_conflicts.prej');
+    const directoryArtifactPath = normalizedPath
+      ? path.join(this.rootPath, normalizedPath, 'dir_conflicts.prej')
+      : path.join(this.rootPath, 'dir_conflicts.prej');
+    const candidates = Array.from(new Set([
+      propertyFile ? path.resolve(propertyFile) : '',
+      artifactPath,
+      directoryArtifactPath,
+    ].filter(Boolean)));
+    for (const candidate of candidates) {
+      try {
+        this.assertSafeWorkingFsPath(candidate);
+        const stat = fs.lstatSync(candidate);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) continue;
+        const values = parsePropertyConflictContent(fs.readFileSync(candidate, 'utf8'));
+        if (values.length > 0) return values;
+      } catch {
+        // SVN info may point at a revision artifact instead of the generated .prej file.
+      }
+    }
+    return [];
+  }
+
+  async getConflictFileStatuses(): Promise<Map<string, ConflictFileStatus>> {
+    const statuses = new Map<string, ConflictFileStatus>();
     const files = await this.parseSvnStatus();
     const conflicts = files.filter(file => file.status === 'conflicted');
     for (let offset = 0; offset < conflicts.length; offset += 8) {
@@ -2503,6 +2578,24 @@ export class SvnService extends GitService {
             ? 'deleted'
             : 'modified';
         const rawInfo = await this.svn(['info', '--xml', '--', this.workingCopyTarget(file.path)]).catch(() => '');
+        const entryKind = attr(rawInfo.match(/<entry\b([^>]*)>/)?.[1] ?? '', 'kind');
+        const treeConflict = rawInfo.match(/<tree-conflict\b([^>]*)>/);
+        const conflictTypes = new Set<ConflictType>();
+        const conflictRegex = /<conflict\b([^>]*)>/g;
+        let conflictMatch: RegExpExecArray | null;
+        while ((conflictMatch = conflictRegex.exec(rawInfo)) !== null) {
+          const type = attr(conflictMatch[1], 'type');
+          if (type === 'text' || type === 'property' || type === 'tree') conflictTypes.add(type);
+        }
+        if (file.svnProps === 'conflicted') conflictTypes.add('property');
+        if (treeConflict || file.treeConflicted) conflictTypes.add('tree');
+        if (conflictTypes.size === 0) conflictTypes.add('unknown');
+        const orderedConflictTypes = (['text', 'property', 'tree', 'unknown'] as ConflictType[])
+          .filter(type => conflictTypes.has(type));
+        const primaryConflictType = orderedConflictTypes[0];
+        const nodeKind = entryKind === 'dir' || attr(treeConflict?.[1] ?? '', 'kind') === 'dir'
+          ? 'directory'
+          : 'file';
         const kinds = new Map<string, string>();
         const versionRegex = /<version\b([^>]*)\/>/g;
         let match: RegExpExecArray | null;
@@ -2518,14 +2611,21 @@ export class SvnService extends GitService {
           : leftKind === 'none' && !!rightKind
             ? 'added'
             : 'modified';
-        statuses.set(file.path, { currentStatus, incomingStatus });
+        statuses.set(file.path, {
+          currentStatus,
+          incomingStatus,
+          nodeKind,
+          conflictType: primaryConflictType,
+          conflictTypes: orderedConflictTypes,
+          propertyConflicts: conflictTypes.has('property') ? this.readPropertyConflictValues(rawInfo, file.path) : [],
+        });
       }));
     }
     return statuses;
   }
 
   async getFileVersions(filePath: string): Promise<{ base: string; ours: string; theirs: string; language: string }> {
-    const relPath = this.normalizeRepoPath(filePath);
+    const relPath = this.normalizeSvnTarget(filePath);
     const absPath = path.join(this.rootPath, relPath);
     this.assertSafeWorkingFsPath(absPath);
     const dir = path.dirname(absPath);

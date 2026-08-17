@@ -14,6 +14,7 @@ import type {
   SubmoduleStatus,
   LineRange,
   SubmoduleEntry,
+  ConflictFileStatus,
 } from '../types/git';
 import type { StashEntry, UnpushedCommit, SubtreePushStatus } from '../types/messages';
 import { parseDiff, detectLanguage } from './DiffParser';
@@ -44,7 +45,7 @@ export interface MergeCommitResult {
   targetBranch: string;
 }
 
-type ConflictSideStatus = 'modified' | 'added' | 'deleted';
+type ConflictSideStatus = ConflictFileStatus['currentStatus'];
 
 function mapConflictSideStatuses(code: string): { currentStatus: ConflictSideStatus; incomingStatus: ConflictSideStatus } | undefined {
   switch (code) {
@@ -299,8 +300,8 @@ export class GitService {
     return this.git.raw(['-c', 'core.quotepath=false', ...args]);
   }
 
-  resolveRepoPath(filePath: string): ResolvedRepoPath {
-    return resolvePathWithinRepo(this.rootPath, filePath);
+  resolveRepoPath(filePath: string, options: { allowRoot?: boolean } = {}): ResolvedRepoPath {
+    return resolvePathWithinRepo(this.rootPath, filePath, options);
   }
 
   protected normalizeRepoPath(filePath: string): string {
@@ -1772,9 +1773,9 @@ export class GitService {
     return output.split('\0').filter(Boolean);
   }
 
-  async getConflictFileStatuses(): Promise<Map<string, { currentStatus: ConflictSideStatus; incomingStatus: ConflictSideStatus }>> {
+  async getConflictFileStatuses(): Promise<Map<string, ConflictFileStatus>> {
     const output = await this.rawPathSafe(['status', '--porcelain', '-z']);
-    const statuses = new Map<string, { currentStatus: ConflictSideStatus; incomingStatus: ConflictSideStatus }>();
+    const statuses = new Map<string, ConflictFileStatus>();
     for (const entry of output.split('\0')) {
       if (entry.length < 4) continue;
       const x = entry[0];

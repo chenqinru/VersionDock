@@ -22,6 +22,30 @@ function fileKey(file: Pick<ConflictListFile, 'repoId' | 'path'>): string {
   return scopedKey(file.repoId, file.path);
 }
 
+type ConflictType = NonNullable<ConflictListFile['conflictType']>;
+
+function getConflictTypes(file: ConflictListFile): ConflictType[] {
+  return file.conflictTypes
+    ?? (file.conflictType ? [file.conflictType] : ['text']);
+}
+
+function isTextConflict(file: ConflictListFile): boolean {
+  return getConflictTypes(file).includes('text') && (file.nodeKind ?? 'file') === 'file';
+}
+
+function hasNonTextConflict(file: ConflictListFile): boolean {
+  return getConflictTypes(file).some(type => type === 'property' || type === 'tree' || type === 'unknown');
+}
+
+function conflictTypeLabel(file: ConflictListFile): string {
+  const types = getConflictTypes(file);
+  if (types.includes('text') && types.includes('property')) return t('Text and property conflict');
+  if (types.includes('property')) return t('Property conflict');
+  if (types.includes('tree') || file.nodeKind === 'directory') return t('Tree conflict');
+  if (types.includes('unknown')) return t('Unknown conflict');
+  return t('Text conflict');
+}
+
 const TREE_BASE_PAD = 6;
 const TREE_LEVEL_PAD = 16;
 const TREE_FILE_SPACER = 14;
@@ -148,9 +172,13 @@ function App() {
   const conflictRepoSummary = conflictRepoCount === 1
     ? t('{0} repository', conflictRepoCount)
     : t('{0} repositories', conflictRepoCount);
-  const conflictCountSummary = conflictRepoCount > 0
-    ? `${conflictRepoSummary} ${t('·')} ${t('{0} files are in conflict', files.length)}`
+  const containsNonFileConflict = files.some(file => file.nodeKind === 'directory' || file.conflictType === 'property' || file.conflictType === 'tree');
+  const conflictItemSummary = containsNonFileConflict
+    ? t('{0} conflicts detected', files.length)
     : t('{0} files are in conflict', files.length);
+  const conflictCountSummary = conflictRepoCount > 0
+    ? `${conflictRepoSummary} ${t('·')} ${conflictItemSummary}`
+    : conflictItemSummary;
   const visibleFiles = useMemo(() => {
     if (!groupByDir) {
       return [...files].sort((left, right) => {
@@ -168,6 +196,7 @@ function App() {
     [files, selectedKeySet],
   );
   const hasSelection = selectedFiles.length > 0;
+  const canMergeSelected = selectedFiles.length === 1 && isTextConflict(selectedFiles[0]);
 
   const selectFile = useCallback((file: ConflictListFile, event: React.MouseEvent) => {
     const key = fileKey(file);
@@ -190,6 +219,10 @@ function App() {
   }, [lastSelectedKey, visibleFiles]);
 
   const openMergeEditor = useCallback((file: ConflictListFile) => {
+    if (!isTextConflict(file)) {
+      setError(t('SVN property and directory conflicts cannot be opened in the text merge editor. Use a conflict action instead.'));
+      return;
+    }
     send({ type: 'CONFLICTS_OPEN_MERGE_EDITOR', repoId: file.repoId, filePath: file.path });
   }, [send]);
 
@@ -221,6 +254,10 @@ function App() {
 
       {error && <div style={styles.error}>{error}</div>}
 
+      {selectedFiles.length === 1 && hasNonTextConflict(selectedFiles[0]) && !isTextConflict(selectedFiles[0]) && (
+        <div style={styles.warning}>{t('SVN tree or property conflict requires a side selection. Choose Accept Current or Accept Incoming.')}</div>
+      )}
+
       {files.length === 0 ? (
         <div style={styles.empty}>{t('All conflicts resolved')}</div>
       ) : (
@@ -248,13 +285,13 @@ function App() {
                   ))
                 : visibleFiles.map(file => (
                     <FileRow key={fileKey(file)} file={file} depth={0} selected={selectedKeySet.has(fileKey(file))} iconTheme={iconTheme} onSelect={selectFile} onOpen={openMergeEditor} />
-                  ))}
+                ))}
             </div>
           </div>
           <div style={styles.actions}>
             <ActionButton disabled={!hasSelection} onClick={() => accept('ours')}>{t('Accept Current')}</ActionButton>
             <ActionButton disabled={!hasSelection} onClick={() => accept('theirs')}>{t('Accept Incoming')}</ActionButton>
-            <ActionButton disabled={!hasSelection} primary onClick={() => selectedFiles[0] && openMergeEditor(selectedFiles[0])}>{t('Merge')}...</ActionButton>
+            <ActionButton disabled={!canMergeSelected} primary onClick={() => selectedFiles[0] && openMergeEditor(selectedFiles[0])}>{t('Merge')}...</ActionButton>
           </div>
         </div>
       )}
@@ -302,7 +339,7 @@ function FileRow({ file, depth, selected, iconTheme, onSelect, onOpen }: {
   onSelect: (file: ConflictListFile, event: React.MouseEvent) => void;
   onOpen: (file: ConflictListFile) => void;
 }) {
-  const fileName = file.path.split('/').pop() ?? file.path;
+  const fileName = file.path === '.' ? t('Repository root') : file.path.split('/').pop() ?? file.path;
   const dir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
   const displayDir = dir ? `${file.repoName}/${dir}` : file.repoName;
   return (
@@ -315,8 +352,11 @@ function FileRow({ file, depth, selected, iconTheme, onSelect, onOpen }: {
       title={`${file.repoName}/${file.path}`}
     >
       <span style={styles.fileSpacer} />
-      <FileIcon name={fileName} theme={iconTheme} size={16} />
+      <FileIcon name={fileName} isFolder={file.nodeKind === 'directory'} isOpen={file.nodeKind === 'directory'} theme={iconTheme} size={16} />
       <span style={styles.fileName}>{fileName}</span>
+      {file.conflictType && file.conflictType !== 'text' && (
+        <span style={styles.conflictKind}>{conflictTypeLabel(file)}</span>
+      )}
       {depth === 0 && <span style={styles.dirPath}>{displayDir}</span>}
       <StatusCell status={file.currentStatus} first />
       <StatusCell status={file.incomingStatus} />
@@ -346,6 +386,7 @@ const styles = {
   count: { marginTop: 4, fontSize: 12, color: 'var(--vscode-descriptionForeground)' },
   checkboxLabel: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 12 },
   error: { padding: '6px 12px', color: 'var(--vscode-inputValidation-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)', borderBottom: '1px solid var(--vscode-inputValidation-errorBorder)', fontSize: 12 },
+  warning: { padding: '6px 12px', color: 'var(--vscode-inputValidation-warningForeground, var(--vscode-editorWarning-foreground, #cca700))', background: 'var(--vscode-inputValidation-warningBackground, var(--vscode-editorWarning-background, rgba(204, 167, 0, 0.12)))', borderBottom: '1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground, #cca700))', fontSize: 12 },
   empty: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--vscode-descriptionForeground)' },
   body: { flex: 1, display: 'flex', minHeight: 0 },
   table: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' as const },
@@ -363,6 +404,7 @@ const styles = {
   fileRow: (selected: boolean): React.CSSProperties => ({ minHeight: 22, display: 'flex', alignItems: 'center', gap: 4, padding: '2px 10px 2px 0', cursor: 'pointer', background: selected ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent', color: selected ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)', fontSize: 13, userSelect: 'none' }),
   fileSpacer: { width: TREE_FILE_SPACER, height: 14, flexShrink: 0 } as React.CSSProperties,
   fileName: { whiteSpace: 'nowrap' as const, overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flexShrink: 1 },
+  conflictKind: { color: 'var(--vscode-descriptionForeground)', fontSize: 11, whiteSpace: 'nowrap' as const, flexShrink: 0 },
   dirPath: { marginLeft: 8, color: 'var(--vscode-descriptionForeground)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0, maxWidth: '45%' },
   statusText: (status: ConflictListFile['currentStatus'], first?: boolean): React.CSSProperties => ({ marginLeft: first ? 'auto' : 0, width: 86, textAlign: 'center' as const, color: status === 'deleted' ? 'var(--vscode-descriptionForeground)' : status === 'added' ? 'var(--vscode-gitDecoration-addedResourceForeground, #57a64a)' : 'var(--vscode-gitDecoration-conflictingResourceForeground, #ff7b72)', fontSize: 11, fontWeight: 600, padding: '0 4px', whiteSpace: 'nowrap' as const, flexShrink: 0 }),
   actions: { width: 132, flexShrink: 0, display: 'flex', flexDirection: 'column' as const, gap: 8, padding: 12, borderLeft: '1px solid var(--vscode-panel-border)' },

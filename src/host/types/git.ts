@@ -83,6 +83,24 @@ export type GitFileStatus =
   | 'conflicted'
   | 'submodule';
 
+export type ConflictNodeKind = 'file' | 'directory';
+export type ConflictType = 'text' | 'property' | 'tree' | 'unknown';
+
+export interface ConflictPropertyValue {
+  name: string;
+  currentValue?: string;
+  incomingValue?: string;
+}
+
+export interface ConflictFileStatus {
+  currentStatus: 'modified' | 'added' | 'deleted';
+  incomingStatus: 'modified' | 'added' | 'deleted';
+  nodeKind?: ConflictNodeKind;
+  conflictType?: ConflictType;
+  conflictTypes?: ConflictType[];
+  propertyConflicts?: ConflictPropertyValue[];
+}
+
 export interface SubmoduleStatus {
   isSubmodule: boolean;
   hasGitlinkChange: boolean;
