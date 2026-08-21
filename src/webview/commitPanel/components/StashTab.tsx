@@ -421,7 +421,7 @@ const css = {
     display: 'flex', alignItems: 'flex-start', padding: '4px 8px', fontSize: '11px',
     color: 'var(--vscode-errorForeground)', background: 'var(--vscode-inputValidation-errorBackground)',
   } as React.CSSProperties,
-  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const, textAlign: 'center' as const },
+  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' as const },
 };
 
 const row = {
@@ -461,5 +461,5 @@ const row = {
     borderTop: '1px solid var(--vscode-panel-border)',
     background: 'var(--vscode-sideBar-background)',
   } as React.CSSProperties,
-  emptyFiles: { padding: '6px 24px', fontSize: '11px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const },
+  emptyFiles: { padding: '6px 24px', fontSize: '11px', color: 'var(--vscode-descriptionForeground)' },
 };

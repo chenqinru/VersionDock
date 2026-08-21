@@ -462,8 +462,10 @@ export function CommitApp() {
   // ── Dropdowns ─────────────────────────────────────────────────────────────
   const [viewMenuOpen, setViewMenuOpen]             = useState(false);
   const [shelveViewMenuOpen, setShelveViewMenuOpen] = useState(false);
+  const [stashViewMenuOpen, setStashViewMenuOpen]   = useState(false);
   const viewMenuRef       = useRef<HTMLDivElement>(null);
   const shelveViewMenuRef = useRef<HTMLDivElement>(null);
+  const stashViewMenuRef  = useRef<HTMLDivElement>(null);
 
   // ── Selected file (highlighted when diff is open or on right-click) ──────
   const [selectedFile, setSelectedFile] = useState<FileStatus | null>(null);
@@ -505,6 +507,7 @@ export function CommitApp() {
     const h = (e: MouseEvent) => {
       if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) setViewMenuOpen(false);
       if (shelveViewMenuRef.current && !shelveViewMenuRef.current.contains(e.target as Node)) setShelveViewMenuOpen(false);
+      if (stashViewMenuRef.current && !stashViewMenuRef.current.contains(e.target as Node)) setStashViewMenuOpen(false);
     };
     document.addEventListener('mousedown', h, true);
     return () => document.removeEventListener('mousedown', h, true);
@@ -1709,6 +1712,29 @@ export function CommitApp() {
             }}>
               <Codicon name="collapse-all" />
             </button>
+            <div ref={stashViewMenuRef} style={{ position: 'relative' }}>
+              <button data-action-btn="" style={css.iconBtn} title={t('View options')} onClick={() => setStashViewMenuOpen(o => !o)}>
+                <Codicon name="eye" />
+              </button>
+              {stashViewMenuOpen && (
+                <div style={{ ...css.dropdownPanel, left: 0 }}>
+                  <div style={css.dropdownTitle}>{t('View')}</div>
+                  {(['flat', 'tree'] as const).map(mode => (
+                    <div
+                      key={mode}
+                      style={{ ...css.dropdownItem, fontWeight: store.stashViewMode === mode ? 'bold' : 'normal' }}
+                      onClick={() => { store.setStashViewMode(mode); setStashViewMenuOpen(false); }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--vscode-list-hoverBackground)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <Codicon name={mode === 'flat' ? 'list-unordered' : 'list-tree'} style={{ marginRight: '6px' }} />
+                      {mode === 'flat' ? t('Flat list') : t('Tree view')}
+                      {store.stashViewMode === mode && <Codicon name="check" style={{ marginLeft: 'auto' }} />}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </>)}
           {hiddenRepoIds.length > 0 && (
             <button
@@ -2135,7 +2161,7 @@ export function CommitApp() {
                   stashes={stashMap[repoId] ?? []}
                   loading={stashLoading[repoId] ?? false}
                   error={stashError[repoId] ?? null}
-                  viewMode={store.viewMode}
+                  viewMode={store.stashViewMode}
                   onApply={handleStashApply}
                   onPop={handleStashPop}
                   onDrop={handleStashDrop}

@@ -5,6 +5,24 @@ import { scopedKey } from '../../shared/scopedKey';
 
 export type ViewMode = 'flat' | 'tree';
 
+const STASH_VIEW_MODE_KEY = 'versiondock:stash-view-mode';
+
+function loadStashViewMode(): ViewMode {
+  try {
+    return localStorage.getItem(STASH_VIEW_MODE_KEY) === 'flat' ? 'flat' : 'tree';
+  } catch {
+    return 'tree';
+  }
+}
+
+function saveStashViewMode(mode: ViewMode): void {
+  try {
+    localStorage.setItem(STASH_VIEW_MODE_KEY, mode);
+  } catch {
+    // Webview storage can be unavailable; the in-memory setting still works.
+  }
+}
+
 export interface WorktreeDiffState {
   repoId: string;
   repoName: string;
@@ -39,6 +57,7 @@ export interface CommitState {
   amendFlags: Record<string, boolean>;
   viewMode: ViewMode;
   shelveViewMode: ViewMode;
+  stashViewMode: ViewMode;
   shelveCollapsedKeys: Set<string>;
   loading: boolean;
   error: string | null;
@@ -62,6 +81,7 @@ export interface CommitState {
   setAmend: (repoId: string, v: boolean) => void;
   setViewMode: (mode: ViewMode) => void;
   setShelveViewMode: (mode: ViewMode) => void;
+  setStashViewMode: (mode: ViewMode) => void;
   isShelveCollapsed: (key: string) => boolean;
   toggleShelveCollapsed: (key: string) => void;
   shelveExpandAll: (keys: string[]) => void;
@@ -121,6 +141,7 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   amendFlags: {},
   viewMode: 'tree',
   shelveViewMode: 'tree',
+  stashViewMode: loadStashViewMode(),
   shelveCollapsedKeys: new Set(),
   loading: false,
   error: null,
@@ -221,6 +242,10 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   setAmend: (repoId, v) => set(s => ({ amendFlags: { ...s.amendFlags, [repoId]: v } })),
   setViewMode: (mode) => set({ viewMode: mode }),
   setShelveViewMode: (mode) => set({ shelveViewMode: mode }),
+  setStashViewMode: (mode) => {
+    saveStashViewMode(mode);
+    set({ stashViewMode: mode });
+  },
   // shelveCollapsedKeys tracks *expanded* items — absence means collapsed (default)
   isShelveCollapsed: (key) => !get().shelveCollapsedKeys.has(key),
   toggleShelveCollapsed: (key) => set(s => {

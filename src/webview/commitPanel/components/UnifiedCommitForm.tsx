@@ -746,7 +746,6 @@ const styles = {
   noTargets: {
     fontSize: '11px',
     color: 'var(--vscode-descriptionForeground)',
-    fontStyle: 'italic' as const,
   },
   targetPill: (color: string): React.CSSProperties => ({
     display: 'inline-flex',

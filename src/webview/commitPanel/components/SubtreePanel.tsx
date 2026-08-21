@@ -379,7 +379,7 @@ const css = {
     padding: '3px 8px',
     cursor: 'pointer',
   } as React.CSSProperties,
-  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', fontStyle: 'italic' as const, textAlign: 'center' as const },
+  empty: { padding: '16px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' as const },
   errorRow: {
     display: 'flex',
     alignItems: 'flex-start',
