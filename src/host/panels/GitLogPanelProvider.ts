@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { LogCommitPathEntry, LogToHostMsg, HostToLogMsg } from '../types/messages';
-import type { BranchInfo, LineRange } from '../types/git';
+import type { BranchInfo, LineRange, RepoMeta } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { ShelveDocumentProvider } from '../utils/ShelveDocumentProvider';
 import type { CommitPanelProvider } from './CommitPanelProvider';
@@ -24,6 +24,69 @@ import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
+
+function getLogMetadataSignature(repos: readonly RepoMeta[], branches: readonly BranchInfo[]): string {
+  const repoData = [...repos]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(repo => [
+      repo.id,
+      repo.name,
+      repo.rootPath,
+      repo.color,
+      repo.kind ?? '',
+      repo.parentRepoId ?? '',
+      repo.submodulePath ?? '',
+      repo.isWorktree ?? false,
+      repo.mainWorktreePath ?? '',
+    ]);
+  const branchData = [...branches]
+    .sort((left, right) => (
+      left.repoId.localeCompare(right.repoId)
+      || left.fullName.localeCompare(right.fullName)
+      || left.name.localeCompare(right.name)
+    ))
+    .map(branch => [
+      branch.repoId,
+      branch.name,
+      branch.fullName,
+      branch.isHead,
+      branch.isRemote,
+      branch.remoteName ?? '',
+      branch.upstream ?? '',
+      branch.aheadBehind?.ahead ?? 0,
+      branch.aheadBehind?.behind ?? 0,
+      branch.lastCommitHash ?? '',
+      branch.lastCommitDate ?? '',
+      branch.detachedTag ?? '',
+      branch.detachedHash ?? '',
+    ]);
+  return JSON.stringify([repoData, branchData]);
+}
+
+// Only fields that can change the visible commit set belong here. Tracking
+// counts and dates still update the sidebar through LOG_INIT_DATA, but they do
+// not justify reloading the commit list and graph.
+function getLogContentSignature(repos: readonly RepoMeta[], branches: readonly BranchInfo[]): string {
+  const repoData = [...repos]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map(repo => [repo.id, repo.kind ?? '']);
+  const branchData = [...branches]
+    .sort((left, right) => (
+      left.repoId.localeCompare(right.repoId)
+      || left.fullName.localeCompare(right.fullName)
+      || left.name.localeCompare(right.name)
+    ))
+    .map(branch => [
+      branch.repoId,
+      branch.fullName,
+      branch.isHead,
+      branch.isRemote,
+      branch.lastCommitHash ?? '',
+      branch.detachedTag ?? '',
+      branch.detachedHash ?? '',
+    ]);
+  return JSON.stringify([repoData, branchData]);
+}
 
 function mergeCurrentIntoBranches(branches: BranchInfo[], current: BranchInfo): BranchInfo[] {
   if (!current.detachedTag && !current.detachedHash) return branches; // normal branch — already in list
@@ -98,6 +161,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private disposables: vscode.Disposable[] = [];
   private readonly managerListeners: vscode.Disposable[] = [];
   private refreshDebounce: ReturnType<typeof setTimeout> | null = null;
+  private lastLogMetadataSignature: string | null = null;
+  private lastLogContentSignature: string | null = null;
+  private pendingRefreshContentSignature: string | null = null;
   private managerSyncGeneration = 0;
   private readonly tagSyncGenerations = new Map<string, number>();
   private commitPanel?: CommitPanelProvider;
@@ -157,13 +223,23 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     // this.post() silently drops messages when the webview is not yet resolved — that's fine,
     // because resolveWebviewView performs an explicit initial sync when the panel first opens.
     const syncManagerState = async () => {
-        const generation = ++this.managerSyncGeneration;
-        const repos = this.getVisibleRepos();
-        const branches = await this.getFilteredBranches(repos);
-        if (generation !== this.managerSyncGeneration) return;
-        this.post({ type: 'LOG_INIT_DATA', repos, branches });
-        if (this.refreshDebounce) clearTimeout(this.refreshDebounce);
-        this.refreshDebounce = setTimeout(() => this.post({ type: 'LOG_REFRESH' }), 300);
+      const generation = ++this.managerSyncGeneration;
+      const repos = this.getVisibleRepos();
+      const branches = await this.getFilteredBranches(repos);
+      if (generation !== this.managerSyncGeneration) return;
+      const metadataSignature = getLogMetadataSignature(repos, branches);
+      if (metadataSignature === this.lastLogMetadataSignature) return;
+      const contentSignature = getLogContentSignature(repos, branches);
+      const contentChanged = contentSignature !== this.lastLogContentSignature;
+      this.post({ type: 'LOG_INIT_DATA', repos, branches });
+      if (!contentChanged) return;
+      if (this.refreshDebounce) clearTimeout(this.refreshDebounce);
+      this.pendingRefreshContentSignature = contentSignature;
+      this.refreshDebounce = setTimeout(() => {
+        this.refreshDebounce = null;
+        this.pendingRefreshContentSignature = null;
+        this.post({ type: 'LOG_REFRESH' });
+      }, 300);
     };
     const scheduleManagerSync = () => {
       void syncManagerState().catch(error => {
@@ -302,10 +378,20 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     void vscode.window.showErrorMessage(t('VersionDock: {0}', message));
   }
 
+  private acknowledgeFreshLogSnapshot(repos: readonly RepoMeta[], branches: readonly BranchInfo[]): void {
+    const contentSignature = getLogContentSignature(repos, branches);
+    if (contentSignature !== this.pendingRefreshContentSignature || !this.refreshDebounce) return;
+    clearTimeout(this.refreshDebounce);
+    this.refreshDebounce = null;
+    this.pendingRefreshContentSignature = null;
+  }
+
   private post(msg: HostToLogMsg): void {
     if (msg.type === 'LOG_INIT_DATA') {
       const m = msg as typeof msg & { hasWorkspaceFolder?: boolean };
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+      this.lastLogMetadataSignature = getLogMetadataSignature(msg.repos, msg.branches);
+      this.lastLogContentSignature = getLogContentSignature(msg.repos, msg.branches);
     }
     const broadcast = msg.type === 'LOG_INIT_DATA'
       || msg.type === 'LOG_ICON_THEME_UPDATE'
@@ -639,6 +725,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
           ]);
           if (metadataGeneration === this.managerSyncGeneration) {
+            this.acknowledgeFreshLogSnapshot(repos, branches);
             this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
 
             // Send tags for all visible repos without blocking the commit batch.

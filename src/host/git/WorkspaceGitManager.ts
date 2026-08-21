@@ -48,6 +48,28 @@ function getWorkspaceStatusSignature(status: WorkspaceStatus): string {
     .join('\u0003');
 }
 
+function getRepositoryMetadataSignature(repos: readonly RepoMeta[]): string {
+  return JSON.stringify(
+    [...repos]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map(repo => [
+        repo.id,
+        repo.name,
+        repo.rootPath,
+        repo.color,
+        repo.kind ?? '',
+        repo.remoteUrl ?? '',
+        repo.relativeUrl ?? '',
+        repo.isSubmodule ?? false,
+        repo.parentRepoId ?? '',
+        repo.submodulePath ?? '',
+        repo.depth ?? 0,
+        repo.isWorktree ?? false,
+        repo.mainWorktreePath ?? '',
+      ]),
+  );
+}
+
 function gitErrorDetail(error: unknown): string {
   const value = error as { stderr?: unknown; gitErrorCode?: unknown; message?: unknown } | undefined;
   const stderr = typeof value?.stderr === 'string' ? value.stderr.trim() : '';
@@ -428,6 +450,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private reinitialize(): void {
+    const previousMetadataSignature = getRepositoryMetadataSignature(
+      Array.from(this.repoMetas.values()),
+    );
     this.repositoryGeneration++;
     this.disposeWatchers();
     this.repos.clear();
@@ -514,8 +539,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
       svnRepositoryCount: metas.filter(meta => meta.kind === 'svn').length,
       generation: this.repositoryGeneration,
     });
-    // Notify listeners that the set of known repos has changed (e.g. submodule added/removed)
-    this.reposListeners.forEach(l => l());
+    // vscode.git can become ready after VersionDock and force a watcher-only
+    // rebuild. Only notify consumers when discovery actually changed the
+    // repository metadata; otherwise the Git Log reloads a second time after
+    // its initial data has already rendered.
+    if (getRepositoryMetadataSignature(metas) !== previousMetadataSignature) {
+      this.reposListeners.forEach(l => l());
+    }
   }
 
   private getRepositoryScanMaxDepth(): number {
