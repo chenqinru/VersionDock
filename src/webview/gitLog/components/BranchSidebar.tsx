@@ -14,6 +14,7 @@ interface Props {
   repos: RepoMeta[];
   branches: BranchInfo[];
   tags: TagInfo[];
+  loading: boolean;
   filter: string;
   selectedBranchFilter: string;
   selectedBranchRepoIds: readonly string[] | null;
@@ -122,7 +123,7 @@ function buildMergedTags(tags: TagInfo[], repoKindMap: Record<string, 'git' | 's
 }
 
 export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSidebar({
-  repos, branches, tags, filter, selectedBranchFilter, onFilterChange, onBranchFilterSelect,
+  repos, branches, tags, loading, filter, selectedBranchFilter, onFilterChange, onBranchFilterSelect,
   selectedBranchRepoIds, selectedRepoId, onRepoFilterSelect,
   onCheckout, onMerge, onRebase, onCompareWithCurrent, onShowWorktreeDiff, onDelete, onFetchRepo: _onFetchRepo, onPull, onPush,
   onCheckoutTag, onMergeTag, onPushTag, onDeleteTag, onCollapse,
@@ -224,6 +225,12 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
             </div>
           </button>
         </div>
+        {loading && (
+          <div role="status" aria-live="polite" style={styles.loadingRow}>
+            <Codicon name="loading~spin" style={styles.loadingIcon} />
+            <span>{t('Loading branches…')}</span>
+          </div>
+        )}
 
         {repos.length > 1 && (
           <div style={styles.repoList}>
@@ -787,6 +794,21 @@ const styles = {
     height: '100%',
     boxSizing: 'border-box' as const,
   },
+  loadingRow: {
+    height: '26px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    color: 'var(--vscode-progressBar-background)',
+    background: 'var(--vscode-sideBar-background)',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    fontSize: '11px',
+    flexShrink: 0,
+  } as React.CSSProperties,
+  loadingIcon: {
+    fontSize: '13px',
+  } as React.CSSProperties,
   collapseBtn: {
     flexShrink: 0,
     display: 'flex',

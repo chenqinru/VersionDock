@@ -123,6 +123,10 @@ export function GitLogApp() {
   });
   const compareInitKeyRef = useRef('');
   const authorCacheRef = useRef<Map<string, CachedAuthorOption>>(new Map());
+  const stableLaidOutCommitsRef = useRef<{ viewScope: string; commits: LaidOutCommit[] }>({
+    viewScope: '',
+    commits: [],
+  });
   const [authorOptions, setAuthorOptions] = useState<AuthorOption[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedRepoIds, setExpandedRepoIds] = useState<Set<string>>(new Set());
@@ -457,6 +461,10 @@ export function GitLogApp() {
 
   const hasTopologyBreakingFilter = hasTopologyBreakingFilters(store.commitFilters);
   const hasRevisionFilter = !!store.commitFilters.branch;
+  const viewScope = useMemo(() => JSON.stringify({
+    repoIds: store.repos.map(repo => repo.id).sort(),
+    filters: store.commitFilters,
+  }), [store.commitFilters, store.repos]);
   const laidOutGraphCommits = useMemo(
     () => assignLanes(store.graphCommits, false, repoKindById, remoteNamesByRepo),
     [store.graphCommits, remoteNamesByRepo, repoKindById],
@@ -501,6 +509,16 @@ export function GitLogApp() {
       repoKindById,
     ],
   );
+  useEffect(() => {
+    if (store.mode !== 'log' || isCommitListReloading) return;
+    stableLaidOutCommitsRef.current = { viewScope, commits: laidOutCommits };
+  }, [isCommitListReloading, laidOutCommits, store.mode, viewScope]);
+  const preservesVisibleContent = isCommitListReloading
+    && stableLaidOutCommitsRef.current.viewScope === viewScope
+    && stableLaidOutCommitsRef.current.commits.length > 0;
+  const visibleLaidOutCommits = preservesVisibleContent
+    ? stableLaidOutCommitsRef.current.commits
+    : laidOutCommits;
   const laidOutCompareBase = useMemo(() => (
     store.compareState ? assignLanes(store.compareState.baseOnly.commits, true, repoKindById, remoteNamesByRepo) : []
   ), [remoteNamesByRepo, repoKindById, store.compareState]);
@@ -534,7 +552,7 @@ export function GitLogApp() {
   }, [activeCommitSource, selectedCommits]);
 
   const selectedCommitFiles = useMemo(() => {
-    if (isCommitListReloading) return [];
+    if (isCommitListReloading && !preservesVisibleContent) return [];
     const historyPath = store.commitFilters.path;
     return sortedSelectedCommits.flatMap(commit => {
       const files = toViewFiles(
@@ -544,7 +562,7 @@ export function GitLogApp() {
       );
       return historyPath ? filterFilesForHistoryPath(files, historyPath) : files;
     });
-  }, [isCommitListReloading, sortedSelectedCommits, store.commitFilesByKey, store.commitFilters.path]);
+  }, [isCommitListReloading, preservesVisibleContent, sortedSelectedCommits, store.commitFilesByKey, store.commitFilters.path]);
 
   const aggregatedFiles = useMemo(() => {
     if (sortedSelectedCommits.length <= 1) return selectedCommitFiles;
@@ -585,8 +603,11 @@ export function GitLogApp() {
   const mergeParentChanges = !isMultiCommitSelection && primarySelectedCommit
     ? store.mergeParentChangesByKey[getCommitKey(primarySelectedCommit.repoId, primarySelectedCommit.hash)] ?? []
     : [];
-  const detailLoading = isCommitListReloading
-    || sortedSelectedCommits.some(commit => store.loadingFilesByKey[getCommitKey(commit.repoId, commit.hash)]);
+  const detailLoading = (isCommitListReloading && !preservesVisibleContent)
+    || sortedSelectedCommits.some(commit => {
+      const key = getCommitKey(commit.repoId, commit.hash);
+      return store.commitFilesByKey[key] === undefined || store.loadingFilesByKey[key];
+    });
   const filterRepos = useMemo(() => (
     store.mode === 'compare' && store.compareState
       ? store.repos.filter(repo => repo.id === store.compareState!.repoId)
@@ -743,6 +764,7 @@ export function GitLogApp() {
               repos={store.repos.filter(repo => !repo.isWorktree)}
               branches={store.branches}
               tags={store.tags}
+              loading={isCommitListReloading}
               filter={store.branchFilter}
               selectedBranchFilter={store.commitFilters.branch}
               selectedBranchRepoIds={store.commitFilters.repoIds}
@@ -836,7 +858,7 @@ export function GitLogApp() {
           />
         ) : (
           <CommitList
-            commits={laidOutCommits}
+            commits={visibleLaidOutCommits}
             selectedHashes={store.selectedCommitHashes}
             primarySelectedHash={store.primarySelectedHash}
             repos={store.repos}
@@ -873,8 +895,8 @@ export function GitLogApp() {
               remoteNamesByRepo={remoteNamesByRepo}
               iconTheme={store.iconTheme}
               isMultiCommitSelection={isMultiCommitSelection}
-              activeHistoryPath={isCommitListReloading ? '' : store.commitFilters.path}
-              activeLineRange={isCommitListReloading ? undefined : store.commitFilters.lineRange}
+              activeHistoryPath={store.commitFilters.path}
+              activeLineRange={store.commitFilters.lineRange}
               onSelectFile={store.selectFile}
               onClose={store.clearSelection}
             />

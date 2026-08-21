@@ -140,6 +140,7 @@
   "{0} commits to pull from {1}": "{0} 个提交可从 {1} 拉取",
   "Local branch — not published to any remote yet": "本地分支 - 尚未发布到任何远程",
   "Up to date": "已是最新",
+  "Loading branches…": "正在加载分支…",
   "Loading commits…": "正在加载提交…",
   "No commits found": "未找到提交",
   "{0} repo · {1} commit to push": "{0} 个仓库 · {1} 个提交待推送",

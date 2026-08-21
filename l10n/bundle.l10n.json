@@ -140,6 +140,7 @@
   "{0} commits to pull from {1}": "{0} commits to pull from {1}",
   "Local branch — not published to any remote yet": "Local branch — not published to any remote yet",
   "Up to date": "Up to date",
+  "Loading branches…": "Loading branches…",
   "Loading commits…": "Loading commits…",
   "No commits found": "No commits found",
   "{0} repo · {1} commit to push": "{0} repo · {1} commit to push",
