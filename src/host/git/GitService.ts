@@ -969,14 +969,15 @@ export class GitService {
   }
 
   // Log uses raw git format for graph rendering — VS Code API's log() lacks graph parents/refs.
-  async getGraphLog(limit: number): Promise<GraphCommitNode[]> {
-    if (limit <= 0) return [];
+  async getGraphLog(limit?: number): Promise<GraphCommitNode[]> {
+    if (limit !== undefined && limit <= 0) return [];
     const args = [
       'log',
       '--date-order',
-      `--max-count=${limit}`,
+      ...(limit === undefined ? [] : [`--max-count=${limit}`]),
       GRAPH_LOG_RECORD_FORMAT,
       '--date=iso-strict',
+      'HEAD',
       '--exclude=refs/stash',
       '--exclude=refs/versiondock/ai-composer/*',
       '--all',
@@ -1022,7 +1023,10 @@ export class GitService {
     } else if (opts?.filterBranch) {
       args.push(this.safeRevisionArg(opts.filterBranch));
     } else {
-      args.push('--exclude=refs/stash', '--exclude=refs/versiondock/ai-composer/*', '--all');
+      // Put the checked-out history first when several tips have the same
+      // commit timestamp. This matches JetBrains and avoids `--all`'s ref
+      // enumeration order placing a remote/incoming branch above HEAD.
+      args.push('HEAD', '--exclude=refs/stash', '--exclude=refs/versiondock/ai-composer/*', '--all');
     }
     if (opts?.filterPath && !lineRange) args.push('--', this.literalPathspec(opts.filterPath));
     const [raw, refsByHash] = await Promise.all([

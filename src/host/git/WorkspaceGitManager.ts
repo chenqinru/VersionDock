@@ -113,33 +113,87 @@ function buildRepoId(rootPath: string, kind: RepoKind): string {
   return `${path.normalize(rootPath)}::${kind}`;
 }
 
-function compareLogHeads(a: GraphCommitNode, b: GraphCommitNode): number {
-  const byDate = new Date(b.committerDate).getTime() - new Date(a.committerDate).getTime();
+interface LogCandidate<T extends GraphCommitNode> {
+  commit: T;
+  logIndex: number;
+  insertionOrder: number;
+}
+
+function javaHashMapCapacity(size: number): number {
+  let capacity = 16;
+  while (size > capacity * 0.75) capacity *= 2;
+  return capacity;
+}
+
+function javaStringHash(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index++) {
+    hash = (Math.imul(31, hash) + value.charCodeAt(index)) | 0;
+  }
+  return hash;
+}
+
+function javaHashBucket(value: string, capacity: number): number {
+  const hash = javaStringHash(value);
+  return (hash ^ (hash >>> 16)) & (capacity - 1);
+}
+
+function compareLogCandidates<T extends GraphCommitNode>(
+  a: LogCandidate<T>,
+  b: LogCandidate<T>,
+  hashCapacity: number,
+): number {
+  const byDate = new Date(b.commit.committerDate).getTime()
+    - new Date(a.commit.committerDate).getTime();
   if (byDate !== 0) return byDate;
-  const byRepo = a.repoId.localeCompare(b.repoId);
-  if (byRepo !== 0) return byRepo;
-  return b.hash.localeCompare(a.hash);
+
+  // JetBrains VcsLogMultiRepoJoiner stores the next commit from every root in
+  // a Java HashMap and, for equal timestamps, keeps the last entry encountered
+  // during bucket iteration. Its internal storage ids are not available here,
+  // so use the stable Git hash as the equivalent commit key and reproduce the
+  // same Java bucket traversal explicitly instead of depending on JS Map order.
+  const byBucket = javaHashBucket(b.commit.hash, hashCapacity)
+    - javaHashBucket(a.commit.hash, hashCapacity);
+  if (byBucket !== 0) return byBucket;
+
+  return b.insertionOrder - a.insertionOrder;
 }
 
 function interleaveCommitLogs<T extends GraphCommitNode>(logs: T[][]): T[] {
   const positions = logs.map(() => 0);
   const commits: T[] = [];
   const totalCommits = logs.reduce((total, log) => total + log.length, 0);
+  const active: Array<LogCandidate<T>> = [];
+  let nextInsertionOrder = 0;
 
-  while (commits.length < totalCommits) {
-    let selectedLog = -1;
-    let selectedCommit: T | undefined;
-    for (let index = 0; index < logs.length; index++) {
-      const candidate = logs[index][positions[index]];
-      if (!candidate) continue;
-      if (!selectedCommit || compareLogHeads(candidate, selectedCommit) < 0) {
-        selectedLog = index;
-        selectedCommit = candidate;
+  for (let logIndex = 0; logIndex < logs.length; logIndex++) {
+    const commit = logs[logIndex][0];
+    if (!commit) continue;
+    active.push({ commit, logIndex, insertionOrder: nextInsertionOrder++ });
+  }
+  const hashCapacity = javaHashMapCapacity(active.length);
+
+  while (active.length > 0 && commits.length < totalCommits) {
+    let selectedIndex = 0;
+    for (let index = 1; index < active.length; index++) {
+      if (compareLogCandidates(active[index], active[selectedIndex], hashCapacity) < 0) {
+        selectedIndex = index;
       }
     }
-    if (selectedLog < 0 || !selectedCommit) break;
-    commits.push(selectedCommit);
-    positions[selectedLog]++;
+
+    const selected = active[selectedIndex];
+    commits.push(selected.commit);
+    positions[selected.logIndex]++;
+    const nextCommit = logs[selected.logIndex][positions[selected.logIndex]];
+    if (nextCommit) {
+      active[selectedIndex] = {
+        commit: nextCommit,
+        logIndex: selected.logIndex,
+        insertionOrder: nextInsertionOrder++,
+      };
+    } else {
+      active.splice(selectedIndex, 1);
+    }
   }
 
   return commits;
@@ -1470,18 +1524,27 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return allCommits.slice(skip, skip + limit);
   }
 
-  async getInterleavedGraphLog(repoIds: string[], limit: number): Promise<GraphCommitNode[]> {
-    if (limit <= 0) return [];
+  async getInterleavedGraphLog(repoIds: string[], svnLimit: number): Promise<GraphCommitNode[]> {
+    if (svnLimit <= 0) return [];
     const targets = repoIds.length > 0
       ? repoIds.map(id => this.repos.get(id)).filter(Boolean) as GitService[]
       : Array.from(this.repos.values());
     const results = await Promise.allSettled(
-      targets.map(repo => repo.getGraphLog(limit)),
+      targets.map(repo => {
+        const kind = this.repoMetas.get(repo.repoId)?.kind ?? 'git';
+        // JetBrains builds its permanent Git layout from the complete graph.
+        // Truncating this lightweight topology can change layout indices near
+        // the newest commits when older branches merge, so Git must remain
+        // complete even though the detailed commit list stays paginated.
+        // SVN history is linear and may involve a remote request, so its
+        // topology can safely retain the configured display limit.
+        return repo.getGraphLog(kind === 'svn' ? svnLimit : undefined);
+      }),
     );
     const graphLogs = results
       .filter((result): result is PromiseFulfilledResult<GraphCommitNode[]> => result.status === 'fulfilled')
       .map(result => result.value);
-    return interleaveCommitLogs(graphLogs).slice(0, limit);
+    return interleaveCommitLogs(graphLogs);
   }
 
   async fetchAll(): Promise<void> {

@@ -1519,18 +1519,18 @@ export class SvnService extends GitService {
     return this.getStatusFresh();
   }
 
-  async getGraphLog(limit: number): Promise<GraphCommitNode[]> {
-    if (limit <= 0) return [];
+  async getGraphLog(limit?: number): Promise<GraphCommitNode[]> {
+    if (limit !== undefined && limit <= 0) return [];
     const info = await this.getInfo();
     const localRevision = await this.resolveEffectiveLocalRevision(info);
-    const raw = await this.svn([
+    const args = [
       'log',
       '--xml',
       '-r',
       'HEAD:1',
-      '--limit',
-      String(limit),
-    ]);
+      ...(limit === undefined ? [] : ['--limit', String(limit)]),
+    ];
+    const raw = await this.svn(args);
     const entries = this.parseLogEntries(raw);
     const headRevision = entries[0]?.revision ?? info.revision;
     return entries.map(entry => ({

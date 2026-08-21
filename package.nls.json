@@ -70,7 +70,7 @@
   "colors.statusBarPushForeground.description": "Status bar text color when there are unpushed commits or the branch is not on remote",
   "colors.statusBarDirtyForeground.description": "Status bar text color when there are uncommitted changes",
   "configuration.title": "VersionDock",
-  "configuration.graphMaxCommits.description": "Maximum commits to load in the Git Log graph",
+  "configuration.graphMaxCommits.description": "Maximum commits to display in Git Log; lightweight Git ancestry may load beyond this limit to keep graph lanes stable",
   "configuration.repositoryScanMaxDepth.description": "Maximum depth of workspace subfolders to scan for Git repositories (0 = only workspace folders).",
   "configuration.repositoryScanIgnoredFolders.description": "Folder names or workspace-relative paths to skip while scanning for nested Git repositories.",
   "configuration.fetchOnStartup.description": "Automatically fetch all remotes when the extension activates",

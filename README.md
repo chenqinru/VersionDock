@@ -270,7 +270,7 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 
 | Setting | Default | Description |
 |:--|:--|:--|
-| `versiondock.graphMaxCommits` | `1000` | Maximum number of commits loaded into the Git Log graph. |
+| `versiondock.graphMaxCommits` | `1000` | Maximum commits displayed in Git Log. Lightweight Git ancestry may load beyond this limit to keep graph lanes stable. |
 | `versiondock.fetchOnStartup` | `false` | Fetches all remotes when VersionDock activates. |
 | `versiondock.projectColors` | `{}` | Maps workspace folder/repository names to hex colors for multi-repo views. |
 | `versiondock.repositoryScanMaxDepth` | `1` | Maximum depth of workspace subfolders to scan for Git repositories. `0` only checks workspace folders. |

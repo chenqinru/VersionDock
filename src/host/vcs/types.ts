@@ -31,7 +31,7 @@ export interface VcsProvider {
   getStatusFresh(): Promise<RepoStatus>;
   getCurrentBranch(): Promise<BranchInfo>;
   getBranches(): Promise<BranchInfo[]>;
-  getGraphLog(limit: number): Promise<GraphCommitNode[]>;
+  getGraphLog(limit?: number): Promise<GraphCommitNode[]>;
   getLog(limit: number, skip: number, opts?: Record<string, unknown>): Promise<CommitNode[]>;
   getCommitFiles(hash: string): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>>;
   getFileDiff(repoId: string, hash: string, filePath: string): Promise<FileDiff | null>;

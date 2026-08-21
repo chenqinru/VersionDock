@@ -70,7 +70,7 @@
   "colors.statusBarPushForeground.description": "有未推送提交或分支未关联远程时状态栏文本颜色",
   "colors.statusBarDirtyForeground.description": "有未提交更改时状态栏文本颜色",
   "configuration.title": "VersionDock",
-  "configuration.graphMaxCommits.description": "Git 日志图中最多加载的提交数量",
+  "configuration.graphMaxCommits.description": "Git 日志中最多显示的提交数量；轻量 Git 拓扑可能加载更早的祖先提交以保持图谱泳道稳定",
   "configuration.repositoryScanMaxDepth.description": "扫描工作区子文件夹中 Git 仓库的最大深度（0 表示仅扫描工作区文件夹）。",
   "configuration.repositoryScanIgnoredFolders.description": "扫描嵌套 Git 仓库时跳过的文件夹名或工作区相对路径。",
   "configuration.fetchOnStartup.description": "扩展激活时自动抓取所有远程",
