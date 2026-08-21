@@ -28,11 +28,6 @@ export interface GraphLayoutData {
 export type LaidOutCommit = CommitNode & GraphLayoutData;
 export type LaidOutGraphCommit = GraphCommitNode & GraphLayoutData;
 
-interface LaneColor {
-  color: string;
-  paletteIndex: number;
-}
-
 interface LayoutRef {
   group: RefGroup;
   priority: number;
@@ -72,41 +67,6 @@ function commitKey(commit: Pick<GraphCommitNode, 'repoId' | 'hash'>): string {
 
 function parentKey(commit: Pick<GraphCommitNode, 'repoId'>, parentHash: string): string {
   return scopedKey(commit.repoId, parentHash);
-}
-
-function paletteDistance(left: number, right: number, size: number): number {
-  const distance = Math.abs(left - right);
-  return Math.min(distance, size - distance);
-}
-
-function pickPaletteIndex(preferred: number, usedIndices: Set<number>): number {
-  const paletteSize = currentPalette().length;
-  if (usedIndices.size === 0) return preferred;
-
-  let bestIndex = preferred;
-  let bestMinimumDistance = -1;
-  for (let index = 0; index < paletteSize; index++) {
-    let minimumDistance = paletteSize;
-    for (const usedIndex of usedIndices) {
-      minimumDistance = Math.min(
-        minimumDistance,
-        paletteDistance(index, usedIndex, paletteSize),
-      );
-    }
-
-    if (
-      minimumDistance > bestMinimumDistance
-      || (
-        minimumDistance === bestMinimumDistance
-        && paletteDistance(index, preferred, paletteSize)
-          < paletteDistance(bestIndex, preferred, paletteSize)
-      )
-    ) {
-      bestMinimumDistance = minimumDistance;
-      bestIndex = index;
-    }
-  }
-  return bestIndex;
 }
 
 function layoutRefPriority(group: RefGroup): number {
@@ -328,8 +288,7 @@ function buildPermanentLayout(
   }
 
   const palette = currentPalette();
-  const usedPaletteIndices = new Set<number>();
-  const colorByHead = new Map<number, LaneColor>();
+  const colorByHead = new Map<number, string>();
   for (const headRow of importantHeads) {
     const commit = commits[headRow];
     const vcsKind = repoKindById[commit.repoId] ?? 'git';
@@ -346,20 +305,22 @@ function buildPermanentLayout(
       && !ref.isTag
       && !ref.isRemoteHead;
 
-    let laneColor: LaneColor;
+    let laneColor: string;
     if (isBranch && isPrimaryBranch(ref.label)) {
-      laneColor = { color: primaryBranchColor(), paletteIndex: -1 };
+      laneColor = primaryBranchColor();
     } else if (isHeadCommit) {
-      laneColor = { color: headColor(), paletteIndex: -2 };
+      laneColor = headColor();
     } else if (ref?.isTag) {
-      laneColor = { color: tagColor(), paletteIndex: -3 };
+      laneColor = tagColor();
     } else {
-      const preferred = ref === null
+      // A named branch's color must depend only on its name. The full topology
+      // is loaded asynchronously after the first commit batch; resolving color
+      // collisions against the currently known heads would recolor lanes when
+      // that topology arrives.
+      const paletteIndex = ref === null
         ? (layoutIndex[headRow] - 1) % palette.length
         : branchPaletteIndex(ref.label);
-      const paletteIndex = pickPaletteIndex(preferred, usedPaletteIndices);
-      usedPaletteIndices.add(paletteIndex);
-      laneColor = { color: palette[paletteIndex], paletteIndex };
+      laneColor = palette[paletteIndex];
     }
     colorByHead.set(headRow, laneColor);
   }
@@ -367,7 +328,7 @@ function buildPermanentLayout(
   const nodeColor = (row: number): string => {
     const headRow = owningHead[row] >= 0 ? owningHead[row] : row;
     if (layoutIndex[row] === layoutIndex[headRow]) {
-      return colorByHead.get(headRow)?.color ?? anonymousLaneColor(layoutIndex[row]);
+      return colorByHead.get(headRow) ?? anonymousLaneColor(layoutIndex[row]);
     }
     return palette[(layoutIndex[row] - 1) % palette.length];
   };

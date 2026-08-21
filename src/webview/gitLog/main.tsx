@@ -135,10 +135,12 @@ export function GitLogApp() {
   const requestGraphCommits = useCallback((filters: CommitFilters, generation: number) => {
     if (hasTopologyBreakingFilters(filters)) {
       activeGraphRequestIdRef.current = null;
+      useLogStore.getState().setLoadingGraphCommits(false);
       return;
     }
     const requestId = generateId();
     activeGraphRequestIdRef.current = requestId;
+    useLogStore.getState().setLoadingGraphCommits(true);
     send({
       type: 'LOG_REQUEST_GRAPH_COMMITS',
       repoIds: filters.repoId ? [filters.repoId] : filters.repoIds,
@@ -389,7 +391,8 @@ export function GitLogApp() {
   ), [store.compareState]);
 
   const activeCommitSource = store.mode === 'compare' ? compareCommits : store.commits;
-  const isCommitListReloading = store.mode === 'log' && store.loadingCommits;
+  const isCommitListReloading = store.mode === 'log'
+    && (store.loadingCommits || store.loadingGraphCommits);
 
   const selectedCommits = useMemo(() => {
     const selected = new Set(store.selectedCommitHashes);
@@ -460,6 +463,11 @@ export function GitLogApp() {
   );
   const laidOutCommits = useMemo(
     () => {
+      // The first commit batch and the permanent graph topology are loaded in
+      // parallel. Rendering the batch provisionally makes anonymous commits
+      // change lanes and colors once the topology arrives, so reveal the graph
+      // only when both halves of the same generation are ready.
+      if (isCommitListReloading) return [];
       if (hasTopologyBreakingFilter) {
         return assignLanes(store.commits, true, repoKindById, remoteNamesByRepo);
       }
@@ -485,6 +493,7 @@ export function GitLogApp() {
     [
       store.commits,
       store.graphCommits,
+      isCommitListReloading,
       laidOutGraphCommits,
       hasRevisionFilter,
       hasTopologyBreakingFilter,
@@ -836,9 +845,9 @@ export function GitLogApp() {
             remoteNamesByRepo={remoteNamesByRepo}
             onSelect={handleSelectCommit}
             onLoadMore={handleLoadMore}
-            hasMore={store.hasMore && !store.loadingCommits && !store.backgroundLoading}
+            hasMore={store.hasMore && !isCommitListReloading && !store.backgroundLoading}
             storeHasMore={store.hasMore}
-            loading={store.loadingCommits}
+            loading={isCommitListReloading}
             backgroundLoading={store.backgroundLoading}
             expandedRepoIds={expandedRepoIds}
             onToggleRepoName={toggleRepoName}

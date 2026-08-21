@@ -71,6 +71,7 @@ interface LogState {
   mergeParentChangesByKey: Record<string, MergeParentChange[]>;
   currentDiff: FileDiff | null;
   loadingCommits: boolean;
+  loadingGraphCommits: boolean;
   backgroundLoading: boolean;
   loadingFilesByKey: Record<string, boolean>;
   loadingDiff: boolean;
@@ -99,6 +100,7 @@ interface LogState {
   selectFile: (file: { repoId: string; path: string; status: string; commitHash?: string } | null) => void;
   setDiff: (diff: FileDiff | null) => void;
   setLoadingCommits: (v: boolean) => void;
+  setLoadingGraphCommits: (v: boolean) => void;
   setBackgroundLoading: (v: boolean) => void;
   setLoadingDiff: (v: boolean) => void;
   setFilterRepoId: (id: string | null) => void;
@@ -179,6 +181,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   mergeParentChangesByKey: {},
   currentDiff: null,
   loadingCommits: false,
+  loadingGraphCommits: false,
   backgroundLoading: false,
   loadingFilesByKey: {},
   loadingDiff: false,
@@ -245,7 +248,10 @@ export const useLogStore = create<LogState>((set, get) => ({
       : {}
   )),
   setIconTheme: (iconTheme) => set({ iconTheme }),
-  setGraphCommits: (graphCommits) => set({ graphCommits }),
+  setGraphCommits: (graphCommits) => set({
+    graphCommits,
+    loadingGraphCommits: false,
+  }),
   appendCommits: (commits, isLast) => set(s => {
     const replacing = s.replaceCommitsOnNextBatch;
     const nextCommits = dedupeCommits(replacing ? commits : [...s.commits, ...commits]);
@@ -295,6 +301,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     mode: 'log',
     hasMore: true,
     loadingCommits: true,
+    loadingGraphCommits: true,
     backgroundLoading: false,
     graphCommits: [],
     replaceCommitsOnNextBatch: true,
@@ -438,6 +445,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   selectFile: (file) => set({ selectedFile: file }),
   setDiff: (diff) => set({ currentDiff: diff, loadingDiff: false }),
   setLoadingCommits: (v) => set({ loadingCommits: v }),
+  setLoadingGraphCommits: (v) => set({ loadingGraphCommits: v }),
   setBackgroundLoading: (v) => set({ backgroundLoading: v }),
   setLoadingDiff: (v) => set({ loadingDiff: v }),
   setFilterRepoId: (id) => set({ filterRepoId: id }),
