@@ -1246,7 +1246,7 @@ function remoteLabel(group: RefGroup): string {
 function formatRefLabel(group: RefGroup): string {
   if (group.isSvnRevision) return group.label;
   if (group.isRemoteHead) return `${group.remoteName || t('remote')}/HEAD`;
-  if (group.isLocal && group.isRemote) return t('{0} & {1}', group.remoteName || t('remote'), group.label);
+  if (group.isLocal && group.isRemote) return `${group.remoteName || t('remote')} & ${group.label}`;
   if (group.isRemote) return remoteLabel(group);
   return group.label;
 }
