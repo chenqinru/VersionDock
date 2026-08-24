@@ -2,7 +2,7 @@
   "name": "versiondock",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "publisher": "chenqinru",
   "license": "GPL-3.0-only",
   "repository": {
@@ -801,7 +801,9 @@
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "npm run typecheck:host && npm run typecheck:webview",
     "typecheck:host": "tsc --noEmit --composite false --incremental false -p tsconfig.host.json",
-    "typecheck:webview": "tsc --noEmit --incremental false -p tsconfig.webview.json"
+    "typecheck:webview": "tsc --noEmit --incremental false -p tsconfig.webview.json",
+    "bump": "node scripts/bump-version.mjs",
+    "version:bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "simple-git": "^3.22.0"

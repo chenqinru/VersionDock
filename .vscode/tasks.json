@@ -39,6 +39,42 @@
       "group": "build",
       "presentation": { "reveal": "always", "panel": "shared" },
       "problemMatcher": []
+    },
+    {
+      "label": "Version: Bump (输入或指定版本)",
+      "type": "shell",
+      "command": "node scripts/bump-version.mjs ${input:targetVersion}",
+      "presentation": { "reveal": "always", "panel": "shared", "focus": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Version: Bump Patch (+0.0.1)",
+      "type": "shell",
+      "command": "node scripts/bump-version.mjs patch",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Version: Bump Minor (+0.1.0)",
+      "type": "shell",
+      "command": "node scripts/bump-version.mjs minor",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Version: Bump Major (+1.0.0)",
+      "type": "shell",
+      "command": "node scripts/bump-version.mjs major",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "targetVersion",
+      "type": "promptString",
+      "description": "请输入目标版本号（如 3.3.0）或升级规则（patch / minor / major）",
+      "default": "patch"
     }
   ]
 }
