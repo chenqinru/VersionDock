@@ -2,9 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { TextDecoder } from 'util';
-import simpleGit, { SimpleGit } from 'simple-git';
+import { type SimpleGit } from 'simple-git';
 import type { ShelveEntry } from '../types/messages';
 import { t } from '../utils/l10n';
+import { createGitClient, withGitWriteLock } from './GitOperationLock';
 
 type ChangelistAssignment = NonNullable<ShelveEntry['changelistAssignments']>[number];
 
@@ -34,7 +35,9 @@ export class ShelveService {
   private metaPath: string;
 
   constructor(public readonly rootPath: string, globalStorage: string) {
-    this.git = simpleGit(rootPath);
+    // Keep read-only shelf queries concurrent; Git writes are serialized by
+    // GitOperationLock and optional index refreshes are disabled below.
+    this.git = createGitClient(rootPath);
     const repoHash = crypto.createHash('sha1').update(rootPath).digest('hex').slice(0, 16);
     this.shelfDir = path.join(globalStorage, 'shelves', repoHash);
     this.metaPath = path.join(this.shelfDir, META_FILE);
@@ -301,6 +304,10 @@ export class ShelveService {
   }
 
   async push(name: string, paths?: string[], changelistAssignments?: ChangelistAssignment[]): Promise<ShelveEntry> {
+    return withGitWriteLock(this.rootPath, () => this.pushLocked(name, paths, changelistAssignments));
+  }
+
+  private async pushLocked(name: string, paths?: string[], changelistAssignments?: ChangelistAssignment[]): Promise<ShelveEntry> {
     this.ensureShelfDir();
 
     const statusOutput = await this.git.status();
@@ -466,6 +473,10 @@ export class ShelveService {
   }
 
   async apply(shelveId: string, paths?: string[]): Promise<ChangelistAssignment[] | undefined> {
+    return withGitWriteLock(this.rootPath, () => this.applyLocked(shelveId, paths));
+  }
+
+  private async applyLocked(shelveId: string, paths?: string[]): Promise<ChangelistAssignment[] | undefined> {
     const meta = this.readMeta();
     const entry = meta.shelves.find(s => s.id === shelveId);
     if (!entry) throw new Error(t('Shelve "{0}" not found', shelveId));

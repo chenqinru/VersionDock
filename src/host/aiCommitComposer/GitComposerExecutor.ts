@@ -6,6 +6,7 @@ import { detectLanguage, parseDiff } from '../git/DiffParser';
 import type { GitService } from '../git/GitService';
 import { t } from '../utils/l10n';
 import { execCli } from '../vcs/cli';
+import { getGitEnvironment, runGitCommandWithIndexLockRetry, waitForGitWrite, withGitWriteLock } from '../git/GitOperationLock';
 import type { ComposerApplyResult, ComposerChangeUnit, ComposerCommitGroup, ComposerPreparedSource } from './types';
 
 const BACKUP_PREFIX = 'refs/versiondock/ai-composer/';
@@ -148,15 +149,17 @@ export class GitComposerExecutor {
     options: { stdin?: string; env?: NodeJS.ProcessEnv; timeout?: number; trimOutput?: boolean } = {},
   ): Promise<string> {
     const { trimOutput = true, ...cliOptions } = options;
-    const stdout = (await execCli('git', args, {
+    const stdout = await runGitCommandWithIndexLockRetry(rootPath, async () => (await execCli('git', args, {
       cwd: rootPath,
       maxBuffer: COMPOSER_GIT_MAX_BUFFER,
       ...cliOptions,
-    })).stdout;
+      env: getGitEnvironment(cliOptions.env),
+    })).stdout);
     return trimOutput ? stdout.trim() : stdout;
   }
 
   async prepareWorking(repo: GitService, repoName: string, paths: string[], stagedOnly: boolean): Promise<PreparedGitComposerSession> {
+    await waitForGitWrite(repo.rootPath);
     const requestedPaths = Array.from(new Set(paths.map(value => repo.resolveRepoPath(value).relativePath))).sort();
     if (requestedPaths.length === 0) throw new Error(t('Select changes before opening AI Commit Composer.'));
     const [oldHead, branchRef, operation, status] = await Promise.all([
@@ -250,6 +253,7 @@ export class GitComposerExecutor {
   }
 
   async prepareHistory(repo: GitService, repoName: string, hashes: string[]): Promise<PreparedGitComposerSession> {
+    await waitForGitWrite(repo.rootPath);
     const validation = await repo.canReorganizeCommitRange(hashes);
     if (!validation.ok || !validation.oldestHash) throw new Error(validation.reason ?? t('Selected commits cannot be reorganized.'));
     const status = await repo.getStatusFresh();
@@ -279,6 +283,15 @@ export class GitComposerExecutor {
   }
 
   async apply(
+    repo: GitService,
+    session: PreparedGitComposerSession,
+    groups: ComposerCommitGroup[],
+    onProgress: (completed: number, total: number, message: string) => void,
+  ): Promise<ComposerApplyResult> {
+    return withGitWriteLock(repo.rootPath, () => this.applyLocked(repo, session, groups, onProgress));
+  }
+
+  private async applyLocked(
     repo: GitService,
     session: PreparedGitComposerSession,
     groups: ComposerCommitGroup[],

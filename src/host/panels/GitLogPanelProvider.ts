@@ -1126,8 +1126,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             );
             if (pick?.value === 'stash') {
               try {
-                await repo.stashPush(t('WIP before merge of {0}', msg.from));
-                await repo.merge(msg.from);
+                await repo.runWithGitWriteLock(async () => {
+                  await repo.stashPush(t('WIP before merge of {0}', msg.from));
+                  await repo.merge(msg.from);
+                });
                 this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
               } catch (e2: unknown) {
                 this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });

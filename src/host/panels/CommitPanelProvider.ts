@@ -494,28 +494,43 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   ): Promise<{ labelUri: vscode.Uri; leftUri: vscode.Uri; rightUri: vscode.Uri; title: string } | null> {
     const resolvedPath = repo.resolveRepoPath(filePath);
     const relativePath = resolvedPath.relativePath;
+    let workingStat: fs.Stats | undefined;
+    try { workingStat = fs.statSync(resolvedPath.absolutePath); } catch { /* missing conflicted path */ }
+    if (workingStat?.isDirectory()) return null;
+
     const diff = await repo.getUnstagedDiff(repo.repoId, relativePath);
     const fileName = path.basename(relativePath);
-    const labelUri = vscode.Uri.file(resolvedPath.absolutePath);
+    const hasWorkingFile = workingStat?.isFile() ?? false;
+    const fileUri = vscode.Uri.file(resolvedPath.absolutePath);
+    const leftUri = this.buildSvnDiffUri(repo, relativePath, 'base');
+    const rightUri = this.buildSvnDiffUri(repo, relativePath, 'working');
     if (!diff) {
-      if (!fs.existsSync(labelUri.fsPath)) return null;
-      const leftUri = this.buildSvnDiffUri(repo, relativePath, 'base');
-      const rightUri = this.buildSvnDiffUri(repo, relativePath, 'working');
-      this.shelveDocProvider.set(leftUri, '');
-      this.shelveDocProvider.set(rightUri, fs.readFileSync(labelUri.fsPath, 'utf8'));
+      let baseContent = '';
+      if (!hasWorkingFile) {
+        // A missing SVN conflict file still has a useful BASE/working view.
+        // Load BASE from SVN and represent the missing working copy as empty
+        // virtual content instead of opening a nonexistent file URI.
+        const versions = await repo.getFileVersions(relativePath).catch(() => undefined);
+        if (!versions) return null;
+        baseContent = versions.base;
+      }
+      let workingContent = '';
+      if (hasWorkingFile) {
+        try { workingContent = fs.readFileSync(resolvedPath.absolutePath, 'utf8'); } catch { /* keep empty */ }
+      }
+      this.shelveDocProvider.set(leftUri, hasWorkingFile ? '' : baseContent);
+      this.shelveDocProvider.set(rightUri, workingContent);
       return {
-        labelUri,
+        labelUri: hasWorkingFile ? fileUri : leftUri,
         leftUri,
         rightUri,
         title: t('{0} (SVN Base ↔ Working Copy)', fileName),
       };
     }
-    const leftUri = this.buildSvnDiffUri(repo, relativePath, 'base');
-    const rightUri = this.buildSvnDiffUri(repo, relativePath, 'working');
     this.shelveDocProvider.set(leftUri, diff.originalContent ?? '');
     this.shelveDocProvider.set(rightUri, diff.modifiedContent ?? '');
     return {
-      labelUri,
+      labelUri: hasWorkingFile ? fileUri : leftUri,
       leftUri,
       rightUri,
       title: t('{0} (SVN Base ↔ Working Copy)', fileName),
@@ -541,9 +556,22 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     filePath: string,
     options: { preview?: boolean } = {},
   ): Promise<void> {
+    const resolvedPath = repo.resolveRepoPath(filePath);
+    let workingStat: fs.Stats | undefined;
+    try { workingStat = fs.statSync(resolvedPath.absolutePath); } catch { /* missing conflicted path */ }
+    if (workingStat?.isDirectory()) {
+      await vscode.window.showInformationMessage(
+        t('SVN directory conflicts cannot be edited as text. Choose a conflict side or resolve the directory manually.'),
+      );
+      return;
+    }
+
     const resource = await this.prepareSvnWorkingDiffResource(repo, filePath);
     if (!resource) {
-      const resolvedPath = repo.resolveRepoPath(filePath);
+      if (!workingStat?.isFile()) {
+        await vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', path.basename(resolvedPath.relativePath)));
+        return;
+      }
       await vscode.window.showTextDocument(vscode.Uri.file(resolvedPath.absolutePath), { preview: options.preview ?? true });
       return;
     }
@@ -2149,11 +2177,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Commit & Push'), cancellable: false },
           async () => {
             try {
-              const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
-              await repo.commit(msg.message, msg.amend, creds, detail => {
-                this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
+              await repo.runWithGitWriteLock(async () => {
+                const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
+                await repo.commit(msg.message, msg.amend, creds, detail => {
+                  this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
+                });
+                if (repo.kind !== 'svn') await repo.push();
               });
-              if (repo.kind !== 'svn') await repo.push();
               this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
               this.logger?.info('Commit', 'Commit and push completed', {
                 repoId: msg.repoId,
@@ -2247,13 +2277,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   continue;
                 }
                 // Stage/unstage according to user selection before committing
-                if (r.filesToUnstage.length > 0) await repo.unstageFiles(r.filesToUnstage);
-                if (r.filesToStage.length > 0) await repo.stageFiles(r.filesToStage);
-                const creds = await this.getCommitCredentials(repo.repoId);
-                await repo.commit(r.message, r.amend, creds, detail => {
-                  this.logger?.debug('Commit', detail, { repoId: r.repoId, requestId: msg.requestId });
+                await repo.runWithGitWriteLock(async () => {
+                  if (r.filesToUnstage.length > 0) await repo.unstageFiles(r.filesToUnstage);
+                  if (r.filesToStage.length > 0) await repo.stageFiles(r.filesToStage);
+                  const creds = await this.getCommitCredentials(repo.repoId);
+                  await repo.commit(r.message, r.amend, creds, detail => {
+                    this.logger?.debug('Commit', detail, { repoId: r.repoId, requestId: msg.requestId });
+                  });
+                  if (msg.andPush) await repo.push();
                 });
-                if (msg.andPush) await repo.push();
               } catch (e: unknown) {
                 const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
                 this.logger?.error('Commit', 'Repository commit failed', e, {
@@ -2286,6 +2318,133 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const status = await this.manager.getAllStatusesFresh();
             this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
             this.postChangelistsUpdate(status);
+          }
+        );
+        break;
+      }
+
+      case 'COMMIT_DO_STASH_MULTI': {
+        const startedAt = Date.now();
+        this.logger?.info('Stash', 'Multi-repository stash started', {
+          repositoryCount: msg.repos.length,
+          requestId: msg.requestId,
+        });
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: msg.repos.length === 1
+              ? t('VersionDock: Stashing {0} repository', msg.repos.length)
+              : t('VersionDock: Stashing {0} repositories', msg.repos.length),
+            cancellable: false,
+          },
+          async () => {
+            const errors: string[] = [];
+            const affectedRepoIds: string[] = [];
+            for (const r of msg.repos) {
+              const repo = this.manager.getRepo(r.repoId);
+              if (!repo) { errors.push(`${r.repoId}: not found`); continue; }
+              if (repo.kind === 'svn') continue;
+              try {
+                const safePaths = r.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
+                await repo.stashPush(msg.message, safePaths);
+                affectedRepoIds.push(r.repoId);
+              } catch (e: unknown) {
+                const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
+                this.logger?.error('Stash', 'Repository stash failed', e, {
+                  repoId: r.repoId,
+                  requestId: msg.requestId,
+                  vcs: repo.kind,
+                });
+                errors.push(`${repoName}: ${String(e)}`);
+              }
+            }
+            if (errors.length > 0) {
+              this.logger?.warn('Stash', 'Multi-repository stash completed with failures', {
+                repositoryCount: msg.repos.length,
+                failedCount: errors.length,
+                requestId: msg.requestId,
+                durationMs: Date.now() - startedAt,
+              });
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+            } else {
+              this.logger?.info('Stash', 'Multi-repository stash completed', {
+                repositoryCount: msg.repos.length,
+                requestId: msg.requestId,
+                durationMs: Date.now() - startedAt,
+              });
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+            }
+            const status = await this.manager.getAllStatusesFresh();
+            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+            this.postChangelistsUpdate(status);
+            for (const repoId of affectedRepoIds) {
+              this.post({ type: 'STASH_OP_RESULT', requestId: `${msg.requestId}-${repoId}`, repoId, op: 'push', ok: true });
+            }
+          }
+        );
+        break;
+      }
+
+      case 'COMMIT_DO_SHELVE_MULTI': {
+        const startedAt = Date.now();
+        this.logger?.info('Shelve', 'Multi-repository shelve started', {
+          repositoryCount: msg.repos.length,
+          requestId: msg.requestId,
+        });
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: msg.repos.length === 1
+              ? t('VersionDock: Shelving {0} repository', msg.repos.length)
+              : t('VersionDock: Shelving {0} repositories', msg.repos.length),
+            cancellable: false,
+          },
+          async () => {
+            const errors: string[] = [];
+            const affectedRepoIds: string[] = [];
+            const clSvc = this.getOrCreateChangelistService();
+            for (const r of msg.repos) {
+              const shelveSvc = this.getShelveService(r.repoId);
+              const repo = this.manager.getRepo(r.repoId);
+              if (!shelveSvc || !repo) { errors.push(`${r.repoId}: not found`); continue; }
+              if (repo.kind === 'svn') continue;
+              try {
+                const safePaths = r.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
+                const clAssignments = clSvc ? this.buildChangelistAssignments(clSvc, r.repoId, safePaths) : undefined;
+                await shelveSvc.push(msg.name, safePaths, clAssignments);
+                affectedRepoIds.push(r.repoId);
+              } catch (e: unknown) {
+                const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
+                this.logger?.error('Shelve', 'Repository shelve failed', e, {
+                  repoId: r.repoId,
+                  requestId: msg.requestId,
+                  vcs: repo.kind,
+                });
+                errors.push(`${repoName}: ${String(e)}`);
+              }
+            }
+            if (errors.length > 0) {
+              this.logger?.warn('Shelve', 'Multi-repository shelve completed with failures', {
+                repositoryCount: msg.repos.length,
+                failedCount: errors.length,
+                requestId: msg.requestId,
+                durationMs: Date.now() - startedAt,
+              });
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+            } else {
+              this.logger?.info('Shelve', 'Multi-repository shelve completed', {
+                repositoryCount: msg.repos.length,
+                requestId: msg.requestId,
+                durationMs: Date.now() - startedAt,
+              });
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+            }
+            const status = await this.manager.getAllStatusesFresh();
+            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+            this.postChangelistsUpdate(status);
+            for (const repoId of affectedRepoIds) {
+              this.post({ type: 'SHELVE_OP_RESULT', requestId: `${msg.requestId}-${repoId}`, repoId, op: 'push', ok: true });
+            }
           }
         );
         break;
@@ -3225,6 +3384,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await repo.stashPush(msg.message, paths);
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          this.postChangelistsUpdate(status);
           this.post({ type: 'STASH_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'push', ok: true });
         } catch (e: unknown) {
           this.post({ type: 'STASH_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'push', ok: false, error: String(e) });

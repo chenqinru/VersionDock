@@ -1792,8 +1792,10 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(archive) ${t('Stash and checkout')}`,
         detail: t('Save changes to stash, then switch to the branch'),
         action: async () => {
-          await repo.stashPush(`WIP before checkout to ${branchName}`);
-          await repo.checkout(branchName);
+          await repo.runWithGitWriteLock(async () => {
+            await repo.stashPush(`WIP before checkout to ${branchName}`);
+            await repo.checkout(branchName);
+          });
           vscode.window.showInformationMessage(
             t('VersionDock [{0}]: changes stashed, switched to "{1}"', meta.name, branchName)
           );
@@ -1803,9 +1805,11 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(arrow-right) ${t('Bring changes to new branch')}`,
         detail: t('Carry uncommitted changes into the new branch'),
         action: async () => {
-          await repo.stashPush(`WIP migrating to ${branchName}`);
-          await repo.checkout(branchName);
-          await repo.stashPop();
+          await repo.runWithGitWriteLock(async () => {
+            await repo.stashPush(`WIP migrating to ${branchName}`);
+            await repo.checkout(branchName);
+            await repo.stashPop();
+          });
           vscode.window.showInformationMessage(
             t('VersionDock [{0}]: changes migrated to "{1}"', meta.name, branchName)
           );
@@ -2212,8 +2216,10 @@ export class BranchStatusBar implements vscode.Disposable {
               );
               if (pick?.value === 'stash') {
                 try {
-                  await repo.stashPush(t('WIP before merge of {0}', from));
-                  await repo.merge(from);
+                  await repo.runWithGitWriteLock(async () => {
+                    await repo.stashPush(t('WIP before merge of {0}', from));
+                    await repo.merge(from);
+                  });
                 } catch (e2: unknown) {
                   errors.push(`${meta.name}: ${String(e2)}`);
                 }

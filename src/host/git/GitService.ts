@@ -1,4 +1,4 @@
-import simpleGit, { SimpleGit } from 'simple-git';
+import { type SimpleGit } from 'simple-git';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -23,6 +23,7 @@ import { ForcePushMode, Status, RefType } from './git.d';
 import { t } from '../utils/l10n';
 import { BlameService, type BlameLine } from './BlameService';
 import { assertNoSymlinkAncestors, isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
+import { createGitClient, getGitWriteGeneration, waitForGitWrite, withGitWriteLock, withGitWriteLocks } from './GitOperationLock';
 
 const STATUS_MAP: Record<string, GitFileStatus> = {
   M: 'modified', A: 'added', D: 'deleted',
@@ -267,7 +268,11 @@ export class GitService {
     private readonly suppressStatusUpdates?: SuppressStatusUpdates,
     private readonly refreshStatus?: RefreshStatus,
   ) {
-    this.git = simpleGit(rootPath);
+    // Git's optional index refresh in commands such as `status` is a read
+    // operation from VersionDock's perspective. Disable that refresh, while
+    // leaving independent read-only commands free to run concurrently. Git
+    // mutations are serialized explicitly by GitOperationLock instead.
+    this.git = createGitClient(rootPath);
   }
 
   async getBlame(filePath: string): Promise<BlameLine[]> {
@@ -289,14 +294,29 @@ export class GitService {
   }
 
   private runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
-    return this.suppressStatusUpdates ? this.suppressStatusUpdates(operation, kind, label) : operation();
+    // Hold the repository lock only for the Git mutation itself. The status
+    // suppression helper may wait for a refresh after the mutation; keeping
+    // the lock during that wait could block the auto-commit triggered by that
+    // refresh.
+    const lockedOperation = () => this.withWriteLock(operation);
+    return this.suppressStatusUpdates ? this.suppressStatusUpdates(lockedOperation, kind, label) : lockedOperation();
   }
 
   private async refreshStatusAfterOperation(): Promise<void> {
     await this.refreshStatus?.().catch(() => {});
   }
 
-  private rawPathSafe(args: string[]): Promise<string> {
+  private withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    return withGitWriteLock(this.rootPath, operation);
+  }
+
+  /** Run a compound working-tree operation without allowing another Git writer to interleave. */
+  async runWithGitWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    return this.withWriteLock(operation);
+  }
+
+  private async rawPathSafe(args: string[]): Promise<string> {
+    await waitForGitWrite(this.rootPath);
     return this.git.raw(['-c', 'core.quotepath=false', ...args]);
   }
 
@@ -439,6 +459,17 @@ export class GitService {
 
   /** Read status directly from git (bypasses VSCode's cached state). */
   async getStatusFresh(): Promise<RepoStatus> {
+    const first = await this.readStatusFreshSnapshot();
+    if (getGitWriteGeneration(this.rootPath) === first.generation) return first.status;
+
+    // A write started while the parallel status queries were running. Read one
+    // more complete snapshot, but do not wait for future queued writers.
+    return (await this.readStatusFreshSnapshot()).status;
+  }
+
+  private async readStatusFreshSnapshot(): Promise<{ status: RepoStatus; generation: number }> {
+    await waitForGitWrite(this.rootPath);
+    const generation = getGitWriteGeneration(this.rootPath);
     const [status, branchInfo, submoduleStatuses, operationState] = await Promise.all([
       this.git.status(),
       this.getCurrentBranch(),
@@ -504,7 +535,10 @@ export class GitService {
       }
     }
 
-    return { repoId: this.repoId, branch: freshBranchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount, operationState };
+    return {
+      status: { repoId: this.repoId, branch: freshBranchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount, operationState },
+      generation,
+    };
   }
 
   protected async assertPullAllowed(): Promise<void> {
@@ -567,6 +601,7 @@ export class GitService {
   }
 
   async getStatus(): Promise<RepoStatus> {
+    await waitForGitWrite(this.rootPath);
     const vsRepo = this.vsRepo();
     if (vsRepo) {
       const head = vsRepo.state.HEAD;
@@ -758,6 +793,7 @@ export class GitService {
   }
 
   async getCurrentBranch(): Promise<BranchInfo> {
+    await waitForGitWrite(this.rootPath);
     const vsRepo = this.vsRepo();
     if (vsRepo) {
       const head = vsRepo.state.HEAD;
@@ -818,6 +854,7 @@ export class GitService {
   }
 
   async getBranches(): Promise<BranchInfo[]> {
+    await waitForGitWrite(this.rootPath);
     const vsRepo = this.vsRepo();
     if (vsRepo) {
       // getBranches({ remote: false }) returns local branches (RefType.Head),
@@ -942,6 +979,7 @@ export class GitService {
   }
 
   async pullBranch(branchName: string): Promise<string> {
+    return this.withWriteLock(async () => {
     const currentBranch = (await this.git.revparse(['--abbrev-ref', 'HEAD']).catch(() => '')).trim();
     if (!branchName || currentBranch === branchName) {
       return this.pull();
@@ -966,6 +1004,7 @@ export class GitService {
     return behind === 0
       ? `pulled ${branchName}`
       : `pulled ${branchName}, still ahead ${ahead} behind ${behind}`;
+    });
   }
 
   // Log uses raw git format for graph rendering — VS Code API's log() lacks graph parents/refs.
@@ -1592,24 +1631,28 @@ export class GitService {
   }
 
   async addSubtree(prefix: string, repository: string, ref: string, squash: boolean, message?: string): Promise<string> {
-    const args = ['subtree', 'add', this.subtreePrefixArg(prefix)];
-    if (squash) args.push('--squash');
-    if (message?.trim()) args.push('-m', message.trim());
-    args.push(repository, ref);
-    return this.rawPathSafe(args);
+    return this.withWriteLock(async () => {
+      const args = ['subtree', 'add', this.subtreePrefixArg(prefix)];
+      if (squash) args.push('--squash');
+      if (message?.trim()) args.push('-m', message.trim());
+      args.push(repository, ref);
+      return this.rawPathSafe(args);
+    });
   }
 
   async pullSubtree(prefix: string, repository: string, ref: string, squash: boolean, message?: string): Promise<string> {
-    await this.assertPullAllowed();
-    const args = ['subtree', 'pull', this.subtreePrefixArg(prefix)];
-    if (squash) args.push('--squash');
-    if (message?.trim()) args.push('-m', message.trim());
-    args.push(repository, ref);
-    return this.rawPathSafe(args);
+    return this.withWriteLock(async () => {
+      await this.assertPullAllowed();
+      const args = ['subtree', 'pull', this.subtreePrefixArg(prefix)];
+      if (squash) args.push('--squash');
+      if (message?.trim()) args.push('-m', message.trim());
+      args.push(repository, ref);
+      return this.rawPathSafe(args);
+    });
   }
 
   async pushSubtree(prefix: string, repository: string, refspec: string): Promise<string> {
-    return this.rawPathSafe(['subtree', 'push', this.subtreePrefixArg(prefix), repository, refspec]);
+    return this.withWriteLock(() => this.rawPathSafe(['subtree', 'push', this.subtreePrefixArg(prefix), repository, refspec]));
   }
 
   private parseSubtreeSplitHash(output: string): string | undefined {
@@ -1706,29 +1749,36 @@ export class GitService {
     onto?: string,
     commit?: string,
   ): Promise<string> {
-    const args = ['subtree', 'split', this.subtreePrefixArg(prefix)];
-    if (branch?.trim()) args.push('--branch', branch.trim());
-    if (annotate?.trim()) args.push('--annotate', annotate.trim());
-    if (onto?.trim()) args.push('--onto', onto.trim());
-    if (rejoin) args.push('--rejoin');
-    if (commit?.trim()) args.push(commit.trim());
-    return this.rawPathSafe(args);
+    return this.withWriteLock(async () => {
+      const args = ['subtree', 'split', this.subtreePrefixArg(prefix)];
+      if (branch?.trim()) args.push('--branch', branch.trim());
+      if (annotate?.trim()) args.push('--annotate', annotate.trim());
+      if (onto?.trim()) args.push('--onto', onto.trim());
+      if (rejoin) args.push('--rejoin');
+      if (commit?.trim()) args.push(commit.trim());
+      return this.rawPathSafe(args);
+    });
   }
 
   async mergeSubtree(prefix: string, commit: string, squash: boolean, message?: string): Promise<string> {
-    const args = ['subtree', 'merge', this.subtreePrefixArg(prefix)];
-    if (squash) args.push('--squash');
-    if (message?.trim()) args.push('-m', message.trim());
-    args.push(commit);
-    return this.rawPathSafe(args);
+    return this.withWriteLock(async () => {
+      const args = ['subtree', 'merge', this.subtreePrefixArg(prefix)];
+      if (squash) args.push('--squash');
+      if (message?.trim()) args.push('-m', message.trim());
+      args.push(commit);
+      return this.rawPathSafe(args);
+    });
   }
 
   async removeSubtree(prefix: string): Promise<string> {
-    const relPath = this.normalizeRepoPath(prefix);
-    return this.rawPathSafe(['rm', '-r', '--', this.literalPathspec(relPath)]);
+    return this.withWriteLock(async () => {
+      const relPath = this.normalizeRepoPath(prefix);
+      return this.rawPathSafe(['rm', '-r', '--', this.literalPathspec(relPath)]);
+    });
   }
 
   async stageFiles(paths: string[]): Promise<void> {
+    return this.withWriteLock(async () => {
     const safePaths = paths.map(filePath => this.normalizeRepoPath(filePath));
     const vsRepo = this.vsRepo();
     // Always use simple-git for gitlink (submodule pointer) entries —
@@ -1770,6 +1820,7 @@ export class GitService {
         await this.git.raw(['add', '--', ...this.literalPathspecs(regularPaths)]);
       }
     }
+    });
   }
 
   async getConflictFiles(): Promise<string[]> {
@@ -1814,6 +1865,7 @@ export class GitService {
   }
 
   async saveMergedContent(filePath: string, content: string): Promise<void> {
+    return this.withWriteLock(async () => {
     const relPath = this.normalizeRepoPath(filePath);
     const absolutePath = path.join(this.rootPath, relPath);
     assertNoSymlinkAncestors(this.rootPath, absolutePath, { includeTarget: true });
@@ -1832,23 +1884,30 @@ export class GitService {
     }
     fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
     fs.writeFileSync(absolutePath, content, 'utf8');
+    });
   }
 
   async deleteMergedFile(filePath: string): Promise<void> {
+    return this.withWriteLock(async () => {
     const relPath = this.normalizeRepoPath(filePath);
     const absolutePath = path.join(this.rootPath, relPath);
     assertNoSymlinkAncestors(this.rootPath, absolutePath);
     if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
+    });
   }
 
   async acceptOurs(filePath: string): Promise<void> {
-    const relPath = this.normalizeRepoPath(filePath);
-    await this.acceptConflictSide(relPath, 'ours');
+    return this.withWriteLock(async () => {
+      const relPath = this.normalizeRepoPath(filePath);
+      await this.acceptConflictSide(relPath, 'ours');
+    });
   }
 
   async acceptTheirs(filePath: string): Promise<void> {
-    const relPath = this.normalizeRepoPath(filePath);
-    await this.acceptConflictSide(relPath, 'theirs');
+    return this.withWriteLock(async () => {
+      const relPath = this.normalizeRepoPath(filePath);
+      await this.acceptConflictSide(relPath, 'theirs');
+    });
   }
 
   private async acceptConflictSide(relPath: string, side: 'ours' | 'theirs'): Promise<void> {
@@ -1871,6 +1930,7 @@ export class GitService {
   }
 
   async stageAll(): Promise<void> {
+    return this.withWriteLock(async () => {
     const vsRepo = this.vsRepo();
     const submodulePaths = await this.getSubmoduleRelativePaths();
 
@@ -1910,9 +1970,11 @@ export class GitService {
       return;
     }
     await this.git.add('.');
+    });
   }
 
   async unstageFiles(paths: string[]): Promise<void> {
+    return this.withWriteLock(async () => {
     const safePaths = paths.map(filePath => this.normalizeRepoPath(filePath));
     if (safePaths.length === 0) return;
     const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
@@ -1924,18 +1986,22 @@ export class GitService {
     // the index preserves the working files and works for regular files and
     // gitlinks alike.
     await this.git.raw(['rm', '-r', '--cached', '--ignore-unmatch', '--', ...this.literalPathspecs(safePaths)]);
+    });
   }
 
   async unstageAll(): Promise<void> {
+    return this.withWriteLock(async () => {
     const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
     if (hasHead) {
       await this.git.raw(['reset', 'HEAD']);
       return;
     }
     await this.git.raw(['rm', '-r', '--cached', '--ignore-unmatch', '--', '.']);
+    });
   }
 
   async discardFile(filePath: string): Promise<void> {
+    return this.withWriteLock(async () => {
     const relPath = this.normalizeRepoPath(filePath);
     const absPath = path.join(this.rootPath, relPath);
     assertNoSymlinkAncestors(this.rootPath, absPath);
@@ -1955,9 +2021,11 @@ export class GitService {
     await this.git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', pathspec])
       .catch(() => this.git.raw(['restore', '--staged', '--worktree', '--', pathspec]))
       .catch(() => this.git.checkout(['--', pathspec]));
+    });
   }
 
   async commit(message: string, amend: boolean, credentials?: { gitName: string; gitEmail: string }, log?: (s: string) => void): Promise<string> {
+    return this.withWriteLock(async () => {
     log?.(`GitService.commit — credentials=${credentials ? 'provided' : 'default'} amend=${amend}`);
     if (credentials?.gitName && credentials?.gitEmail) {
       const flags = [
@@ -1978,6 +2046,7 @@ export class GitService {
     }
     const result = await this.git.commit(message, undefined, amend ? { '--amend': null } : {});
     return result.summary.changes.toString();
+    });
   }
 
   private async getAbsoluteGitDir(): Promise<string | undefined> {
@@ -2004,6 +2073,7 @@ export class GitService {
   }
 
   async getOperationState(): Promise<'merge' | 'rebase' | 'cherry-pick' | 'revert' | null> {
+    await waitForGitWrite(this.rootPath);
     const gitDir = await this.getAbsoluteGitDir();
     if (!gitDir) return null;
     if (fs.existsSync(path.join(gitDir, 'MERGE_HEAD'))) return 'merge';
@@ -2014,6 +2084,7 @@ export class GitService {
   }
 
   async commitMergeIfResolved(): Promise<MergeCommitResult | undefined> {
+    return this.withWriteLock(async () => {
     if (this.kind !== 'git' || await this.getOperationState() !== 'merge') return undefined;
     if ((await this.getConflictFiles()).length > 0) return undefined;
 
@@ -2024,6 +2095,7 @@ export class GitService {
       sourceBranch: mergeDetails.sourceBranch,
       targetBranch: mergeDetails.targetBranch ?? currentBranch.name,
     };
+    });
   }
 
   async getMergeRebaseState(): Promise<'merge' | 'rebase' | null> {
@@ -2032,15 +2104,19 @@ export class GitService {
   }
 
   async abortMerge(): Promise<void> {
+    return this.withWriteLock(async () => {
     const vsRepo = this.vsRepo();
     if (vsRepo) { await vsRepo.mergeAbort(); return; }
     await this.git.raw(['merge', '--abort']);
+    });
   }
 
   async abortRebase(): Promise<void> {
+    return this.withWriteLock(async () => {
     const vsRepo = this.vsRepo();
     if (vsRepo) { await vsRepo.rebase('--abort' as string); return; }
     await this.git.raw(['rebase', '--abort']);
+    });
   }
 
   async getRemotes(): Promise<string[]> {
@@ -2076,58 +2152,63 @@ export class GitService {
   }
 
   async addRemote(name: string, url: string): Promise<void> {
-    await this.git.addRemote(name, url);
-    // Refresh VS Code's remote state without creating an unhandled rejection
-    // when the newly-added endpoint is offline or needs authentication.
-    void this.vsRepo()?.fetch?.().catch(() => undefined);
+    return this.withWriteLock(async () => {
+      await this.git.addRemote(name, url);
+      // Refresh VS Code's remote state without creating an unhandled rejection
+      // when the newly-added endpoint is offline or needs authentication.
+      void this.vsRepo()?.fetch?.().catch(() => undefined);
+    });
   }
 
   async removeRemote(name: string): Promise<void> {
-    await this.git.removeRemote(name);
+    return this.withWriteLock(() => this.git.removeRemote(name).then(() => undefined));
   }
 
   async renameRemote(oldName: string, newName: string): Promise<void> {
-    await this.git.remote(['rename', oldName, newName]);
+    return this.withWriteLock(() => this.git.remote(['rename', oldName, newName]).then(() => undefined));
   }
 
   async setRemoteUrl(name: string, url: string): Promise<void> {
-    await this.git.remote(['set-url', name, url]);
+    return this.withWriteLock(() => this.git.remote(['set-url', name, url]).then(() => undefined));
   }
 
   async push(force = false, remote?: string): Promise<void> {
-    await this.assertBranchOperationAllowed();
-    const vsRepo = this.vsRepo();
-    // Only use VS Code API when it actually knows the remotes for this repo.
-    // If remotes are empty VS Code would push to an unknown remote (exit 128).
-    // Repos where VS Code lists no remotes are typically SSH-keyed or use a
-    // system credential helper, so falling back to simple-git is safe there.
-    if (vsRepo && vsRepo.state.remotes.length > 0) {
-      const branchName = vsRepo.state.HEAD?.name;
-      const hasUpstream = !!vsRepo.state.HEAD?.upstream;
-      const targetRemote = remote ?? vsRepo.state.HEAD?.upstream?.remote ?? vsRepo.state.remotes[0]?.name ?? 'origin';
-      const forceMode = force ? ForcePushMode.ForceWithLease : undefined;
-      await vsRepo.push(targetRemote, branchName, !hasUpstream, forceMode);
-      return;
-    }
-    const tracking = await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '');
-    const hasUpstream = !!tracking.trim();
-    const branchName = (await this.git.revparse(['--abbrev-ref', 'HEAD'])).trim();
-    // Match the longest configured prefix because Git permits remote names with
-    // slashes (for example, team/upstream/main).
-    const remoteNames = await this.getRemotes().catch(() => [] as string[]);
-    const remoteNamesByLength = [...remoteNames].sort((a, b) => b.length - a.length);
-    const trackingName = tracking.trim();
-    const trackingRemote = remoteNamesByLength.find(name => trackingName.startsWith(`${name}/`)) ?? '';
-    const firstRemote = remoteNames[0] ?? 'origin';
-    const targetRemote = remote ?? (trackingRemote || firstRemote);
-    const args = ['push'];
-    if (!hasUpstream) args.push('--set-upstream', targetRemote, branchName);
-    else if (remote) args.push(remote, branchName);
-    if (force) args.push('--force-with-lease');
-    await this.git.raw(args);
+    return this.withWriteLock(async () => {
+      await this.assertBranchOperationAllowed();
+      const vsRepo = this.vsRepo();
+      // Only use VS Code API when it actually knows the remotes for this repo.
+      // If remotes are empty VS Code would push to an unknown remote (exit 128).
+      // Repos where VS Code lists no remotes are typically SSH-keyed or use a
+      // system credential helper, so falling back to simple-git is safe there.
+      if (vsRepo && vsRepo.state.remotes.length > 0) {
+        const branchName = vsRepo.state.HEAD?.name;
+        const hasUpstream = !!vsRepo.state.HEAD?.upstream;
+        const targetRemote = remote ?? vsRepo.state.HEAD?.upstream?.remote ?? vsRepo.state.remotes[0]?.name ?? 'origin';
+        const forceMode = force ? ForcePushMode.ForceWithLease : undefined;
+        await vsRepo.push(targetRemote, branchName, !hasUpstream, forceMode);
+        return;
+      }
+      const tracking = await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '');
+      const hasUpstream = !!tracking.trim();
+      const branchName = (await this.git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+      // Match the longest configured prefix because Git permits remote names with
+      // slashes (for example, team/upstream/main).
+      const remoteNames = await this.getRemotes().catch(() => [] as string[]);
+      const remoteNamesByLength = [...remoteNames].sort((a, b) => b.length - a.length);
+      const trackingName = tracking.trim();
+      const trackingRemote = remoteNamesByLength.find(name => trackingName.startsWith(`${name}/`)) ?? '';
+      const firstRemote = remoteNames[0] ?? 'origin';
+      const targetRemote = remote ?? (trackingRemote || firstRemote);
+      const args = ['push'];
+      if (!hasUpstream) args.push('--set-upstream', targetRemote, branchName);
+      else if (remote) args.push(remote, branchName);
+      if (force) args.push('--force-with-lease');
+      await this.git.raw(args);
+    });
   }
 
   async pull(): Promise<string> {
+    return this.withWriteLock(async () => {
     await this.assertPullAllowed();
     const vsRepo = this.vsRepo();
     if (vsRepo && vsRepo.state.remotes.length > 0) {
@@ -2143,9 +2224,11 @@ export class GitService {
     if (!tracking.trim()) return 'No remote tracking branch — skipped';
     const result = await this.git.pull();
     return `${result.summary.changes} changes, ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`;
+    });
   }
 
   async pullRebase(): Promise<string> {
+    return this.withWriteLock(async () => {
     await this.assertPullAllowed();
     const vsRepo = this.vsRepo();
     if (vsRepo && vsRepo.state.remotes.length > 0) {
@@ -2163,17 +2246,20 @@ export class GitService {
     if (!tracking) return 'No remote tracking branch — skipped';
     await this.git.raw(['pull', '--rebase']);
     return 'pulled (rebase)';
+    });
   }
 
   async fetchAll(): Promise<void> {
-    const vsRepo = this.vsRepo();
-    if (vsRepo && vsRepo.state.remotes.length > 0) { await vsRepo.fetch({ all: true, prune: true }); return; }
-    await this.git.fetch(['--all', '--prune']);
+    return this.withWriteLock(async () => {
+      const vsRepo = this.vsRepo();
+      if (vsRepo && vsRepo.state.remotes.length > 0) { await vsRepo.fetch({ all: true, prune: true }); return; }
+      await this.git.fetch(['--all', '--prune']);
+    });
   }
 
   async checkout(branchName: string, createNew?: boolean, from?: string): Promise<void> {
-    await this.assertCheckoutAllowed();
     await this.runStatusSensitiveOperation(async () => {
+      await this.assertCheckoutAllowed();
       this._pendingDetachedTag = undefined;
       const vsRepo = this.vsRepo();
       if (vsRepo) {
@@ -2230,9 +2316,11 @@ export class GitService {
   }
 
   async createBranch(branchName: string, from?: string): Promise<void> {
+    return this.withWriteLock(async () => {
     const vsRepo = this.vsRepo();
     if (vsRepo) { await vsRepo.createBranch(branchName, false, from); return; }
     await this.git.branch(from ? [branchName, from] : [branchName]);
+    });
   }
 
   async merge(from: string): Promise<void> {
@@ -2276,66 +2364,78 @@ export class GitService {
   }
 
   async rebase(onto: string): Promise<void> {
-    await this.assertBranchOperationAllowed();
-    const vsRepo = this.vsRepo();
-    if (vsRepo) { await vsRepo.rebase(onto); return; }
-    await this.git.rebase([onto]);
+    return this.withWriteLock(async () => {
+      await this.assertBranchOperationAllowed();
+      const vsRepo = this.vsRepo();
+      if (vsRepo) { await vsRepo.rebase(onto); return; }
+      await this.git.rebase([onto]);
+    });
   }
 
   async deleteBranch(branchName: string, force: boolean): Promise<void> {
-    await this.assertBranchOperationAllowed();
-    const vsRepo = this.vsRepo();
-    if (vsRepo) { await vsRepo.deleteBranch(branchName, force); return; }
-    await this.git.deleteLocalBranch(branchName, force);
+    return this.withWriteLock(async () => {
+      await this.assertBranchOperationAllowed();
+      const vsRepo = this.vsRepo();
+      if (vsRepo) { await vsRepo.deleteBranch(branchName, force); return; }
+      await this.git.deleteLocalBranch(branchName, force);
+    });
   }
 
   async checkoutForce(branchName: string): Promise<void> {
-    await this.assertCheckoutAllowed();
-    // VS Code API has no force checkout — use simple-git
-    await this.runStatusSensitiveOperation(() => this.git.checkout(['-f', branchName]), 'checkout', branchName);
+    await this.runStatusSensitiveOperation(async () => {
+      await this.assertCheckoutAllowed();
+      // VS Code API has no force checkout — use simple-git
+      await this.git.checkout(['-f', branchName]);
+    }, 'checkout', branchName);
   }
 
   async renameBranch(oldName: string, newName: string): Promise<void> {
-    // VS Code API has no renameBranch — use simple-git
-    await this.git.branch(['-m', oldName, newName]);
+    return this.withWriteLock(async () => {
+      // VS Code API has no renameBranch — use simple-git
+      await this.git.branch(['-m', oldName, newName]);
+    });
   }
 
   async pullFromRemote(remote: string, branch: string, rebase: boolean): Promise<void> {
-    await this.assertPullAllowed();
-    // VS Code API pull() doesn't accept remote/branch args — use simple-git
-    const args = rebase ? ['pull', '--rebase', remote, branch] : ['pull', remote, branch];
-    await this.git.raw(args);
+    return this.withWriteLock(async () => {
+      await this.assertPullAllowed();
+      // VS Code API pull() doesn't accept remote/branch args — use simple-git
+      const args = rebase ? ['pull', '--rebase', remote, branch] : ['pull', remote, branch];
+      await this.git.raw(args);
+    });
   }
 
   async cherryPick(hash: string): Promise<void> {
-    await this.git.raw(['cherry-pick', hash]);
+    return this.withWriteLock(() => this.git.raw(['cherry-pick', hash]).then(() => undefined));
   }
 
   async cherryPickContinue(): Promise<void> {
-    await this.git.raw(['cherry-pick', '--continue', '--no-edit']);
+    return this.withWriteLock(() => this.git.raw(['cherry-pick', '--continue', '--no-edit']).then(() => undefined));
   }
 
   async cherryPickSkip(): Promise<void> {
-    await this.git.raw(['cherry-pick', '--skip']);
+    return this.withWriteLock(() => this.git.raw(['cherry-pick', '--skip']).then(() => undefined));
   }
 
   async cherryPickAbort(): Promise<void> {
-    await this.git.raw(['cherry-pick', '--abort']);
+    return this.withWriteLock(() => this.git.raw(['cherry-pick', '--abort']).then(() => undefined));
   }
 
   async revertCommit(hash: string): Promise<void> {
-    await this.git.raw(['revert', '--no-edit', hash]);
+    return this.withWriteLock(() => this.git.raw(['revert', '--no-edit', hash]).then(() => undefined));
   }
 
   async checkoutFileFromCommit(hash: string, filePath: string): Promise<void> {
-    await this.git.raw(['checkout', hash, '--', this.literalPathspec(filePath)]);
+    return this.withWriteLock(() => this.git.raw(['checkout', hash, '--', this.literalPathspec(filePath)]).then(() => undefined));
   }
 
   async revertFileToParent(hash: string, filePath: string): Promise<void> {
+    return this.withWriteLock(async () => {
     // For added files, 'A' status: the file was created in this commit, so reverting
     // means deleting it from working tree by checking out from the empty tree.
     // For other statuses: restore the file to its state in the parent commit.
     await this.git.raw(['checkout', `${hash}~1`, '--', this.literalPathspec(filePath)]);
+    });
   }
 
   async hasFileAtRef(ref: string, filePath: string): Promise<boolean> {
@@ -2348,15 +2448,15 @@ export class GitService {
   }
 
   async revertContinue(): Promise<void> {
-    await this.git.raw(['revert', '--continue', '--no-edit']);
+    return this.withWriteLock(() => this.git.raw(['revert', '--continue', '--no-edit']).then(() => undefined));
   }
 
   async revertAbort(): Promise<void> {
-    await this.git.raw(['revert', '--abort']);
+    return this.withWriteLock(() => this.git.raw(['revert', '--abort']).then(() => undefined));
   }
 
   async resetTo(hash: string, mode: 'soft' | 'mixed' | 'hard'): Promise<void> {
-    await this.git.raw(['reset', `--${mode}`, hash]);
+    return this.withWriteLock(() => this.git.raw(['reset', `--${mode}`, hash]).then(() => undefined));
   }
 
   async createPatch(hash: string): Promise<string> {
@@ -2364,50 +2464,56 @@ export class GitService {
   }
 
   async dropCommit(hash: string): Promise<void> {
-    await this.git.raw(['rebase', '--onto', `${hash}^`, hash]);
+    return this.withWriteLock(() => this.git.raw(['rebase', '--onto', `${hash}^`, hash]).then(() => undefined));
   }
 
   async squashCommits(hashes: string[], message: string): Promise<void> {
-    const normalized = message.trim();
-    if (!normalized) {
-      throw new Error(t('Commit message cannot be empty'));
-    }
-    const validation = await this.validateCommitRewriteHashes(hashes, 'squash');
     await this.runStatusSensitiveOperation(async () => {
+      const normalized = message.trim();
+      if (!normalized) {
+        throw new Error(t('Commit message cannot be empty'));
+      }
+      const validation = await this.validateCommitRewriteHashes(hashes, 'squash');
       await this.git.raw(['reset', '--soft', `${validation.oldestHash}^`]);
       await this.git.raw(['commit', '-m', normalized]);
     }, 'squash');
   }
 
   async cherryPickMulti(hashes: string[]): Promise<void> {
-    for (const hash of hashes) {
-      await this.git.raw(['cherry-pick', hash]);
-    }
+    return this.withWriteLock(async () => {
+      for (const hash of hashes) {
+        await this.git.raw(['cherry-pick', hash]);
+      }
+    });
   }
 
   async revertCommits(hashes: string[]): Promise<void> {
-    for (const hash of hashes) {
-      await this.git.raw(['revert', '--no-edit', hash]);
-    }
+    return this.withWriteLock(async () => {
+      for (const hash of hashes) {
+        await this.git.raw(['revert', '--no-edit', hash]);
+      }
+    });
   }
 
   async dropCommits(oldestHash: string): Promise<void> {
-    await this.git.raw(['reset', '--hard', `${oldestHash}^`]);
+    return this.withWriteLock(() => this.git.raw(['reset', '--hard', `${oldestHash}^`]).then(() => undefined));
   }
 
   async undoCommit(): Promise<void> {
-    const parentCount = await this.git.raw(['rev-list', '--count', 'HEAD']).then(s => parseInt(s.trim(), 10)).catch(() => 0);
-    if (parentCount <= 1) {
-      // First commit: unstage all files and delete HEAD so the branch goes back to unborn state
-      await this.git.raw(['rm', '-r', '--cached', '.']);
-      await this.git.raw(['update-ref', '-d', 'HEAD']);
-    } else {
-      await this.git.raw(['reset', '--soft', 'HEAD~1']);
-    }
+    return this.withWriteLock(async () => {
+      const parentCount = await this.git.raw(['rev-list', '--count', 'HEAD']).then(s => parseInt(s.trim(), 10)).catch(() => 0);
+      if (parentCount <= 1) {
+        // First commit: unstage all files and delete HEAD so the branch goes back to unborn state
+        await this.git.raw(['rm', '-r', '--cached', '.']);
+        await this.git.raw(['update-ref', '-d', 'HEAD']);
+      } else {
+        await this.git.raw(['reset', '--soft', 'HEAD~1']);
+      }
+    });
   }
 
   async editCommitMessage(message: string): Promise<void> {
-    await this.git.raw(['commit', '--amend', '-m', message]);
+    return this.withWriteLock(() => this.git.raw(['commit', '--amend', '-m', message]).then(() => undefined));
   }
 
   async canSquashCommitRange(hashes: string[]): Promise<{ ok: boolean; hashes: string[]; oldestHash?: string; reason?: string }> {
@@ -2429,7 +2535,7 @@ export class GitService {
   }
 
   async rewordCommit(newMessage: string): Promise<void> {
-    await this.git.raw(['commit', '--amend', '-m', newMessage]);
+    return this.withWriteLock(() => this.git.raw(['commit', '--amend', '-m', newMessage]).then(() => undefined));
   }
 
   async createBranchFromCommit(name: string, hash: string): Promise<void> {
@@ -2437,11 +2543,13 @@ export class GitService {
   }
 
   async createTag(name: string, hash: string): Promise<void> {
+    return this.withWriteLock(async () => {
     if (!name || name.startsWith('-') || name.includes('\0')) {
       throw new Error(`Invalid Git tag name: ${name}`);
     }
     await this.git.raw(['check-ref-format', `refs/tags/${name}`]);
     await this.git.raw(['tag', name, this.safeRevisionArg(hash)]);
+    });
   }
 
   async getTags(): Promise<Array<{ name: string; hash: string; date: string }>> {
@@ -2527,20 +2635,20 @@ export class GitService {
   }
 
   async deleteTag(name: string): Promise<void> {
-    await this.git.raw(['tag', '-d', '--', name]);
+    return this.withWriteLock(() => this.git.raw(['tag', '-d', '--', name]).then(() => undefined));
   }
 
   async pushTag(name: string, remote: string): Promise<void> {
-    await this.git.raw(['push', remote, `refs/tags/${name}`]);
+    return this.withWriteLock(() => this.git.raw(['push', remote, `refs/tags/${name}`]).then(() => undefined));
   }
 
   async deleteTagRemote(name: string, remote: string): Promise<void> {
-    await this.git.raw(['push', remote, `--delete`, `refs/tags/${name}`]);
+    return this.withWriteLock(() => this.git.raw(['push', remote, `--delete`, `refs/tags/${name}`]).then(() => undefined));
   }
 
   async checkoutTag(name: string): Promise<void> {
-    await this.assertCheckoutAllowed();
     await this.runStatusSensitiveOperation(async () => {
+      await this.assertCheckoutAllowed();
       await this.git.raw(['checkout', '--detach', `refs/tags/${name}`]);
       this._pendingDetachedTag = name;
     }, 'checkout', name);
@@ -2703,6 +2811,7 @@ export class GitService {
   }
 
   async stashPush(message: string, paths?: string[]): Promise<void> {
+    return this.withWriteLock(async () => {
     const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
     if (!hasHead) {
       // Native `git stash` cannot create its commit graph without an initial
@@ -2792,18 +2901,19 @@ export class GitService {
       );
     }
     if (primaryError) throw primaryError;
+    });
   }
 
   async stashApply(stashRef: string): Promise<void> {
-    await this.git.raw(['stash', 'apply', stashRef]);
+    return this.withWriteLock(() => this.git.raw(['stash', 'apply', stashRef]).then(() => undefined));
   }
 
   async stashPop(stashRef = 'stash@{0}'): Promise<void> {
-    await this.git.raw(['stash', 'pop', stashRef]);
+    return this.withWriteLock(() => this.git.raw(['stash', 'pop', stashRef]).then(() => undefined));
   }
 
   async stashDrop(stashRef: string): Promise<void> {
-    await this.git.raw(['stash', 'drop', stashRef]);
+    return this.withWriteLock(() => this.git.raw(['stash', 'drop', stashRef]).then(() => undefined));
   }
 
   async getStashFileContent(stashRef: string, filePath: string): Promise<string> {
@@ -2824,22 +2934,26 @@ export class GitService {
   // ── Submodule push/pull helpers ───────────────────────────────────────────
 
   async pushSubmodule(): Promise<void> {
-    const status = await this.git.status();
-    if (status.detached) {
-      throw new Error(t('Submodule is in detached HEAD — checkout a branch before pushing.'));
-    }
-    await this.push();
+    return this.withWriteLock(async () => {
+      const status = await this.git.status();
+      if (status.detached) {
+        throw new Error(t('Submodule is in detached HEAD — checkout a branch before pushing.'));
+      }
+      await this.push();
+    });
   }
 
   async pullSubmodule(rebase = false): Promise<string> {
-    await this.assertPullAllowed();
-    const status = await this.git.status();
-    if (status.detached) {
-      // In detached HEAD: fetch then checkout the latest commit on the tracked ref.
-      await this.git.fetch();
-      return t('fetched (detached HEAD — use Update Submodule to advance to a new commit)');
-    }
-    return rebase ? this.pullRebase() : this.pull();
+    return this.withWriteLock(async () => {
+      await this.assertPullAllowed();
+      const status = await this.git.status();
+      if (status.detached) {
+        // In detached HEAD: fetch then checkout the latest commit on the tracked ref.
+        await this.git.fetch();
+        return t('fetched (detached HEAD — use Update Submodule to advance to a new commit)');
+      }
+      return rebase ? this.pullRebase() : this.pull();
+    });
   }
 
   // ── Submodule operations ──────────────────────────────────────────────────
@@ -2918,24 +3032,33 @@ export class GitService {
   }
 
   async initSubmodule(submodulePath: string): Promise<void> {
-    const pathspec = this.literalPathspec(submodulePath);
-    await this.git.raw(['submodule', 'init', '--', pathspec]);
-    await this.git.raw(['submodule', 'update', '--', pathspec]);
+    const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
+    return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
+      const pathspec = this.literalPathspec(submodulePath);
+      await this.git.raw(['submodule', 'init', '--', pathspec]);
+      await this.git.raw(['submodule', 'update', '--', pathspec]);
+    });
   }
 
   async deinitSubmodule(submodulePath: string, force = false): Promise<void> {
-    const args = ['submodule', 'deinit'];
-    if (force) args.push('--force');
-    args.push('--', this.literalPathspec(submodulePath));
-    await this.git.raw(args);
+    const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
+    return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
+      const args = ['submodule', 'deinit'];
+      if (force) args.push('--force');
+      args.push('--', this.literalPathspec(submodulePath));
+      await this.git.raw(args);
+    });
   }
 
   async updateSubmodule(submodulePath: string, init = true, recursive = false): Promise<void> {
-    const args = ['submodule', 'update'];
-    if (init) args.push('--init');
-    if (recursive) args.push('--recursive');
-    args.push('--', this.literalPathspec(submodulePath));
-    await this.git.raw(args);
+    const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
+    return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
+      const args = ['submodule', 'update'];
+      if (init) args.push('--init');
+      if (recursive) args.push('--recursive');
+      args.push('--', this.literalPathspec(submodulePath));
+      await this.git.raw(args);
+    });
   }
 
   async getUnpushedCommits(): Promise<UnpushedCommit[]> {
@@ -3008,39 +3131,45 @@ export class GitService {
   }
 
   async createWorktree(worktreePath: string, opts: { branch?: string; newBranch?: string; commitish?: string; noTrack?: boolean }): Promise<void> {
-    const args = ['worktree', 'add'];
-    if (opts.newBranch) {
-      args.push('-b', opts.newBranch);
-    } else if (opts.branch) {
-      // checkout existing branch — no -b flag, just add path + branch
-    }
-    if (opts.noTrack) args.push('--no-track');
-    args.push(worktreePath);
-    if (opts.branch) args.push(opts.branch);
-    else if (opts.commitish) args.push(opts.commitish);
-    await this.git.raw(args);
+    return withGitWriteLocks([this.rootPath, worktreePath], async () => {
+      const args = ['worktree', 'add'];
+      if (opts.newBranch) {
+        args.push('-b', opts.newBranch);
+      } else if (opts.branch) {
+        // checkout existing branch — no -b flag, just add path + branch
+      }
+      if (opts.noTrack) args.push('--no-track');
+      args.push(worktreePath);
+      if (opts.branch) args.push(opts.branch);
+      else if (opts.commitish) args.push(opts.commitish);
+      await this.git.raw(args);
+    });
   }
 
   async deleteWorktree(worktreePath: string, force = false): Promise<void> {
-    const args = ['worktree', 'remove'];
-    if (force) args.push('--force');
-    args.push(worktreePath);
-    await this.git.raw(args);
+    return withGitWriteLocks([this.rootPath, worktreePath], async () => {
+      const args = ['worktree', 'remove'];
+      if (force) args.push('--force');
+      args.push(worktreePath);
+      await this.git.raw(args);
+    });
   }
 
   async pruneWorktrees(): Promise<void> {
-    await this.git.raw(['worktree', 'prune']);
+    return this.withWriteLock(() => this.git.raw(['worktree', 'prune']).then(() => undefined));
   }
 
   async lockWorktree(worktreePath: string, reason?: string): Promise<void> {
-    const args = ['worktree', 'lock'];
-    if (reason) args.push('--reason', reason);
-    args.push(worktreePath);
-    await this.git.raw(args);
+    return this.withWriteLock(async () => {
+      const args = ['worktree', 'lock'];
+      if (reason) args.push('--reason', reason);
+      args.push(worktreePath);
+      await this.git.raw(args);
+    });
   }
 
   async unlockWorktree(worktreePath: string): Promise<void> {
-    await this.git.raw(['worktree', 'unlock', worktreePath]);
+    return this.withWriteLock(() => this.git.raw(['worktree', 'unlock', worktreePath]).then(() => undefined));
   }
 }
 

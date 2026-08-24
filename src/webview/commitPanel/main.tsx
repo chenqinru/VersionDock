@@ -2078,22 +2078,40 @@ export function CommitApp() {
             onShelve={() => {
               const name = store.commitMessage.trim();
               if (!name) return;
+              const targets: Array<{ repoId: string; paths: string[] }> = [];
               for (const repoStatus of repos) {
                 if (isSvnRepo(repoStatus.repoId)) continue;
                 const selectedPaths = store.getSelectedFilesForRepo(repoStatus.repoId);
                 if (selectedPaths.length === 0) continue;
-                confirmShelve(repoStatus.repoId, name, selectedPaths);
+                targets.push({ repoId: repoStatus.repoId, paths: selectedPaths });
               }
+              if (targets.length === 0) return;
+              store.setLoading(true);
+              getVsCodeApi().postMessage({
+                type: 'COMMIT_DO_SHELVE_MULTI',
+                requestId: generateId(),
+                name,
+                repos: targets,
+              } satisfies CommitToHostMsg);
               store.setCommitMessage('');
             }}
             onStash={() => {
               const message = store.commitMessage.trim() || t('WIP stash');
+              const targets: Array<{ repoId: string; paths: string[] }> = [];
               for (const repoStatus of repos) {
                 if (isSvnRepo(repoStatus.repoId)) continue;
                 const selectedPaths = store.getSelectedFilesForRepo(repoStatus.repoId);
                 if (selectedPaths.length === 0) continue;
-                doStash(repoStatus.repoId, message, selectedPaths);
+                targets.push({ repoId: repoStatus.repoId, paths: selectedPaths });
               }
+              if (targets.length === 0) return;
+              store.setLoading(true);
+              getVsCodeApi().postMessage({
+                type: 'COMMIT_DO_STASH_MULTI',
+                requestId: generateId(),
+                message,
+                repos: targets,
+              } satisfies CommitToHostMsg);
             }}
           />
 

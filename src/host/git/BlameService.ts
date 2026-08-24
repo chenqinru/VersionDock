@@ -1,5 +1,5 @@
-import simpleGit from 'simple-git';
 import * as path from 'path';
+import { createGitClient, waitForGitWrite } from './GitOperationLock';
 
 export interface BlameLine {
   lineNumber: number; // 0-indexed
@@ -31,7 +31,8 @@ export class BlameService {
     const revision = this.revisions.get(filePath) ?? 0;
     this.activeRequests.set(filePath, (this.activeRequests.get(filePath) ?? 0) + 1);
     const request = (async () => {
-      const git = simpleGit(rootPath);
+      await waitForGitWrite(rootPath);
+      const git = createGitClient(rootPath);
       const relPath = path.relative(rootPath, filePath).split(path.sep).join('/');
 
       let raw: string;

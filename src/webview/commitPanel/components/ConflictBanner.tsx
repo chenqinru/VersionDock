@@ -155,29 +155,6 @@ export function ConflictBanner({ summary, actions }: Props) {
         box-shadow: 0 2px 7px color-mix(in srgb, var(--vscode-statusBarItem-errorBackground, #b42318) 26%, transparent);
       }
 
-      @media (max-width: 370px) {
-        .vd-conflict-banner {
-          align-items: flex-start;
-          flex-wrap: wrap;
-          gap: 6px 8px;
-          padding-bottom: 8px;
-        }
-
-        .vd-conflict-banner__copy {
-          min-width: 0;
-        }
-
-        .vd-conflict-banner__actions {
-          width: calc(100% - 32px);
-          margin-left: 32px;
-        }
-
-        .vd-conflict-banner__action {
-          flex: 1;
-          padding-inline: 7px;
-        }
-      }
-
       @media (prefers-reduced-motion: reduce) {
         .vd-conflict-banner,
         .vd-conflict-banner__action {

@@ -156,13 +156,23 @@ export class ConflictsPanelProvider implements vscode.Disposable {
         const startedAt = Date.now();
         const strategy = msg.type === 'CONFLICTS_ACCEPT_OURS' ? 'current' : 'incoming';
         try {
+          const targets = new Map<string, { repo: NonNullable<ReturnType<WorkspaceGitManager['getRepo']>>; paths: string[] }>();
           for (const file of msg.files) {
             const repo = this.manager.getRepo(file.repoId);
             if (!repo) throw new Error(t('Repo not found'));
             const resolvedPath = repo.resolveRepoPath(file.path, { allowRoot: repo.kind === 'svn' });
             const relativePath = repo.kind === 'svn' && !resolvedPath.relativePath ? '.' : resolvedPath.relativePath;
-            if (msg.type === 'CONFLICTS_ACCEPT_OURS') await repo.acceptOurs(relativePath);
-            else await repo.acceptTheirs(relativePath);
+            const target = targets.get(file.repoId);
+            if (target) target.paths.push(relativePath);
+            else targets.set(file.repoId, { repo, paths: [relativePath] });
+          }
+          for (const { repo, paths } of targets.values()) {
+            await repo.runWithGitWriteLock(async () => {
+              for (const relativePath of paths) {
+                if (msg.type === 'CONFLICTS_ACCEPT_OURS') await repo.acceptOurs(relativePath);
+                else await repo.acceptTheirs(relativePath);
+              }
+            });
           }
           this.post({ type: 'CONFLICTS_OP_RESULT', requestId: msg.requestId, ok: true });
           this.logger.info('ConflictsPanel', 'Conflict files accepted', {

@@ -1,0 +1,186 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { AsyncLocalStorage } from 'async_hooks';
+import simpleGit, { type SimpleGit } from 'simple-git';
+
+interface LockToken {
+  active: boolean;
+}
+
+type LockContext = ReadonlyMap<string, LockToken>;
+
+const writeTails = new Map<string, Promise<void>>();
+const activeWrites = new Map<string, Promise<void>>();
+const writeGenerations = new Map<string, number>();
+const lockContext = new AsyncLocalStorage<LockContext>();
+
+const DEFAULT_EXTERNAL_LOCK_TIMEOUT_MS = 5_000;
+const INITIAL_EXTERNAL_LOCK_DELAY_MS = 50;
+const MAX_EXTERNAL_LOCK_DELAY_MS = 250;
+
+function lockKey(rootPath: string): string {
+  const absolutePath = path.resolve(rootPath);
+  const normalizeCase = (value: string): string => process.platform === 'win32' ? value.toLowerCase() : value;
+  try {
+    return normalizeCase(fs.realpathSync.native(absolutePath));
+  } catch {
+    return normalizeCase(absolutePath);
+  }
+}
+
+function resolveGitDir(rootPath: string): string | undefined {
+  const dotGitPath = path.join(path.resolve(rootPath), '.git');
+  try {
+    const stat = fs.statSync(dotGitPath);
+    if (stat.isDirectory()) return dotGitPath;
+    if (!stat.isFile()) return undefined;
+
+    const gitFile = fs.readFileSync(dotGitPath, 'utf8').trim();
+    const match = gitFile.match(/^gitdir:\s*(.+)$/i);
+    if (!match) return undefined;
+    return path.resolve(path.dirname(dotGitPath), match[1].trim());
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveIndexLockPath(rootPath: string): string | undefined {
+  const gitDir = resolveGitDir(rootPath);
+  return gitDir ? path.join(gitDir, 'index.lock') : undefined;
+}
+
+/** Environment shared by every VersionDock-owned Git child process. */
+export function getGitEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...overrides,
+    // Do not let read commands refresh the index and create an optional lock.
+    GIT_OPTIONAL_LOCKS: '0',
+  };
+}
+
+function isGitIndexLockError(error: unknown): boolean {
+  const value = error as { message?: unknown; stderr?: unknown; gitErrorCode?: unknown } | undefined;
+  const detail = [value?.message, value?.stderr, value?.gitErrorCode]
+    .filter((part): part is string => typeof part === 'string')
+    .join('\n');
+  return /index\.lock|unable to create .*index|another git process.*repository/i.test(detail);
+}
+
+/** Retry one Git command when another process briefly owns index.lock. */
+export async function runGitCommandWithIndexLockRetry<T>(
+  rootPath: string,
+  command: () => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await command();
+    } catch (error) {
+      if (!isGitIndexLockError(error) || attempt >= 2) throw error;
+      await waitForExternalGitIndexLock(rootPath);
+    }
+  }
+}
+
+/** Create the standard VersionDock Git client without limiting read concurrency. */
+export function createGitClient(rootPath: string): SimpleGit {
+  const client = simpleGit({ baseDir: rootPath }).env('GIT_OPTIONAL_LOCKS', '0');
+  const builderMethods = new Set(['customBinary', 'env', 'outputHandler', 'silent']);
+
+  const wrapped = new Proxy(client, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function' || typeof property !== 'string' || builderMethods.has(property)) {
+        return value;
+      }
+      return (...args: unknown[]) => runGitCommandWithIndexLockRetry(
+        rootPath,
+        () => Promise.resolve(value.apply(target, args)),
+      );
+    },
+  });
+  return wrapped;
+}
+
+/**
+ * Wait for an index lock created by another Git process. Never remove it: the
+ * other process may still be using it, and deleting it can corrupt the index.
+ */
+export async function waitForExternalGitIndexLock(
+  rootPath: string,
+  timeoutMs = DEFAULT_EXTERNAL_LOCK_TIMEOUT_MS,
+): Promise<void> {
+  const lockPath = resolveIndexLockPath(rootPath);
+  if (!lockPath || !fs.existsSync(lockPath)) return;
+
+  const startedAt = Date.now();
+  let delayMs = INITIAL_EXTERNAL_LOCK_DELAY_MS;
+  while (fs.existsSync(lockPath)) {
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`Git index is busy: ${lockPath}`);
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+    delayMs = Math.min(delayMs * 2, MAX_EXTERNAL_LOCK_DELAY_MS);
+  }
+}
+
+/**
+ * Wait until VersionDock's in-process Git writers for this working tree have
+ * finished. It also waits briefly for an existing physical index.lock before a
+ * VersionDock writer starts, coordinating independently-created GitService,
+ * ShelveService, Composer, and other Git clients in this extension host.
+ */
+export async function waitForGitWrite(rootPath: string): Promise<void> {
+  const key = lockKey(rootPath);
+  if (lockContext.getStore()?.get(key)?.active) return;
+  // Only wait for the writer currently holding the lock. A reader that starts
+  // while later writers are queued should not wait for the entire future queue.
+  await activeWrites.get(key);
+}
+
+/** Monotonic counter used by status reads to detect a write during the read. */
+export function getGitWriteGeneration(rootPath: string): number {
+  return writeGenerations.get(lockKey(rootPath)) ?? 0;
+}
+
+/**
+ * Serialize all Git operations that can mutate a working tree or its index.
+ * Reentrancy is required because compound operations such as conflict
+ * resolution call stageFiles() after already acquiring the repository lock.
+ */
+export async function withGitWriteLock<T>(rootPath: string, operation: () => Promise<T>): Promise<T> {
+  const key = lockKey(rootPath);
+  const currentContext = lockContext.getStore();
+  if (currentContext?.get(key)?.active) return operation();
+
+  const previous = writeTails.get(key);
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  const token: LockToken = { active: true };
+  writeTails.set(key, current);
+
+  try {
+    await previous;
+    await waitForExternalGitIndexLock(key);
+    activeWrites.set(key, current);
+    writeGenerations.set(key, (writeGenerations.get(key) ?? 0) + 1);
+    const nextContext = new Map(currentContext ?? []);
+    nextContext.set(key, token);
+    return await lockContext.run(nextContext, operation);
+  } finally {
+    token.active = false;
+    if (activeWrites.get(key) === current) activeWrites.delete(key);
+    release();
+    if (writeTails.get(key) === current) writeTails.delete(key);
+  }
+}
+
+/** Acquire several repository locks in a stable order to avoid lock inversion. */
+export async function withGitWriteLocks<T>(rootPaths: string[], operation: () => Promise<T>): Promise<T> {
+  const keys = Array.from(new Set(rootPaths.map(lockKey))).sort();
+  const acquire = async (index: number): Promise<T> => {
+    if (index >= keys.length) return operation();
+    return withGitWriteLock(keys[index], () => acquire(index + 1));
+  };
+  return acquire(0);
+}

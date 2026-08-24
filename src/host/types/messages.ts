@@ -194,6 +194,8 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_DO_COMMIT'; requestId: string; repoId: string; message: string; amend: boolean }
   | { type: 'COMMIT_DO_COMMIT_PUSH'; requestId: string; repoId: string; message: string; amend: boolean }
   | { type: 'COMMIT_DO_COMMIT_MULTI'; requestId: string; repos: Array<{ repoId: string; message: string; amend: boolean; filesToStage: string[]; filesToUnstage: string[] }>; andPush: boolean }
+  | { type: 'COMMIT_DO_STASH_MULTI'; requestId: string; message: string; repos: Array<{ repoId: string; paths: string[] }> }
+  | { type: 'COMMIT_DO_SHELVE_MULTI'; requestId: string; name: string; repos: Array<{ repoId: string; paths: string[] }> }
   | { type: 'COMMIT_GET_LAST_COMMIT_MESSAGE'; requestId: string; repoId: string }
   | { type: 'COMMIT_REQUEST_MESSAGE_HISTORY'; requestId: string; repoIds: string[]; limit?: number }
   | { type: 'COMMIT_PULL_ALL' }
