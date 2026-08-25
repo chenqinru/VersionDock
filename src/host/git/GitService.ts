@@ -24,6 +24,7 @@ import { t } from '../utils/l10n';
 import { BlameService, type BlameLine } from './BlameService';
 import { assertNoSymlinkAncestors, isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
 import { createGitClient, getGitWriteGeneration, waitForGitWrite, withGitWriteLock, withGitWriteLocks } from './GitOperationLock';
+import type { PublishMissingRemote } from '../remote/types';
 
 const STATUS_MAP: Record<string, GitFileStatus> = {
   M: 'modified', A: 'added', D: 'deleted',
@@ -267,6 +268,7 @@ export class GitService {
     public readonly rootPath: string,
     private readonly suppressStatusUpdates?: SuppressStatusUpdates,
     private readonly refreshStatus?: RefreshStatus,
+    private readonly publishMissingRemote?: PublishMissingRemote,
   ) {
     // Git's optional index refresh in commands such as `status` is a read
     // operation from VersionDock's perspective. Disable that refresh, while
@@ -2173,8 +2175,18 @@ export class GitService {
   }
 
   async push(force = false, remote?: string): Promise<void> {
+    // Publishing a repository without a remote may open several prompts and
+    // perform a network request. Do that before taking the Git write lock so
+    // the repository is not blocked while the user is interacting with UI.
+    await this.assertBranchOperationAllowed();
+    let configuredRemotes = await this.getRemotes().catch(() => [] as string[]);
+    if (configuredRemotes.length === 0 && this.publishMissingRemote) {
+      await this.publishMissingRemote(this.repoId, this.rootPath);
+    }
+
     return this.withWriteLock(async () => {
       await this.assertBranchOperationAllowed();
+      configuredRemotes = await this.getRemotes().catch(() => [] as string[]);
       const vsRepo = this.vsRepo();
       // Only use VS Code API when it actually knows the remotes for this repo.
       // If remotes are empty VS Code would push to an unknown remote (exit 128).
@@ -2193,7 +2205,7 @@ export class GitService {
       const branchName = (await this.git.revparse(['--abbrev-ref', 'HEAD'])).trim();
       // Match the longest configured prefix because Git permits remote names with
       // slashes (for example, team/upstream/main).
-      const remoteNames = await this.getRemotes().catch(() => [] as string[]);
+      const remoteNames = configuredRemotes;
       const remoteNamesByLength = [...remoteNames].sort((a, b) => b.length - a.length);
       const trackingName = tracking.trim();
       const trackingRemote = remoteNamesByLength.find(name => trackingName.startsWith(`${name}/`)) ?? '';

@@ -15,6 +15,8 @@ import {
 } from '../utils/abortOperation';
 import { formatRepoLabel } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
+import { isRemoteRepositoryCancelled } from '../remote/types';
+import { withGitPushProgress } from '../utils/pushProgress';
 
 type SvnIgnoreRepo = {
   addIgnoreEntry(entryPath: string): Promise<{ entry: string; directoryPath: string; alreadyExists: boolean }>;
@@ -1036,7 +1038,7 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async pushMenu(metas: RepoMeta[]): Promise<void> {
-    type RepoRemoteItem = vscode.QuickPickItem & { repoId: string; remote: string; repoLabel: string };
+    type RepoRemoteItem = vscode.QuickPickItem & { repoId: string; remote?: string; repoLabel: string };
     const allMetas = this.manager.getRepoMetas();
     const gitMetas = allMetas.filter(meta => meta.kind !== 'svn');
     const showRepoKinds = gitMetas.length > 0 && gitMetas.length < allMetas.length;
@@ -1047,12 +1049,13 @@ export class BranchStatusBar implements vscode.Disposable {
       if (meta.kind === 'svn') continue;
       const repo = this.manager.getRepo(meta.id);
       if (!repo) continue;
-      const remotes = await repo.getRemotes();
-      for (const remote of remotes) {
+      const remotes = await repo.getRemotes().catch(() => [] as string[]);
+      const targets = remotes.length > 0 ? remotes : [undefined];
+      for (const remote of targets) {
         const repoLabel = showRepoKinds ? formatRepoLabel(meta) : meta.name;
         items.push({
           label: `$(cloud-upload) ${repoLabel}`,
-          description: `→ ${remote}`,
+          description: remote ? `→ ${remote}` : t('No remote — create and push'),
           repoId: meta.id,
           remote,
           repoLabel,
@@ -1075,16 +1078,20 @@ export class BranchStatusBar implements vscode.Disposable {
     const repo = this.manager.getRepo(pick.repoId);
     if (!repo) return;
 
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing to {0}…', pick.remote), cancellable: false },
+    await withGitPushProgress(
+      repo,
+      pick.remote ? t('VersionDock: Pushing to {0}…', pick.remote) : t('VersionDock: Creating remote and pushing…'),
       async () => {
         try {
           await repo.push(false, pick.remote);
-          vscode.window.showInformationMessage(t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote));
+          vscode.window.showInformationMessage(pick.remote
+            ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
+            : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
         } catch (e: unknown) {
+          if (isRemoteRepositoryCancelled(e)) return;
           vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(e)));
         }
-      }
+      },
     );
     await this.refresh();
   }
@@ -1974,7 +1981,9 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.push();
       vscode.window.showInformationMessage(t('VersionDock [{0}]: pushed successfully.', meta.name));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      if (!isRemoteRepositoryCancelled(e)) {
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      }
     }
     await this.refresh();
   }

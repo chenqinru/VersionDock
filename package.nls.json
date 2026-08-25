@@ -11,6 +11,7 @@
   "commands.pull.title": "VersionDock: Pull",
   "commands.push.title": "VersionDock: Push",
   "commands.fetchAll.title": "VersionDock: Fetch All Remotes",
+  "commands.manageRemoteAccounts.title": "VersionDock: Manage Remote Accounts",
   "commands.openMergeEditor.title": "Open Merge Editor",
   "commands.openConflicts.title": "VersionDock: Conflicts",
   "commands.openMergeEditorFromSCM.title": "Open in VersionDock Merge Editor",

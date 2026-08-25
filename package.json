@@ -109,6 +109,10 @@
         "title": "%commands.fetchAll.title%"
       },
       {
+        "command": "versiondock.manageRemoteAccounts",
+        "title": "%commands.manageRemoteAccounts.title%"
+      },
+      {
         "command": "versiondock.openMergeEditor",
         "title": "%commands.openMergeEditor.title%"
       },

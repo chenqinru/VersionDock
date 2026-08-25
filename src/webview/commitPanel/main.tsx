@@ -1349,7 +1349,7 @@ export function CommitApp() {
   // ── Push actions ──────────────────────────────────────────────────────────
 
   const doPush = (repoId: string) => {
-    const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName ?? 'origin';
+    const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
     send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote });
   };
 
@@ -1382,7 +1382,7 @@ export function CommitApp() {
     for (const r of allRepos) {
       if (isSvnRepo(r.repoId)) continue;
       if ((r.branch.aheadBehind?.ahead ?? 0) > 0) {
-        const remote = r.branch.remoteName ?? 'origin';
+        const remote = r.branch.remoteName;
         send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId: r.repoId, remote });
       }
     }

@@ -10,6 +10,7 @@ import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
+import type { PublishMissingRemote } from '../remote/types';
 
 const MAX_SUBMODULE_DEPTH = 5;
 const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
@@ -311,6 +312,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly logger: VersionDockLogger,
+    private readonly publishMissingRemote?: PublishMissingRemote,
   ) {
     this.globalListeners.push(
       // Workspace folder changes → rebuild everything and push fresh status to listeners
@@ -396,6 +398,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       rootPath,
       (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
       async () => { await this.refreshStatusNow(); },
+      this.publishMissingRemote,
     );
   }
 

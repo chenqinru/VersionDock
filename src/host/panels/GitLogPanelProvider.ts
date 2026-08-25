@@ -21,6 +21,8 @@ import type { AiCommitExplanationService } from '../aiCommitExplanation/AiCommit
 import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageService';
 import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
+import { isRemoteRepositoryCancelled } from '../remote/types';
+import { withGitPushProgress } from '../utils/pushProgress';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -374,6 +376,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   private showOperationError(error: unknown): void {
+    if (isRemoteRepositoryCancelled(error)) return;
     const message = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, '');
     void vscode.window.showErrorMessage(t('VersionDock: {0}', message));
   }
@@ -1060,19 +1063,17 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_PUSH': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing'), cancellable: false },
-          async () => {
-            try {
-              await repo.push(msg.force, msg.remote);
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-              this.post({ type: 'LOG_REFRESH' });
-            } catch (e: unknown) {
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e);
-            }
+        await withGitPushProgress(repo, t('VersionDock: Pushing'), async () => {
+          try {
+            await repo.push(msg.force, msg.remote);
+            this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+            this.post({ type: 'LOG_REFRESH' });
+          } catch (e: unknown) {
+            const cancelled = isRemoteRepositoryCancelled(e);
+            this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e) });
+            if (!cancelled) this.showOperationError(e);
           }
-        );
+        });
         break;
       }
 
@@ -2004,24 +2005,29 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
         const remotes = await repo.getRemotes().catch(() => [] as string[]);
-        if (remotes.length === 0) { vscode.window.showWarningMessage(t('VersionDock: No remotes configured.')); return; }
         const remotePick = remotes.length === 1
           ? remotes[0]
-          : (await vscode.window.showQuickPick(
+          : remotes.length > 1
+            ? (await vscode.window.showQuickPick(
               remotes.map(r => ({ label: `$(cloud-upload) ${r}`, remote: r })),
               { title: t('Push — Select remote') }
-            ) as { label: string; remote: string } | undefined)?.remote;
-        if (!remotePick) return;
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing to {0}…', remotePick), cancellable: false },
+            ) as { label: string; remote: string } | undefined)?.remote
+            : undefined;
+        if (remotes.length > 1 && !remotePick) return;
+        await withGitPushProgress(
+          repo,
+          remotePick ? t('VersionDock: Pushing to {0}…', remotePick) : t('VersionDock: Creating remote and pushing…'),
           async () => {
             try {
               await repo.push(false, remotePick);
-              vscode.window.showInformationMessage(t('VersionDock: Pushed to "{0}" successfully.', remotePick));
+              vscode.window.showInformationMessage(remotePick
+                ? t('VersionDock: Pushed to "{0}" successfully.', remotePick)
+                : t('VersionDock: Remote created and branch pushed successfully.'));
             } catch (e: unknown) {
+              if (isRemoteRepositoryCancelled(e)) return;
               vscode.window.showErrorMessage(t('VersionDock: Push failed: {0}', String(e)));
             }
-          }
+          },
         );
         this.post({ type: 'LOG_REFRESH' });
         break;

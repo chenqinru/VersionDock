@@ -105,6 +105,8 @@ On first install, a QuickPick lets you choose your preferred view mode. You can 
 - SVN working copies show the current trunk/branch/tag or repository-relative URL and provide update, commit, cleanup, switch, branch, and tag actions.
 - **Tags section** in the per-repository menu: checkout, merge, push to remote, and delete tags; delete dialog offers three options (local, remote, or both).
 - **Per-repository sub-menu** with full remote management: add, rename, change URL, and remove remotes.
+- GitHub and GitLab remote-source providers for the native VS Code Clone picker; GitLab.com and self-hosted GitLab are supported.
+- Push a repository with no configured remote to create a GitHub/GitLab repository, configure `origin`, and publish the current branch in one flow.
 - Tracks the active editor to reflect the correct repository in multi-repo workspaces.
 
 <br>
@@ -237,6 +239,7 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 |:--|:--|
 | `VersionDock: Focus Git Log` | Focuses the Git Log panel. |
 | `VersionDock: Fetch All Remotes` | Fetches and prunes all remotes. |
+| `VersionDock: Manage Remote Accounts` | Connects GitHub through VS Code and manages GitLab PATs stored in VS Code SecretStorage. |
 | `VersionDock: Open Merge Editor` | Opens the merge editor for the active file when conflict markers are present. |
 | `VersionDock: Refresh Commit Panel` | Refreshes the Commit panel state. |
 | `VersionDock: Branch Menu` | Opens the Status Bar branch menu. |

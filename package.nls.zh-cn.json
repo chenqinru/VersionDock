@@ -11,6 +11,7 @@
   "commands.pull.title": "VersionDock：拉取",
   "commands.push.title": "VersionDock：推送",
   "commands.fetchAll.title": "VersionDock：抓取所有远程",
+  "commands.manageRemoteAccounts.title": "VersionDock：管理远程账户",
   "commands.openMergeEditor.title": "打开合并编辑器",
   "commands.openConflicts.title": "VersionDock：冲突",
   "commands.openMergeEditorFromSCM.title": "在 VersionDock 合并编辑器中打开",

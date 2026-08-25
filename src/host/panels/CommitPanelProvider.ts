@@ -33,6 +33,8 @@ import type { CodeReviewDiffSource } from '../aiCodeReview/types';
 import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
+import { isRemoteRepositoryCancelled } from '../remote/types';
+import { withGitPushProgress } from '../utils/pushProgress';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE = 3;
@@ -2173,38 +2175,48 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         });
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Commit & Push'), cancellable: false },
-          async () => {
-            try {
-              await repo.runWithGitWriteLock(async () => {
-                const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
-                await repo.commit(msg.message, msg.amend, creds, detail => {
-                  this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
-                });
-                if (repo.kind !== 'svn') await repo.push();
+        try {
+          const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: t('Commit'), cancellable: false },
+            async () => {
+              await repo.commit(msg.message, msg.amend, creds, detail => {
+                this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
               });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-              this.logger?.info('Commit', 'Commit and push completed', {
-                repoId: msg.repoId,
-                requestId: msg.requestId,
-                vcs: repo.kind,
-                durationMs: Date.now() - startedAt,
-              });
-              this.logProvider?.refresh();
-              const status = await this.manager.getAllStatusesFresh();
-              this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-            } catch (e: unknown) {
-              this.logger?.error('Commit', 'Commit and push failed', e, {
-                repoId: msg.repoId,
-                requestId: msg.requestId,
-                vcs: repo.kind,
-                durationMs: Date.now() - startedAt,
-              });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-            }
+            },
+          );
+          if (repo.kind !== 'svn') {
+            await withGitPushProgress(repo, t('VersionDock: Pushing'), () => repo.push());
           }
-        );
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.logger?.info('Commit', 'Commit and push completed', {
+            repoId: msg.repoId,
+            requestId: msg.requestId,
+            vcs: repo.kind,
+            durationMs: Date.now() - startedAt,
+          });
+          this.logProvider?.refresh();
+          const status = await this.manager.getAllStatusesFresh();
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+        } catch (e: unknown) {
+          const cancelled = isRemoteRepositoryCancelled(e);
+          if (cancelled) {
+            this.logger?.info('Commit', 'Commit and push cancelled', {
+              repoId: msg.repoId,
+              requestId: msg.requestId,
+              vcs: repo.kind,
+              durationMs: Date.now() - startedAt,
+            });
+          } else {
+            this.logger?.error('Commit', 'Commit and push failed', e, {
+              repoId: msg.repoId,
+              requestId: msg.requestId,
+              vcs: repo.kind,
+              durationMs: Date.now() - startedAt,
+            });
+          }
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e) });
+        }
         break;
       }
 
@@ -2215,14 +2227,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           requestId: msg.requestId,
           andPush: msg.andPush,
         });
-        // Check for missing remotes before pushing
+        // Multi-repository commit-and-push remains explicit: creating a
+        // remote for several repositories would require a separate provider
+        // choice for each repository and could leave a partial batch.
         if (msg.andPush) {
           const noRemoteRepos: string[] = [];
           for (const r of msg.repos) {
             const repo = this.manager.getRepo(r.repoId);
-            if (!repo) continue;
-            if (repo.kind === 'svn') continue;
-            const remotes = await repo.getRemotes().catch(() => []);
+            if (!repo || repo.kind === 'svn') continue;
+            const remotes = await repo.getRemotes().catch(() => [] as string[]);
             const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
             if (remotes.length === 0) noRemoteRepos.push(repoName);
           }
@@ -2233,22 +2246,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               requestId: msg.requestId,
             });
             vscode.window.showInformationMessage(
-              t('VersionDock: Cannot push — no remote configured for: {0}. Add a remote first (git remote add <name> <url>).', noRemoteRepos.join(', '))
+              t('VersionDock: Cannot push — no remote configured for: {0}. Add a remote first (git remote add <name> <url>).', noRemoteRepos.join(', ')),
             );
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'No remote configured' });
             return;
           }
         }
-        await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: msg.repos.length === 1
-              ? t('VersionDock: Committing {0} repository', msg.repos.length)
-              : t('VersionDock: Committing {0} repositories', msg.repos.length),
-            cancellable: false,
-          },
-          async () => {
+        const runMultiCommit = async (): Promise<void> => {
             const errors: string[] = [];
+            let cancelled = false;
             // Commit submodules before parent repos so the parent's pointer update
             // always refers to an already-committed submodule state.
             const repoMetas = this.manager.getRepoMetas();
@@ -2284,27 +2290,38 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   await repo.commit(r.message, r.amend, creds, detail => {
                     this.logger?.debug('Commit', detail, { repoId: r.repoId, requestId: msg.requestId });
                   });
-                  if (msg.andPush) await repo.push();
                 });
+                if (msg.andPush) {
+                  await withGitPushProgress(repo, t('VersionDock: Pushing'), () => repo.push());
+                }
               } catch (e: unknown) {
                 const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
-                this.logger?.error('Commit', 'Repository commit failed', e, {
-                  repoId: r.repoId,
-                  requestId: msg.requestId,
-                  vcs: repo.kind,
-                });
-                errors.push(`${repoName}: ${String(e)}`);
+                if (isRemoteRepositoryCancelled(e)) {
+                  cancelled = true;
+                  this.logger?.info('Commit', 'Repository commit and push cancelled', {
+                    repoId: r.repoId,
+                    requestId: msg.requestId,
+                    vcs: repo.kind,
+                  });
+                } else {
+                  this.logger?.error('Commit', 'Repository commit failed', e, {
+                    repoId: r.repoId,
+                    requestId: msg.requestId,
+                    vcs: repo.kind,
+                  });
+                  errors.push(`${repoName}: ${String(e)}`);
+                }
               }
             }
-            if (errors.length > 0) {
+            if (errors.length > 0 || cancelled) {
               this.logger?.warn('Commit', 'Multi-repository commit completed with failures', {
                 repositoryCount: msg.repos.length,
-                failedCount: errors.length,
+                failedCount: errors.length + (cancelled ? 1 : 0),
                 requestId: msg.requestId,
                 andPush: msg.andPush,
                 durationMs: Date.now() - startedAt,
               });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.length > 0 ? errors.join('\n') : 'Cancelled' });
             } else {
               this.logger?.info('Commit', 'Multi-repository commit completed', {
                 repositoryCount: msg.repos.length,
@@ -2318,8 +2335,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const status = await this.manager.getAllStatusesFresh();
             this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
             this.postChangelistsUpdate(status);
-          }
-        );
+        };
+        if (msg.andPush) {
+          // Publishing may open QuickPick/InputBox controls. Do not keep a
+          // surrounding progress notification visible while that happens.
+          await runMultiCommit();
+        } else {
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: msg.repos.length === 1
+                ? t('VersionDock: Committing {0} repository', msg.repos.length)
+                : t('VersionDock: Committing {0} repositories', msg.repos.length),
+              cancellable: false,
+            },
+            runMultiCommit,
+          );
+        }
         break;
       }
 
@@ -2517,32 +2549,39 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           requestId: msg.requestId,
           remote: msg.remote,
         });
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing'), cancellable: false },
-          async () => {
-            try {
-              await repo.push(false, msg.remote);
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-              this.logger?.info('Git', 'Push completed', {
-                repoId: msg.repoId,
-                requestId: msg.requestId,
-                remote: msg.remote,
-                durationMs: Date.now() - startedAt,
-              });
-              this.logProvider?.refresh();
-              const status = await this.manager.getAllStatusesFresh();
-              this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-            } catch (e: unknown) {
+        await withGitPushProgress(repo, t('VersionDock: Pushing'), async () => {
+          try {
+            await repo.push(false, msg.remote);
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+            this.logger?.info('Git', 'Push completed', {
+              repoId: msg.repoId,
+              requestId: msg.requestId,
+              remote: msg.remote,
+              durationMs: Date.now() - startedAt,
+            });
+            this.logProvider?.refresh();
+            const status = await this.manager.getAllStatusesFresh();
+            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          } catch (e: unknown) {
+            const cancelled = isRemoteRepositoryCancelled(e);
+            if (!cancelled) {
               this.logger?.error('Git', 'Push failed', e, {
                 repoId: msg.repoId,
                 requestId: msg.requestId,
                 remote: msg.remote,
                 durationMs: Date.now() - startedAt,
               });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+            } else {
+              this.logger?.info('Git', 'Push cancelled', {
+                repoId: msg.repoId,
+                requestId: msg.requestId,
+                remote: msg.remote,
+                durationMs: Date.now() - startedAt,
+              });
             }
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e) });
           }
-        );
+        });
         break;
       }
 

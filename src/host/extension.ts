@@ -22,6 +22,7 @@ import { AiCommitComposerService } from './aiCommitComposer/AiCommitComposerServ
 import { AiCommitComposerProvider } from './panels/AiCommitComposerProvider';
 import { AiCodeReviewService } from './aiCodeReview/AiCodeReviewService';
 import { AiCodeReviewProvider } from './panels/AiCodeReviewProvider';
+import { RemoteRepositoryService } from './remote/RemoteRepositoryService';
 import type { WorkspaceStatus } from './types/git';
 
 async function maybeResetViewLocationsOnStartup(logger: VersionDockLogger): Promise<void> {
@@ -235,7 +236,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   await maybeResetViewLocationsOnStartup(logger);
 
-  const manager = new WorkspaceVcsManager(context, logger);
+  const remoteRepositoryService = new RemoteRepositoryService(context, logger);
+  const manager = new WorkspaceVcsManager(context, logger, remoteRepositoryService.publishMissingRemote);
 
   // DEV ONLY: uncomment to reset the quickpick flag
   //context.globalState.update('hasShownViewModeQuickpick', false);
@@ -315,7 +317,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     branchStatusBar,
     profileStatusBar,
     profileService,
+    remoteRepositoryService,
     annotationController,
+    vscode.commands.registerCommand('versiondock.manageRemoteAccounts', () => remoteRepositoryService.manageAccounts()),
     vscode.commands.registerCommand('versiondock.aiCommitMessage.editPrompt', () => aiCommitMessageService.editPrompt()),
     vscode.commands.registerCommand('versiondock.aiCommitMessage.resetPrompt', () => aiCommitMessageService.resetPrompt()),
     vscode.commands.registerCommand('versiondock.aiMergeConflict.editPrompt', () => aiMergeConflictService.editPrompt()),

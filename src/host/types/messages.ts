@@ -201,7 +201,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_PULL_ALL' }
   | { type: 'COMMIT_PULL_REPO'; requestId: string; repoId: string }
   | { type: 'COMMIT_GET_REMOTES'; requestId: string; repoId: string }
-  | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote: string }
+  | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote?: string }
   | { type: 'COMMIT_DISCARD_FILE'; requestId: string; repoId: string; path: string }
   | { type: 'COMMIT_DISCARD_FILES'; requestId: string; files: Array<{ repoId: string; path: string }> }
   | { type: 'COMMIT_OPEN_DIFF'; repoId: string; filePath: string; staged: boolean }
