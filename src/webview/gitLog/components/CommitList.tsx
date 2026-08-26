@@ -11,7 +11,7 @@ import { Codicon } from '../../shared/Codicon';
 import { AiCommitComposerIcon } from '../../shared/AiCommitComposerIcon';
 import { getVsCodeApi } from '../../shared/vscodeApi';
 import type { LogToHostMsg } from '../../../host/types/messages';
-import { AuthorAvatar, formatAuthorIdentity } from './AuthorAvatar';
+import { AuthorAvatar } from './AuthorAvatar';
 import { formatDateTime } from '../../shared/dateUtils';
 import { t } from '../../shared/i18n';
 import { getCommitKey, type CommitSelectionMode } from '../store/logStore';
@@ -390,7 +390,6 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                 }
                 setContextMenu({ commit, x: e.clientX, y: e.clientY, multiSelected });
               }}
-              title={`${commit.hash}\n${formatAuthorIdentity(commit.authorName, commit.authorEmail)}\n${formatDateTime(commit.authorDate)}`}
             >
               {labelColWidth > 0 && <div style={{ width: labelColWidth, flexShrink: 0 }} />}
 
