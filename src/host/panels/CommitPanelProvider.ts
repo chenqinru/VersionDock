@@ -35,6 +35,7 @@ import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup 
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from '../utils/pushProgress';
+import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AI_COMMIT_CONTEXT_LINES_AROUND_CHANGE = 3;
@@ -194,6 +195,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly globalState?: vscode.Memento,
     private readonly workspaceState?: vscode.Memento,
     private readonly logger?: VersionDockLogger,
+    private readonly updateSummaryService?: UpdateSummaryService,
   ) {
     this.updateVcsContext();
 
@@ -2483,12 +2485,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'COMMIT_PULL_ALL': {
+        let trackedResults: Awaited<ReturnType<UpdateSummaryService['runAll']>> | undefined;
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling all repositories'), cancellable: false },
           async () => {
-            const results = await this.manager.pullAll();
-            const failed = results.filter(r => !r.ok);
-            if (failed.length > 0) {
+            if (this.updateSummaryService) {
+              trackedResults = await this.updateSummaryService.runAll(
+                this.manager.getRepoMetas().map(meta => ({ repoId: meta.id, execute: repo => repo.pull() })),
+              );
+            } else {
+              const results = await this.manager.pullAll();
+              const failed = results.filter(r => !r.ok);
+              if (failed.length === 0) return;
               const failedDescription = failed.map(result => {
                 const name = this.manager.getRepoMeta(result.repoId)?.name ?? result.repoId;
                 return `${name}: ${result.message}`;
@@ -2497,6 +2505,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }
           }
         );
+        if (trackedResults) await this.updateSummaryService?.notify(trackedResults);
         break;
       }
 
@@ -2506,8 +2515,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
         this.logger?.info('VCS', 'Pull started', { repoId: msg.repoId, requestId: msg.requestId, vcs: repo.kind });
         try {
-          const output = await repo.pull();
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output });
+          const result = this.updateSummaryService
+            ? await this.updateSummaryService.run({ repoId: msg.repoId, execute: target => target.pull() })
+            : { repoId: msg.repoId, tracked: false, ok: true, output: await repo.pull(), commits: [], files: [] };
+          if (!result.ok) throw new Error(result.error ?? t('Unknown error'));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output: result.output });
           this.logger?.info('VCS', 'Pull completed', {
             repoId: msg.repoId,
             requestId: msg.requestId,
@@ -2516,6 +2528,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
           const pullStatus = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status: pullStatus });
+          await this.updateSummaryService?.notify([result]);
         } catch (e: unknown) {
           this.logger?.error('VCS', 'Pull failed', e, {
             repoId: msg.repoId,

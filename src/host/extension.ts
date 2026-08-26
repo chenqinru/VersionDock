@@ -24,6 +24,7 @@ import { AiCodeReviewService } from './aiCodeReview/AiCodeReviewService';
 import { AiCodeReviewProvider } from './panels/AiCodeReviewProvider';
 import { RemoteRepositoryService } from './remote/RemoteRepositoryService';
 import type { WorkspaceStatus } from './types/git';
+import { UpdateSummaryService } from './update/UpdateSummaryService';
 
 async function maybeResetViewLocationsOnStartup(logger: VersionDockLogger): Promise<void> {
   const enabled = vscode.workspace.getConfiguration('versiondock').get<boolean>('resetViewLocationsOnStartup', false);
@@ -115,7 +116,11 @@ async function maybeNotifyUnpushedCommits(manager: WorkspaceVcsManager, commitPa
   }
 }
 
-async function maybeNotifyIncomingCommits(manager: WorkspaceVcsManager, globalState: vscode.Memento): Promise<void> {
+async function maybeNotifyIncomingCommits(
+  manager: WorkspaceVcsManager,
+  globalState: vscode.Memento,
+  updateSummaryService: UpdateSummaryService,
+): Promise<void> {
   const DO_NOT_SHOW_KEY = 'doNotShowIncomingCommitsNotification';
   if (globalState.get<boolean>(DO_NOT_SHOW_KEY)) return;
   if (!vscode.workspace.getConfiguration('versiondock').get<boolean>('notifyOnIncomingCommits', true)) return;
@@ -155,30 +160,17 @@ async function maybeNotifyIncomingCommits(manager: WorkspaceVcsManager, globalSt
   if (picked === doNotShow) {
     await globalState.update(DO_NOT_SHOW_KEY, true);
   } else if (picked === pull) {
-    const metaById = new Map(metas.map(m => [m.id, m]));
+    let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling…'), cancellable: false },
       async () => {
-        const results = await manager.pullAll(false);
-        const failed = results.filter(r => !r.ok);
-        const ok = results.filter(r => r.ok);
-        if (failed.length === 0) {
-          vscode.window.showInformationMessage(
-            ok.length === 1
-              ? t('VersionDock: {0} repository updated.', ok.length)
-              : t('VersionDock: {0} repositories updated.', ok.length)
-          );
-        } else {
-          const failedDesc = failed.map(r => {
-            const name = metaById.get(r.repoId)?.name ?? r.repoId;
-            return `${name}: ${r.message}`;
-          }).join('; ');
-          vscode.window.showWarningMessage(
-            `VersionDock: ${ok.length} updated, ${failed.length} failed: ${failedDesc}`
-          );
-        }
+        results = await updateSummaryService.runAll(metas.map(meta => ({
+          repoId: meta.id,
+          execute: repo => repo.pull(),
+        })));
       }
     );
+    await updateSummaryService.notify(results);
   }
 }
 
@@ -201,6 +193,7 @@ async function runStartupRefresh(
   commitPanel: CommitPanelProvider,
   globalState: vscode.Memento,
   logger: VersionDockLogger,
+  updateSummaryService: UpdateSummaryService,
 ): Promise<void> {
   const startedAt = Date.now();
   const fetchOnStartup = vscode.workspace.getConfiguration('versiondock').get<boolean>('fetchOnStartup', false);
@@ -214,7 +207,7 @@ async function runStartupRefresh(
     const status = await manager.getAllStatusesFresh();
     badge.update(status);
     await maybeNotifyConflicts(status);
-    await maybeNotifyIncomingCommits(manager, globalState);
+    await maybeNotifyIncomingCommits(manager, globalState, updateSummaryService);
     await maybeNotifyUnpushedCommits(manager, commitPanel);
     logger.info('Startup', 'Repository refresh completed', {
       repositoryCount: status.repos.length,
@@ -258,10 +251,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const aiCommitExplanationService = new AiCommitExplanationService(context, aiProviderService);
   const aiCommitComposerService = new AiCommitComposerService(context, aiProviderService, logger);
   const aiCodeReviewService = new AiCodeReviewService(context, aiProviderService);
+  const updateSummaryService = new UpdateSummaryService(
+    context.extensionUri,
+    manager,
+    aiCommitExplanationService,
+    logger,
+  );
 
-  const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger);
+  const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger, updateSummaryService);
 
-  const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, aiCommitMessageService, aiCommitExplanationService, logger);
+  const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, aiCommitMessageService, aiCommitExplanationService, logger, updateSummaryService);
   const mergeEditor = new MergeEditorProvider(context.extensionUri, manager, aiMergeConflictService, logger);
   const conflictsPanel = new ConflictsPanelProvider(context.extensionUri, manager, mergeEditor, logger);
   const aiCommitComposer = new AiCommitComposerProvider(context.extensionUri, manager, aiCommitComposerService, aiCommitMessageService, logger);
@@ -286,7 +285,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const branchStatusBar = new BranchStatusBar(manager, () => {
     vscode.commands.executeCommand('versiondock.commitPanel.focus');
-  }, logger);
+  }, logger, updateSummaryService);
 
   const profileStatusBar = new ProfileStatusBar(profileService, manager, logger);
 
@@ -344,7 +343,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     gitRepositoryCount: metas.filter(meta => meta.kind !== 'svn').length,
     svnRepositoryCount: metas.filter(meta => meta.kind === 'svn').length,
   });
-  void runStartupRefresh(manager, badge, commitPanel, context.globalState, logger);
+  void runStartupRefresh(manager, badge, commitPanel, context.globalState, logger, updateSummaryService);
 }
 
 export function deactivate(): void {}

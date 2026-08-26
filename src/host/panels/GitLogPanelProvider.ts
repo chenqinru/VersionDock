@@ -23,6 +23,7 @@ import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHist
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from '../utils/pushProgress';
+import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -220,6 +221,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly aiCommitMessageService: AiCommitMessageService,
     private readonly aiCommitExplanationService: AiCommitExplanationService,
     private readonly logger: VersionDockLogger,
+    private readonly updateSummaryService: UpdateSummaryService,
   ) {
     // Register manager listeners here so they fire even when the panel has never been opened.
     // this.post() silently drops messages when the webview is not yet resolved — that's fine,
@@ -1044,12 +1046,18 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_PULL': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        let trackedResult: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: repo.kind === 'svn' ? t('VersionDock: Updating') : t('VersionDock: Pulling'), cancellable: false },
           async () => {
             try {
-              const output = msg.branchName ? await repo.pullBranch(msg.branchName) : await repo.pull();
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true, output });
+              trackedResult = await this.updateSummaryService.run({
+                repoId: msg.repoId,
+                branchName: msg.branchName,
+                execute: target => msg.branchName ? target.pullBranch(msg.branchName) : target.pull(),
+              });
+              if (!trackedResult.ok) throw new Error(trackedResult.error ?? t('Unknown error'));
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true, output: trackedResult.output });
               this.post({ type: 'LOG_REFRESH' });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -1057,6 +1065,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }
           }
         );
+        if (trackedResult?.ok) await this.updateSummaryService.notify([trackedResult]);
         break;
       }
 

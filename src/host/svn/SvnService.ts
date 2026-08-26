@@ -23,6 +23,7 @@ import { CliError, execCli } from '../vcs/cli';
 import { t } from '../utils/l10n';
 import { resolveRepoPath as resolvePathWithinRepo } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
+import type { SvnUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
 
 const SVN_REVISION_CONTENT_CACHE_LIMIT = 200;
 const SVN_BLAME_CACHE_LIMIT = 20;
@@ -1464,6 +1465,56 @@ export class SvnService extends GitService {
     };
   }
 
+  override async captureUpdateSnapshot(branchName?: string): Promise<VcsUpdateSnapshot | undefined> {
+    const info = await this.getInfo();
+    const current = this.displayRef(info);
+    if (branchName && branchName !== current.name) return undefined;
+
+    const incoming = await this.getIncomingState(info, { force: true }).catch(() => undefined);
+    const beforeRevision = incoming?.localRevision ?? await this.resolveEffectiveLocalRevision(info);
+    return {
+      kind: 'svn',
+      repoId: this.repoId,
+      branchName: current.name,
+      workingCopyUrl: info.url,
+      beforeRevision,
+      incomingHashes: Array.from(incoming?.incomingRevisions ?? [])
+        .map(revision => `r${revision}`),
+    } satisfies SvnUpdateSnapshot;
+  }
+
+  override async getUpdateCommitHashes(snapshot: VcsUpdateSnapshot): Promise<string[]> {
+    if (snapshot.kind !== 'svn' || snapshot.repoId !== this.repoId) return [];
+
+    const info = await this.getInfo();
+    if (info.url !== snapshot.workingCopyUrl) return [];
+    const afterRevision = await this.resolveEffectiveLocalRevision(info);
+    if (afterRevision === undefined) return [];
+
+    const revisions = new Set<number>();
+    for (const hash of snapshot.incomingHashes) {
+      const revision = parseRevisionNumber(hash);
+      if (revision !== undefined && revision <= afterRevision) revisions.add(revision);
+    }
+
+    if (revisions.size === 0 && snapshot.beforeRevision !== undefined && afterRevision > snapshot.beforeRevision) {
+      const raw = await this.svn([
+        'log',
+        '--xml',
+        '-r',
+        `${snapshot.beforeRevision + 1}:${afterRevision}`,
+      ]);
+      for (const entry of this.parseLogEntries(raw)) {
+        const revision = parseRevisionNumber(entry.revision);
+        if (revision !== undefined) revisions.add(revision);
+      }
+    }
+
+    return Array.from(revisions)
+      .sort((left, right) => right - left)
+      .map(revision => `r${revision}`);
+  }
+
   async getBranches(): Promise<BranchInfo[]> {
     const current = await this.getCurrentBranch();
     const branches: BranchInfo[] = [current];
@@ -1755,6 +1806,7 @@ export class SvnService extends GitService {
     let match: RegExpExecArray | null;
     while ((match = pathRegex.exec(raw)) !== null) {
       const item = attr(match[1], 'item') ?? 'modified';
+      if (attr(match[1], 'kind') === 'dir') continue;
       const decodedPath = decodeXml(match[2]).trim();
       const workingPath = this.repositoryUrlToWorkingPath(decodedPath, info);
       if (workingPath === undefined) continue;

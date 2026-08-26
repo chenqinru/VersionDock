@@ -25,6 +25,7 @@ import { BlameService, type BlameLine } from './BlameService';
 import { assertNoSymlinkAncestors, isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
 import { createGitClient, getGitWriteGeneration, waitForGitWrite, withGitWriteLock, withGitWriteLocks } from './GitOperationLock';
 import type { PublishMissingRemote } from '../remote/types';
+import type { GitUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
 
 const STATUS_MAP: Record<string, GitFileStatus> = {
   M: 'modified', A: 'added', D: 'deleted',
@@ -978,6 +979,49 @@ export class GitService {
       // Branch list rendering should not fail just because tracking metadata is unavailable.
     }
     return map;
+  }
+
+  async captureUpdateSnapshot(branchName?: string): Promise<VcsUpdateSnapshot | undefined> {
+    const currentBranch = await this.getCurrentBranch();
+    if (branchName && branchName !== currentBranch.name) return undefined;
+
+    const upstreamRef = (await this.git.raw([
+      'rev-parse',
+      '--abbrev-ref',
+      '--symbolic-full-name',
+      '@{u}',
+    ]).catch(() => '')).trim() || undefined;
+    const beforeHeadHash = (await this.git.raw(['rev-parse', '--verify', 'HEAD']).catch(() => '')).trim() || undefined;
+
+    return {
+      kind: 'git',
+      repoId: this.repoId,
+      branchName: currentBranch.name,
+      beforeHeadHash,
+      upstreamRef,
+    } satisfies GitUpdateSnapshot;
+  }
+
+  async getUpdateCommitHashes(snapshot: VcsUpdateSnapshot): Promise<string[]> {
+    if (snapshot.kind !== 'git' || snapshot.repoId !== this.repoId) return [];
+    if (!snapshot.upstreamRef || !snapshot.beforeHeadHash) return [];
+
+    const currentBranch = await this.getCurrentBranch();
+    if (currentBranch.name !== snapshot.branchName) return [];
+
+    const afterUpstreamHash = (await this.git.raw([
+      'rev-parse',
+      '--verify',
+      snapshot.upstreamRef,
+    ]).catch(() => '')).trim();
+    if (!afterUpstreamHash) return [];
+
+    const raw = await this.git.raw([
+      'log',
+      '--format=%H',
+      `${this.safeRevisionArg(snapshot.beforeHeadHash)}..${this.safeRevisionArg(afterUpstreamHash)}`,
+    ]);
+    return raw.trim().split('\n').map(hash => hash.trim()).filter(Boolean);
   }
 
   async pullBranch(branchName: string): Promise<string> {

@@ -59,6 +59,26 @@ type CommitDetailRepo = {
 };
 
 type CommitDetailSelection = { repoId: string; hash: string };
+type AggregatedCommitDetailOptions = { title?: string; message?: string };
+
+const AGGREGATED_DETAIL_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(values[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 const singleCommitDetailPanels = new Map<string, vscode.WebviewPanel>();
 const aggregatedCommitDetailPanels = new Map<string, vscode.WebviewPanel>();
@@ -69,14 +89,14 @@ function singleCommitDetailKey(repoId: string, hash: string): string {
   return scopedKey(repoId, hash);
 }
 
-function aggregatedCommitDetailKey(commits: CommitDetailSelection[]): string {
+function aggregatedCommitDetailKey(commits: CommitDetailSelection[], context = 'selection'): string {
   const unique = new Map<string, CommitDetailSelection>();
   for (const commit of commits) {
     unique.set(singleCommitDetailKey(commit.repoId, commit.hash), commit);
   }
-  return JSON.stringify(Array.from(unique.values()).sort((left, right) => (
+  return `${context}:${JSON.stringify(Array.from(unique.values()).sort((left, right) => (
     left.repoId.localeCompare(right.repoId) || left.hash.localeCompare(right.hash)
-  )));
+  )))}`;
 }
 
 export async function openCommitDetailPanel(
@@ -333,8 +353,9 @@ export async function openAggregatedCommitDetailPanel(
   logger: VersionDockLogger,
   commits: Array<{ repoId: string; hash: string }>,
   autoExplain = false,
+  options: AggregatedCommitDetailOptions = {},
 ): Promise<void> {
-  const panelKey = aggregatedCommitDetailKey(commits);
+  const panelKey = aggregatedCommitDetailKey(commits, options.title ?? 'selection');
   const existingPanel = aggregatedCommitDetailPanels.get(panelKey);
   if (existingPanel) {
     existingPanel.reveal(vscode.ViewColumn.One);
@@ -348,7 +369,7 @@ export async function openAggregatedCommitDetailPanel(
     return;
   }
 
-  const opening = createAggregatedCommitDetailPanel(extensionUri, manager, aiCommitExplanationService, logger, commits, autoExplain);
+  const opening = createAggregatedCommitDetailPanel(extensionUri, manager, aiCommitExplanationService, logger, commits, autoExplain, options);
   pendingAggregatedCommitDetails.set(panelKey, opening);
   try {
     await opening;
@@ -366,6 +387,7 @@ async function createAggregatedCommitDetailPanel(
   logger: VersionDockLogger,
   commits: Array<{ repoId: string; hash: string }>,
   autoExplain: boolean,
+  options: AggregatedCommitDetailOptions,
 ): Promise<void> {
   if (commits.length === 0) return;
 
@@ -375,9 +397,9 @@ async function createAggregatedCommitDetailPanel(
   const fileEntries: CommitDetailFile[] = [];
 
   try {
-    for (const selection of commits) {
+    const details = await mapWithConcurrency(commits, AGGREGATED_DETAIL_CONCURRENCY, async selection => {
       const repo = manager.getRepo(selection.repoId);
-      if (!repo) continue;
+      if (!repo) return undefined;
       const [commitInfo, fullMessage, branches] = await Promise.all([
         repo.getCommitMeta(selection.hash),
         repo.getFullCommitMessage(selection.hash),
@@ -387,7 +409,7 @@ async function createAggregatedCommitDetailPanel(
       const repoName = repoMeta?.name ?? selection.repoId;
       const repoColor = repoMeta?.color ?? '#4ec9b0';
       const files = await repo.getCommitFilesForLogDetail(selection.hash, commitInfo.parents);
-      commitSummaries.push({
+      const summary: CommitSummary = {
         repoId: selection.repoId,
         repoName,
         repoColor,
@@ -404,14 +426,20 @@ async function createAggregatedCommitDetailPanel(
         parents: commitInfo.parents,
         branches,
         files,
-      });
-      fileEntries.push(...files.map(file => ({
+      };
+      const entries = files.map(file => ({
         ...file,
         repoId: selection.repoId,
         repoName,
         repoColor,
         hash: selection.hash,
-      })));
+      }));
+      return { summary, entries };
+    });
+    for (const detail of details) {
+      if (!detail) continue;
+      commitSummaries.push(detail.summary);
+      fileEntries.push(...detail.entries);
     }
   } catch (e: unknown) {
     vscode.window.showErrorMessage(t('VersionDock: Failed to load commit details: {0}', String(e)));
@@ -462,7 +490,7 @@ async function createAggregatedCommitDetailPanel(
   const nonce = generateNonce();
   const panel = vscode.window.createWebviewPanel(
     'versiondockCommitDetail',
-    t('Aggregated commit selection'),
+    options.title ?? t('Aggregated commit selection'),
     vscode.ViewColumn.One,
     {
       enableScripts: true,
@@ -475,7 +503,7 @@ async function createAggregatedCommitDetailPanel(
     }
   );
   panel.iconPath = new vscode.ThemeIcon('git-commit');
-  const panelKey = aggregatedCommitDetailKey(commits);
+  const panelKey = aggregatedCommitDetailKey(commits, options.title ?? 'selection');
   aggregatedCommitDetailPanels.set(panelKey, panel);
   panel.onDidDispose(() => {
     if (aggregatedCommitDetailPanels.get(panelKey) === panel) {
@@ -519,9 +547,9 @@ async function createAggregatedCommitDetailPanel(
     i18n,
     iconTheme,
     shortHash: commitSummaries.length === 1 ? t('{0} commit selected', commitSummaries.length) : t('{0} commits selected', commitSummaries.length),
-    message: t('Aggregated commit selection'),
+    message: options.message ?? t('Aggregated commit selection'),
     fullMessage: commitSummaries.map(commit => commit.fullMessage || commit.message).join('\n\n'),
-    authorName: t('Aggregated commit selection'),
+    authorName: options.message ?? t('Aggregated commit selection'),
     authorEmail: '',
     authorDate: firstCommit.authorDate,
     committerDate: firstCommit.committerDate,
@@ -877,7 +905,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       <div>
         <div class="section-label">${escHtml(t('Details'))}</div>
         <div class="meta-grid">
-          <span class="meta-key">${escHtml(t('Aggregated commit selection'))}</span>
+          <span class="meta-key">${escHtml(data.message)}</span>
           <span class="meta-val normal">${escHtml(data.commits?.length === 1 ? t('{0} commit selected', data.commits.length) : t('{0} commits selected', data.commits?.length ?? 0))}</span>
           <span class="meta-key">${escHtml(t('Repository'))}</span>
           <span class="meta-val normal">${escHtml(t('{0} repositories involved', data.involvedRepoCount ?? 0))}</span>
@@ -886,7 +914,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
         </div>
       </div>
       <div>
-        <div class="section-label">${escHtml(t('Aggregated commit selection'))}</div>
+        <div class="section-label">${escHtml(data.message)}</div>
         <div class="commit-summary-list">
           ${(data.commits ?? []).map((commit, index, allCommits) => {
             const commitMessage = splitCommitMessage(commit.fullMessage, commit.message);

@@ -17,6 +17,7 @@ import { formatRepoLabel } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from '../utils/pushProgress';
+import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 
 type SvnIgnoreRepo = {
   addIgnoreEntry(entryPath: string): Promise<{ entry: string; directoryPath: string; alreadyExists: boolean }>;
@@ -51,6 +52,7 @@ export class BranchStatusBar implements vscode.Disposable {
     private readonly manager: WorkspaceGitManager,
     private readonly commitPanelReveal: () => void,
     private readonly logger: VersionDockLogger,
+    private readonly updateSummaryService: UpdateSummaryService,
   ) {
     this.statusBarItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
@@ -1152,8 +1154,7 @@ export class BranchStatusBar implements vscode.Disposable {
       useRebase = pick.rebase;
     }
 
-    const metaById = new Map(metas.map(m => [m.id, m]));
-
+    let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -1161,41 +1162,17 @@ export class BranchStatusBar implements vscode.Disposable {
         cancellable: false,
       },
       async () => {
-        const results: Array<{ repoId: string; ok: boolean; message: string }> = [];
-        for (const meta of metas) {
-          const repo = this.manager.getRepo(meta.id);
-          if (!repo) continue;
-          try {
-            const message = meta.kind === 'svn'
-              ? await repo.pull()
-              : useRebase
-                ? await repo.pullRebase()
-                : await repo.pull();
-            results.push({ repoId: meta.id, ok: true, message });
-          } catch (e: unknown) {
-            const err = e as { stderr?: string; gitErrorCode?: string; message?: string };
-            const detail = err.stderr?.trim() || err.gitErrorCode || err.message || String(e);
-            results.push({ repoId: meta.id, ok: false, message: detail });
-          }
-        }
-        const failed = results.filter(r => !r.ok);
-        const ok = results.filter(r => r.ok);
-        if (failed.length === 0) {
-          vscode.window.showInformationMessage(
-            ok.length === 1 ? t('VersionDock: {0} repository updated.', ok.length) : t('VersionDock: {0} repositories updated.', ok.length)
-          );
-        } else {
-          const failedDesc = failed.map(r => {
-            const name = metaById.get(r.repoId)?.name ?? r.repoId;
-            return `${name}: ${r.message}`;
-          }).join('; ');
-          vscode.window.showWarningMessage(
-            t('VersionDock: {0} updated, {1} failed: {2}', ok.length, failed.length, failedDesc)
-          );
-        }
-        await vscode.commands.executeCommand('versiondock.openLog');
+        results = await this.updateSummaryService.runAll(metas.map(meta => ({
+          repoId: meta.id,
+          execute: repo => meta.kind === 'svn'
+            ? repo.pull()
+            : useRebase
+              ? repo.pullRebase()
+              : repo.pull(),
+        })));
       }
     );
+    await this.updateSummaryService.notify(results);
   }
 
   private async newBranch(metas: RepoMeta[]): Promise<void> {
@@ -1429,7 +1406,8 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(cloud-download) ${t('Update Project…')}`,
         description: t('Run svn update for {0}', meta.name),
         action: async () => {
-          await repo.pull();
+          const result = await this.updateSummaryService.run({ repoId: meta.id, execute: target => target.pull() });
+          await this.updateSummaryService.notify([result]);
           await this.refresh();
         },
       },
@@ -1939,18 +1917,20 @@ export class BranchStatusBar implements vscode.Disposable {
   private async pullSingleRepo(meta: RepoMeta, branchName?: string): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
+    let result: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pulling…', meta.name), cancellable: false },
       async () => {
-        try {
-          if (branchName) await repo.pullBranch(branchName);
-          else await repo.pull();
-          vscode.window.showInformationMessage(t('VersionDock [{0}]: pulled successfully.', meta.name));
-        } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
-        }
+        result = await this.updateSummaryService.run({
+          repoId: meta.id,
+          branchName,
+          execute: target => branchName ? target.pullBranch(branchName) : target.pull(),
+        });
       }
     );
+    if (result?.tracked) await this.updateSummaryService.notify([result]);
+    else if (result?.ok) vscode.window.showInformationMessage(t('VersionDock [{0}]: pulled successfully.', meta.name));
+    else if (result) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, result.error ?? t('Unknown error')));
     await this.refresh();
   }
 
@@ -2110,26 +2090,27 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async pullBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
+    let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling "{0}"…', branchName), cancellable: false },
       async () => {
-        const errors: string[] = [];
-        for (const meta of metas) {
-          const repo = this.manager.getRepo(meta.id);
-          if (!repo) continue;
-          try {
-            await repo.pullBranch(branchName);
-          } catch (e: unknown) {
-            errors.push(`${meta.name}: ${String(e)}`);
-          }
-        }
-        if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
-        } else {
-          vscode.window.showInformationMessage(t('VersionDock: Pulled in {0} repos.', metas.length));
-        }
+        results = await this.updateSummaryService.runAll(metas.map(meta => ({
+          repoId: meta.id,
+          branchName,
+          execute: repo => repo.pullBranch(branchName),
+        })));
       }
     );
+    if (results.some(result => result.tracked)) {
+      await this.updateSummaryService.notify(results);
+    } else {
+      const failed = results.filter(result => !result.ok);
+      if (failed.length > 0) {
+        vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', failed.length, failed.map(result => result.error ?? '').join('; ')));
+      } else {
+        vscode.window.showInformationMessage(t('VersionDock: Pulled in {0} repos.', metas.length));
+      }
+    }
     await this.refresh();
   }
 
