@@ -100,6 +100,21 @@ function sortMerged(list: MergedBranch[]): MergedBranch[] {
   });
 }
 
+function sumAheadBehind(branches: readonly BranchInfo[]): { ahead: number; behind: number } | undefined {
+  let ahead = 0;
+  let behind = 0;
+  let hasTrackingInfo = false;
+
+  for (const branch of branches) {
+    if (!branch.aheadBehind) continue;
+    hasTrackingInfo = true;
+    ahead += branch.aheadBehind.ahead;
+    behind += branch.aheadBehind.behind;
+  }
+
+  return hasTrackingInfo ? { ahead, behind } : undefined;
+}
+
 interface MergedTag {
   key: string;
   vcsKind: 'git' | 'svn';
@@ -457,6 +472,7 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
   const { baseName, isPrimary, isHead, repoIds } = merged;
   const isRemote = merged.instances[0].isRemote;
   const headRepoCount = merged.instances.filter(instance => instance.isHead).length;
+  const aheadBehind = sumAheadBehind(merged.instances);
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -518,10 +534,10 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
         </span>
       )}
 
-      {merged.instances[0].aheadBehind && (
+      {aheadBehind && (aheadBehind.ahead > 0 || aheadBehind.behind > 0) && (
         <span style={styles.aheadBehind}>
-          {merged.instances[0].aheadBehind.ahead > 0 && <span style={styles.pushIndicator}>↑{merged.instances[0].aheadBehind.ahead}</span>}
-          {merged.instances[0].aheadBehind.behind > 0 && <span style={styles.pullIndicator}>↓{merged.instances[0].aheadBehind.behind}</span>}
+          {aheadBehind.ahead > 0 && <span style={styles.pushIndicator}>↑{aheadBehind.ahead}</span>}
+          {aheadBehind.behind > 0 && <span style={styles.pullIndicator}>↓{aheadBehind.behind}</span>}
         </span>
       )}
     </div>
