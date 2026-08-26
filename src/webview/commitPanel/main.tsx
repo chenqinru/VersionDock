@@ -2042,6 +2042,7 @@ export function CommitApp() {
             repoStatuses={repos}
             repoMetas={store.repoMetas}
             amendFlags={store.amendFlags}
+            unpushedMap={unpushedMap}
             loading={store.loading}
             changesViewMode={store.changesViewMode}
             defaultCommitAction={store.defaultCommitAction}

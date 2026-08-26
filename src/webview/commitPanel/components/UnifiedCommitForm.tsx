@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { RepoMeta, RepoStatus } from '../../shared/types';
+import type { UnpushedCommit } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { AiCommitComposerIcon } from '../../shared/AiCommitComposerIcon';
 import { t } from '../../shared/i18n';
@@ -15,6 +16,7 @@ interface Props {
   repoStatuses: RepoStatus[];
   repoMetas: RepoMeta[];
   amendFlags: Record<string, boolean>;
+  unpushedMap: Record<string, { loading: boolean; commits: UnpushedCommit[]; error?: string }>;
   loading: boolean;
   changesViewMode?: 'simplified' | 'changelists' | 'vscode';
   defaultCommitAction?: 'commit' | 'commitAndPush';
@@ -217,7 +219,7 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
 }
 
 export function UnifiedCommitForm({
-  message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags,
+  message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags, unpushedMap,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
   onAutopilot, onStopAutopilot, onOpenComposer, onOpenCodeReview, generatingMessage,
 }: Props) {
@@ -247,8 +249,20 @@ export function UnifiedCommitForm({
   const commitLabel = t('Commit');
   const pushLabel = t('Commit & Push');
   const amendTarget = commitTargets.length === 1 ? commitTargets[0] : null;
-  const showAmend = amendTarget !== null && (amendTarget.branch.aheadBehind?.ahead ?? 0) > 0;
   const amendRepoId = amendTarget?.repoId;
+  const unpushed = amendRepoId ? unpushedMap[amendRepoId] : undefined;
+  const showAmend = amendTarget !== null
+    && metaMap.get(amendTarget.repoId)?.kind !== 'svn'
+    && (
+      (amendTarget.branch.aheadBehind?.ahead ?? 0) > 0
+      || (
+        !amendTarget.branch.upstream
+        && !!unpushed
+        && !unpushed.loading
+        && !unpushed.error
+        && unpushed.commits.length > 0
+      )
+    );
   const amend = amendFlags[amendRepoId ?? ''] ?? false;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
