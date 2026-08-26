@@ -9,6 +9,9 @@ import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 
+const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
+const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
+
 interface Props {
   repos: RepoStatus[];
   repoMetas: RepoMeta[];
@@ -904,12 +907,12 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
                 <Codicon name={pushViewMode === 'commits' ? 'diff-multiple' : 'list-unordered'} />
               </button>
               {commitCount > 0 ? (
-                <span style={styles.aheadBadge}>
+                <span style={styles.directionBadge(PUSH_COLOR)}>
                   <Codicon name="arrow-up" style={{ fontSize: '10px', marginRight: '2px' }} />
                   {commitCount}
                 </span>
               ) : behind > 0 ? (
-                <span style={styles.behindBadge}>
+                <span style={styles.directionBadge(PULL_COLOR)}>
                   <Codicon name="arrow-down" style={{ fontSize: '10px', marginRight: '2px' }} />
                   {behind}
                 </span>
@@ -1307,18 +1310,15 @@ const styles = {
   branchName: {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, minWidth: 0,
   } as React.CSSProperties,
-  aheadBadge: {
+  directionBadge: (color: string): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center',
-    background: 'var(--versiondock-badge-background)', color: 'var(--versiondock-badge-foreground)',
+    color,
+    border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`,
+    background: `color-mix(in srgb, ${color} 12%, transparent)`,
     borderRadius: '8px', padding: '1px 6px', fontSize: '10px', fontWeight: 'bold' as const,
+    lineHeight: '14px',
     flexShrink: 0,
-  } as React.CSSProperties,
-  behindBadge: {
-    display: 'inline-flex', alignItems: 'center',
-    background: 'var(--vscode-inputValidation-warningBackground, #6b4f00)', color: 'var(--vscode-inputValidation-warningForeground, #cca700)',
-    borderRadius: '8px', padding: '1px 6px', fontSize: '10px', fontWeight: 'bold' as const,
-    flexShrink: 0,
-  } as React.CSSProperties,
+  }),
   publishBadge: {
     display: 'inline-flex', alignItems: 'center',
     background: 'var(--versiondock-badge-background)', color: 'var(--versiondock-badge-foreground)',

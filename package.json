@@ -590,20 +590,20 @@
         "id": "versiondock.statusBarPushForeground",
         "description": "%colors.statusBarPushForeground.description%",
         "defaults": {
-          "dark": "#ce93d8",
-          "light": "#6a1b9a",
-          "highContrast": "#ce93d8",
-          "highContrastLight": "#6a1b9a"
+          "dark": "#81c784",
+          "light": "#2e7d32",
+          "highContrast": "#81c784",
+          "highContrastLight": "#2e7d32"
         }
       },
       {
         "id": "versiondock.statusBarDirtyForeground",
         "description": "%colors.statusBarDirtyForeground.description%",
         "defaults": {
-          "dark": "#81c784",
-          "light": "#2e7d32",
-          "highContrast": "#81c784",
-          "highContrastLight": "#2e7d32"
+          "dark": "#ce93d8",
+          "light": "#6a1b9a",
+          "highContrast": "#ce93d8",
+          "highContrastLight": "#6a1b9a"
         }
       }
     ],
