@@ -186,7 +186,7 @@ npm run package
 Then install the generated `.vsix`:
 
 ```bash
-code --install-extension versiondock-3.4.0.vsix
+code --install-extension versiondock-3.5.0.vsix
 ```
 
 ### Development Host

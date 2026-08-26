@@ -2,7 +2,7 @@
   "name": "versiondock",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "publisher": "chenqinru",
   "license": "GPL-3.0-only",
   "repository": {
