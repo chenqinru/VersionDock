@@ -50,7 +50,13 @@ export class ProfileStatusBar implements vscode.Disposable {
     const version = ++this.refreshVersion;
     const services = this.getContextServices();
     if (services.length === 0) {
-      this.renderStatusBar(this.profileService.getActiveProfile(), 'active');
+      // A workspace can be open before Git has discovered a repository, or it
+      // may simply contain no repository. Resolve the effective identity
+      // anyway so a configured global Git identity is not shown as missing.
+      void this.refreshAsync(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath, version).catch(error => {
+        this.logger?.error('IdentityStatus', 'Failed to refresh Git identity status', error);
+        if (version === this.refreshVersion) this.renderNoProfile();
+      });
       return;
     }
 
@@ -84,7 +90,7 @@ export class ProfileStatusBar implements vscode.Disposable {
     });
   }
 
-  private async refreshAsync(repoPath: string, version = this.refreshVersion): Promise<void> {
+  private async refreshAsync(repoPath: string | undefined, version = this.refreshVersion): Promise<void> {
     const result = await this.profileService.getEffectiveProfile(repoPath);
     if (version !== this.refreshVersion) return;
     if (result) {

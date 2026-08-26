@@ -133,7 +133,7 @@ export class GitProfileService implements vscode.Disposable {
   // Priority: active (per-workspace) → local .git/config → global ~/.gitconfig
   // Returns undefined only when nothing is configured anywhere.
 
-  async getEffectiveProfile(repoPath: string): Promise<EffectiveProfile | undefined> {
+  async getEffectiveProfile(repoPath?: string): Promise<EffectiveProfile | undefined> {
     this.logger.trace('Identity', 'Resolving effective Git identity', {
       customProfileCount: this.getProfiles().length,
       repoPath,
@@ -143,7 +143,7 @@ export class GitProfileService implements vscode.Disposable {
     const activeId = this.getActiveProfileId();
     if (activeId) {
       if (activeId === LOCAL_PROFILE_ID) {
-        const creds = await this.readLocalCreds(repoPath);
+        const creds = repoPath ? await this.readLocalCreds(repoPath) : undefined;
         if (creds) return { profile: { ...this.makeLocalPlaceholder(), ...creds }, source: 'active' };
       } else if (activeId === GLOBAL_PROFILE_ID) {
         const creds = await this.readGlobalCreds();
@@ -161,7 +161,7 @@ export class GitProfileService implements vscode.Disposable {
     }
 
     // 2. Local .git/config
-    const local = await this.readLocalCreds(repoPath);
+    const local = repoPath ? await this.readLocalCreds(repoPath) : undefined;
     if (local) return { profile: { ...this.makeLocalPlaceholder(), ...local }, source: 'local' };
 
     // 3. Global ~/.gitconfig

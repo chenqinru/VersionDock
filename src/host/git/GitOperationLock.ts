@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
-import simpleGit, { type SimpleGit } from 'simple-git';
+import simpleGit, { type SimpleGit, type SimpleGitOptions } from 'simple-git';
 
 interface LockToken {
   active: boolean;
@@ -84,7 +84,19 @@ export async function runGitCommandWithIndexLockRetry<T>(
 
 /** Create the standard VersionDock Git client without limiting read concurrency. */
 export function createGitClient(rootPath: string): SimpleGit {
-  const client = simpleGit({ baseDir: rootPath }).env('GIT_OPTIONAL_LOCKS', '0');
+  // simple-git's .env(name, value) replaces the child-process environment
+  // instead of extending it. Passing only GIT_OPTIONAL_LOCKS therefore drops
+  // HOME, which makes `git config --global` fail with "$HOME not set". Keep
+  // the same environment Git would inherit when launched by the extension.
+  const environment = getGitEnvironment();
+  const client = simpleGit({
+    baseDir: rootPath,
+    // Recent simple-git versions validate environment variables passed through
+    // .env(). These are inherited from the extension host, not repository
+    // input, so allow only the categories that are actually present and keep
+    // the previous Git authentication/editor behavior intact.
+    unsafe: getSimpleGitUnsafeOptions(environment),
+  }).env(environment);
   const builderMethods = new Set(['customBinary', 'env', 'outputHandler', 'silent']);
 
   const wrapped = new Proxy(client, {
@@ -100,6 +112,45 @@ export function createGitClient(rootPath: string): SimpleGit {
     },
   });
   return wrapped;
+}
+
+type SimpleGitUnsafeOptions = NonNullable<SimpleGitOptions['unsafe']>;
+
+function getSimpleGitUnsafeOptions(environment: NodeJS.ProcessEnv): SimpleGitUnsafeOptions {
+  const options: SimpleGitUnsafeOptions = {};
+  const has = (...names: string[]): boolean => names.some(name => environment[name] !== undefined);
+
+  if (has('GIT_ASKPASS', 'SSH_ASKPASS')) options.allowUnsafeAskPass = true;
+  if (has('EDITOR', 'VISUAL', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR')) options.allowUnsafeEditor = true;
+  if (has('GIT_PAGER', 'PAGER')) options.allowUnsafePager = true;
+  if (has('GIT_SSH', 'GIT_SSH_COMMAND')) options.allowUnsafeSshCommand = true;
+  if (has('GIT_PROXY_COMMAND')) options.allowUnsafeGitProxy = true;
+  if (has('GIT_EXTERNAL_DIFF')) options.allowUnsafeDiffExternal = true;
+  if (has('GIT_TEMPLATE_DIR')) options.allowUnsafeTemplateDir = true;
+  if (has('GIT_CONFIG', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_EXEC_PATH')) {
+    options.allowUnsafeConfigPaths = true;
+  }
+
+  // GIT_CONFIG_COUNT can inject arbitrary Git config entries. Preserve the
+  // inherited environment for compatibility, while explicitly acknowledging
+  // all config categories simple-git may validate from those entries.
+  if (has('GIT_CONFIG_COUNT') || Object.keys(environment).some(key => /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(key))) {
+    options.allowUnsafeConfigEnvCount = true;
+    options.allowUnsafeCredentialHelper = true;
+    options.allowUnsafeEditor = true;
+    options.allowUnsafePager = true;
+    options.allowUnsafeSshCommand = true;
+    options.allowUnsafeGitProxy = true;
+    options.allowUnsafeDiffExternal = true;
+    options.allowUnsafeDiffTextConv = true;
+    options.allowUnsafeFilter = true;
+    options.allowUnsafeFsMonitor = true;
+    options.allowUnsafeGpgProgram = true;
+    options.allowUnsafeTemplateDir = true;
+    options.allowUnsafeMergeDriver = true;
+  }
+
+  return options;
 }
 
 /**
