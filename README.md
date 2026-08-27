@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/icons/versiondock-logo.png" alt="VersionDock logo" width="160">
+  <img src="media/icons/versiondock-logo-dark.png" alt="VersionDock logo" width="160">
 </p>
 
 <h1 align="center">VersionDock</h1>
@@ -186,7 +186,7 @@ npm run package
 Then install the generated `.vsix`:
 
 ```bash
-code --install-extension versiondock-3.5.0.vsix
+code --install-extension versiondock-3.6.0.vsix
 ```
 
 ### Development Host

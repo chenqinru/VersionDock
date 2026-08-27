@@ -1,6 +1,6 @@
 {
   "displayName": "VersionDock",
-  "description": "面向 VS Code 的 Git 与 SVN 版本控制工作台，包含提交面板、历史图谱、多仓库工作流和合并工具等功能。",
+  "description": "⚡️ 面向 VS Code 的 Git 与 SVN 版本控制工作台，包含提交面板、历史图谱、多仓库工作流和合并工具等功能。",
   "viewsContainers.activitybar.commit.title": "VersionDock 提交",
   "viewsContainers.panel.log.title": "VersionDock 日志",
   "views.commitPanel.name": "VersionDock 提交",

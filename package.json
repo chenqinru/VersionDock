@@ -2,7 +2,7 @@
   "name": "versiondock",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "publisher": "chenqinru",
   "license": "GPL-3.0-only",
   "repository": {
@@ -30,7 +30,7 @@
     "intellij",
     "phpstorm"
   ],
-  "icon": "media/icons/versiondock-logo-v2.png",
+  "icon": "media/icons/versiondock-logo-dark.png",
   "galleryBanner": {
     "color": "#071b45",
     "theme": "dark"
