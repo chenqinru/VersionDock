@@ -400,17 +400,12 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
 
               {commit.refs.length > 0 && (() => {
                 const allGroups = mergeLocalRemote(groupRefs(commit.refs, repoKind, remoteNamesByRepo[commit.repoId] ?? []));
-                const headGroup = allGroups.find(g => g.isHead && !g.isDetached && !g.isSvnRevision);
-                const remoteHeadGroups = allGroups.filter(g => g.isRemoteHead);
-                const remoteHeadGroup = remoteHeadGroups.length === 1 ? remoteHeadGroups[0] : undefined;
-                const headAndRemoteHead = headGroup && remoteHeadGroup;
-                // All groups shown as branch badges; remoteHead excluded when merged into HEAD badge
-                const otherGroups = allGroups.filter(g => !(headAndRemoteHead && g.key === remoteHeadGroup.key));
+                // Exclude remoteHead from branch badges since it is a symbolic pointer, not a distinct branch
+                const displayGroups = allGroups.filter(g => !g.isRemoteHead);
                 const refsSpace = containerWidth - labelColWidth - 340;
                 const MAX = refsSpace < 80 ? 0 : refsSpace < 170 ? 1 : 2;
-                const visible = otherGroups.slice(0, MAX);
-                const overflow = otherGroups.slice(MAX);
-                const hc = headColor();
+                const visible = displayGroups.slice(0, MAX);
+                const overflow = displayGroups.slice(MAX);
                 return (
                   <div style={styles.refs}>
                     {visible.map(group => {
@@ -424,38 +419,14 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                         </span>
                       );
                     })}
-                    {headGroup && (
-                      <span style={styles.refBadge(hc, false, true, isSelected)} title={headBadgeTitle(headGroup, remoteHeadGroup)}>
-                        {headAndRemoteHead
-                          ? <Codicon name="milestone" style={{ fontSize: '11px', flexShrink: 0, lineHeight: 1 }} />
-                          : <Codicon name="arrow-right" style={{ fontSize: '9px', flexShrink: 0, lineHeight: 1 }} />}
-                        <span style={styles.refBadgeLabel}>{headAndRemoteHead ? `${remoteHeadGroup!.remoteName || t('remote')} & HEAD` : 'HEAD'}</span>
+                    {overflow.length > 0 && (
+                      <span
+                        style={styles.overflowLabel(badgeColor(overflow[0]), isSelected)}
+                        title={overflow.map(g => badgeTitle(g)).join('\n')}
+                      >
+                        {visible.length === 0 ? `${overflow.length}` : `+${overflow.length}`}
                       </span>
                     )}
-                    {overflow.length > 0 && (() => {
-                      const STEP = 4;
-                      const layers = overflow.slice(0, 3).reverse();
-                      const totalShift = layers.length * STEP;
-                      const frontColor = badgeColor(overflow[0]);
-                      return (
-                        <span
-                          style={{ ...styles.overflowWrapper, marginRight: totalShift }}
-                          title={overflow.map(g => badgeTitle(g)).join('\n')}
-                        >
-                          {layers.map((g, i) => {
-                            const c = badgeColor(g);
-                            const shift = (layers.length - i) * STEP;
-                            return (
-                              <span
-                                key={g.key}
-                                style={styles.overflowStackLayer(c, shift, isSelected)}
-                              />
-                            );
-                          })}
-                          <span style={styles.overflowLabel(frontColor, isSelected)}>{visible.length === 0 ? `${overflow.length}` : `+${overflow.length}`}</span>
-                        </span>
-                      );
-                    })()}
                   </div>
                 );
               })()}
@@ -684,24 +655,9 @@ function CommitPopover({ commit, repoKind, remoteNames, rowTop, listRect, mouseX
 
       {/* Ref badges */}
       {refGroups.length > 0 && (() => {
-        const popoverHeadGroup = refGroups.find(g => g.isHead && !g.isDetached && !g.isSvnRevision);
-        const popoverRemoteHeadGroups = refGroups.filter(g => g.isRemoteHead);
-        const popoverRemoteHeadGroup = popoverRemoteHeadGroups.length === 1 ? popoverRemoteHeadGroups[0] : undefined;
-        const headAndRemoteHead = popoverHeadGroup && popoverRemoteHeadGroup;
-        const displayGroups = headAndRemoteHead
-          ? refGroups.filter(g => g.key !== popoverRemoteHeadGroup.key)
-          : refGroups;
-        const hc = headColor();
+        const displayGroups = refGroups.filter(g => !g.isRemoteHead);
         return (
           <div style={popoverStyles.refs}>
-            {popoverHeadGroup && (
-              <span style={popoverStyles.badge(hc, true)} title={headBadgeTitle(popoverHeadGroup, popoverRemoteHeadGroup)}>
-                {headAndRemoteHead
-                  ? <Codicon name="milestone" style={{ fontSize: '11px', flexShrink: 0, lineHeight: 1 }} />
-                  : <Codicon name="arrow-right" style={{ fontSize: '9px', flexShrink: 0, lineHeight: 1 }} />}
-                <span style={popoverStyles.badgeLabel}>{headAndRemoteHead ? `${popoverRemoteHeadGroup.remoteName || t('remote')} & HEAD` : 'HEAD'}</span>
-              </span>
-            )}
             {displayGroups.map(group => {
               const color = badgeColor(group);
               return (
@@ -1530,24 +1486,7 @@ const styles = {
     whiteSpace: 'nowrap',
     minWidth: 0,
   } as React.CSSProperties,
-  overflowWrapper: {
-    position: 'relative',
-    display: 'inline-flex',
-    alignItems: 'center',
-    height: '16px',
-    flexShrink: 0,
-  } as React.CSSProperties,
-  overflowStackLayer: (color: string, shift: number, isRowSelected = false): React.CSSProperties => ({
-    position: 'absolute',
-    inset: 0,
-    borderRadius: '3px',
-    boxSizing: 'border-box',
-    background: isRowSelected ? color : `${color}33`,
-    border: `1px solid ${isRowSelected ? color : `${color}88`}`,
-    transform: `translateX(${shift}px)`,
-  }),
   overflowLabel: (color: string, isRowSelected = false): React.CSSProperties => ({
-    position: 'relative',
     fontSize: '10px',
     fontWeight: 600,
     height: '16px',
@@ -1561,6 +1500,8 @@ const styles = {
     boxSizing: 'border-box',
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   }),
   message: (isMergeCommit = false, isSelected = false): React.CSSProperties => ({
     overflow: 'hidden',

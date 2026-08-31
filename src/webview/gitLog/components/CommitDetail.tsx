@@ -1202,7 +1202,8 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                   ...(selectedBranches?.local ?? []).map(branch => branch.startsWith('refs/') ? branch : `refs/heads/${branch}`),
                   ...(selectedBranches?.remote ?? []).map(branch => branch.startsWith('refs/') ? branch : `refs/remotes/${branch}`),
                   ...(selectedBranches?.tags ?? []).map(tag => tag.startsWith('refs/tags/') ? tag : `refs/tags/${tag}`),
-                ])), repoKindById[selectedCommit.repoId] ?? 'git', remoteNamesByRepo[selectedCommit.repoId] ?? []);
+                ])), repoKindById[selectedCommit.repoId] ?? 'git', remoteNamesByRepo[selectedCommit.repoId] ?? [])
+                  .filter(group => !group.isRemoteHead);
                 const selectedHeadGroup = selectedRefGroups.find(group => group.isHead && !group.isDetached && !group.isRemoteHead && !group.isSvnRevision);
                 const loadingSelectedBranches = loadingAggregateBranchKeys.has(messageKey);
                 return (
@@ -1367,8 +1368,11 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
             {(() => {
               const LIMIT = 5;
               const remoteNames = remoteNamesByRepo[commit.repoId] ?? [];
-              const refGroups = groupRefs(commit.refs, repoKindById[commit.repoId] ?? 'git', remoteNames);
-              const refLabels = new Set(refGroups.map(group => group.label));
+              const refGroups = groupRefs(commit.refs, repoKindById[commit.repoId] ?? 'git', remoteNames).filter(group => !group.isRemoteHead);
+              const existingLocalNames = new Set(refGroups.filter(group => group.isLocal).map(group => group.label));
+              const existingRemoteNames = new Set(refGroups.filter(group => group.isRemote).map(group => `${group.remoteName}/${group.label}`));
+              const existingTagNames = new Set(refGroups.filter(group => group.isTag).map(group => group.label));
+
               type Badge =
                 | { kind: 'ref'; group: RefGroup }
                 | { kind: 'local'; name: string }
@@ -1380,37 +1384,62 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
               const getRemote = (branch: string) => splitRemote(branch)?.remoteName ?? '';
               const isHEADRef = (branch: string) => stripRemote(branch).toUpperCase() === 'HEAD';
 
+              function primaryBranchRank(name: string): number {
+                const lower = stripRemote(name).toLowerCase();
+                if (lower === 'main' || lower === 'master' || lower === 'trunk') return 1;
+                if (lower === 'develop' || lower === 'dev' || lower === 'release') return 2;
+                return 3;
+              }
+
+              function compareBadges(a: Badge, b: Badge): number {
+                const nameA = a.kind === 'ref' ? a.group.label : a.name;
+                const nameB = b.kind === 'ref' ? b.group.label : b.name;
+                const rankA = primaryBranchRank(nameA);
+                const rankB = primaryBranchRank(nameB);
+                if (rankA !== rankB) return rankA - rankB;
+                const fullA = a.kind === 'remote' ? `${a.remoteName}/${a.name}` : a.kind === 'ref' && a.group.isRemote ? `${a.group.remoteName}/${a.group.label}` : nameA;
+                const fullB = b.kind === 'remote' ? `${b.remoteName}/${b.name}` : b.kind === 'ref' && b.group.isRemote ? `${b.group.remoteName}/${b.group.label}` : nameB;
+                return fullA.localeCompare(fullB);
+              }
+
               const revisionBadges = refGroups.filter(group => group.isSvnRevision).map(group => ({ kind: 'ref' as const, group }));
               const headBadges = refGroups.filter(group => group.isHead && !group.isSvnRevision).map(group => ({ kind: 'ref' as const, group }));
-              const refTagBadges = refGroups.filter(group => group.isTag).map(group => ({ kind: 'ref' as const, group }));
-              const refLocalPrimary = refGroups.filter(group => !group.isHead && !group.isTag && group.isLocal && isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
-              const refLocalOther = refGroups.filter(group => !group.isHead && !group.isTag && group.isLocal && !isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
-              const refRemotePrimary = refGroups.filter(group => !group.isHead && !group.isTag && group.isRemote && isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
-              const refRemoteOther = refGroups.filter(group => !group.isHead && !group.isTag && group.isRemote && !isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group }));
+              const refTagBadges = refGroups.filter(group => group.isTag).map(group => ({ kind: 'ref' as const, group })).sort(compareBadges);
 
-              const localOnly = containingBranches.local;
-              const extraLocalPrimary = localOnly.filter(branch => !refLabels.has(branch) && isPrimaryBranch(branch)).map(name => ({ kind: 'local' as const, name }));
-              const extraLocalOther = localOnly.filter(branch => !refLabels.has(branch) && !isPrimaryBranch(branch)).map(name => ({ kind: 'local' as const, name }));
-              const extraRemotePrimary = containingBranches.remote
-                .filter(branch => !isHEADRef(branch) && !refLabels.has(stripRemote(branch)) && isPrimaryBranch(stripRemote(branch)))
-                .map(branch => ({ kind: 'remote' as const, name: stripRemote(branch), remoteName: getRemote(branch) }));
-              const extraRemoteOther = containingBranches.remote
-                .filter(branch => !isHEADRef(branch) && !refLabels.has(stripRemote(branch)) && !isPrimaryBranch(stripRemote(branch)))
-                .map(branch => ({ kind: 'remote' as const, name: stripRemote(branch), remoteName: getRemote(branch) }));
-              const extraTags = containingBranches.tags.filter(tag => !refLabels.has(tag)).map(name => ({ kind: 'tag' as const, name }));
+              const localPrimaryBadges: Badge[] = [
+                ...refGroups.filter(group => !group.isHead && !group.isTag && group.isLocal && isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group })),
+                ...containingBranches.local.filter(branch => !existingLocalNames.has(branch) && isPrimaryBranch(branch)).map(name => ({ kind: 'local' as const, name })),
+              ].sort(compareBadges);
+
+              const localOtherBadges: Badge[] = [
+                ...refGroups.filter(group => !group.isHead && !group.isTag && group.isLocal && !isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group })),
+                ...containingBranches.local.filter(branch => !existingLocalNames.has(branch) && !isPrimaryBranch(branch)).map(name => ({ kind: 'local' as const, name })),
+              ].sort(compareBadges);
+
+              const remotePrimaryBadges: Badge[] = [
+                ...refGroups.filter(group => !group.isHead && !group.isRemoteHead && !group.isTag && group.isRemote && isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group })),
+                ...containingBranches.remote
+                  .filter(branch => !isHEADRef(branch) && !existingRemoteNames.has(`${getRemote(branch)}/${stripRemote(branch)}`) && isPrimaryBranch(stripRemote(branch)))
+                  .map(branch => ({ kind: 'remote' as const, name: stripRemote(branch), remoteName: getRemote(branch) })),
+              ].sort(compareBadges);
+
+              const remoteOtherBadges: Badge[] = [
+                ...refGroups.filter(group => !group.isHead && !group.isRemoteHead && !group.isTag && group.isRemote && !isPrimaryBranch(group.label)).map(group => ({ kind: 'ref' as const, group })),
+                ...containingBranches.remote
+                  .filter(branch => !isHEADRef(branch) && !existingRemoteNames.has(`${getRemote(branch)}/${stripRemote(branch)}`) && !isPrimaryBranch(stripRemote(branch)))
+                  .map(branch => ({ kind: 'remote' as const, name: stripRemote(branch), remoteName: getRemote(branch) })),
+              ].sort(compareBadges);
+
+              const extraTags = containingBranches.tags.filter(tag => !existingTagNames.has(tag)).map(name => ({ kind: 'tag' as const, name })).sort(compareBadges);
 
               const allBadges: Badge[] = [
                 ...revisionBadges,
                 ...headBadges,
                 ...refTagBadges,
-                ...refLocalPrimary,
-                ...extraLocalPrimary,
-                ...refLocalOther,
-                ...extraLocalOther,
-                ...refRemotePrimary,
-                ...extraRemotePrimary,
-                ...refRemoteOther,
-                ...extraRemoteOther,
+                ...localPrimaryBadges,
+                ...localOtherBadges,
+                ...remotePrimaryBadges,
+                ...remoteOtherBadges,
                 ...extraTags,
               ];
 

@@ -2859,12 +2859,13 @@ export class GitService {
     }, 'merge', name);
   }
 
-  async getBranchesContaining(hash: string): Promise<{ local: string[]; remote: string[]; tags: string[] }> {
-    const [localOut, remoteOut, tagOut] = await Promise.all([
+  async getBranchesContaining(hash: string): Promise<{ local: string[]; remote: string[]; tags: string[]; isHead?: boolean }> {
+    const [localOut, remoteOut, tagOut, headHash] = await Promise.all([
       this.git.raw(['branch', '--contains', hash, '--format=%(refname)']).catch(() => ''),
       this.git.raw(['branch', '-r', '--contains', hash, '--format=%(refname)']).catch(() => ''),
       // --points-at: only tags directly on this commit, not ancestors.
       this.git.raw(['tag', '--points-at', hash]).catch(() => ''),
+      this.git.raw(['rev-parse', 'HEAD']).then(r => r.trim()).catch(() => ''),
     ]);
     const parse = (out: string) => out.split('\n').map(b => b.trim()).filter(Boolean);
     // Full ref names avoid Git's ambiguous `%(refname:short)` output when a
@@ -2879,7 +2880,8 @@ export class GitService {
       .map(ref => ref.slice('refs/remotes/'.length))
       .filter(ref => !ref.endsWith('/HEAD'));
     const tags = parse(tagOut);
-    return { local, remote, tags };
+    const isHead = Boolean(headHash && (headHash === hash || headHash.startsWith(hash) || hash.startsWith(headHash)));
+    return { local, remote, tags, isHead };
   }
 
   async getFullCommitMessage(hash: string): Promise<string> {

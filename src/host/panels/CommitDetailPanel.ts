@@ -858,7 +858,7 @@ interface PanelData {
   parents: string[];
   files: CommitDetailFile[];
   mergeParentChanges?: MergeParentChange[];
-  branches: { local: string[]; remote: string[]; tags: string[] };
+  branches: { local: string[]; remote: string[]; tags: string[]; isHead?: boolean };
   commits?: CommitSummaryView[];
   selectedTimeRange?: string;
   involvedRepoCount?: number;
@@ -886,14 +886,15 @@ function getAuthorInitials(authorName: string): string {
 function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData): string {
   // remote entries come in as "origin/feat" — split into remote + name
   const allBranches = [
-    ...data.branches.local.map(b => ({ type: 'local',  name: b, remote: '' })),
+    ...(data.branches.isHead ? [{ type: 'head' as const, name: 'HEAD', remote: '' }] : []),
+    ...data.branches.local.map(b => ({ type: 'local' as const,  name: b, remote: '' })),
     ...data.branches.remote.map(b => {
       const slash = b.indexOf('/');
       return slash >= 0
-        ? { type: 'remote', name: b.slice(slash + 1), remote: b.slice(0, slash) }
-        : { type: 'remote', name: b, remote: '' };
+        ? { type: 'remote' as const, name: b.slice(slash + 1), remote: b.slice(0, slash) }
+        : { type: 'remote' as const, name: b, remote: '' };
     }),
-    ...data.branches.tags.map(b => ({ type: 'tag', name: b, remote: '' })),
+    ...data.branches.tags.map(b => ({ type: 'tag' as const, name: b, remote: '' })),
   ];
 
   const authorInitials = getAuthorInitials(data.authorName);
@@ -2366,8 +2367,18 @@ ${leftPanelContent}
 
     // ── Branch / tag badges — runs after render, isolated ──
     try {
-      const PAL_D = ['#6a9fc2','#a07cb0','#5aaa96','#b87c5a','#7a9e5a','#b09050','#7085b8','#a06060','#5a8fa0','#908060','#7aaa70','#9a7060'];
-      const PAL_L = ['#2a6090','#6a3a80','#2a7a68','#8a4a28','#3a6a28','#7a5a18','#3a4a88','#7a2828','#1a5a70','#605030','#3a6a30','#603828'];
+      const PAL_D = [
+        '#6aaed0', '#cc6a9a', '#6ab86a', '#cc7070',
+        '#8c70cc', '#cc7a50', '#4aaa9a', '#cc8060',
+        '#a0cc6a', '#6a8ecc', '#cc6ab0', '#7acc80',
+        '#cc6060', '#6accc0', '#b870cc', '#6ab0d0',
+      ];
+      const PAL_L = [
+        '#2e6898', '#962860', '#2a7828', '#963232',
+        '#4a2e96', '#963818', '#1a7a6a', '#964018',
+        '#587818', '#2a4e98', '#962878', '#2a7840',
+        '#982020', '#287878', '#6a2496', '#2a6890',
+      ];
       const PRIM  = ['main','master','develop','dev','trunk','release'];
       const dark  = () => document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast');
       function normB(n) {
@@ -2394,53 +2405,108 @@ ${leftPanelContent}
       function darken(raw,threshold) {
         const rgb=parseC(raw); if(!rgb) return raw;
         let [r,g,b]=rgb; let l=lum(r,g,b);
-        while(l>threshold){ r=Math.round(r*0.82);g=Math.round(g*0.82);b=Math.round(b*0.82);l=lum(r,g,b); }
+        while(l>threshold){ r=Math.round(r*0.82);g=Math.round(g*0.82);b=Math.round(g*0.82);l=lum(r,g,b); }
         return toHex(r,g,b);
       }
       function lighten(raw,threshold) {
         const rgb=parseC(raw); if(!rgb) return raw;
         let [r,g,b]=rgb; let l=lum(r,g,b);
         while(l<threshold){
-          r=Math.min(255,Math.round(r*1.15+8));g=Math.min(255,Math.round(g*1.15+8));b=Math.min(255,Math.round(b*1.15+8));
+          r=Math.min(255,Math.round(r*1.15+8));g=Math.min(255,Math.round(g*1.15+8));b=Math.min(255,Math.round(g*1.15+8));
           const next=lum(r,g,b); if(next===l) break; l=next;
         }
         return toHex(r,g,b);
       }
       function primaryColor() {
         const raw = getComputedStyle(document.body).getPropertyValue('--vscode-button-background').trim() || '#0078d4';
-        return dark() ? lighten(raw,0.18) : darken(raw,0.3);
+        return dark() ? lighten(raw,0.28) : darken(raw,0.22);
       }
       function hashB(n) { let h=0; const s=normB(n); for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0; return h%PAL_D.length; }
       function bColor(n) {
         if (PRIM.includes(normB(n).toLowerCase())) return primaryColor();
         return (dark() ? PAL_D : PAL_L)[hashB(n)];
       }
-      const tColor = () => dark() ? '#4aaa9a' : '#1a7a6a';
+      const tColor = () => dark() ? '#909090' : '#707070';
+      const hColor = () => dark() ? '#c9a84c' : '#8a6914';
 
-      function normalizeBranches(branches) {
-        const result = [];
-        for (const name of branches?.local || []) result.push({ type: 'local', name, remote: '' });
-        for (const remoteBranch of branches?.remote || []) {
-          const slash = remoteBranch.indexOf('/');
-          result.push(slash >= 0
-            ? { type: 'remote', name: remoteBranch.slice(slash + 1), remote: remoteBranch.slice(0, slash) }
-            : { type: 'remote', name: remoteBranch, remote: '' });
+      function primaryBranchRank(name) {
+        const lower = normB(name).toLowerCase();
+        if (lower === 'main' || lower === 'master' || lower === 'trunk') return 1;
+        if (lower === 'develop' || lower === 'dev' || lower === 'release') return 2;
+        return 3;
+      }
+      function compareBranches(a, b) {
+        const rankA = primaryBranchRank(a.name);
+        const rankB = primaryBranchRank(b.name);
+        if (rankA !== rankB) return rankA - rankB;
+        const fullA = a.remote ? (a.remote + '/' + a.name) : a.name;
+        const fullB = b.remote ? (b.remote + '/' + b.name) : b.name;
+        return fullA.localeCompare(fullB);
+      }
+
+      function normalizeBranches(branchesInput) {
+        if (!branchesInput) return [];
+        const isPrimary = n => PRIM.includes(normB(n).toLowerCase());
+        let items = [];
+        let hasHead = false;
+        if (Array.isArray(branchesInput)) {
+          items = branchesInput;
+          hasHead = branchesInput.some(b => b.type === 'head' || (b.name && b.name.toUpperCase() === 'HEAD'));
+        } else if (typeof branchesInput === 'object') {
+          hasHead = Boolean(branchesInput.isHead) || (branchesInput.local || []).some(n => n.toUpperCase() === 'HEAD');
+          for (const name of branchesInput.local || []) items.push({ type: 'local', name, remote: '' });
+          for (const remoteBranch of branchesInput.remote || []) {
+            const slash = remoteBranch.indexOf('/');
+            const remote = slash >= 0 ? remoteBranch.slice(0, slash) : '';
+            const name = slash >= 0 ? remoteBranch.slice(slash + 1) : remoteBranch;
+            items.push({ type: 'remote', name, remote });
+          }
+          for (const name of branchesInput.tags || []) items.push({ type: 'tag', name, remote: '' });
         }
-        for (const name of branches?.tags || []) result.push({ type: 'tag', name, remote: '' });
+
+        const validItems = items.filter(b => b.type !== 'head' && !(b.type === 'remote' && b.name.toUpperCase() === 'HEAD') && !(b.type === 'local' && b.name.toUpperCase() === 'HEAD'));
+
+        const localPrimary = validItems
+          .filter(b => b.type === 'local' && isPrimary(b.name))
+          .sort(compareBranches);
+        const localOther = validItems
+          .filter(b => b.type === 'local' && !isPrimary(b.name))
+          .sort(compareBranches);
+        const remotePrimary = validItems
+          .filter(b => b.type === 'remote' && isPrimary(b.name))
+          .sort(compareBranches);
+        const remoteOther = validItems
+          .filter(b => b.type === 'remote' && !isPrimary(b.name))
+          .sort(compareBranches);
+        const sortedTags = validItems
+          .filter(b => b.type === 'tag')
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        const result = [];
+        if (hasHead) {
+          result.push({ type: 'head', name: 'HEAD', remote: '' });
+        }
+        result.push(...localPrimary, ...localOther, ...remotePrimary, ...remoteOther, ...sortedTags);
         return result;
       }
 
       function appendBranchBadges(refsRow, branches) {
+        if (!refsRow) return;
+        refsRow.innerHTML = '';
         for (const b of branches) {
-          const color = b.type === 'tag' ? tColor() : bColor(b.name);
-          const icon  = b.type === 'tag' ? 'tag' : b.type === 'remote' ? 'cloud' : 'git-branch';
+          if (b.type === 'remote' && b.name.toUpperCase() === 'HEAD') continue;
+          const isHead = b.name.toUpperCase() === 'HEAD';
+          const color = b.type === 'tag' ? tColor() : isHead ? hColor() : bColor(b.name);
+          const icon  = b.type === 'tag' ? 'tag' : isHead ? 'arrow-right' : b.type === 'remote' ? 'cloud' : 'git-branch';
           const label = b.type === 'remote' && b.remote ? b.remote + '/' + b.name : b.name;
           const sp = document.createElement('span');
           sp.title = b.type === 'tag'
             ? t('Tag: {0}', label)
             : b.type === 'remote'
               ? t('Remote: {0}', label)
-              : t('Local: {0}', label);
+              : isHead
+                ? t('HEAD')
+                : t('Local: {0}', label);
           sp.style.cssText = 'font-size:10px;padding:0 6px;height:16px;line-height:16px;border-radius:3px;display:inline-flex;align-items:center;gap:3px;background:' + color + '33;color:' + color + ';border:1px solid ' + color + '88;max-width:160px;overflow:hidden;white-space:nowrap;flex-shrink:0;box-sizing:border-box;font-weight:500;margin:2px;';
           sp.innerHTML = '<span class="codicon codicon-' + icon + '" style="font-size:10px;flex-shrink:0;line-height:1"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">' + escText(label) + '</span>';
           refsRow.appendChild(sp);
@@ -2448,7 +2514,7 @@ ${leftPanelContent}
       }
 
       const refsRow = document.getElementById('refsRow');
-      if (refsRow) appendBranchBadges(refsRow, __d.branches || []);
+      if (refsRow) appendBranchBadges(refsRow, normalizeBranches(__d.branches));
 
       document.querySelectorAll('[data-commit-refs]').forEach(commitRefsRow => {
         const repoId = commitRefsRow.dataset.commitRepoId || '';

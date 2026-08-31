@@ -1,4 +1,5 @@
 import { currentPalette as _currentPalette } from '../../shared/branchColors';
+import { isPrimaryBranch } from '../../shared/branchUtils';
 import type { BranchInfo } from '../../shared/types';
 export {
   primaryBranchColor,
@@ -231,13 +232,20 @@ export function groupRefs(
   }
 
   groups.sort((a, b) => {
-    // HEAD (detached or remote) always first
-    if (a.isRemoteHead !== b.isRemoteHead) return a.isRemoteHead ? -1 : 1;
-    if (a.isHead !== b.isHead) return a.isHead ? -1 : 1;
-    if (a.isTag !== b.isTag) return a.isTag ? 1 : -1;
-    if (a.label !== b.label) return a.label.localeCompare(b.label);
-    if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
-    return 0;
+    const isSpecialHead = (g: RefGroup) => (g.isHead && g.isDetached) || (g.isSvnRevision && g.label === 'HEAD');
+    if (isSpecialHead(a) !== isSpecialHead(b)) return isSpecialHead(a) ? -1 : 1;
+    if (a.isRemoteHead !== b.isRemoteHead) return a.isRemoteHead ? 1 : -1;
+    const rank = (g: RefGroup): number => {
+      if (g.isTag) return 5;
+      if (g.isLocal) return isPrimaryBranch(g.label) ? 1 : 2;
+      if (g.isRemote) return isPrimaryBranch(g.label) ? 3 : 4;
+      return 6;
+    };
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    const nameA = a.isRemote && a.remoteName ? `${a.remoteName}/${a.label}` : a.label;
+    const nameB = b.isRemote && b.remoteName ? `${b.remoteName}/${b.label}` : b.label;
+    return nameA.localeCompare(nameB);
   });
 
   return groups;

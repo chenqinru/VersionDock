@@ -142,18 +142,19 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
         </div>
       )}
 
-      {hasFilters && (
-        <ClearFiltersButton onClick={onClear} />
-      )}
-
-      <MoreMenu
-        onFetchAll={onFetchAll}
-        showRepoNameToggle={repos.length > 1}
-        repoNamesExpanded={repoNamesExpanded}
-        onToggleRepoNames={onToggleRepoNames}
-        onUndock={onUndock}
-        hideUndock={hideUndock}
-      />
+      <div style={styles.rightActions}>
+        {hasFilters && (
+          <ClearFiltersButton onClick={onClear} />
+        )}
+        <MoreMenu
+          onFetchAll={onFetchAll}
+          showRepoNameToggle={repos.length > 1}
+          repoNamesExpanded={repoNamesExpanded}
+          onToggleRepoNames={onToggleRepoNames}
+          onUndock={onUndock}
+          hideUndock={hideUndock}
+        />
+      </div>
     </div>
   );
 }
@@ -193,7 +194,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
   }, [open]);
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative', flexShrink: 0, marginLeft: 'auto' }}>
+    <div ref={wrapRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
         data-top-action-btn=""
         style={styles.moreBtn}
@@ -790,7 +791,8 @@ const calStyles = {
     position: 'absolute' as const,
     top: 'calc(100% + 4px)',
     right: 0,
-    width: '100%',
+    width: '380px',
+    maxWidth: 'calc(100vw - 20px)',
     zIndex: 300,
     background: 'var(--vscode-dropdown-background, var(--vscode-editor-background))',
     border: '1px solid var(--vscode-dropdown-border, var(--vscode-input-border, rgba(128,128,128,0.35)))',
@@ -877,21 +879,30 @@ const styles = {
   bar: {
     display: 'flex',
     alignItems: 'center',
-    flexWrap: 'wrap' as const,
+    flexWrap: 'nowrap' as const,
     gap: '6px',
     padding: '6px 10px',
     borderBottom: '1px solid var(--vscode-panel-border)',
     background: 'var(--vscode-editor-background)',
     flexShrink: 0,
+    minHeight: '38px',
+    boxSizing: 'border-box' as const,
   },
+  rightActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    flexShrink: 0,
+    marginLeft: 'auto',
+  } as React.CSSProperties,
   filterGrow: (grow: number, minWidth: number): React.CSSProperties => ({
     flex: `${grow} 1 ${minWidth}px`,
-    minWidth,
+    minWidth: `${Math.min(minWidth, 80)}px`,
   }),
   dateFilter: {
-    flex: `0 0 ${DATE_RANGE_WIDTH}px`,
-    width: `${DATE_RANGE_WIDTH}px`,
-    maxWidth: '100%',
+    flex: '0.8 1 110px',
+    minWidth: '95px',
+    maxWidth: '200px',
   } as React.CSSProperties,
   fieldWrap: {
     display: 'flex',
