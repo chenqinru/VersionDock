@@ -1729,33 +1729,47 @@ export class BranchStatusBar implements vscode.Disposable {
     ) as { label: string; value: boolean } | undefined;
     if (!checkoutPick) return;
 
-    try {
-      if (checkoutPick.value) {
-        await repo.checkout(branchName, true, baseFrom);
-      } else {
-        await repo.createBranch(branchName, baseFrom);
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: t('VersionDock: Creating branch "{0}"…', branchName),
+        cancellable: false,
+      },
+      async () => {
+        try {
+          if (checkoutPick.value) {
+            await repo.checkout(branchName, true, baseFrom);
+          } else {
+            await repo.createBranch(branchName, baseFrom);
+          }
+          vscode.window.showInformationMessage(
+            checkoutPick.value
+              ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, branchName)
+              : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
+          );
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+        }
       }
-      vscode.window.showInformationMessage(
-        checkoutPick.value
-          ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, branchName)
-          : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
-      );
-    } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
-    }
+    );
     await this.refresh();
   }
 
   private async checkoutSingleRepo(branchName: string, meta: RepoMeta): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
-    try {
-      await repo.checkout(branchName);
-      vscode.window.showInformationMessage(t('VersionDock [{0}]: switched to "{1}"', meta.name, branchName));
-    } catch (e: unknown) {
-      const handled = await this.handleDirtyCheckout(repo, meta, branchName, e);
-      if (!handled) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
-    }
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', branchName), cancellable: false },
+      async () => {
+        try {
+          await repo.checkout(branchName);
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: switched to "{1}"', meta.name, branchName));
+        } catch (e: unknown) {
+          const handled = await this.handleDirtyCheckout(repo, meta, branchName, e);
+          if (!handled) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+        }
+      }
+    );
     await this.refresh();
   }
 
@@ -1897,20 +1911,29 @@ export class BranchStatusBar implements vscode.Disposable {
     ) as { label: string; value: boolean } | undefined;
     if (!checkoutPick) return;
 
-    try {
-      if (checkoutPick.value) {
-        await repo.checkout(branchName, true, fromBranch);
-      } else {
-        await repo.createBranch(branchName, fromBranch);
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: t('VersionDock: Creating branch "{0}"…', branchName),
+        cancellable: false,
+      },
+      async () => {
+        try {
+          if (checkoutPick.value) {
+            await repo.checkout(branchName, true, fromBranch);
+          } else {
+            await repo.createBranch(branchName, fromBranch);
+          }
+          vscode.window.showInformationMessage(
+            checkoutPick.value
+              ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, branchName)
+              : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
+          );
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+        }
       }
-      vscode.window.showInformationMessage(
-        checkoutPick.value
-          ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, branchName)
-          : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
-      );
-    } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
-    }
+    );
     await this.refresh();
   }
 

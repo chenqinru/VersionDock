@@ -1171,7 +1171,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     });
   }
 
-  async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
+  async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, _kind?: StatusOperationKind, _label?: string): Promise<T> {
     if (this.statusUpdateSuppressionDepth === 0) {
       this.beginStatusStabilization();
       this.statusOperationSettled = new Promise<void>(resolve => {
@@ -1180,33 +1180,17 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.statusOperationListeners.forEach(listener => listener(true));
     }
     this.statusUpdateSuppressionDepth += 1;
-    const execute = async (): Promise<T> => {
-      try {
-        return await operation();
-      } finally {
-        this.statusUpdateSuppressionDepth -= 1;
-        if (this.statusUpdateSuppressionDepth === 0) {
-          const settled = this.statusOperationSettled;
-          this.scheduleRefresh();
-          if (settled) await this.waitForStatusOperationSettled(settled);
-          this.statusOperationListeners.forEach(listener => listener(false));
-        }
+    try {
+      return await operation();
+    } finally {
+      this.statusUpdateSuppressionDepth -= 1;
+      if (this.statusUpdateSuppressionDepth === 0) {
+        const settled = this.statusOperationSettled;
+        this.scheduleRefresh();
+        if (settled) await this.waitForStatusOperationSettled(settled);
+        this.statusOperationListeners.forEach(listener => listener(false));
       }
-    };
-
-    if (kind === 'checkout' || kind === 'merge') {
-      return vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: kind === 'merge'
-            ? t('VersionDock: Merging "{0}"…', label ?? t('branch'))
-            : t('VersionDock: Checking out "{0}"…', label ?? t('branch')),
-          cancellable: false,
-        },
-        () => execute(),
-      );
     }
-    return execute();
   }
 
   private async waitForStatusOperationSettled(settled: Promise<void>): Promise<void> {

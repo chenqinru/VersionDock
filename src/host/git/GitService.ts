@@ -1,4 +1,5 @@
 import { type SimpleGit } from 'simple-git';
+import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -221,6 +222,13 @@ type BranchTrackingInfo = Pick<BranchInfo, 'upstream' | 'aheadBehind'> & {
   upstreamRemoteRef?: string;
 };
 
+type PullStrategy = 'merge' | 'rebase';
+
+interface PullAutoStash {
+  hash: string;
+  shortHash: string;
+}
+
 function parseAheadBehindTrack(track: string): { ahead: number; behind: number } | undefined {
   const ahead = track.match(/ahead (\d+)/)?.[1];
   const behind = track.match(/behind (\d+)/)?.[1];
@@ -261,6 +269,7 @@ export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
   private git: SimpleGit;
   private readonly blameService = new BlameService();
+  private pendingPullAutoStash: PullAutoStash | undefined;
   // Set immediately after a tag checkout, cleared when VS Code API confirms the update.
   private _pendingDetachedTag: string | undefined;
 
@@ -2264,44 +2273,177 @@ export class GitService {
   }
 
   async pull(): Promise<string> {
-    return this.withWriteLock(async () => {
-    await this.assertPullAllowed();
-    const vsRepo = this.vsRepo();
-    if (vsRepo && vsRepo.state.remotes.length > 0) {
-      if (!vsRepo.state.HEAD?.upstream) return 'No remote tracking branch — skipped';
-      try {
-        await vsRepo.pull();
-        return 'pulled';
-      } catch (error: unknown) {
-        throw new Error(gitErrorDetail(error));
-      }
-    }
-    const tracking = await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '');
-    if (!tracking.trim()) return 'No remote tracking branch — skipped';
-    const result = await this.git.pull();
-    return `${result.summary.changes} changes, ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`;
-    });
+    return this.withWriteLock(() => this.pullWithStrategy('merge'));
   }
 
   async pullRebase(): Promise<string> {
-    return this.withWriteLock(async () => {
+    return this.withWriteLock(() => this.pullWithStrategy('rebase'));
+  }
+
+  private async pullWithStrategy(strategy: PullStrategy, remote?: string, branch?: string): Promise<string> {
     await this.assertPullAllowed();
-    const vsRepo = this.vsRepo();
-    if (vsRepo && vsRepo.state.remotes.length > 0) {
-      if (!vsRepo.state.HEAD?.upstream) return 'No remote tracking branch — skipped';
-      const upstream = vsRepo.state.HEAD.upstream;
+    if (!remote || !branch) {
+      const tracking = await this.git.raw([
+        'rev-parse',
+        '--abbrev-ref',
+        '--symbolic-full-name',
+        '@{u}',
+      ]).catch(() => '');
+      if (!tracking.trim()) return 'No remote tracking branch — skipped';
+    }
+
+    const autoStash = await this.createPullAutoStash();
+    const strategyOptions = strategy === 'rebase'
+      ? ['--rebase']
+      // `--ff` keeps the normal fast-forward-when-possible merge behavior while
+      // overriding a configured `pull.ff=only` for the explicitly selected
+      // merge strategy.
+      : ['--no-rebase', '--ff'];
+    let result: Awaited<ReturnType<SimpleGit['pull']>>;
+    try {
+      result = remote && branch
+        ? await this.git.pull(remote, branch, strategyOptions)
+        : await this.git.pull(strategyOptions);
+    } catch (error: unknown) {
+      const pullError = gitErrorDetail(error);
+      if (!autoStash) throw new Error(pullError);
+
+      const status = await this.getStatusFresh().catch(() => undefined);
+      if (status && (status.conflictCount > 0 || status.operationState)) {
+        await this.openPullConflicts();
+        throw new Error(t(
+          'Update stopped with conflicts: {0} Your local tracked changes remain safe in VersionDock auto-stash {1}. Resolve or abort the current operation, then restore the stash from the Stash panel.',
+          pullError,
+          autoStash.shortHash,
+        ));
+      }
+
       try {
-        await vsRepo.fetch();
-        await vsRepo.rebase(`${upstream.remote}/${upstream.name}`);
-        return 'pulled (rebase)';
+        await this.restorePullAutoStash(autoStash);
+      } catch (restoreError: unknown) {
+        throw new Error(t(
+          'Update failed: {0} VersionDock also could not restore the local changes: {1}',
+          pullError,
+          gitErrorDetail(restoreError),
+        ));
+      }
+      throw new Error(pullError);
+    }
+
+    if (autoStash) {
+      try {
+        await this.restorePullAutoStash(autoStash);
       } catch (error: unknown) {
-        throw new Error(gitErrorDetail(error));
+        throw new Error(t(
+          'Update completed, but VersionDock could not restore the local changes: {0}',
+          gitErrorDetail(error),
+        ));
       }
     }
-    const tracking = (await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '')).trim();
-    if (!tracking) return 'No remote tracking branch — skipped';
-    await this.git.raw(['pull', '--rebase']);
-    return 'pulled (rebase)';
+
+    const summary = `${result.summary.changes} changes, ${result.summary.insertions} insertions, ${result.summary.deletions} deletions`;
+    return strategy === 'rebase' ? `pulled (rebase): ${summary}` : summary;
+  }
+
+  private async createPullAutoStash(): Promise<PullAutoStash | undefined> {
+    const trackedStatus = await this.git.raw([
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=no',
+    ]);
+    if (!trackedStatus.trim()) return undefined;
+
+    const marker = `versiondock-${process.pid}-${Date.now().toString(36)}`;
+    const message = t('VersionDock automatic stash before update ({0})', marker);
+    await this.git.raw(['stash', 'push', '-m', message]);
+
+    const entry = (await this.getStashIdentities()).find(candidate => candidate.subject.includes(marker));
+    if (entry) {
+      return { hash: entry.hash, shortHash: entry.hash.slice(0, 12) };
+    }
+
+    // A dirty submodule can appear in porcelain status even though `git stash`
+    // has no superproject change to save. In that case leave it untouched and
+    // let pull decide whether the working tree is safe to update.
+    const remainingStatus = await this.git.raw([
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=no',
+    ]);
+    if (remainingStatus.trim()) return undefined;
+
+    throw new Error(t(
+      'VersionDock stashed the local changes but could not identify the automatic stash. Restore the entry named "{0}" from the Stash panel before retrying.',
+      message,
+    ));
+  }
+
+  private async restorePullAutoStash(autoStash: PullAutoStash): Promise<void> {
+    const entry = (await this.getStashIdentities()).find(candidate => candidate.hash === autoStash.hash);
+    if (!entry) {
+      throw new Error(t(
+        'VersionDock auto-stash {0} could not be found. Check the Stash panel before making further changes.',
+        autoStash.shortHash,
+      ));
+    }
+
+    try {
+      // `--index` restores both the file contents and the staged/unstaged split.
+      // Git keeps the stash automatically if applying it produces conflicts.
+      await this.git.raw(['stash', 'pop', '--index', entry.ref]);
+    } catch (error: unknown) {
+      const status = await this.getStatusFresh().catch(() => undefined);
+      if ((status?.conflictCount ?? 0) > 0) {
+        this.pendingPullAutoStash = autoStash;
+        await this.openPullConflicts();
+        throw new Error(t(
+          'Restoring VersionDock auto-stash {0} produced conflicts: {1}. The Conflicts panel has been opened, and the stash remains as a backup until resolution is complete.',
+          autoStash.shortHash,
+          gitErrorDetail(error),
+        ));
+      }
+      throw new Error(t(
+        'Could not restore VersionDock auto-stash {0}: {1}. The stash was kept for manual recovery in the Stash panel.',
+        autoStash.shortHash,
+        gitErrorDetail(error),
+      ));
+    }
+  }
+
+  private async openPullConflicts(): Promise<void> {
+    await this.refreshStatusAfterOperation();
+    await vscode.commands.executeCommand('versiondock.openConflicts');
+  }
+
+  getPendingPullAutoStash(): { hash: string; shortHash: string } | undefined {
+    return this.pendingPullAutoStash ? { ...this.pendingPullAutoStash } : undefined;
+  }
+
+  clearPendingPullAutoStash(): void {
+    this.pendingPullAutoStash = undefined;
+  }
+
+  async dropPendingPullAutoStash(): Promise<boolean> {
+    return this.withWriteLock(async () => {
+      const pending = this.pendingPullAutoStash;
+      if (!pending) return false;
+      const entry = (await this.getStashIdentities()).find(candidate => candidate.hash === pending.hash);
+      if (!entry) {
+        this.pendingPullAutoStash = undefined;
+        return false;
+      }
+      await this.git.raw(['stash', 'drop', entry.ref]);
+      this.pendingPullAutoStash = undefined;
+      return true;
+    });
+  }
+
+  private async getStashIdentities(): Promise<Array<{ hash: string; ref: string; subject: string }>> {
+    const raw = await this.git.raw(['stash', 'list', '--format=%H%x00%gd%x00%gs']);
+    return raw.split(/\r?\n/).flatMap(line => {
+      if (!line) return [];
+      const [hash, ref, subject] = line.split('\0');
+      return hash && ref ? [{ hash, ref, subject: subject ?? '' }] : [];
     });
   }
 
@@ -2454,10 +2596,7 @@ export class GitService {
 
   async pullFromRemote(remote: string, branch: string, rebase: boolean): Promise<void> {
     return this.withWriteLock(async () => {
-      await this.assertPullAllowed();
-      // VS Code API pull() doesn't accept remote/branch args — use simple-git
-      const args = rebase ? ['pull', '--rebase', remote, branch] : ['pull', remote, branch];
-      await this.git.raw(args);
+      await this.pullWithStrategy(rebase ? 'rebase' : 'merge', remote, branch);
     });
   }
 

@@ -3005,12 +3005,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
           const errors: string[] = [];
           for (const target of targets) {
+            const errorCountBeforeTarget = errors.length;
             for (const filePath of target.paths) {
               try {
                 await target.repo.discardFile(filePath);
               } catch (error: unknown) {
                 errors.push(`${filePath}: ${String(error)}`);
               }
+            }
+            if (errors.length === errorCountBeforeTarget) {
+              // The user explicitly discarded the conflicted auto-stash
+              // application. Keep its stash entry as the only remaining copy
+              // and suppress the normal resolved-conflict cleanup prompt.
+              target.repo.clearPendingPullAutoStash();
             }
           }
 

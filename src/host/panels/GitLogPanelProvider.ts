@@ -1028,18 +1028,23 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHECKOUT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        try {
-          await repo.checkout(msg.branchName, msg.createNew, msg.from);
-          // _pendingDetachedTag is cleared inside GitService.checkout().
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
-          const merged = mergeCurrentIntoBranches(branches, current);
-          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
-          this.post({ type: 'LOG_REFRESH' });
-        } catch (e: unknown) {
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e);
-        }
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', msg.branchName), cancellable: false },
+          async () => {
+            try {
+              await repo.checkout(msg.branchName, msg.createNew, msg.from);
+              // _pendingDetachedTag is cleared inside GitService.checkout().
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+              const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+              const merged = mergeCurrentIntoBranches(branches, current);
+              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+              this.post({ type: 'LOG_REFRESH' });
+            } catch (e: unknown) {
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+              this.showOperationError(e);
+            }
+          }
+        );
         break;
       }
 
@@ -1113,57 +1118,67 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
           break;
         }
-        try {
-          await repo.merge(msg.from);
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-        } catch (e: unknown) {
-          const errMsg = String(e);
-          const isDirty = errMsg.includes('Your local changes') || errMsg.includes('overwritten by merge') || (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree';
-          if (isDirty) {
-            this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
-            const repoMeta = this.getNonWorktreeRepos().find(m => m.id === msg.repoId);
-            const repoName = repoMeta?.name ?? msg.repoId;
-            const pick = await vscode.window.showQuickPick(
-              [
-                { label: `$(archive) ${t('Stash and merge')}`, detail: t('Save local changes to stash, then merge'), value: 'stash' },
-                { label: `$(close) ${t('Cancel')}`, detail: '', value: 'cancel' },
-              ],
-              {
-                title: t('VersionDock [{0}]: Uncommitted changes', repoName),
-                placeHolder: t('Local changes would be overwritten by merging "{0}"', msg.from),
-                ignoreFocusOut: true,
+        let dirtyError: unknown;
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging "{0}"…', msg.from), cancellable: false },
+          async () => {
+            try {
+              await repo.merge(msg.from);
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+            } catch (e: unknown) {
+              const errMsg = String(e);
+              const isDirty = errMsg.includes('Your local changes') || errMsg.includes('overwritten by merge') || (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree';
+              if (isDirty) {
+                dirtyError = e;
+                return;
               }
-            );
-            if (pick?.value === 'stash') {
-              try {
-                await repo.runWithGitWriteLock(async () => {
-                  await repo.stashPush(t('WIP before merge of {0}', msg.from));
-                  await repo.merge(msg.from);
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
+              if (errMsg.includes('CONFLICT')) {
+                const requestedTarget = this.replyTarget.getStore() ?? 'sidebar';
+                const commitTarget = requestedTarget === 'undocked' && this.undockedPanel?.hasCommitPane()
+                  ? 'undocked'
+                  : 'sidebar';
+                void repo.getCurrentBranch().then(current => {
+                  const mergeMsg = `Merge branch '${msg.from}' into '${current.name}'`;
+                  this.commitPanel?.prefillCommitMessage(mergeMsg, commitTarget);
+                }).catch(() => {});
+                const warning = t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
+                void vscode.window.showWarningMessage(warning, t('Open Merge List')).then(choice => {
+                  if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
                 });
-                this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-              } catch (e2: unknown) {
-                this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });
-                this.showOperationError(e2);
+              } else {
+                this.showOperationError(e);
               }
             }
-            break;
           }
+        );
+        if (dirtyError) {
+          const errMsg = String(dirtyError);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
-          if (errMsg.includes('CONFLICT')) {
-            const requestedTarget = this.replyTarget.getStore() ?? 'sidebar';
-            const commitTarget = requestedTarget === 'undocked' && this.undockedPanel?.hasCommitPane()
-              ? 'undocked'
-              : 'sidebar';
-            void repo.getCurrentBranch().then(current => {
-              const mergeMsg = `Merge branch '${msg.from}' into '${current.name}'`;
-              this.commitPanel?.prefillCommitMessage(mergeMsg, commitTarget);
-            }).catch(() => {});
-            const warning = t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
-            void vscode.window.showWarningMessage(warning, t('Open Merge List')).then(choice => {
-              if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
-            });
-          } else {
-            this.showOperationError(e);
+          const repoMeta = this.getNonWorktreeRepos().find(m => m.id === msg.repoId);
+          const repoName = repoMeta?.name ?? msg.repoId;
+          const pick = await vscode.window.showQuickPick(
+            [
+              { label: `$(archive) ${t('Stash and merge')}`, detail: t('Save local changes to stash, then merge'), value: 'stash' },
+              { label: `$(close) ${t('Cancel')}`, detail: '', value: 'cancel' },
+            ],
+            {
+              title: t('VersionDock [{0}]: Uncommitted changes', repoName),
+              placeHolder: t('Local changes would be overwritten by merging "{0}"', msg.from),
+              ignoreFocusOut: true,
+            }
+          );
+          if (pick?.value === 'stash') {
+            try {
+              await repo.runWithGitWriteLock(async () => {
+                await repo.stashPush(t('WIP before merge of {0}', msg.from));
+                await repo.merge(msg.from);
+              });
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+            } catch (e2: unknown) {
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });
+              this.showOperationError(e2);
+            }
           }
         }
         break;
@@ -1924,41 +1939,51 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHECKOUT_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        try {
-          await repo.checkoutTag(msg.tagName);
-          // _pendingDetachedTag is now set inside GitService.checkoutTag().
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          const branches = await repo.getBranches();
-          const detachedHeadEntry: BranchInfo = {
-            repoId: msg.repoId,
-            name: 'HEAD',
-            fullName: 'HEAD',
-            isHead: true,
-            isRemote: false,
-            detachedTag: msg.tagName,
-          };
-          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: [...branches, detachedHeadEntry] });
-          this.post({ type: 'LOG_REFRESH' });
-          vscode.window.showInformationMessage(t('VersionDock: Checked out tag "{0}" (detached HEAD).', msg.tagName));
-        } catch (e: unknown) {
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Checkout tag failed: {0}', String(e)));
-        }
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out tag "{0}"…', msg.tagName), cancellable: false },
+          async () => {
+            try {
+              await repo.checkoutTag(msg.tagName);
+              // _pendingDetachedTag is now set inside GitService.checkoutTag().
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+              const branches = await repo.getBranches();
+              const detachedHeadEntry: BranchInfo = {
+                repoId: msg.repoId,
+                name: 'HEAD',
+                fullName: 'HEAD',
+                isHead: true,
+                isRemote: false,
+                detachedTag: msg.tagName,
+              };
+              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: [...branches, detachedHeadEntry] });
+              this.post({ type: 'LOG_REFRESH' });
+              vscode.window.showInformationMessage(t('VersionDock: Checked out tag "{0}" (detached HEAD).', msg.tagName));
+            } catch (e: unknown) {
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+              vscode.window.showErrorMessage(t('VersionDock: Checkout tag failed: {0}', String(e)));
+            }
+          }
+        );
         break;
       }
 
       case 'LOG_MERGE_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        try {
-          await repo.mergeTag(msg.tagName);
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
-          vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}".', msg.tagName));
-        } catch (e: unknown) {
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Merge tag failed: {0}', String(e)));
-        }
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging tag "{0}"…', msg.tagName), cancellable: false },
+          async () => {
+            try {
+              await repo.mergeTag(msg.tagName);
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+              this.post({ type: 'LOG_REFRESH' });
+              vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}".', msg.tagName));
+            } catch (e: unknown) {
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+              vscode.window.showErrorMessage(t('VersionDock: Merge tag failed: {0}', String(e)));
+            }
+          }
+        );
         break;
       }
 
@@ -2107,16 +2132,21 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         } else {
           target = msg.hash;
         }
-        try {
-          await repo.checkout(target);
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
-          const merged = mergeCurrentIntoBranches(branches, current);
-          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
-        } catch (e: unknown) {
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e);
-        }
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', target), cancellable: false },
+          async () => {
+            try {
+              await repo.checkout(target);
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+              const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+              const merged = mergeCurrentIntoBranches(branches, current);
+              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+            } catch (e: unknown) {
+              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+              this.showOperationError(e);
+            }
+          }
+        );
         break;
       }
 

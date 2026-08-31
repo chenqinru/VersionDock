@@ -12,6 +12,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private disposables: vscode.Disposable[] = [];
   private refreshGeneration = 0;
+  private autoStashCleanupPrompts = new Set<string>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -82,6 +83,10 @@ export class ConflictsPanelProvider implements vscode.Disposable {
       loadIconTheme(this.panel.webview).catch(() => undefined),
     ]);
     const metaMap = new Map(this.manager.getRepoMetas().map(meta => [meta.id, meta]));
+    const pendingAutoStashes = new Map(this.manager.getRepoMetas().flatMap(meta => {
+      const pending = this.manager.getRepo(meta.id)?.getPendingPullAutoStash();
+      return pending ? [[meta.id, pending] as const] : [];
+    }));
     const files: ConflictListFile[] = [];
     for (const repoStatus of status.repos) {
       const meta = metaMap.get(repoStatus.repoId);
@@ -109,11 +114,16 @@ export class ConflictsPanelProvider implements vscode.Disposable {
     }
 
     if (!this.panel || generation !== this.refreshGeneration) return;
+    const hasAutoStashConflicts = status.repos.some(repoStatus =>
+      repoStatus.conflictCount > 0 && pendingAutoStashes.has(repoStatus.repoId)
+    );
     this.post({
       type: 'CONFLICTS_DATA',
       files,
-      isMerging: states.some(Boolean),
-      operationLabel: states.some(state => state === 'rebase') ? t('Rebase in progress') : t('Merge in progress'),
+      isMerging: states.some(Boolean) || hasAutoStashConflicts,
+      operationLabel: hasAutoStashConflicts
+        ? t('Restoring local changes after update')
+        : states.some(state => state === 'rebase') ? t('Rebase in progress') : t('Merge in progress'),
       iconTheme,
     });
     this.logger.debug('ConflictsPanel', 'Conflict data refreshed', {
@@ -121,6 +131,56 @@ export class ConflictsPanelProvider implements vscode.Disposable {
       conflictFileCount: files.length,
       durationMs: Date.now() - startedAt,
     });
+    await this.offerAutoStashCleanup(status.repos, pendingAutoStashes, metaMap);
+  }
+
+  private async offerAutoStashCleanup(
+    statuses: Awaited<ReturnType<WorkspaceGitManager['getAllStatusesFresh']>>['repos'],
+    pendingAutoStashes: ReadonlyMap<string, { hash: string; shortHash: string }>,
+    metaMap: ReadonlyMap<string, ReturnType<WorkspaceGitManager['getRepoMetas']>[number]>,
+  ): Promise<void> {
+    for (const status of statuses) {
+      const pending = pendingAutoStashes.get(status.repoId);
+      if (!pending || status.conflictCount > 0) continue;
+      const promptKey = `${status.repoId}\0${pending.hash}`;
+      if (this.autoStashCleanupPrompts.has(promptKey)) continue;
+      this.autoStashCleanupPrompts.add(promptKey);
+
+      const repo = this.manager.getRepo(status.repoId);
+      if (!repo) continue;
+      const repoName = metaMap.get(status.repoId)?.name ?? status.repoId;
+      const deleteBackup = t('Delete Backup');
+      const keepBackup = t('Keep in Stash');
+      const picked = await vscode.window.showInformationMessage(
+        t(
+          'VersionDock [{0}]: All conflicts from restoring local changes are resolved. Delete auto-stash backup {1}?',
+          repoName,
+          pending.shortHash,
+        ),
+        deleteBackup,
+        keepBackup,
+      );
+
+      if (picked === deleteBackup) {
+        try {
+          const dropped = await repo.dropPendingPullAutoStash();
+          if (dropped) {
+            vscode.window.showInformationMessage(
+              t('VersionDock [{0}]: Auto-stash backup {1} deleted.', repoName, pending.shortHash),
+            );
+            await vscode.commands.executeCommand('versiondock.refreshCommitPanel');
+          }
+        } catch (error: unknown) {
+          vscode.window.showErrorMessage(
+            t('VersionDock [{0}]: Could not delete auto-stash backup {1}: {2}', repoName, pending.shortHash, String(error)),
+          );
+        }
+      } else {
+        // Dismiss and explicit keep both retain the stash without repeatedly
+        // prompting during subsequent status refreshes.
+        repo.clearPendingPullAutoStash();
+      }
+    }
   }
 
   private post(msg: HostToConflictsMsg): void {
