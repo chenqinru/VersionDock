@@ -1,0 +1,60 @@
+name: 🐛 Bug Report
+description: Report a reproducible bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please search existing issues before submitting to see if this has already been reported.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the problem...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Provide detailed steps to reproduce the issue.
+      placeholder: |
+        1. Open a workspace with Git/SVN repository...
+        2. Click on VersionDock Commit panel...
+        3. Perform action...
+        4. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Info
+      description: Please share your environment details.
+      value: |
+        - OS: [e.g. macOS 14.5 / Windows 11 / Ubuntu 22.04]
+        - VS Code Version: [e.g. 1.88.0]
+        - VersionDock Version: [e.g. 3.6.0]
+        - VCS Engine: [e.g. Git 2.43.0 / SVN 1.14.5]
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output or Screenshots
+      description: Please paste any relevant console logs, extension host output, or attach screenshots.
+      placeholder: Open VS Code Output panel -> Select "VersionDock" or Developer Tools Console.
+      render: shell

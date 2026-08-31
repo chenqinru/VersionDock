@@ -4,6 +4,14 @@
   "description": "%description%",
   "version": "3.6.0",
   "publisher": "chenqinru",
+  "author": {
+    "name": "chenqinru",
+    "url": "https://github.com/chenqinru"
+  },
+  "homepage": "https://github.com/chenqinru/VersionDock#readme",
+  "bugs": {
+    "url": "https://github.com/chenqinru/VersionDock/issues"
+  },
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
@@ -22,13 +30,22 @@
     "vcs",
     "version-control",
     "scm",
+    "source-control",
+    "git-graph",
+    "git-history",
     "commit",
     "log",
     "merge",
+    "merge-conflict",
+    "merge-editor",
     "changelist",
     "shelve",
+    "stash",
+    "blame",
     "intellij",
-    "phpstorm"
+    "phpstorm",
+    "ai-commit",
+    "copilot"
   ],
   "icon": "media/icons/versiondock-logo-dark.png",
   "galleryBanner": {

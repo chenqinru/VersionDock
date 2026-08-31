@@ -5,13 +5,19 @@
 <h1 align="center">VersionDock</h1>
 
 <p align="center">
-  A focused Git and SVN workbench for VS Code.
+  <strong>A focused Git and SVN workbench for VS Code.</strong>
 </p>
 
 <p align="center">
-  <img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-1.85%2B-007ACC">
-  <img alt="Node" src="https://img.shields.io/badge/Node-18%2B-339933">
-  <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-red">
+  <a href="https://github.com/chenqinru/VersionDock/actions/workflows/ci.yml"><img alt="CI Status" src="https://img.shields.io/github/actions/workflow/status/chenqinru/VersionDock/ci.yml?branch=main&label=CI&logo=github"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=chenqinru.versiondock"><img alt="VS Code Marketplace Version" src="https://img.shields.io/visual-studio-marketplace/v/chenqinru.versiondock?color=blue&logo=visual-studio-code"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=chenqinru.versiondock"><img alt="VS Code Marketplace Installs" src="https://img.shields.io/visual-studio-marketplace/i/chenqinru.versiondock"></a>
+  <a href="https://github.com/chenqinru/VersionDock/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/chenqinru/VersionDock?color=green"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-red"></a>
+</p>
+
+<p align="center">
+  <a href="README.md"><strong>English</strong></a> | <a href="README_zh.md"><strong>简体中文</strong></a>
 </p>
 
 VersionDock brings an IDE-style VCS workflow to Visual Studio Code: a focused Commit panel, a Git Log panel with graph and branch operations for Git, SVN revision history, multi-repository awareness, shelving/stashing tools for Git, push helpers, and a 3-way merge editor for conflict resolution.
@@ -344,32 +350,24 @@ out/                      Built extension and webview bundles
 - The merge editor works on files that contain Git/SVN text conflict markers. SVN conflicts can be marked resolved as working after saving.
 - Git Annotations require the file to be tracked in a Git repository with at least one commit.
 
+## 🌐 Ecosystem
+ 
+Looking for a standalone desktop application that runs independently without VS Code?
+ 
+Check out [**VersionDock Desktop**](https://github.com/chenqinru/VersionDockDesktop) — a high-performance desktop Git & SVN client built with Tauri 2, Rust, and React 18.
+ 
 ## 🤝 Contributing
-
-Contributions are welcome! To contribute:
-
-1. **Fork** the repository
-2. **Create** a branch for changes (`git checkout -b feature/your-feature`)
-3. **Commit** the changes (`git commit -m 'Added your-feature'`)
-4. **Push** to the branch (`git push origin feature/your-feature`)
-5. **Open** a Pull Request
-
-### 🐛 Bug Reporting
-
-To report bugs, open an issue including:
-- Extension version
-- VSCode version
-- Operating system
-- What is the problem
-- Full error log
-
-### 💡 Feature Requests
-
-For new features, open an issue describing:
-- Desired functionality
-- Specific use case
-- Priority (low/medium/high)
-
+ 
+Contributions are welcome! Please read our [**Contributing Guide**](CONTRIBUTING.md) and [**Code of Conduct**](CODE_OF_CONDUCT.md) for details on our code of conduct and the process for submitting pull requests.
+ 
+- 🐛 Found a bug? [Report it here](https://github.com/chenqinru/VersionDock/issues/new?template=bug_report.yml)
+- 💡 Have an idea? [Request a feature](https://github.com/chenqinru/VersionDock/issues/new?template=feature_request.yml)
+- 💬 Want to discuss? [Join the discussion](https://github.com/chenqinru/VersionDock/discussions)
+ 
+## 🔒 Security
+ 
+If you discover a security vulnerability, please follow our [Security Policy](SECURITY.md).
+ 
 ## 📄 License
-
-This project is distributed under the GNU General Public License v3.0.
+ 
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
