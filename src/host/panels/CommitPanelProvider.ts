@@ -82,8 +82,39 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private sidebarReady = false;
   private sidebarViewGeneration = 0;
 
+  private currentTabFileViewMode: 'flat' | 'tree' = 'tree';
+  private currentTabIsCollapsed = false;
+
+  private updateViewAndExpandContext(fileViewMode: 'flat' | 'tree' = this.getFileViewMode(), isCollapsed: boolean = false): void {
+    void vscode.commands.executeCommand('setContext', 'versiondock.fileViewMode', fileViewMode);
+    void vscode.commands.executeCommand('setContext', 'versiondock.isTreeFileView', fileViewMode === 'tree');
+    void vscode.commands.executeCommand('setContext', 'versiondock.isFlatFileView', fileViewMode === 'flat');
+    void vscode.commands.executeCommand('setContext', 'versiondock.expandMode', isCollapsed ? 'collapse' : 'expand');
+    void vscode.commands.executeCommand('setContext', 'versiondock.isExpanded', !isCollapsed);
+    void vscode.commands.executeCommand('setContext', 'versiondock.isCollapsed', isCollapsed);
+  }
+
   async focus(): Promise<void> {
     await vscode.commands.executeCommand(`${CommitPanelProvider.viewType}.focus`);
+  }
+
+  expandAll(): void {
+    this.currentTabIsCollapsed = false;
+    this.updateViewAndExpandContext(this.currentTabFileViewMode, false);
+    this.post({ type: 'COMMIT_EXPAND_ALL' });
+  }
+
+  collapseAll(): void {
+    this.currentTabIsCollapsed = true;
+    this.updateViewAndExpandContext(this.currentTabFileViewMode, true);
+    this.post({ type: 'COMMIT_COLLAPSE_ALL' });
+  }
+
+  async setFileViewMode(mode: 'flat' | 'tree'): Promise<void> {
+    await this.globalState?.update('fileViewMode', mode);
+    this.currentTabFileViewMode = mode;
+    this.updateViewAndExpandContext(mode, this.currentTabIsCollapsed);
+    this.post({ type: 'COMMIT_SET_FILE_VIEW_MODE', mode });
   }
 
   async triggerCommitAction(andPush: boolean): Promise<void> {
@@ -197,7 +228,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly logger?: VersionDockLogger,
     private readonly updateSummaryService?: UpdateSummaryService,
   ) {
+    this.currentTabFileViewMode = this.getFileViewMode();
     this.updateVcsContext();
+    this.updateViewAndExpandContext(this.currentTabFileViewMode, false);
 
     this.managerListeners.push(
       this.manager.onStatusChange((status) => {
@@ -1320,10 +1353,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     if (options.notifyStatusUpdates) this.notifySubtreeStatusUpdates(currentEntries, statuses);
   }
 
-  private async postCommitStatusUpdate(options: { includeIconTheme?: boolean; refreshSubtrees?: boolean } = {}): Promise<void> {
+  private async postCommitStatusUpdate(options: { includeIconTheme?: boolean; refreshSubtrees?: boolean; fresh?: boolean } = {}): Promise<void> {
     const [repos, status, iconTheme] = await Promise.all([
       Promise.resolve(this.manager.getRepoMetas()),
-      this.manager.getAllStatuses(),
+      options.fresh ? this.manager.getAllStatusesFresh() : this.manager.getAllStatuses(),
       options.includeIconTheme && this.view
         ? loadIconTheme(this.view.webview)
         : Promise.resolve(undefined),
@@ -1982,6 +2015,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_ACTIVE_TAB_CHANGED': {
         this.activeTab = msg.tab;
+        if (msg.viewMode) {
+          this.currentTabFileViewMode = msg.viewMode;
+        }
+        if (msg.expandMode) {
+          this.currentTabIsCollapsed = msg.expandMode === 'collapse';
+        }
+        this.updateViewAndExpandContext(this.currentTabFileViewMode, this.currentTabIsCollapsed);
+        break;
+      }
+
+      case 'COMMIT_EXPAND_MODE_CHANGED': {
+        this.currentTabIsCollapsed = msg.expandMode === 'collapse';
+        this.updateViewAndExpandContext(this.currentTabFileViewMode, this.currentTabIsCollapsed);
         break;
       }
 
@@ -3820,6 +3866,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_SET_FILE_VIEW_MODE': {
         await this.globalState?.update('fileViewMode', msg.mode);
+        this.currentTabFileViewMode = msg.mode;
+        this.updateViewAndExpandContext(msg.mode, this.currentTabIsCollapsed);
         break;
       }
 
@@ -4339,7 +4387,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   async refresh(options: { refreshSubtrees?: boolean } = {}): Promise<void> {
-    await this.postCommitStatusUpdate(options);
+    this.post({ type: 'COMMIT_REFRESH_START' });
+    await vscode.window.withProgress(
+      { location: { viewId: CommitPanelProvider.viewType } },
+      async () => {
+        await this.postCommitStatusUpdate({ fresh: true, ...options });
+      }
+    );
   }
 
   dispose(): void {

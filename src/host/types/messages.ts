@@ -175,6 +175,10 @@ export type HostToCommitMsg =
   | { type: 'SUBTREE_STATUS_RESULT'; statuses: Record<string, SubtreePushStatus> }
   | { type: 'SUBTREE_OP_RESULT'; requestId: string; repoId: string; entryId?: string; op: SubtreeOp; ok: boolean; output?: string; error?: string }
   | { type: 'COMMIT_HIDDEN_REPOS_UPDATE'; hiddenRepoIds: string[] }
+  | { type: 'COMMIT_REFRESH_START' }
+  | { type: 'COMMIT_EXPAND_ALL' }
+  | { type: 'COMMIT_COLLAPSE_ALL' }
+  | { type: 'COMMIT_SET_FILE_VIEW_MODE'; mode: 'flat' | 'tree' }
   | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab };
 
 // ─── Commit Panel: WebView → Host ────────────────────────────────────────────
@@ -182,7 +186,8 @@ export type HostToCommitMsg =
 export type CommitToHostMsg =
   | { type: 'COMMIT_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'COMMIT_REQUEST_STATUS'; refreshSubtrees?: boolean }
-  | { type: 'COMMIT_ACTIVE_TAB_CHANGED'; tab: CommitPanelTab }
+  | { type: 'COMMIT_ACTIVE_TAB_CHANGED'; tab: CommitPanelTab; viewMode?: 'flat' | 'tree'; expandMode?: 'expand' | 'collapse' }
+  | { type: 'COMMIT_EXPAND_MODE_CHANGED'; expandMode: 'expand' | 'collapse' }
   | { type: 'COMMIT_REQUEST_DIFF'; requestId: string; repoId: string; filePath: string; staged: boolean }
   | { type: 'COMMIT_REQUEST_WORKTREE_DIFF_FILES'; requestId: string; repoId: string; baseRef: string }
   | { type: 'COMMIT_REQUEST_WORKTREE_DIFF'; requestId: string; repoId: string; baseRef: string; filePath: string }

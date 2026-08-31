@@ -227,6 +227,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     workspaceFolderCount: vscode.workspace.workspaceFolders?.length ?? 0,
   });
 
+  // Set default menu toggle contexts immediately on activation
+  void vscode.commands.executeCommand('setContext', 'versiondock.isExpanded', true);
+  void vscode.commands.executeCommand('setContext', 'versiondock.isCollapsed', false);
+  const initialFileViewMode = context.globalState.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
+  void vscode.commands.executeCommand('setContext', 'versiondock.isTreeFileView', initialFileViewMode === 'tree');
+  void vscode.commands.executeCommand('setContext', 'versiondock.isFlatFileView', initialFileViewMode === 'flat');
+
   await maybeResetViewLocationsOnStartup(logger);
 
   const remoteRepositoryService = new RemoteRepositoryService(context, logger);

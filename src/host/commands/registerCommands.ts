@@ -54,6 +54,38 @@ export function registerCommands(
       return commitPanel.refresh({ refreshSubtrees: commitPanel.isSubtreeTabActive() });
     }),
 
+    vscode.commands.registerCommand('versiondock.expandAll', () => {
+      commitPanel.expandAll();
+    }),
+
+    vscode.commands.registerCommand('versiondock.expandAll.checked', () => {
+      commitPanel.expandAll();
+    }),
+
+    vscode.commands.registerCommand('versiondock.collapseAll', () => {
+      commitPanel.collapseAll();
+    }),
+
+    vscode.commands.registerCommand('versiondock.collapseAll.checked', () => {
+      commitPanel.collapseAll();
+    }),
+
+    vscode.commands.registerCommand('versiondock.setFileViewModeToFlat', () => {
+      return commitPanel.setFileViewMode('flat');
+    }),
+
+    vscode.commands.registerCommand('versiondock.setFileViewModeToFlat.checked', () => {
+      return commitPanel.setFileViewMode('flat');
+    }),
+
+    vscode.commands.registerCommand('versiondock.setFileViewModeToTree', () => {
+      return commitPanel.setFileViewMode('tree');
+    }),
+
+    vscode.commands.registerCommand('versiondock.setFileViewModeToTree.checked', () => {
+      return commitPanel.setFileViewMode('tree');
+    }),
+
     vscode.commands.registerCommand('versiondock.openMergeEditor', (resource?: unknown) => {
       const uri = getScmResourceUri(resource);
       if (uri?.scheme === 'file') {

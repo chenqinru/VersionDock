@@ -376,9 +376,49 @@
         "command": "versiondock.svn.createTag",
         "title": "%commands.svnCreateTag.title%",
         "icon": "$(tag)"
+      },
+      {
+        "command": "versiondock.expandAll",
+        "title": "%commands.expandAll.title%"
+      },
+      {
+        "command": "versiondock.expandAll.checked",
+        "title": "%commands.expandAll.checked.title%"
+      },
+      {
+        "command": "versiondock.collapseAll",
+        "title": "%commands.collapseAll.title%"
+      },
+      {
+        "command": "versiondock.collapseAll.checked",
+        "title": "%commands.collapseAll.checked.title%"
+      },
+      {
+        "command": "versiondock.setFileViewModeToFlat",
+        "title": "%commands.setFileViewModeToFlat.title%"
+      },
+      {
+        "command": "versiondock.setFileViewModeToFlat.checked",
+        "title": "%commands.setFileViewModeToFlat.checked.title%"
+      },
+      {
+        "command": "versiondock.setFileViewModeToTree",
+        "title": "%commands.setFileViewModeToTree.title%"
+      },
+      {
+        "command": "versiondock.setFileViewModeToTree.checked",
+        "title": "%commands.setFileViewModeToTree.checked.title%"
       }
     ],
     "submenus": [
+      {
+        "id": "versiondock.commitPanel.expandMode",
+        "label": "%submenus.commitPanel.expandMode.label%"
+      },
+      {
+        "id": "versiondock.commitPanel.viewMode",
+        "label": "%submenus.commitPanel.viewMode.label%"
+      },
       {
         "id": "versiondock.context.editor",
         "label": "VersionDock"
@@ -414,6 +454,60 @@
           "command": "versiondock.openSettings",
           "when": "view == versiondock.commitPanel",
           "group": "navigation@5"
+        },
+        {
+          "submenu": "versiondock.commitPanel.expandMode",
+          "when": "view == versiondock.commitPanel",
+          "group": "1_options@1"
+        },
+        {
+          "submenu": "versiondock.commitPanel.viewMode",
+          "when": "view == versiondock.commitPanel",
+          "group": "1_options@2"
+        }
+      ],
+      "versiondock.commitPanel.expandMode": [
+        {
+          "command": "versiondock.expandAll.checked",
+          "when": "versiondock.isExpanded",
+          "group": "1_expand@1"
+        },
+        {
+          "command": "versiondock.expandAll",
+          "when": "!versiondock.isExpanded",
+          "group": "1_expand@1"
+        },
+        {
+          "command": "versiondock.collapseAll.checked",
+          "when": "versiondock.isCollapsed",
+          "group": "1_expand@2"
+        },
+        {
+          "command": "versiondock.collapseAll",
+          "when": "!versiondock.isCollapsed",
+          "group": "1_expand@2"
+        }
+      ],
+      "versiondock.commitPanel.viewMode": [
+        {
+          "command": "versiondock.setFileViewModeToFlat.checked",
+          "when": "versiondock.isFlatFileView",
+          "group": "1_view@1"
+        },
+        {
+          "command": "versiondock.setFileViewModeToFlat",
+          "when": "!versiondock.isFlatFileView",
+          "group": "1_view@1"
+        },
+        {
+          "command": "versiondock.setFileViewModeToTree.checked",
+          "when": "versiondock.isTreeFileView",
+          "group": "1_view@2"
+        },
+        {
+          "command": "versiondock.setFileViewModeToTree",
+          "when": "!versiondock.isTreeFileView",
+          "group": "1_view@2"
         }
       ],
       "scm/sourceControl": [
