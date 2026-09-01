@@ -311,6 +311,8 @@
   "From → To": "From → To",
   "From YYYY-MM-DD": "From YYYY-MM-DD",
   "To YYYY-MM-DD": "To YYYY-MM-DD",
+  "Previous month": "Previous month",
+  "Next month": "Next month",
   "Not pulled": "Not pulled",
   "Not pushed": "Not pushed",
   "{0} file changed": "{0} file changed",

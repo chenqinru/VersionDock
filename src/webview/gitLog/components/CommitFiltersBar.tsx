@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { CommitFilters } from '../store/logStore';
 import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
-import { t } from '../../shared/i18n';
+import { t, getLocale } from '../../shared/i18n';
 import { formatAuthorIdentity } from './AuthorAvatar';
 import { readableAccentColor } from '../../shared/branchColors';
 import { branchRevisionRef, tagRevisionRef } from '../utils/refs';
@@ -62,7 +62,13 @@ export const FILTER_INPUT_STYLE = `
 `;
 
 export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions, onFilterChange, onRepoChange, onClear, onFetchAll, repoNamesExpanded, onToggleRepoNames, onUndock, hideUndock, disableBranchFilter = false }: Props) {
-  const localBranches = branches.filter(b => !b.isRemote);
+  const relevantBranches = filters.repoId
+    ? branches.filter(b => b.repoId === filters.repoId)
+    : branches;
+  const relevantTags = filters.repoId
+    ? tags.filter(t => t.repoId === filters.repoId)
+    : tags;
+  const localBranches = relevantBranches.filter(b => !b.isRemote);
   const repoKindById: Record<string, 'git' | 'svn'> = Object.fromEntries(
     repos.map(repo => [repo.id, repo.kind ?? 'git']),
   );
@@ -74,7 +80,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
     };
     return [option.value, option];
   })).values()).sort((left, right) => left.label.localeCompare(right.label));
-  const tagOptions = Array.from(new Map(tags.map(tag => {
+  const tagOptions = Array.from(new Map(relevantTags.map(tag => {
     const option: RevisionOption = {
       value: tagRevisionRef(tag.name, repoKindById[tag.repoId] ?? 'git'),
       label: tag.name,
@@ -97,15 +103,15 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
         placeholder={t('Search commits…')}
         icon="search"
         onChange={v => onFilterChange('text', v)}
-        style={styles.filterGrow(1.15, 170)}
-        debounceMs={600}
+        style={styles.searchFilter}
+        debounceMs={250}
       />
 
       <AuthorPicker
         value={filters.author}
         options={authorOptions}
         onChange={v => onFilterChange('author', v)}
-        style={styles.filterGrow(1, 150)}
+        style={styles.authorFilter}
       />
 
       {repos.length > 1 && (
@@ -113,7 +119,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
           value={filters.repoId}
           repos={repos}
           onChange={onRepoChange}
-          style={styles.filterGrow(1, 150)}
+          style={styles.repoFilter}
         />
       )}
 
@@ -122,7 +128,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
         branches={branchOptions}
         tags={tagOptions}
         onChange={v => onFilterChange('branch', v)}
-        style={styles.filterGrow(0.75, 150)}
+        style={styles.branchFilter}
         disabled={disableBranchFilter}
       />
 
@@ -375,15 +381,32 @@ export function DebouncedInput({ value, placeholder, icon, onChange, width, styl
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
+  function handleImmediateChange(v: string) {
+    setLocal(v);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    onChange(v);
+  }
+
   function handleChange(v: string) {
     setLocal(v);
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => onChange(v), debounceMs);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      onChange(v);
+    }, debounceMs);
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Escape') { handleChange(''); event.currentTarget.blur(); }
-    if (event.key === 'Enter' && !local.trim()) { handleChange(''); }
+    if (event.key === 'Escape') {
+      handleImmediateChange('');
+      event.currentTarget.blur();
+    }
+    if (event.key === 'Enter') {
+      handleImmediateChange(local);
+    }
   }
 
   return (
@@ -399,7 +422,7 @@ export function DebouncedInput({ value, placeholder, icon, onChange, width, styl
         onKeyDown={handleKeyDown}
       />
       {local && (
-        <button style={styles.fieldClear} onClick={() => handleChange('')} tabIndex={-1}>
+        <button style={styles.fieldClear} onClick={() => handleImmediateChange('')} tabIndex={-1}>
           <Codicon name="close" style={{ fontSize: '10px' }} />
         </button>
       )}
@@ -592,9 +615,29 @@ function RepoPicker({ value, repos, onChange, style }: {
   );
 }
 
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const DAYS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
-const DATE_RANGE_WIDTH = 386;
+function getLocalizedWeekdays(locale: string): string[] {
+  try {
+    const baseSunday = new Date(2021, 7, 1);
+    const isZh = locale.toLowerCase().startsWith('zh');
+    const formatter = new Intl.DateTimeFormat(locale, { weekday: isZh ? 'narrow' : 'short' });
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(baseSunday);
+      d.setDate(baseSunday.getDate() + i);
+      return formatter.format(d);
+    });
+  } catch {
+    return ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+  }
+}
+
+function formatYearMonth(year: number, month: number, locale: string): string {
+  try {
+    const date = new Date(year, month, 1);
+    return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' }).format(date);
+  } catch {
+    return `${year}-${String(month + 1).padStart(2, '0')}`;
+  }
+}
 
 function toYMD(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -606,7 +649,7 @@ function parseYMD(value: string): Date | null {
   return isNaN(date.getTime()) ? null : date;
 }
 
-function CalendarMonth({ year, month, from, to, hovered, onDay, onHover }: {
+function CalendarMonth({ year, month, from, to, hovered, onDay, onHover, weekdays }: {
   year: number;
   month: number;
   from: Date | null;
@@ -614,6 +657,7 @@ function CalendarMonth({ year, month, from, to, hovered, onDay, onHover }: {
   hovered: Date | null;
   onDay: (date: Date) => void;
   onHover: (date: Date | null) => void;
+  weekdays: string[];
 }) {
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -625,9 +669,10 @@ function CalendarMonth({ year, month, from, to, hovered, onDay, onHover }: {
 
   return (
     <div style={calStyles.month}>
-      <div style={calStyles.monthTitle}>{MONTHS[month]} {year}</div>
       <div style={calStyles.grid}>
-        {DAYS.map(day => <div key={day} style={calStyles.dayHeader}>{day}</div>)}
+        {weekdays.map((day, index) => (
+          <div key={`${day}-${index}`} style={calStyles.dayHeader}>{day}</div>
+        ))}
         {cells.map((date, index) => {
           if (!date) return <div key={`empty-${index}`} />;
           const ymd = toYMD(date);
@@ -667,6 +712,10 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
   const [open, setOpen] = useState(false);
   const [hovered, setHovered] = useState<Date | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const [isDual, setIsDual] = useState(true);
+
+  const locale = getLocale();
+  const weekdays = getLocalizedWeekdays(locale);
 
   const today = new Date();
   const fromDate = parseYMD(from);
@@ -675,6 +724,24 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
   const initRight = toDate ?? new Date(today.getFullYear(), today.getMonth(), 1);
   const [leftYM, setLeftYM] = useState({ year: initLeft.getFullYear(), month: initLeft.getMonth() });
   const [rightYM, setRightYM] = useState({ year: initRight.getFullYear(), month: initRight.getMonth() });
+  const [singleYM, setSingleYM] = useState({
+    year: (toDate ?? fromDate ?? today).getFullYear(),
+    month: (toDate ?? fromDate ?? today).getMonth(),
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const width = wrapRef.current?.clientWidth ?? 340;
+    setIsDual(width >= 310);
+    const curFrom = parseYMD(from);
+    const curTo = parseYMD(to);
+    const left = curFrom ?? new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const right = curTo ?? new Date(today.getFullYear(), today.getMonth(), 1);
+    const activeSingle = curTo ?? curFrom ?? today;
+    setLeftYM({ year: left.getFullYear(), month: left.getMonth() });
+    setRightYM({ year: right.getFullYear(), month: right.getMonth() });
+    setSingleYM({ year: activeSingle.getFullYear(), month: activeSingle.getMonth() });
+  }, [open, from, to]);
 
   useEffect(() => {
     if (!open) return;
@@ -715,6 +782,10 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
     setRightYM(previous => shiftMonth(previous, delta));
   }
 
+  function shiftSingle(delta: -1 | 1) {
+    setSingleYM(previous => shiftMonth(previous, delta));
+  }
+
   const hasRange = !!(from || to);
   const label = from && to ? `${from}  →  ${to}` : from ? `${from}  →  ...` : null;
 
@@ -743,29 +814,82 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
             <Codicon name="close" style={{ fontSize: '10px' }} />
           </span>
         )}
+        <Codicon name={open ? 'chevron-up' : 'chevron-down'} style={{ fontSize: '10px', flexShrink: 0 }} />
       </button>
 
       {open && (
-        <div style={calStyles.popup}>
-          <div style={calStyles.calCol}>
-            <div style={calStyles.navRow}>
-              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftLeft(-1)}><Codicon name="chevron-left" style={{ fontSize: '12px' }} /></button>
-              <span style={calStyles.navLabel}>{MONTHS[leftYM.month]} {leftYM.year}</span>
-              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftLeft(1)}><Codicon name="chevron-right" style={{ fontSize: '12px' }} /></button>
-            </div>
-            <CalendarMonth year={leftYM.year} month={leftYM.month} from={fromDate} to={toDate} hovered={hovered} onDay={handleDay} onHover={setHovered} />
-          </div>
+        <div style={isDual ? calStyles.dualPopup : calStyles.singlePopup}>
+          {isDual ? (
+            <>
+              <div style={calStyles.calCol}>
+                <div style={calStyles.navRow}>
+                  <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftLeft(-1)} title={t('Previous month')}>
+                    <Codicon name="chevron-left" style={{ fontSize: '12px' }} />
+                  </button>
+                  <span style={calStyles.navLabel}>{formatYearMonth(leftYM.year, leftYM.month, locale)}</span>
+                  <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftLeft(1)} title={t('Next month')}>
+                    <Codicon name="chevron-right" style={{ fontSize: '12px' }} />
+                  </button>
+                </div>
+                <CalendarMonth
+                  year={leftYM.year}
+                  month={leftYM.month}
+                  from={fromDate}
+                  to={toDate}
+                  hovered={hovered}
+                  onDay={handleDay}
+                  onHover={setHovered}
+                  weekdays={weekdays}
+                />
+              </div>
 
-          <div style={calStyles.divider} />
+              <div style={calStyles.divider} />
 
-          <div style={calStyles.calCol}>
-            <div style={calStyles.navRow}>
-              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftRight(-1)}><Codicon name="chevron-left" style={{ fontSize: '12px' }} /></button>
-              <span style={calStyles.navLabel}>{MONTHS[rightYM.month]} {rightYM.year}</span>
-              <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftRight(1)}><Codicon name="chevron-right" style={{ fontSize: '12px' }} /></button>
-            </div>
-            <CalendarMonth year={rightYM.year} month={rightYM.month} from={fromDate} to={toDate} hovered={hovered} onDay={handleDay} onHover={setHovered} />
-          </div>
+              <div style={calStyles.calCol}>
+                <div style={calStyles.navRow}>
+                  <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftRight(-1)} title={t('Previous month')}>
+                    <Codicon name="chevron-left" style={{ fontSize: '12px' }} />
+                  </button>
+                  <span style={calStyles.navLabel}>{formatYearMonth(rightYM.year, rightYM.month, locale)}</span>
+                  <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftRight(1)} title={t('Next month')}>
+                    <Codicon name="chevron-right" style={{ fontSize: '12px' }} />
+                  </button>
+                </div>
+                <CalendarMonth
+                  year={rightYM.year}
+                  month={rightYM.month}
+                  from={fromDate}
+                  to={toDate}
+                  hovered={hovered}
+                  onDay={handleDay}
+                  onHover={setHovered}
+                  weekdays={weekdays}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={calStyles.navRow}>
+                <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftSingle(-1)} title={t('Previous month')}>
+                  <Codicon name="chevron-left" style={{ fontSize: '12px' }} />
+                </button>
+                <span style={calStyles.navLabel}>{formatYearMonth(singleYM.year, singleYM.month, locale)}</span>
+                <button data-filter-calendar-nav="" style={calStyles.navBtn} onClick={() => shiftSingle(1)} title={t('Next month')}>
+                  <Codicon name="chevron-right" style={{ fontSize: '12px' }} />
+                </button>
+              </div>
+              <CalendarMonth
+                year={singleYM.year}
+                month={singleYM.month}
+                from={fromDate}
+                to={toDate}
+                hovered={hovered}
+                onDay={handleDay}
+                onHover={setHovered}
+                weekdays={weekdays}
+              />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -787,32 +911,50 @@ function shiftMonth(previous: { year: number; month: number }, delta: -1 | 1) {
 }
 
 const calStyles = {
-  popup: {
+  dualPopup: {
     position: 'absolute' as const,
-    top: 'calc(100% + 4px)',
-    right: 0,
-    width: '380px',
-    maxWidth: 'calc(100vw - 20px)',
+    top: '100%',
+    left: 0,
+    marginTop: '2px',
+    width: '100%',
     zIndex: 300,
     background: 'var(--vscode-dropdown-background, var(--vscode-editor-background))',
     border: '1px solid var(--vscode-dropdown-border, var(--vscode-input-border, rgba(128,128,128,0.35)))',
-    borderRadius: '6px',
+    borderRadius: '4px',
     boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
     boxSizing: 'border-box' as const,
     display: 'flex',
     flexDirection: 'row' as const,
-    padding: '10px',
+    padding: '8px',
+  },
+  singlePopup: {
+    position: 'absolute' as const,
+    top: '100%',
+    left: 0,
+    marginTop: '2px',
+    width: '100%',
+    zIndex: 300,
+    background: 'var(--vscode-dropdown-background, var(--vscode-editor-background))',
+    border: '1px solid var(--vscode-dropdown-border, var(--vscode-input-border, rgba(128,128,128,0.35)))',
+    borderRadius: '4px',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+    boxSizing: 'border-box' as const,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    padding: '8px',
+    gap: '4px',
   },
   calCol: {
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '6px',
-    minWidth: '168px',
+    gap: '4px',
+    flex: 1,
+    minWidth: 0,
   },
   divider: {
     width: '1px',
     background: 'var(--vscode-panel-border)',
-    margin: '0 10px',
+    margin: '0 8px',
     alignSelf: 'stretch',
   },
   navRow: {
@@ -839,7 +981,7 @@ const calStyles = {
   month: {
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '4px',
+    gap: '2px',
   },
   monthTitle: {
     display: 'none',
@@ -895,14 +1037,25 @@ const styles = {
     flexShrink: 0,
     marginLeft: 'auto',
   } as React.CSSProperties,
-  filterGrow: (grow: number, minWidth: number): React.CSSProperties => ({
-    flex: `${grow} 1 ${minWidth}px`,
-    minWidth: `${Math.min(minWidth, 80)}px`,
-  }),
+  searchFilter: {
+    flex: '1.2 1 180px',
+    minWidth: '130px',
+  } as React.CSSProperties,
+  authorFilter: {
+    flex: '1 1 150px',
+    minWidth: '100px',
+  } as React.CSSProperties,
+  repoFilter: {
+    flex: '1 1 140px',
+    minWidth: '100px',
+  } as React.CSSProperties,
+  branchFilter: {
+    flex: '1.1 1 160px',
+    minWidth: '110px',
+  } as React.CSSProperties,
   dateFilter: {
-    flex: '0.8 1 110px',
-    minWidth: '95px',
-    maxWidth: '200px',
+    flex: '1.5 1 220px',
+    minWidth: '160px',
   } as React.CSSProperties,
   fieldWrap: {
     display: 'flex',

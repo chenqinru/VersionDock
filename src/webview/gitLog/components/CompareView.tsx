@@ -408,10 +408,10 @@ const styles = {
     minWidth: '120px',
   } as React.CSSProperties,
   dateFilter: {
-    flex: '0 1 180px',
-    width: '180px',
-    minWidth: '140px',
-    maxWidth: '180px',
+    flex: '0 1 215px',
+    width: '215px',
+    minWidth: '190px',
+    maxWidth: '225px',
   } as React.CSSProperties,
   notice: {
     padding: '5px 8px',
