@@ -1710,11 +1710,12 @@ export function CommitApp() {
               const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Push');
               const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'cloud-upload';
               const count = tabCounts[tab];
+              const isActive = activeTab === tab;
               return (
                 <button
                   data-action-btn=""
                   key={tab}
-                  style={css.tab(activeTab === tab)}
+                  style={css.tab(isActive)}
                   title={`${label} (${count})`}
                   onClick={() => {
                     setActiveTab(tab);
@@ -1727,15 +1728,15 @@ export function CommitApp() {
                 >
                   <Codicon
                     name={iconName}
-                    style={{ marginRight: activeTab === tab ? '5px' : '0', fontSize: '13px', transition: 'margin 0.15s' }}
+                    style={{ marginRight: isActive ? '5px' : '0', fontSize: '13px', transition: 'margin 0.15s' }}
                   />
-                  {activeTab === tab && (
+                  {isActive && (
                     <span style={{ animation: 'gs-tab-label-in 0.18s ease-out both', overflow: 'hidden', display: 'inline-block' }}>
                       {label}
                     </span>
                   )}
                   {count > 0 && (
-                    <span style={css.tabBadge}>{count}</span>
+                    <span style={css.tabBadge(isActive)}>{count}</span>
                   )}
                 </button>
               );
@@ -2429,7 +2430,7 @@ const css = {
     fontWeight: active ? '600' : 'normal', whiteSpace: 'nowrap' as const,
     transition: 'color 0.1s, border-color 0.1s',
   }),
-  tabBadge: {
+  tabBadge: (active: boolean): React.CSSProperties => ({
     background: 'var(--versiondock-badge-background)',
     color: 'var(--versiondock-badge-foreground)',
     borderRadius: '8px',
@@ -2441,7 +2442,9 @@ const css = {
     flexShrink: 0,
     minWidth: '16px',
     textAlign: 'center' as const,
-  } as React.CSSProperties,
+    opacity: active ? 1 : 0.65,
+    transition: 'opacity 0.15s',
+  }),
   main: { display: 'flex', flexDirection: 'column' as const, flex: 1, overflow: 'hidden' },
   repoList: { flex: 1, overflowY: 'auto' as const },
   // Shelve name prompt bar (above commit form)

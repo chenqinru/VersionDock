@@ -110,7 +110,7 @@ export function GitLogApp() {
   const { setCommitFiles, setCommitFilters, setLoadingFiles, selectCommit, setPendingScrollHash } = store;
   const pendingRef = useRef<Map<string, (msg: HostToLogMsg) => void>>(new Map());
   const { panelRef: sidebarRef, onMouseDown: onSidebarResize, onKeyDown: onSidebarResizeKeyDown } = useResize('right', 220, 120, 400);
-  const { panelRef: detailRef, onMouseDown: onDetailResize, onKeyDown: onDetailResizeKeyDown } = useResize('left', 380, 260, 680);
+  const { panelRef: detailRef, onMouseDown: onDetailResize, onKeyDown: onDetailResizeKeyDown } = useResize('left', 380, 220, 680);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadRef = useRef<() => void>(() => {});
   const filterRepoRef = useRef<(repoId: string | null, branch?: string | null) => void>(() => {});
@@ -964,7 +964,7 @@ const expandSidebarBtn: React.CSSProperties = {
 };
 
 const detailPane: React.CSSProperties = {
-  width: '420px',
+  width: '380px',
   flexShrink: 0,
   overflow: 'hidden',
   display: 'flex',

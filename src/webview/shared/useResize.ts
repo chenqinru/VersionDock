@@ -16,30 +16,36 @@ export function useResize(
   min: number,
   max: number,
 ) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelElRef = useRef<HTMLDivElement | null>(null);
   const widthRef = useRef(initial);
   const dragCleanupRef = useRef<(() => void) | null>(null);
 
   const setWidth = useCallback((width: number) => {
     const next = Math.min(max, Math.max(min, width));
     widthRef.current = next;
-    if (panelRef.current) {
-      panelRef.current.style.width = `${next}px`;
-      panelRef.current.style.flex = 'none';
+    if (panelElRef.current) {
+      panelElRef.current.style.width = `${next}px`;
+      panelElRef.current.style.flex = 'none';
     }
   }, [max, min]);
 
-  // Restore persisted width on mount
+  const panelRef = useCallback((el: HTMLDivElement | null) => {
+    panelElRef.current = el;
+    if (el) {
+      el.style.width = `${widthRef.current}px`;
+      el.style.flex = 'none';
+    }
+  }, []);
+
   useEffect(() => {
-    setWidth(widthRef.current);
     return () => dragCleanupRef.current?.();
-  }, [setWidth]);
+  }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     dragCleanupRef.current?.();
     const startX = e.clientX;
-    const startWidth = panelRef.current?.offsetWidth ?? widthRef.current;
+    const startWidth = panelElRef.current?.offsetWidth ?? widthRef.current;
 
     const onMove = (ev: MouseEvent) => {
       const delta = direction === 'right' ? ev.clientX - startX : startX - ev.clientX;
