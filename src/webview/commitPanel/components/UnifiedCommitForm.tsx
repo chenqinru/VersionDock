@@ -188,7 +188,7 @@ function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, f
       {open && hasItems && (
         <div style={{
           position: 'absolute', bottom: 'calc(100% + 4px)', ...(dropdownAlign === 'right' ? { right: 0 } : { left: 0 }),
-          background: 'var(--vscode-menu-background, var(--vscode-editor-background))',
+          background: 'var(--vscode-menu-background, var(--vscode-sideBar-background))',
           border: '1px solid var(--vscode-menu-border, var(--vscode-panel-border))',
           borderRadius: '4px',
           boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
@@ -727,7 +727,7 @@ const styles = {
     gap: '6px',
     padding: '8px',
     borderTop: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-editor-background)',
+    background: 'var(--vscode-sideBar-background)',
   },
   resizeHandle: (active: boolean): React.CSSProperties => ({
     position: 'absolute',

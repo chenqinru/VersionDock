@@ -91,7 +91,7 @@ export function ContextMenu({ x, y, items, onSelect, onClose }: Props) {
 
 const styles = {
   menu: {
-    background: 'var(--vscode-menu-background, var(--vscode-editor-background))',
+    background: 'var(--vscode-menu-background, var(--vscode-sideBar-background))',
     border: '1px solid var(--vscode-menu-border, var(--vscode-panel-border))',
     borderRadius: '4px',
     boxShadow: '0 2px 8px rgba(0,0,0,0.2)',

@@ -2415,7 +2415,7 @@ const css = {
   } as React.CSSProperties,
   tabBar: {
     display: 'flex', borderBottom: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-editor-background)', flexShrink: 0,
+    background: 'var(--vscode-sideBar-background)', flexShrink: 0,
   } as React.CSSProperties,
   tab: (active: boolean): React.CSSProperties => ({
     display: 'flex', alignItems: 'center',
@@ -2460,7 +2460,7 @@ const css = {
   shelvePromptBar: {
     display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 8px',
     borderTop: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-editor-background)', flexShrink: 0,
+    background: 'var(--vscode-sideBar-background)', flexShrink: 0,
   } as React.CSSProperties,
   shelvePromptInput: {
     flex: 1, background: 'var(--vscode-input-background)', color: 'var(--vscode-input-foreground)',

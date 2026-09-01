@@ -367,7 +367,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
     height: '100vh',
-    background: 'var(--vscode-editor-background)',
+    background: 'var(--vscode-sideBar-background)',
     color: 'var(--vscode-foreground)',
   },
   header: {

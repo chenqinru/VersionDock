@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Codicon } from '../../shared/Codicon';
 import { t } from '../../shared/i18n';
-import { isDarkTheme } from '../../shared/branchColors';
 
 interface Props {
   messages: string[];
@@ -12,7 +11,6 @@ interface Props {
 }
 
 export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose }: Props) {
-  const darkTheme = isDarkTheme();
 
   useEffect(() => {
     const keyHandler = (event: KeyboardEvent) => {
@@ -34,20 +32,14 @@ export function CommitMessageHistoryModal({ messages, loading, onSelect, onClose
 
   return createPortal(
     <div
-      style={{
-        ...styles.backdrop,
-        background: darkTheme ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.16)',
-      }}
+      style={styles.backdrop}
       onClick={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label={t('Commit message history')}
-        style={{
-          ...styles.modal,
-          boxShadow: darkTheme ? '0 8px 32px rgba(0,0,0,0.5)' : styles.modal.boxShadow,
-        }}
+        style={styles.modal}
         onClick={event => event.stopPropagation()}
       >
         <div style={styles.header}>
@@ -105,7 +97,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'rgba(0,0,0,0.16)',
+    background: 'color-mix(in srgb, var(--vscode-sideBar-background, #1e1e1e) 55%, transparent)',
+    backdropFilter: 'blur(2.5px)',
+    WebkitBackdropFilter: 'blur(2.5px)',
   },
   modal: {
     width: '440px',
@@ -114,10 +108,10 @@ const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
     overflow: 'hidden',
-    background: 'var(--vscode-editor-background)',
-    border: '1px solid var(--vscode-panel-border)',
+    background: 'var(--vscode-sideBar-background)',
+    border: '1px solid var(--vscode-widget-border, var(--vscode-panel-border))',
     borderRadius: '6px',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
+    boxShadow: '0 8px 24px var(--vscode-widget-shadow, rgba(0,0,0,0.2))',
     color: 'var(--vscode-foreground)',
     fontFamily: 'var(--vscode-font-family)',
     fontSize: '12px',

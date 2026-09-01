@@ -40,8 +40,8 @@ export function ConflictBanner({ summary, actions }: Props) {
         flex-shrink: 0;
         overflow: hidden;
         color: var(--vscode-foreground);
-        background: var(--vscode-editor-background);
-        background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 7%, var(--vscode-editor-background));
+        background: var(--vscode-sideBar-background);
+        background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 7%, var(--vscode-sideBar-background));
         border-bottom: 1px solid color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 24%, var(--vscode-panel-border));
         font-family: var(--vscode-font-family);
         animation: vd-conflict-banner-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
