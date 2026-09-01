@@ -1436,10 +1436,15 @@ export class SvnService extends GitService {
     if (!filter) return true;
     const ref = this.displayRef(info);
     const relative = info.relativeUrl.replace(/^\/+/, '');
+    const strippedFilter = filter.replace(/^branches\//, '').replace(/^tags\//, '');
     return ref.name === filter
+      || ref.name === strippedFilter
       || ref.detachedTag === filter
+      || ref.detachedTag === strippedFilter
       || relative === filter
-      || info.url.endsWith(`/${filter}`);
+      || relative === strippedFilter
+      || info.url.endsWith(`/${filter}`)
+      || info.url.endsWith(`/${strippedFilter}`);
   }
 
   async isGitRepo(): Promise<boolean> {

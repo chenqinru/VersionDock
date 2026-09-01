@@ -45,10 +45,7 @@ export function branchRevisionRef(branch: BranchInfo, vcsKind: 'git' | 'svn'): s
     if (branch.fullName.startsWith('refs/')) return branch.fullName;
     return branch.isRemote ? `refs/remotes/${branch.name}` : `refs/heads/${branch.name}`;
   }
-  if (branch.name === 'trunk' || branch.name.startsWith('branches/') || branch.name.startsWith('tags/')) {
-    return branch.name;
-  }
-  return `branches/${branch.name}`;
+  return branch.name;
 }
 
 export function tagRevisionRef(tagName: string, vcsKind: 'git' | 'svn'): string {
