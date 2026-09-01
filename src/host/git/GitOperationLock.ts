@@ -17,6 +17,8 @@ const lockContext = new AsyncLocalStorage<LockContext>();
 const DEFAULT_EXTERNAL_LOCK_TIMEOUT_MS = 5_000;
 const INITIAL_EXTERNAL_LOCK_DELAY_MS = 50;
 const MAX_EXTERNAL_LOCK_DELAY_MS = 250;
+const STALE_LOCK_AGE_MS = 10_000;
+const STALE_CHECK_WAIT_MS = 200;
 
 function lockKey(rootPath: string): string {
   const absolutePath = path.resolve(rootPath);
@@ -153,24 +155,85 @@ function getSimpleGitUnsafeOptions(environment: NodeJS.ProcessEnv): SimpleGitUns
   return options;
 }
 
+function tryRemoveStaleGitIndexLock(lockPath: string, reason: string): boolean {
+  try {
+    if (!fs.existsSync(lockPath)) return true;
+    fs.unlinkSync(lockPath);
+    console.warn(`[VersionDock] Automatically removed ${reason} Git index lock: ${lockPath}`);
+    return true;
+  } catch (error) {
+    console.error(`[VersionDock] Failed to remove Git index lock ${lockPath}:`, error);
+    return false;
+  }
+}
+
 /**
- * Wait for an index lock created by another Git process. Never remove it: the
- * other process may still be using it, and deleting it can corrupt the index.
+ * Wait for an index lock created by another Git process.
+ * If the lock file is identified as a stale lock left behind by an aborted or crashed
+ * process, it will be automatically cleaned up safely so operations never hang or fail.
  */
 export async function waitForExternalGitIndexLock(
   rootPath: string,
   timeoutMs = DEFAULT_EXTERNAL_LOCK_TIMEOUT_MS,
 ): Promise<void> {
   const lockPath = resolveIndexLockPath(rootPath);
-  if (!lockPath || !fs.existsSync(lockPath)) return;
+  if (!lockPath) return;
+
+  let initialStat: fs.Stats;
+  try {
+    initialStat = fs.statSync(lockPath);
+  } catch {
+    return;
+  }
+
+  // Fast path for stale locks: if the lock file already existed more than STALE_LOCK_AGE_MS
+  // before this operation (e.g. minutes or days ago from a crash), verify it is completely
+  // static and automatically clean it up.
+  const initialAge = Date.now() - initialStat.mtimeMs;
+  if (initialAge >= STALE_LOCK_AGE_MS) {
+    await new Promise<void>(resolve => setTimeout(resolve, STALE_CHECK_WAIT_MS));
+    try {
+      const currentStat = fs.statSync(lockPath);
+      if (currentStat.mtimeMs === initialStat.mtimeMs && currentStat.size === initialStat.size) {
+        if (tryRemoveStaleGitIndexLock(lockPath, `stale (${Math.round(initialAge / 1000)}s old)`)) {
+          return;
+        }
+      }
+    } catch {
+      return;
+    }
+  }
 
   const startedAt = Date.now();
   let delayMs = INITIAL_EXTERNAL_LOCK_DELAY_MS;
+  let lastMtime = initialStat.mtimeMs;
+  let lastSize = initialStat.size;
+
   while (fs.existsSync(lockPath)) {
     if (Date.now() - startedAt >= timeoutMs) {
+      // Timeout reached: if the lock file remained completely static throughout our entire
+      // wait duration (no size change and no mtime update), it is an abandoned dead lock.
+      try {
+        const finalStat = fs.statSync(lockPath);
+        const totalAge = Date.now() - finalStat.mtimeMs;
+        if (totalAge >= timeoutMs && finalStat.mtimeMs === lastMtime && finalStat.size === lastSize) {
+          if (tryRemoveStaleGitIndexLock(lockPath, `abandoned (${Math.round(totalAge / 1000)}s old)`)) {
+            return;
+          }
+        }
+      } catch {
+        return;
+      }
       throw new Error(`Git index is busy: ${lockPath}`);
     }
     await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+    try {
+      const s = fs.statSync(lockPath);
+      lastMtime = s.mtimeMs;
+      lastSize = s.size;
+    } catch {
+      return;
+    }
     delayMs = Math.min(delayMs * 2, MAX_EXTERNAL_LOCK_DELAY_MS);
   }
 }

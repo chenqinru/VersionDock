@@ -20,6 +20,7 @@ import { openEditMessageEditor } from './EditMessageEditorPanel';
 import type { GitProfileService } from '../git/GitProfileService';
 import type { SvnIgnoreEntry, SvnIgnoreUpdateResult } from '../svn/SvnService';
 import { t } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import { collectAbortOperationTargets, runAbortOperationFlow } from '../utils/abortOperation';
 import { toGitUri } from '../utils/resourceUri';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
@@ -3552,7 +3553,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.logProvider?.refresh();
         } catch (e: unknown) {
           this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Drop failed: {0}', String(e)));
+          void showGitErrorMessage(t('VersionDock: Drop failed: {0}', String(e)), {
+            onUnlocked: async () => {
+              const status = await this.manager.getAllStatusesFresh();
+              this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+              this.logProvider?.refresh();
+            },
+          });
         }
         break;
       }
@@ -3587,7 +3594,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (choice === continueAction) await repo.revertContinue();
             else await repo.revertAbort();
           } else {
-            vscode.window.showErrorMessage(t('VersionDock: Revert failed: {0}', errMsg));
+            void showGitErrorMessage(t('VersionDock: Revert failed: {0}', errMsg), {
+              onUnlocked: async () => {
+                const status = await this.manager.getAllStatusesFresh();
+                this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+                this.logProvider?.refresh();
+              },
+            });
           }
         }
         break;
@@ -3774,7 +3787,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await shelveSvc.push(shelveName.trim(), safePaths, clAssignments);
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('Shelve failed for repo {0}: {1}', repoId, String(e)));
+            void showGitErrorMessage(t('Shelve failed for repo {0}: {1}', repoId, String(e)), {
+              onUnlocked: async () => {
+                const status = await this.manager.getAllStatusesFresh();
+                this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+              },
+            });
           }
         }
         const shelveStatus = await this.manager.getAllStatusesFresh();
@@ -3805,7 +3823,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const safePaths = paths.map(filePath => repo.resolveRepoPath(filePath).relativePath);
             await repo.stashPush(stashName.trim(), safePaths);
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('Stash failed for repo {0}: {1}', repoId, String(e)));
+            void showGitErrorMessage(t('Stash failed for repo {0}: {1}', repoId, String(e)), {
+              onUnlocked: async () => {
+                const status = await this.manager.getAllStatusesFresh();
+                this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+              },
+            });
           }
         }
         const stashStatus = await this.manager.getAllStatusesFresh();
@@ -4088,7 +4111,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'WORKTREE_LIST_RESULT', repos });
           vscode.window.showInformationMessage(t('VersionDock: Worktree created at {0}', worktreePath.trim()));
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Failed to create worktree — {0}', String(e)));
+          void showGitErrorMessage(t('VersionDock: Failed to create worktree — {0}', String(e)), {
+            onUnlocked: async () => {
+              const status = await this.manager.getAllStatusesFresh();
+              this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+            },
+          });
         }
         break;
       }
@@ -4301,7 +4329,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'NOTIFY_ERROR': {
-        vscode.window.showErrorMessage(t('VersionDock: {0}', msg.message));
+        void showGitErrorMessage(msg.message, {
+          onUnlocked: async () => {
+            const status = await this.manager.getAllStatusesFresh();
+            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          },
+        });
         break;
       }
 

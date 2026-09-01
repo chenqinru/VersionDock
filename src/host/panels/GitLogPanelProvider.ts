@@ -9,6 +9,7 @@ import { ShelveDocumentProvider } from '../utils/ShelveDocumentProvider';
 import type { CommitPanelProvider } from './CommitPanelProvider';
 import type { UndockedPanelProvider } from './UndockedPanelProvider';
 import { t } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import { openSquashEditor } from './SquashEditorPanel';
 import { openEditMessageEditor } from './EditMessageEditorPanel';
 import { formatRepoLabel } from '../utils/repoLabels';
@@ -377,10 +378,16 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.post({ type: 'LOG_REFRESH' });
   }
 
-  private showOperationError(error: unknown): void {
+  private showOperationError(error: unknown, customPrefix?: string): void {
     if (isRemoteRepositoryCancelled(error)) return;
-    const message = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, '');
-    void vscode.window.showErrorMessage(t('VersionDock: {0}', message));
+    const rawMsg = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, '');
+    const message = customPrefix ? `${customPrefix}: ${rawMsg}` : rawMsg;
+    void showGitErrorMessage(message, {
+      onUnlocked: async () => {
+        await this.manager.getAllStatusesFresh();
+        this.refresh();
+      },
+    });
   }
 
   private acknowledgeFreshLogSnapshot(repos: readonly RepoMeta[], branches: readonly BranchInfo[]): void {
@@ -773,7 +780,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'LOG_WEBVIEW_ERROR': {
         this.logger.error('GitLogWebview', msg.message, msg.stack, { componentStack: msg.componentStack });
-        vscode.window.showErrorMessage(t('VersionDock Log error: {0}', msg.message));
+        void showGitErrorMessage(t('VersionDock Log error: {0}', msg.message), {
+          onUnlocked: async () => {
+            await this.manager.getAllStatusesFresh();
+            this.refresh();
+          },
+        });
         break;
       }
 
@@ -860,7 +872,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
           await this.openDiffBetweenRefs(repo, msg.filePath, `${msg.hash}~1`, msg.hash, title, msg.lineRange);
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Cannot open diff'));
         }
         break;
       }
@@ -890,7 +902,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             msg.lineRange,
           );
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Cannot open diff'));
         }
         break;
       }
@@ -908,7 +920,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               : undefined,
           );
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Cannot open file'));
         }
         break;
       }
@@ -958,7 +970,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Cannot revert file: {0}', String(e)));
+          void showGitErrorMessage(t('VersionDock: Cannot revert file: {0}', String(e)), {
+            onUnlocked: async () => {
+              await this.manager.getAllStatusesFresh();
+              this.refresh();
+            },
+          });
         }
         break;
       }
@@ -989,7 +1006,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Cannot apply selected changes: {0}', String(e)));
+          void showGitErrorMessage(t('VersionDock: Cannot apply selected changes: {0}', String(e)), {
+            onUnlocked: async () => {
+              await this.manager.getAllStatusesFresh();
+              this.refresh();
+            },
+          });
         }
         break;
       }
@@ -1020,7 +1042,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Cannot revert selected changes: {0}', String(e)));
+          void showGitErrorMessage(t('VersionDock: Cannot revert selected changes: {0}', String(e)), {
+            onUnlocked: async () => {
+              await this.manager.getAllStatusesFresh();
+              this.refresh();
+            },
+          });
         }
         break;
       }
@@ -1114,7 +1141,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             vscode.window.showInformationMessage(t('VersionDock: Merged SVN branch "{0}" into the working copy.', msg.from));
           } catch (e: unknown) {
             this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-            vscode.window.showErrorMessage(t('VersionDock: SVN merge failed: {0}', String(e)));
+            this.showOperationError(e, t('VersionDock: SVN merge failed'));
           }
           break;
         }
@@ -1223,7 +1250,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             targetRef: target.branchName,
           });
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot start compare: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Cannot start compare'));
         }
         break;
       }
@@ -1238,7 +1265,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.replyTarget.getStore() ?? 'sidebar',
           );
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open worktree diff: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Cannot open worktree diff'));
         }
         break;
       }
@@ -1419,7 +1446,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.cherryPickAbort();
             }
           } else {
-            vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg));
+            void showGitErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg), {
+              onUnlocked: async () => {
+                await this.manager.getAllStatusesFresh();
+                this.refresh();
+              },
+            });
           }
         }
         break;
@@ -1455,7 +1487,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.revertAbort();
             }
           } else {
-            vscode.window.showErrorMessage(t('VersionDock: Revert failed: {0}', errMsg));
+            void showGitErrorMessage(t('VersionDock: Revert failed: {0}', errMsg), {
+              onUnlocked: async () => {
+                await this.manager.getAllStatusesFresh();
+                this.refresh();
+              },
+            });
           }
         }
         break;
@@ -1478,7 +1515,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Reset failed: {0}', String(e)));
+          void showGitErrorMessage(t('VersionDock: Reset failed: {0}', String(e)), {
+            onUnlocked: async () => {
+              await this.manager.getAllStatusesFresh();
+              this.refresh();
+            },
+          });
         }
         break;
       }
@@ -1499,7 +1541,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Create patch failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Create patch failed'));
         }
         break;
       }
@@ -1523,7 +1565,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             else if (choice === t('Skip')) await repo.cherryPickSkip();
             else await repo.cherryPickAbort();
           } else {
-            vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg));
+            this.showOperationError(errMsg, t('VersionDock: Cherry-pick failed'));
           }
         }
         break;
@@ -1557,7 +1599,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (choice === t('Continue')) await repo.revertContinue();
             else await repo.revertAbort();
           } else {
-            vscode.window.showErrorMessage(t('VersionDock: Revert failed: {0}', errMsg));
+            this.showOperationError(errMsg, t('VersionDock: Revert failed'));
           }
         }
         break;
@@ -1580,7 +1622,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Drop commits failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Drop commits failed'));
         }
         break;
       }
@@ -1610,7 +1652,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Create patches failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Create patches failed'));
         }
         break;
       }
@@ -1632,7 +1674,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Drop commit failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Drop commit failed'));
         }
         break;
       }
@@ -1677,7 +1719,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           vscode.window.showInformationMessage(t('VersionDock: Squash completed.'));
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Squash failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Squash failed'));
         }
         break;
       }
@@ -1708,7 +1750,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Undo commit failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Undo commit failed'));
         }
         break;
       }
@@ -1745,7 +1787,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           vscode.window.showInformationMessage(t('VersionDock: Commit message updated.'));
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Edit commit message failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Edit commit message failed'));
         }
         break;
       }
@@ -1771,7 +1813,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Create branch failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Create branch failed'));
         }
         break;
       }
@@ -1796,7 +1838,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Create tag failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Create tag failed'));
         }
         break;
       }
@@ -1848,7 +1890,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Delete tag failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Delete tag failed'));
         }
         break;
       }
@@ -1929,7 +1971,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               vscode.window.showInformationMessage(t('VersionDock: Tag "{0}" pushed to "{1}".', msg.tagName, msg.remote));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              vscode.window.showErrorMessage(t('VersionDock: Push tag failed: {0}', String(e)));
+              this.showOperationError(e, t('VersionDock: Push tag failed'));
             }
           }
         );
@@ -1960,7 +2002,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               vscode.window.showInformationMessage(t('VersionDock: Checked out tag "{0}" (detached HEAD).', msg.tagName));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              vscode.window.showErrorMessage(t('VersionDock: Checkout tag failed: {0}', String(e)));
+              this.showOperationError(e, t('VersionDock: Checkout tag failed'));
             }
           }
         );
@@ -1980,7 +2022,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}".', msg.tagName));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              vscode.window.showErrorMessage(t('VersionDock: Merge tag failed: {0}', String(e)));
+              this.showOperationError(e, t('VersionDock: Merge tag failed'));
             }
           }
         );
@@ -2030,7 +2072,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: reqId, ok: false, error: String(e) });
-          vscode.window.showErrorMessage(t('VersionDock: Reset failed: {0}', String(e)));
+          this.showOperationError(e, t('VersionDock: Reset failed'));
         }
         break;
       }
@@ -2059,7 +2101,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 : t('VersionDock: Remote created and branch pushed successfully.'));
             } catch (e: unknown) {
               if (isRemoteRepositoryCancelled(e)) return;
-              vscode.window.showErrorMessage(t('VersionDock: Push failed: {0}', String(e)));
+              this.showOperationError(e, t('VersionDock: Push failed'));
             }
           },
         );
@@ -2086,7 +2128,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.pushTag(msg.tagName, remotePick);
               vscode.window.showInformationMessage(t('VersionDock: Tag "{0}" pushed to "{1}".', msg.tagName, remotePick));
             } catch (e: unknown) {
-              vscode.window.showErrorMessage(t('VersionDock: Push tag failed: {0}', String(e)));
+              this.showOperationError(e, t('VersionDock: Push tag failed'));
             }
           }
         );
@@ -2306,7 +2348,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         await this.refreshTags(repoId, repo);
         this.post({ type: 'LOG_REFRESH' });
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Create tag failed: {0}', String(e)));
+        this.showOperationError(e, t('VersionDock: Create tag failed'));
       }
       return;
     }
@@ -2328,7 +2370,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.post({ type: 'LOG_REFRESH' });
             vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}" into "{1}".', tagName, currentBranch));
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('VersionDock: Merge tag failed: {0}', String(e)));
+            this.showOperationError(e, t('VersionDock: Merge tag failed'));
           }
         },
       },
@@ -2344,7 +2386,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.post({ type: 'LOG_REFRESH' });
             vscode.window.showInformationMessage(t('VersionDock: Deleted tag "{0}".', tagName));
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('VersionDock: Delete tag failed: {0}', String(e)));
+            this.showOperationError(e, t('VersionDock: Delete tag failed'));
           }
         },
       },

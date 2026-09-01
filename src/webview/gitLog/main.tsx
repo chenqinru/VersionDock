@@ -110,7 +110,7 @@ export function GitLogApp() {
   const { setCommitFiles, setCommitFilters, setLoadingFiles, selectCommit, setPendingScrollHash } = store;
   const pendingRef = useRef<Map<string, (msg: HostToLogMsg) => void>>(new Map());
   const { panelRef: sidebarRef, onMouseDown: onSidebarResize, onKeyDown: onSidebarResizeKeyDown } = useResize('right', 220, 120, 400);
-  const { panelRef: detailRef, onMouseDown: onDetailResize, onKeyDown: onDetailResizeKeyDown } = useResize('left', 380, 220, 680);
+  const { panelRef: detailRef, onMouseDown: onDetailResize, onKeyDown: onDetailResizeKeyDown } = useResize('left', 320, 220, 680);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadRef = useRef<() => void>(() => {});
   const filterRepoRef = useRef<(repoId: string | null, branch?: string | null) => void>(() => {});
@@ -129,6 +129,7 @@ export function GitLogApp() {
   });
   const [authorOptions, setAuthorOptions] = useState<AuthorOption[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [detailCollapsed, setDetailCollapsed] = useState(false);
   const [expandedRepoIds, setExpandedRepoIds] = useState<Set<string>>(new Set());
   const isUndocked = (window as Window & { __VERSIONDOCK_APP_NAME__?: string }).__VERSIONDOCK_APP_NAME__ === 'undockedPanel';
 
@@ -878,29 +879,43 @@ export function GitLogApp() {
           />
         )}
 
-        {hasSelectedCommit && <ResizeHandle onMouseDown={onDetailResize} onKeyDown={onDetailResizeKeyDown} />}
-
         {hasSelectedCommit && (
-          <div ref={detailRef} style={detailPane}>
-            <CommitDetail
-              commit={primarySelectedCommit}
-              commits={sortedSelectedCommits}
-              files={aggregatedFiles}
-              mergeParentChanges={mergeParentChanges}
-              groupedEntries={selectedCommitFilesByPath}
-              selectedFile={store.selectedFile}
-              loadingFiles={detailLoading}
-              repoColor={selectedRepoColor}
-              repos={store.repos}
-              remoteNamesByRepo={remoteNamesByRepo}
-              iconTheme={store.iconTheme}
-              isMultiCommitSelection={isMultiCommitSelection}
-              activeHistoryPath={store.commitFilters.path}
-              activeLineRange={store.commitFilters.lineRange}
-              onSelectFile={store.selectFile}
-              onClose={store.clearSelection}
-            />
-          </div>
+          detailCollapsed ? (
+            <div style={collapsedDetailStrip}>
+              <button
+                data-top-action-btn=""
+                style={expandSidebarBtn}
+                onClick={() => setDetailCollapsed(false)}
+                title={t('Expand commit detail')}
+              >
+                <Codicon name="layout-sidebar-right-off" style={{ fontSize: '14px' }} />
+              </button>
+            </div>
+          ) : (
+            <>
+              <ResizeHandle onMouseDown={onDetailResize} onKeyDown={onDetailResizeKeyDown} />
+              <div ref={detailRef} style={detailPane}>
+                <CommitDetail
+                  commit={primarySelectedCommit}
+                  commits={sortedSelectedCommits}
+                  files={aggregatedFiles}
+                  mergeParentChanges={mergeParentChanges}
+                  groupedEntries={selectedCommitFilesByPath}
+                  selectedFile={store.selectedFile}
+                  loadingFiles={detailLoading}
+                  repoColor={selectedRepoColor}
+                  repos={store.repos}
+                  remoteNamesByRepo={remoteNamesByRepo}
+                  iconTheme={store.iconTheme}
+                  isMultiCommitSelection={isMultiCommitSelection}
+                  activeHistoryPath={store.commitFilters.path}
+                  activeLineRange={store.commitFilters.lineRange}
+                  onSelectFile={store.selectFile}
+                  onCollapse={() => setDetailCollapsed(true)}
+                />
+              </div>
+            </>
+          )
         )}
       </div>
     </div>
@@ -950,6 +965,16 @@ const collapsedSidebarStrip: React.CSSProperties = {
   paddingTop: '6px',
 };
 
+const collapsedDetailStrip: React.CSSProperties = {
+  width: '28px',
+  flexShrink: 0,
+  borderLeft: '1px solid var(--vscode-panel-border)',
+  background: 'var(--vscode-sideBar-background)',
+  display: 'flex',
+  justifyContent: 'center',
+  paddingTop: '6px',
+};
+
 const expandSidebarBtn: React.CSSProperties = {
   width: '22px',
   height: '22px',
@@ -964,7 +989,7 @@ const expandSidebarBtn: React.CSSProperties = {
 };
 
 const detailPane: React.CSSProperties = {
-  width: '380px',
+  width: '320px',
   flexShrink: 0,
   overflow: 'hidden',
   display: 'flex',

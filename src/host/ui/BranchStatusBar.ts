@@ -6,6 +6,7 @@ import type { RepoMeta } from '../types/git';
 import type { SvnIgnoreEntry } from '../svn/SvnService';
 import { isPrimaryBranch } from '../utils/branchUtils';
 import { t } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import {
   getAbortOperationDescription,
   getAbortOperationLabel,
@@ -485,6 +486,17 @@ export class BranchStatusBar implements vscode.Disposable {
     return picked?.filePath;
   }
 
+  private showError(meta: { name: string }, error: unknown): void {
+    if (isRemoteRepositoryCancelled(error)) return;
+    const msg = error instanceof Error ? error.message : String(error);
+    void showGitErrorMessage(t('VersionDock [{0}]: {1}', meta.name, msg), {
+      onUnlocked: async () => {
+        await this.manager.getAllStatusesFresh();
+        await this.refresh();
+      },
+    });
+  }
+
   private async markSvnResolvedWorking(meta: RepoMeta): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
@@ -498,7 +510,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await svn.resolveWorking?.(filePath);
       vscode.window.showInformationMessage(t('VersionDock [{0}]: marked "{1}" as resolved.', meta.name, filePath));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -522,7 +534,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await svn.lock?.([filePath], message);
       vscode.window.showInformationMessage(t('VersionDock [{0}]: locked "{1}".', meta.name, filePath));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -540,7 +552,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await svn.unlock?.([filePath]);
       vscode.window.showInformationMessage(t('VersionDock [{0}]: unlocked "{1}".', meta.name, filePath));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -653,7 +665,7 @@ export class BranchStatusBar implements vscode.Disposable {
       vscode.window.showInformationMessage(t('Removed {0} SVN ignore entries.', selected.length));
       await this.refresh();
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
   }
 
@@ -1505,7 +1517,7 @@ export class BranchStatusBar implements vscode.Disposable {
               await repo.pushTag(tagName, r);
               vscode.window.showInformationMessage(t('VersionDock [{0}]: tag "{1}" pushed to "{2}".', meta.name, tagName, r));
             } catch (e: unknown) {
-              vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+              this.showError(meta, e);
             }
           }
         );
@@ -1519,7 +1531,7 @@ export class BranchStatusBar implements vscode.Disposable {
           await repo.mergeTag(tagName);
           vscode.window.showInformationMessage(t('VersionDock [{0}]: merged tag "{1}".', meta.name, tagName));
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+          this.showError(meta, e);
         }
         await this.refresh();
       },
@@ -1539,7 +1551,7 @@ export class BranchStatusBar implements vscode.Disposable {
             await repo.checkoutTag(tagName);
             vscode.window.showInformationMessage(t('VersionDock [{0}]: checked out tag "{1}" (detached HEAD).', meta.name, tagName));
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+            this.showError(meta, e);
           }
           await this.refresh();
         },
@@ -1573,7 +1585,7 @@ export class BranchStatusBar implements vscode.Disposable {
             }
             vscode.window.showInformationMessage(t('VersionDock [{0}]: tag "{1}" deleted.', meta.name, tagName));
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+            this.showError(meta, e);
           }
           await this.refresh();
         },
@@ -1748,7 +1760,7 @@ export class BranchStatusBar implements vscode.Disposable {
               : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
           );
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+          this.showError(meta, e);
         }
       }
     );
@@ -1930,7 +1942,7 @@ export class BranchStatusBar implements vscode.Disposable {
               : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
           );
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+          this.showError(meta, e);
         }
       }
     );
@@ -1972,7 +1984,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.renameBranch(oldName, newName);
       vscode.window.showInformationMessage(t('VersionDock [{0}]: renamed "{1}" → "{2}".', meta.name, oldName, newName));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -1985,7 +1997,7 @@ export class BranchStatusBar implements vscode.Disposable {
       vscode.window.showInformationMessage(t('VersionDock [{0}]: pushed successfully.', meta.name));
     } catch (e: unknown) {
       if (!isRemoteRepositoryCancelled(e)) {
-        vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+        this.showError(meta, e);
       }
     }
     await this.refresh();
@@ -2006,7 +2018,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.rebase(onto);
       vscode.window.showInformationMessage(t('VersionDock [{0}]: rebased onto "{1}".', meta.name, onto));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -2018,7 +2030,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.merge(from);
       vscode.window.showInformationMessage(t('VersionDock [{0}]: merged "{1}".', meta.name, from));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -2040,7 +2052,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.deleteBranch(branchName, confirm.value === 'force');
       vscode.window.showInformationMessage(t('VersionDock [{0}]: deleted "{1}".', meta.name, branchName));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -2061,7 +2073,7 @@ export class BranchStatusBar implements vscode.Disposable {
         t('VersionDock [{0}]: pulled "{1}" using {2}.', meta.name, remoteBranch, useRebase ? t('rebase') : t('merge'))
       );
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.refresh();
   }
@@ -2410,7 +2422,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.addRemote(name.trim(), url.trim());
       vscode.window.showInformationMessage(t('VersionDock [{0}]: remote "{1}" added.', meta.name, name));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.showRepoRemotesMenu(meta);
   }
@@ -2433,7 +2445,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.renameRemote(remote.name, newName.trim());
       vscode.window.showInformationMessage(t('VersionDock [{0}]: remote renamed "{1}" → "{2}".', meta.name, remote.name, newName));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.showRepoRemotesMenu(meta);
   }
@@ -2456,7 +2468,7 @@ export class BranchStatusBar implements vscode.Disposable {
       await repo.setRemoteUrl(remote.name, newUrl.trim());
       vscode.window.showInformationMessage(t('VersionDock [{0}]: URL of "{1}" updated.', meta.name, remote.name));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+      this.showError(meta, e);
     }
     await this.showRepoRemotesMenu(meta);
   }

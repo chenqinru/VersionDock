@@ -7,6 +7,7 @@ import { BranchStatusBar } from '../ui/BranchStatusBar';
 import { FileAnnotationController } from '../ui/FileAnnotationController';
 import { ProfileStatusBar } from '../ui/ProfileStatusBar';
 import { t } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import type { LineRange } from '../types/git';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { formatRepoLabel } from '../utils/repoLabels';
@@ -444,7 +445,11 @@ export function registerCommands(
         logPanel.refresh();
         await branchStatusBar.refresh();
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', picked.meta.name, String(e)));
+        void showGitErrorMessage(t('VersionDock [{0}]: {1}', picked.meta.name, String(e)), {
+          onUnlocked: async () => {
+            await manager?.getAllStatusesFresh();
+          },
+        });
       }
     }),
 

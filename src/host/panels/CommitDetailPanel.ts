@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { generateNonce } from '../utils/webviewHtml';
 import { loadIconTheme, type IconThemeData } from '../utils/IconThemeService';
 import { getWebviewI18nPayload, t, type WebviewI18nPayload } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { toGitUri } from '../utils/resourceUri';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
@@ -340,7 +341,11 @@ async function createCommitDetailPanel(
         vscode.window.showInformationMessage(t('VersionDock: Reverted "{0}".', resolvedPath.relativePath));
         panel.webview.postMessage({ type: 'revertDone', filePath: resolvedPath.relativePath });
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Revert failed: {0}', String(e)));
+        void showGitErrorMessage(t('VersionDock: Revert failed: {0}', String(e)), {
+          onUnlocked: async () => {
+            await manager.getAllStatusesFresh();
+          },
+        });
       }
     }
   });

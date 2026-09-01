@@ -6,6 +6,7 @@ import { loadIconTheme } from '../utils/IconThemeService';
 import type { ConflictsToHostMsg, ConflictListFile, HostToConflictsMsg } from '../types/messages';
 import type { MergeEditorProvider } from './MergeEditorProvider';
 import { t } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import type { VersionDockLogger } from '../utils/Logger';
 
 export class ConflictsPanelProvider implements vscode.Disposable {
@@ -171,8 +172,13 @@ export class ConflictsPanelProvider implements vscode.Disposable {
             await vscode.commands.executeCommand('versiondock.refreshCommitPanel');
           }
         } catch (error: unknown) {
-          vscode.window.showErrorMessage(
+          void showGitErrorMessage(
             t('VersionDock [{0}]: Could not delete auto-stash backup {1}: {2}', repoName, pending.shortHash, String(error)),
+            {
+              onUnlocked: async () => {
+                await this.manager.getAllStatusesFresh();
+              },
+            }
           );
         }
       } else {

@@ -145,6 +145,14 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
           <Codicon name="history" style={styles.fieldIcon} />
           <span style={styles.historyPrefix}>{t('History:')}</span>
           <span style={styles.historyLabel}>{historyLabel}</span>
+          <button
+            style={styles.fieldClear}
+            onClick={() => onFilterChange('path', '')}
+            title={t('Clear history filter')}
+            tabIndex={-1}
+          >
+            <Codicon name="close" style={{ fontSize: '10px' }} />
+          </button>
         </div>
       )}
 
@@ -1255,9 +1263,9 @@ const styles = {
     gap: '5px',
     height: '26px',
     maxWidth: '260px',
-    padding: '0 7px',
-    background: 'var(--vscode-tab-activeBackground, var(--vscode-input-background))',
-    border: '1px solid var(--vscode-tab-border, var(--vscode-input-border))',
+    padding: '0 6px 0 8px',
+    background: 'var(--vscode-input-background)',
+    border: '1px solid var(--vscode-input-border)',
     borderRadius: '4px',
     boxSizing: 'border-box' as const,
     color: 'var(--vscode-foreground)',
@@ -1286,10 +1294,11 @@ const styles = {
     height: '26px',
     width: '26px',
     padding: '0',
-    background: 'transparent',
+    background: 'var(--vscode-input-background)',
     color: 'var(--vscode-errorForeground)',
-    border: 'none',
+    border: '1px solid var(--vscode-input-border)',
     borderRadius: '4px',
+    boxSizing: 'border-box' as const,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
@@ -1302,10 +1311,11 @@ const styles = {
     justifyContent: 'center',
     width: '26px',
     height: '26px',
-    background: 'none',
+    background: 'var(--vscode-input-background)',
     color: 'var(--vscode-descriptionForeground)',
-    border: 'none',
+    border: '1px solid var(--vscode-input-border)',
     borderRadius: '4px',
+    boxSizing: 'border-box' as const,
     cursor: 'pointer',
     flexShrink: 0,
   } as React.CSSProperties,

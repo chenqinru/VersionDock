@@ -74,7 +74,7 @@ interface Props {
   activeHistoryPath?: string;
   activeLineRange?: LineRange;
   onSelectFile: (file: { repoId: string; path: string; status: string; commitHash?: string } | null) => void;
-  onClose?: () => void;
+  onCollapse?: () => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -498,7 +498,7 @@ function MergeParentChangeGroup({
   );
 }
 
-export function CommitDetail({ commit, commits, files, mergeParentChanges, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onClose }: Props) {
+export function CommitDetail({ commit, commits, files, mergeParentChanges, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onCollapse }: Props) {
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null);
   const [containingBranches, setContainingBranches] = useState<ContainingBranches>({ local: [], remote: [], tags: [] });
@@ -1168,13 +1168,13 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 >
                   <Codicon name={commitMessagesExpandedByDefault ? 'collapse-all' : 'expand-all'} style={{ fontSize: '14px' }} />
                 </button>
-                {onClose && (
+                {onCollapse && (
                   <button
                     className="versiondock-detail-icon-row"
                     data-top-action-btn=""
                     style={styles.topActionBtn}
-                    title={t('Close commit detail')}
-                    onClick={onClose}
+                    title={t('Collapse commit detail')}
+                    onClick={onCollapse}
                   >
                     <Codicon name="layout-sidebar-right" style={{ fontSize: '15px' }} />
                   </button>
@@ -1317,13 +1317,13 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                   >
                     <Codicon name={commitMessagesExpandedByDefault ? 'collapse-all' : 'expand-all'} style={{ fontSize: '14px' }} />
                   </button>
-                  {onClose && (
+                  {onCollapse && (
                     <button
                       className="versiondock-detail-icon-row"
                       data-top-action-btn=""
                       style={styles.topActionBtn}
-                      title={t('Close commit detail')}
-                      onClick={onClose}
+                      title={t('Collapse commit detail')}
+                      onClick={onCollapse}
                     >
                       <Codicon name="layout-sidebar-right" style={{ fontSize: '15px' }} />
                     </button>

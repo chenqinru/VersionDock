@@ -6,6 +6,7 @@ import { parseConflictFile, hasConflictMarkers } from '../git/ConflictParser';
 import type { MergeToHostMsg, HostToMergeMsg } from '../types/messages';
 import type { MergeConflictFile, MergeFileVersions } from '../types/git';
 import { t } from '../utils/l10n';
+import { showGitErrorMessage } from '../utils/gitError';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { scopedKey } from '../utils/scopedKey';
 import type { VersionDockLogger } from '../utils/Logger';
@@ -37,7 +38,11 @@ export class MergeEditorProvider implements vscode.Disposable {
   openForFile(filePath: string, repoId?: string, relativePath?: string): void {
     void this.openForFileResolved(filePath, repoId, relativePath).catch(error => {
       this.logger.error('MergeEditor', 'Failed to open conflict file', error, { repoId, relativePath });
-      vscode.window.showErrorMessage(t('VersionDock: {0}', error instanceof Error ? error.message : String(error)));
+      void showGitErrorMessage(t('VersionDock: {0}', error instanceof Error ? error.message : String(error)), {
+        onUnlocked: async () => {
+          await this.manager.getAllStatusesFresh();
+        },
+      });
     });
   }
 
