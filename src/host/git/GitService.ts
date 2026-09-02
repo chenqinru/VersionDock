@@ -681,16 +681,31 @@ export class GitService {
       const detachedHash = (isDetached && !detachedTag)
         ? (head?.commit ? head.commit.slice(0, 8) : await this.getShortHash())
         : undefined;
+      let upstream = head?.upstream ? `${head.upstream.remote}/${head.upstream.name}` : undefined;
+      let aheadBehind = (head?.ahead !== undefined && head?.behind !== undefined)
+        ? { ahead: head.ahead, behind: head.behind }
+        : undefined;
+
+      if (!isDetached) {
+        try {
+          const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
+          if (tracking) {
+            upstream = tracking.upstream ?? upstream;
+            if (tracking.aheadBehind !== undefined) {
+              aheadBehind = tracking.aheadBehind;
+            }
+          }
+        } catch { /* ignore fallback */ }
+      }
+
       const branchInfo: BranchInfo = {
         repoId: this.repoId,
         name: branchName,
         fullName: isDetached ? 'HEAD' : `refs/heads/${branchName}`,
         isHead: true,
         isRemote: false,
-        upstream: head?.upstream ? `${head.upstream.remote}/${head.upstream.name}` : undefined,
-        aheadBehind: (head?.ahead !== undefined && head?.behind !== undefined)
-          ? { ahead: head.ahead, behind: head.behind }
-          : undefined,
+        upstream,
+        aheadBehind,
         detachedTag,
         detachedHash,
       };
@@ -915,14 +930,27 @@ export class GitService {
     const branchName = await this.resolveHeadName(status.current ?? undefined);
     const detachedTag = isDetached ? await this.getDetachedTag() : undefined;
     const detachedHash = (isDetached && !detachedTag) ? await this.getShortHash() : undefined;
+    let upstream = status.tracking ?? undefined;
+    let aheadBehind = status.tracking ? { ahead: status.ahead, behind: status.behind } : undefined;
+    if (!isDetached) {
+      try {
+        const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
+        if (tracking) {
+          upstream = tracking.upstream ?? upstream;
+          if (tracking.aheadBehind !== undefined) {
+            aheadBehind = tracking.aheadBehind;
+          }
+        }
+      } catch { /* ignore fallback */ }
+    }
     return {
       repoId: this.repoId,
       name: branchName,
       fullName: isDetached ? 'HEAD' : `refs/heads/${branchName}`,
       isHead: true,
       isRemote: false,
-      upstream: status.tracking ?? undefined,
-      aheadBehind: status.tracking ? { ahead: status.ahead, behind: status.behind } : undefined,
+      upstream,
+      aheadBehind,
       detachedTag,
       detachedHash,
     };
