@@ -8,10 +8,15 @@ export interface PushProtectionTargetRepo {
   repoId?: string;
   name?: string;
   rootPath?: string;
+  kind?: 'git' | 'svn';
   push(force?: boolean, remote?: string): Promise<void>;
+  pull?(): Promise<string>;
   pullRebase?(): Promise<string>;
   getRemotes(): Promise<string[]>;
   getCurrentBranch?(): Promise<{ name: string } | undefined>;
+  getStatus?(): Promise<{ stagedFiles: unknown[]; unstagedFiles: unknown[]; conflictCount?: number; operationState?: string | null }>;
+  stashPush?(message?: string): Promise<void>;
+  stashPop?(stashRef?: string): Promise<void>;
 }
 
 export interface RunPushOptions {
@@ -70,7 +75,7 @@ async function validateProtectedBranchPush(
     const branchName = currentBranch?.name;
     if (!branchName || branchName === 'HEAD') return true;
 
-    if (!isBranchProtected(branchName)) {
+    if (!isBranchProtected(branchName, undefined, repo.repoId)) {
       return true;
     }
 
@@ -117,7 +122,8 @@ async function validateProtectedBranchPush(
 /**
  * Runs a Git push operation wrapped with JetBrains-style protection:
  * If the push is rejected because the remote is ahead, it prompts the user to
- * Rebase & Push, Force Push, or Cancel, and automatically handles the rebase + retry workflow.
+ * Rebase/Merge & Push, Force Push, or Cancel, and automatically handles the clean working tree,
+ * update, and push retry workflow.
  */
 export async function runPushWithProtection(
   repo: PushProtectionTargetRepo,
@@ -161,11 +167,17 @@ export async function runPushWithProtection(
       return { success: false, cancelled: false, error, isPushRejected: true };
     }
 
-    let shouldRebase = mode === 'rebaseAndRetry';
+    const updateMethod = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
+    const isMergePreferred = updateMethod === 'merge';
+
+    let shouldUpdate = mode === 'rebaseAndRetry';
+    let selectedUpdateMethod: 'rebase' | 'merge' = isMergePreferred ? 'merge' : 'rebase';
     let shouldForce = false;
 
     if (mode === 'prompt') {
-      const rebaseBtn = t('Rebase & Push');
+      const updateBtn = isMergePreferred ? t('Merge & Push') : t('Rebase & Push');
       const forceBtn = t('Force Push');
 
       const choice = await vscode.window.showWarningMessage(
@@ -173,12 +185,13 @@ export async function runPushWithProtection(
           'VersionDock [{0}]: Push was rejected because the remote contains work that you do not have locally.',
           repoName,
         ),
-        rebaseBtn,
+        updateBtn,
         forceBtn,
       );
 
-      if (choice === rebaseBtn) {
-        shouldRebase = true;
+      if (choice === updateBtn) {
+        shouldUpdate = true;
+        selectedUpdateMethod = isMergePreferred ? 'merge' : 'rebase';
       } else if (choice === forceBtn) {
         shouldForce = true;
       } else {
@@ -186,36 +199,89 @@ export async function runPushWithProtection(
       }
     }
 
-    // 3. Handle Rebase & Retry
-    if (shouldRebase) {
-      if (!repo.pullRebase) {
-        return {
-          success: false,
-          cancelled: false,
-          error: new Error(t('VersionDock [{0}]: Rebase is not supported on this repository.', repoName)),
-        };
+    // 3. Handle Update & Retry (with clean working tree protection)
+    if (shouldUpdate) {
+      options?.logger?.info('Git', `Auto-updating (${selectedUpdateMethod}) before push retry`, { repoName, remote });
+
+      // 3.1 Check dirty working tree and auto-clean (Auto-stash)
+      let autoStashed = false;
+      if (repo.getStatus && repo.stashPush) {
+        try {
+          const statusBefore = await repo.getStatus();
+          const isDirty = (statusBefore.stagedFiles.length > 0) || (statusBefore.unstagedFiles.length > 0);
+          if (isDirty) {
+            const timestamp = new Date().toLocaleTimeString();
+            await repo.stashPush(`Auto-stashed before push retry (${timestamp})`);
+            autoStashed = true;
+            options?.logger?.info('Git', 'Auto-stashed local changes before update and push retry', { repoName });
+          }
+        } catch (stashErr) {
+          options?.logger?.warn('Git', 'Failed to auto-stash dirty working tree before push retry', { repoName, error: String(stashErr) });
+        }
       }
 
-      options?.logger?.info('Git', 'Auto-rebasing before push retry', { repoName, remote });
+      // 3.2 Execute pull with configured strategy
+      const updateTitle = selectedUpdateMethod === 'merge'
+        ? t('VersionDock [{0}]: Merging remote changes…', repoName)
+        : t('VersionDock [{0}]: Rebasing on remote…', repoName);
 
       try {
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: t('VersionDock [{0}]: Rebasing on remote…', repoName),
+            title: updateTitle,
             cancellable: false,
           },
           async () => {
-            await repo.pullRebase!();
+            if (selectedUpdateMethod === 'merge' && repo.pull) {
+              await repo.pull();
+            } else if (repo.pullRebase) {
+              await repo.pullRebase();
+            } else if (repo.pull) {
+              await repo.pull();
+            } else {
+              throw new Error(t('VersionDock [{0}]: Pull/Rebase is not supported on this repository.', repoName));
+            }
           },
         );
-      } catch (rebaseErr: unknown) {
-        options?.logger?.error('Git', 'Rebase failed during push recovery', rebaseErr, { repoName });
-        return { success: false, cancelled: false, error: rebaseErr };
+      } catch (updateErr: unknown) {
+        if (autoStashed && repo.stashPop) {
+          try {
+            await repo.stashPop();
+          } catch { /* ignore pop error on update failure */ }
+        }
+        options?.logger?.error('Git', 'Update failed during push recovery', updateErr, { repoName });
+        return { success: false, cancelled: false, error: updateErr };
       }
 
-      // Retry push after successful rebase
-      options?.logger?.info('Git', 'Retrying push after rebase', { repoName, remote });
+      // 3.3 Restore working tree after update
+      if (autoStashed && repo.stashPop) {
+        try {
+          await repo.stashPop();
+          options?.logger?.info('Git', 'Auto-restored stashed changes after update', { repoName });
+        } catch (popErr) {
+          options?.logger?.warn('Git', 'Conflicts detected while restoring stashed changes during push recovery', { repoName, error: String(popErr) });
+          void vscode.window.showWarningMessage(
+            t('VersionDock [{0}]: Conflicts detected while restoring stashed changes.', repoName),
+          );
+          return { success: false, cancelled: false, error: popErr };
+        }
+      }
+
+      // 3.4 Verify conflict status after update
+      if (repo.getStatus) {
+        const statusAfter = await repo.getStatus().catch(() => undefined);
+        if (statusAfter && ((statusAfter.conflictCount ?? 0) > 0 || statusAfter.operationState)) {
+          return {
+            success: false,
+            cancelled: false,
+            error: new Error(t('VersionDock [{0}]: Update stopped with conflicts. Please resolve conflicts before pushing.', repoName)),
+          };
+        }
+      }
+
+      // 3.5 Retry push after successful update
+      options?.logger?.info('Git', 'Retrying push after update', { repoName, remote });
       try {
         await withGitPushProgress(
           repo,
@@ -226,13 +292,14 @@ export async function runPushWithProtection(
         );
 
         if (!options?.silentOnSuccess) {
-          void vscode.window.showInformationMessage(
-            t('VersionDock [{0}]: Rebased and pushed successfully.', repoName),
-          );
+          const successMsg = selectedUpdateMethod === 'merge'
+            ? t('VersionDock [{0}]: Merged and pushed successfully.', repoName)
+            : t('VersionDock [{0}]: Rebased and pushed successfully.', repoName);
+          void vscode.window.showInformationMessage(successMsg);
         }
-        return { success: true, rebased: true, forced: false };
+        return { success: true, rebased: selectedUpdateMethod === 'rebase', forced: false };
       } catch (retryErr: unknown) {
-        options?.logger?.error('Git', 'Push retry after rebase failed', retryErr, { repoName });
+        options?.logger?.error('Git', 'Push retry after update failed', retryErr, { repoName });
         return { success: false, cancelled: isRemoteRepositoryCancelled(retryErr), error: retryErr };
       }
     }

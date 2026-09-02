@@ -718,305 +718,382 @@
         }
       }
     ],
-    "configuration": {
-      "title": "%configuration.title%",
-      "properties": {
-        "versiondock.graphMaxCommits": {
-          "order": 80,
-          "type": "number",
-          "default": 1000,
-          "minimum": 100,
-          "maximum": 10000,
-          "description": "%configuration.graphMaxCommits.description%"
-        },
-        "versiondock.repositoryScanMaxDepth": {
-          "order": 60,
-          "type": "number",
-          "default": 1,
-          "minimum": 0,
-          "maximum": 10,
-          "description": "%configuration.repositoryScanMaxDepth.description%"
-        },
-        "versiondock.repositoryScanIgnoredFolders": {
-          "order": 70,
-          "type": "array",
-          "default": [
-            "node_modules"
-          ],
-          "items": {
-            "type": "string"
+    "configuration": [
+      {
+        "title": "%configuration.category.general%",
+        "properties": {
+          "versiondock.changesViewMode": {
+            "order": 10,
+            "type": "string",
+            "enum": [
+              "simplified",
+              "changelists",
+              "vscode"
+            ],
+            "enumDescriptions": [
+              "%configuration.changesViewMode.enum.simplified%",
+              "%configuration.changesViewMode.enum.changelists%",
+              "%configuration.changesViewMode.enum.vscode%"
+            ],
+            "default": "simplified",
+            "description": "%configuration.changesViewMode.description%"
           },
-          "description": "%configuration.repositoryScanIgnoredFolders.description%"
-        },
-        "versiondock.fetchOnStartup": {
-          "order": 40,
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.fetchOnStartup.description%"
-        },
-        "versiondock.resetViewLocationsOnStartup": {
-          "order": 45,
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.resetViewLocationsOnStartup.description%"
-        },
-        "versiondock.notifyOnIncomingCommits": {
-          "order": 50,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.notifyOnIncomingCommits.description%"
-        },
-        "versiondock.notifyOnUnpushedCommits": {
-          "order": 55,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.notifyOnUnpushedCommits.description%"
-        },
-        "versiondock.git.onPushRejected": {
-          "order": 58,
-          "type": "string",
-          "enum": [
-            "prompt",
-            "rebaseAndRetry",
-            "error"
-          ],
-          "enumDescriptions": [
-            "%configuration.git.onPushRejected.enum.prompt%",
-            "%configuration.git.onPushRejected.enum.rebaseAndRetry%",
-            "%configuration.git.onPushRejected.enum.error%"
-          ],
-          "default": "prompt",
-          "description": "%configuration.git.onPushRejected.description%"
-        },
-        "versiondock.projectColors": {
-          "order": 110,
-          "type": "object",
-          "default": {},
-          "description": "%configuration.projectColors.description%"
-        },
-        "versiondock.autoRefreshInterval": {
-          "order": 30,
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "%configuration.autoRefreshInterval.description%"
-        },
-        "versiondock.gitAnnotations.enabled": {
-          "order": 90,
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.gitAnnotationsEnabled.description%"
-        },
-        "versiondock.gitGhostText.enabled": {
-          "order": 100,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.gitGhostTextEnabled.description%"
-        },
-        "versiondock.ai.provider": {
-          "order": 120,
-          "type": "string",
-          "enum": ["github-copilot", "openai", "claude", "gemini", "custom"],
-          "enumDescriptions": [
-            "%configuration.ai.provider.enum.githubCopilot%",
-            "%configuration.ai.provider.enum.openai%",
-            "%configuration.ai.provider.enum.claude%",
-            "%configuration.ai.provider.enum.gemini%",
-            "%configuration.ai.provider.enum.custom%"
-          ],
-          "default": "github-copilot",
-          "description": "%configuration.ai.provider.description%"
-        },
-        "versiondock.ai.model": {
-          "order": 121,
-          "type": "string",
-          "default": "",
-          "description": "%configuration.ai.model.description%"
-        },
-        "versiondock.ai.apiUrl": {
-          "order": 122,
-          "type": "string",
-          "default": "",
-          "description": "%configuration.ai.apiUrl.description%"
-        },
-        "versiondock.ai.apiKey": {
-          "order": 123,
-          "type": "string",
-          "default": "",
-          "description": "%configuration.ai.apiKey.description%"
-        },
-        "versiondock.ai.maxInputTokens": {
-          "order": 124,
-          "type": "number",
-          "default": 128000,
-          "minimum": 4096,
-          "description": "%configuration.ai.maxInputTokens.description%"
-        },
-        "versiondock.ai.maxOutputTokens": {
-          "order": 125,
-          "type": "number",
-          "default": 128000,
-          "minimum": 1024,
-          "maximum": 128000,
-          "description": "%configuration.ai.maxOutputTokens.description%"
-        },
-        "versiondock.changesViewMode": {
-          "order": 10,
-          "type": "string",
-          "enum": [
-            "simplified",
-            "changelists",
-            "vscode"
-          ],
-          "enumDescriptions": [
-            "%configuration.changesViewMode.enum.simplified%",
-            "%configuration.changesViewMode.enum.changelists%",
-            "%configuration.changesViewMode.enum.vscode%"
-          ],
-          "default": "simplified",
-          "description": "%configuration.changesViewMode.description%"
-        },
-        "versiondock.promptAddUntrackedToGit": {
-          "order": 25,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.promptAddUntrackedToGit.description%"
-        },
-        "versiondock.defaultCommitAction": {
-          "order": 20,
-          "type": "string",
-          "enum": [
-            "commit",
-            "commitAndPush"
-          ],
-          "enumDescriptions": [
-            "%configuration.defaultCommitAction.enum.commit%",
-            "%configuration.defaultCommitAction.enum.commitAndPush%"
-          ],
-          "default": "commit",
-          "description": "%configuration.defaultCommitAction.description%"
-        },
-        "versiondock.defaultSaveAction": {
-          "order": 21,
-          "type": "string",
-          "enum": [
-            "stash",
-            "shelve"
-          ],
-          "enumDescriptions": [
-            "%configuration.defaultSaveAction.enum.stash%",
-            "%configuration.defaultSaveAction.enum.shelve%"
-          ],
-          "default": "stash",
-          "description": "%configuration.defaultSaveAction.description%"
-        },
-        "versiondock.suppressDivergedBranchWarning": {
-          "order": 35,
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.suppressDivergedBranchWarning.description%"
-        },
-        "versiondock.guard.warnOnLargeFiles": {
-          "order": 130,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.guard.warnOnLargeFiles.description%"
-        },
-        "versiondock.guard.largeFileSizeLimitMB": {
-          "order": 131,
-          "type": "number",
-          "default": 50,
-          "minimum": 1,
-          "maximum": 1000,
-          "description": "%configuration.guard.largeFileSizeLimitMB.description%"
-        },
-        "versiondock.guard.warnOnDetachedHead": {
-          "order": 132,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.guard.warnOnDetachedHead.description%"
-        },
-        "versiondock.guard.warnOnCrlf": {
-          "order": 133,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.guard.warnOnCrlf.description%"
-        },
-        "versiondock.guard.warnOnInvalidFileNames": {
-          "order": 134,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.guard.warnOnInvalidFileNames.description%"
-        },
-        "versiondock.git.protectedBranches": {
-          "order": 140,
-          "type": "array",
-          "default": [
-            "master",
-            "main"
-          ],
-          "items": {
-            "type": "string"
+          "versiondock.defaultCommitAction": {
+            "order": 11,
+            "type": "string",
+            "enum": [
+              "commit",
+              "commitAndPush"
+            ],
+            "enumDescriptions": [
+              "%configuration.defaultCommitAction.enum.commit%",
+              "%configuration.defaultCommitAction.enum.commitAndPush%"
+            ],
+            "default": "commit",
+            "description": "%configuration.defaultCommitAction.description%"
           },
-          "description": "%configuration.git.protectedBranches.description%"
-        },
-        "versiondock.git.showPushDialogForProtectedBranches": {
-          "order": 141,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.git.showPushDialogForProtectedBranches.description%"
-        },
-        "versiondock.git.branchCleanCharacter": {
-          "order": 142,
-          "type": "string",
-          "default": "-",
-          "maxLength": 1,
-          "description": "%configuration.git.branchCleanCharacter.description%"
-        },
-        "versiondock.git.cherryPickAddSuffix": {
-          "order": 143,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.git.cherryPickAddSuffix.description%"
-        },
-        "versiondock.updateProject.method": {
-          "order": 150,
-          "type": "string",
-          "enum": [
-            "rebase",
-            "merge",
-            "prompt"
-          ],
-          "enumDescriptions": [
-            "%configuration.updateProject.method.enum.rebase%",
-            "%configuration.updateProject.method.enum.merge%",
-            "%configuration.updateProject.method.enum.prompt%"
-          ],
-          "default": "rebase",
-          "description": "%configuration.updateProject.method.description%"
-        },
-        "versiondock.updateProject.cleanWorkingTree": {
-          "order": 151,
-          "type": "string",
-          "enum": [
-            "shelve",
-            "stash"
-          ],
-          "enumDescriptions": [
-            "%configuration.updateProject.cleanWorkingTree.enum.shelve%",
-            "%configuration.updateProject.cleanWorkingTree.enum.stash%"
-          ],
-          "default": "shelve",
-          "description": "%configuration.updateProject.cleanWorkingTree.description%"
-        },
-        "versiondock.updateProject.showUpdateInfo": {
-          "order": 152,
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.updateProject.showUpdateInfo.description%"
+          "versiondock.defaultSaveAction": {
+            "order": 12,
+            "type": "string",
+            "enum": [
+              "stash",
+              "shelve"
+            ],
+            "enumDescriptions": [
+              "%configuration.defaultSaveAction.enum.stash%",
+              "%configuration.defaultSaveAction.enum.shelve%"
+            ],
+            "default": "stash",
+            "description": "%configuration.defaultSaveAction.description%"
+          },
+          "versiondock.promptAddUntrackedToGit": {
+            "order": 13,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.promptAddUntrackedToGit.description%"
+          },
+          "versiondock.projectColors": {
+            "order": 14,
+            "type": "object",
+            "default": {},
+            "description": "%configuration.projectColors.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.sync%",
+        "properties": {
+          "versiondock.git.autoFetchInterval": {
+            "order": 30,
+            "type": "number",
+            "default": 15,
+            "minimum": 0,
+            "maximum": 1440,
+            "description": "%configuration.git.autoFetchInterval.description%"
+          },
+          "versiondock.fetchOnStartup": {
+            "order": 31,
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.fetchOnStartup.description%"
+          },
+          "versiondock.autoRefreshInterval": {
+            "order": 32,
+            "type": "number",
+            "default": 0,
+            "minimum": 0,
+            "description": "%configuration.autoRefreshInterval.description%"
+          },
+          "versiondock.notifyOnIncomingCommits": {
+            "order": 33,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.notifyOnIncomingCommits.description%"
+          },
+          "versiondock.notifyOnUnpushedCommits": {
+            "order": 34,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.notifyOnUnpushedCommits.description%"
+          },
+          "versiondock.suppressDivergedBranchWarning": {
+            "order": 35,
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.suppressDivergedBranchWarning.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.repositories%",
+        "properties": {
+          "versiondock.repositoryScanMaxDepth": {
+            "order": 50,
+            "type": "number",
+            "default": 1,
+            "minimum": 0,
+            "maximum": 10,
+            "description": "%configuration.repositoryScanMaxDepth.description%"
+          },
+          "versiondock.repositoryScanIgnoredFolders": {
+            "order": 51,
+            "type": "array",
+            "default": [
+              "node_modules"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "%configuration.repositoryScanIgnoredFolders.description%"
+          },
+          "versiondock.graphMaxCommits": {
+            "order": 52,
+            "type": "number",
+            "default": 1000,
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "%configuration.graphMaxCommits.description%"
+          },
+          "versiondock.gitAnnotations.enabled": {
+            "order": 53,
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.gitAnnotationsEnabled.description%"
+          },
+          "versiondock.gitGhostText.enabled": {
+            "order": 54,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.gitGhostTextEnabled.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.guard%",
+        "properties": {
+          "versiondock.git.noVerify": {
+            "order": 70,
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.git.noVerify.description%"
+          },
+          "versiondock.guard.warnOnLargeFiles": {
+            "order": 71,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.guard.warnOnLargeFiles.description%"
+          },
+          "versiondock.guard.largeFileSizeLimitMB": {
+            "order": 72,
+            "type": "number",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "%configuration.guard.largeFileSizeLimitMB.description%"
+          },
+          "versiondock.guard.warnOnDetachedHead": {
+            "order": 73,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.guard.warnOnDetachedHead.description%"
+          },
+          "versiondock.guard.warnOnCrlf": {
+            "order": 74,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.guard.warnOnCrlf.description%"
+          },
+          "versiondock.guard.warnOnInvalidFileNames": {
+            "order": 75,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.guard.warnOnInvalidFileNames.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.branch%",
+        "properties": {
+          "versiondock.git.protectedBranches": {
+            "order": 90,
+            "type": "array",
+            "default": [
+              "master",
+              "main"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "%configuration.git.protectedBranches.description%"
+          },
+          "versiondock.git.syncProtectedBranchesFromGitHub": {
+            "order": 91,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.syncProtectedBranchesFromGitHub.description%"
+          },
+          "versiondock.git.showPushDialogForProtectedBranches": {
+            "order": 92,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.showPushDialogForProtectedBranches.description%"
+          },
+          "versiondock.git.onPushRejected": {
+            "order": 93,
+            "type": "string",
+            "enum": [
+              "prompt",
+              "rebaseAndRetry",
+              "error"
+            ],
+            "enumDescriptions": [
+              "%configuration.git.onPushRejected.enum.prompt%",
+              "%configuration.git.onPushRejected.enum.rebaseAndRetry%",
+              "%configuration.git.onPushRejected.enum.error%"
+            ],
+            "default": "prompt",
+            "description": "%configuration.git.onPushRejected.description%"
+          },
+          "versiondock.git.branchCleanCharacter": {
+            "order": 94,
+            "type": "string",
+            "default": "-",
+            "maxLength": 1,
+            "description": "%configuration.git.branchCleanCharacter.description%"
+          },
+          "versiondock.git.cherryPickAddSuffix": {
+            "order": 95,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.cherryPickAddSuffix.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.update%",
+        "properties": {
+          "versiondock.updateProject.method": {
+            "order": 110,
+            "type": "string",
+            "enum": [
+              "rebase",
+              "merge",
+              "prompt"
+            ],
+            "enumDescriptions": [
+              "%configuration.updateProject.method.enum.rebase%",
+              "%configuration.updateProject.method.enum.merge%",
+              "%configuration.updateProject.method.enum.prompt%"
+            ],
+            "default": "rebase",
+            "description": "%configuration.updateProject.method.description%"
+          },
+          "versiondock.updateProject.cleanWorkingTree": {
+            "order": 111,
+            "type": "string",
+            "enum": [
+              "shelve",
+              "stash"
+            ],
+            "enumDescriptions": [
+              "%configuration.updateProject.cleanWorkingTree.enum.shelve%",
+              "%configuration.updateProject.cleanWorkingTree.enum.stash%"
+            ],
+            "default": "shelve",
+            "description": "%configuration.updateProject.cleanWorkingTree.description%"
+          },
+          "versiondock.updateProject.showUpdateInfo": {
+            "order": 112,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.updateProject.showUpdateInfo.description%"
+          },
+          "versiondock.git.cloneRecursiveSubmodules": {
+            "order": 113,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.cloneRecursiveSubmodules.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.diff%",
+        "properties": {
+          "versiondock.diff.shelveComparisonBase": {
+            "order": 130,
+            "type": "string",
+            "enum": [
+              "local",
+              "parent"
+            ],
+            "enumDescriptions": [
+              "%configuration.diff.shelveComparisonBase.enum.local%",
+              "%configuration.diff.shelveComparisonBase.enum.parent%"
+            ],
+            "default": "local",
+            "description": "%configuration.diff.shelveComparisonBase.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.ai%",
+        "properties": {
+          "versiondock.ai.provider": {
+            "order": 150,
+            "type": "string",
+            "enum": [
+              "github-copilot",
+              "openai",
+              "claude",
+              "gemini",
+              "custom"
+            ],
+            "enumDescriptions": [
+              "%configuration.ai.provider.enum.githubCopilot%",
+              "%configuration.ai.provider.enum.openai%",
+              "%configuration.ai.provider.enum.claude%",
+              "%configuration.ai.provider.enum.gemini%",
+              "%configuration.ai.provider.enum.custom%"
+            ],
+            "default": "github-copilot",
+            "description": "%configuration.ai.provider.description%"
+          },
+          "versiondock.ai.model": {
+            "order": 151,
+            "type": "string",
+            "default": "",
+            "description": "%configuration.ai.model.description%"
+          },
+          "versiondock.ai.apiUrl": {
+            "order": 152,
+            "type": "string",
+            "default": "",
+            "description": "%configuration.ai.apiUrl.description%"
+          },
+          "versiondock.ai.apiKey": {
+            "order": 153,
+            "type": "string",
+            "default": "",
+            "description": "%configuration.ai.apiKey.description%"
+          },
+          "versiondock.ai.maxInputTokens": {
+            "order": 154,
+            "type": "number",
+            "default": 128000,
+            "minimum": 4096,
+            "description": "%configuration.ai.maxInputTokens.description%"
+          },
+          "versiondock.ai.maxOutputTokens": {
+            "order": 155,
+            "type": "number",
+            "default": 128000,
+            "minimum": 1024,
+            "maximum": 128000,
+            "description": "%configuration.ai.maxOutputTokens.description%"
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build",

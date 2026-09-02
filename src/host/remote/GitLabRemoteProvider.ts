@@ -101,6 +101,24 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider {
     return branches.map(branch => branch.name);
   }
 
+  async getProtectedBranches(url: string): Promise<string[]> {
+    const parsed = await this.parseProjectUrl(url);
+    if (!parsed) return [];
+    try {
+      const account = await this.getAccount(parsed.host, false);
+      if (!account) return [];
+      const protectedBranches = await this.fetchPages<{ name: string }>(
+        account,
+        `/projects/${encodePath(parsed.path)}/protected_branches`,
+        {},
+      );
+      return protectedBranches.map(b => b.name);
+    } catch (error) {
+      this.logger.debug('GitLab', 'Failed to fetch protected branches', { url, error: String(error) });
+      return [];
+    }
+  }
+
   async createRepository(input: CreateRepositoryInput): Promise<RemoteRepository> {
     const host = input.namespace?.host ?? await this.chooseHost();
     const account = await this.getAccount(host, true);

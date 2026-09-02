@@ -37,6 +37,8 @@ interface Props {
   onOpenComposer: () => void;
   onOpenCodeReview: () => void;
   generatingMessage: boolean;
+  noVerify?: boolean;
+  onNoVerifyChange?: (v: boolean) => void;
 }
 
 interface DropdownButtonItem { icon: string; label: string; onSelect: () => void; }
@@ -221,7 +223,7 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
 export function UnifiedCommitForm({
   message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags, unpushedMap,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
-  onAutopilot, onStopAutopilot, onOpenComposer, onOpenCodeReview, generatingMessage,
+  onAutopilot, onStopAutopilot, onOpenComposer, onOpenCodeReview, generatingMessage, noVerify = false, onNoVerifyChange,
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
 
@@ -501,6 +503,15 @@ export function UnifiedCommitForm({
             {t('Amend last commit')}
           </label>
         )}
+        <label style={styles.amendLabel} title={t('Bypass Git pre-commit hooks')}>
+          <input
+            type="checkbox"
+            checked={noVerify}
+            onChange={(e) => onNoVerifyChange?.(e.target.checked)}
+            style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
+          />
+          {t('Bypass hooks (--no-verify)')}
+        </label>
         <div style={styles.commitOptionActions}>
           <button
             data-action-btn=""

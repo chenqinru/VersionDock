@@ -321,4 +321,12 @@ export class RemoteRepositoryService implements vscode.Disposable {
     this.logger.error('Remote', `${provider} operation failed`, error);
     void vscode.window.showErrorMessage(vscode.l10n.t('{0}: {1}', provider, value));
   }
+
+  async getProtectedBranches(url: string): Promise<string[]> {
+    if (!url) return [];
+    if (/github\.com/i.test(url)) {
+      return this.github.getProtectedBranches(url);
+    }
+    return this.gitlab.getProtectedBranches(url);
+  }
 }

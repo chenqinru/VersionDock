@@ -97,6 +97,24 @@ export class GitHubRemoteProvider implements RemoteRepositoryProvider {
     return branches.map(branch => branch.name);
   }
 
+  async getProtectedBranches(url: string): Promise<string[]> {
+    const repository = this.parseRepositoryUrl(url);
+    if (!repository) return [];
+    try {
+      const token = await this.getAccessToken(false);
+      if (!token) return [];
+      const branches = await this.fetchPages<GithubBranch>(
+        `/repos/${encodePath(repository.owner)}/${encodePath(repository.name)}/branches`,
+        token,
+        { protected: 'true' },
+      );
+      return branches.map(branch => branch.name);
+    } catch (error) {
+      this.logger.debug('GitHub', 'Failed to fetch protected branches', { url, error: String(error) });
+      return [];
+    }
+  }
+
   async createRepository(input: CreateRepositoryInput): Promise<RemoteRepository> {
     const token = await this.getAccessToken(true);
     const isOrganization = input.namespace?.kind === 'organization';

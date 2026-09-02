@@ -1,4 +1,4 @@
-import { type SimpleGit } from 'simple-git';
+import { type SimpleGit, type TaskOptions } from 'simple-git';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -2230,15 +2230,23 @@ export class GitService {
     });
   }
 
-  async commit(message: string, amend: boolean, credentials?: { gitName: string; gitEmail: string }, log?: (s: string) => void): Promise<string> {
+  async commit(
+    message: string,
+    amend: boolean,
+    credentials?: { gitName: string; gitEmail: string },
+    log?: (s: string) => void,
+    noVerify?: boolean,
+  ): Promise<string> {
+    const shouldNoVerify = noVerify ?? vscode.workspace.getConfiguration('versiondock').get<boolean>('git.noVerify', false);
     return this.runStatusSensitiveOperation(async () => {
-      log?.(`GitService.commit — credentials=${credentials ? 'provided' : 'default'} amend=${amend}`);
+      log?.(`GitService.commit — credentials=${credentials ? 'provided' : 'default'} amend=${amend} noVerify=${shouldNoVerify}`);
       if (credentials?.gitName && credentials?.gitEmail) {
         const flags = [
           '-c', `user.name=${credentials.gitName}`,
           '-c', `user.email=${credentials.gitEmail}`,
           'commit', '-m', message,
           ...(amend ? ['--amend'] : []),
+          ...(shouldNoVerify ? ['--no-verify'] : []),
         ];
         log?.('GitService.commit — running git commit with an explicit identity');
         await this.git.raw(flags);
@@ -2247,10 +2255,13 @@ export class GitService {
       log?.(`GitService.commit — no credentials, using vsRepo/simple-git`);
       const vsRepo = this.vsRepo();
       if (vsRepo) {
-        await vsRepo.commit(message, { amend });
+        await vsRepo.commit(message, { amend, noVerify: shouldNoVerify });
         return '';
       }
-      const result = await this.git.commit(message, undefined, amend ? { '--amend': null } : {});
+      const commitOptions: TaskOptions = {};
+      if (amend) commitOptions['--amend'] = null;
+      if (shouldNoVerify) commitOptions['--no-verify'] = null;
+      const result = await this.git.commit(message, undefined, commitOptions);
       return result.summary.changes.toString();
     }, 'commit', message);
   }
@@ -3298,6 +3309,15 @@ export class GitService {
     }
   }
 
+  async getStashParentFileContent(stashRef: string, filePath: string): Promise<string> {
+    const relPath = this.normalizeRepoPath(filePath);
+    try {
+      return await this.git.show([`${stashRef}^1:${relPath}`]);
+    } catch {
+      return '';
+    }
+  }
+
   // ── Unpushed commits ──────────────────────────────────────────────────────
 
   // ── Submodule push/pull helpers ───────────────────────────────────────────
@@ -3426,6 +3446,14 @@ export class GitService {
       if (init) args.push('--init');
       if (recursive) args.push('--recursive');
       args.push('--', this.literalPathspec(submodulePath));
+      await this.git.raw(args);
+    });
+  }
+
+  async updateAllSubmodules(recursive = true): Promise<void> {
+    return withGitWriteLock(this.rootPath, async () => {
+      const args = ['submodule', 'update', '--init'];
+      if (recursive) args.push('--recursive');
       await this.git.raw(args);
     });
   }

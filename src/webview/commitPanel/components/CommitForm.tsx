@@ -17,11 +17,14 @@ interface Props {
   onCommitAndPush: () => void;
   onPull: () => void;
   loading: boolean;
+  noVerify?: boolean;
+  onNoVerifyChange?: (v: boolean) => void;
 }
 
 export function CommitForm({
   repoName, repoColor, message, amend, stagedCount, branchName, aheadBehind,
   onMessageChange, onAmendChange, onCommit, onCommitAndPush, onPull, loading,
+  noVerify = false, onNoVerifyChange,
 }: Props) {
   const canCommit = (message.trim().length > 0 || amend) && (stagedCount > 0 || amend);
   const projectColor = readableAccentColor(repoColor);
@@ -76,6 +79,16 @@ export function CommitForm({
             style={{ ...nativeCheckboxBorderStyle(), marginRight: '5px' }}
           />
           {t('Amend last commit')}
+        </label>
+        <label style={styles.amendLabel} title={t('Bypass Git pre-commit hooks')}>
+          <input
+            type="checkbox"
+            checked={noVerify}
+            onChange={(e) => onNoVerifyChange?.(e.target.checked)}
+            disabled={loading}
+            style={{ ...nativeCheckboxBorderStyle(), marginRight: '5px' }}
+          />
+          {t('Bypass hooks (--no-verify)')}
         </label>
         <span style={styles.stagedCount}>
           {stagedCount === 1 ? t('{0} file staged', stagedCount) : t('{0} files staged', stagedCount)}

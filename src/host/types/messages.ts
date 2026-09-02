@@ -136,7 +136,7 @@ export type CommitPanelTab = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree'
 // ─── Commit Panel: Host → WebView ────────────────────────────────────────────
 
 export type HostToCommitMsg =
-  | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean }
+  | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean; noVerify?: boolean }
   | { type: 'COMMIT_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'COMMIT_DIFF_RESULT'; requestId: string; diff: FileDiff | null; error?: string }
   | { type: 'COMMIT_WORKTREE_DIFF_STARTED'; repoId: string; repoName: string; repoColor: string; baseRef: string; currentRef: string; files: FileStatus[] }
@@ -196,9 +196,9 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_UNSTAGE_FILES'; requestId: string; repoId: string; paths: string[] }
   | { type: 'COMMIT_STAGE_ALL'; requestId: string; repoId: string }
   | { type: 'COMMIT_UNSTAGE_ALL'; requestId: string; repoId: string }
-  | { type: 'COMMIT_DO_COMMIT'; requestId: string; repoId: string; message: string; amend: boolean }
-  | { type: 'COMMIT_DO_COMMIT_PUSH'; requestId: string; repoId: string; message: string; amend: boolean }
-  | { type: 'COMMIT_DO_COMMIT_MULTI'; requestId: string; repos: Array<{ repoId: string; message: string; amend: boolean; filesToStage: string[]; filesToUnstage: string[] }>; andPush: boolean }
+  | { type: 'COMMIT_DO_COMMIT'; requestId: string; repoId: string; message: string; amend: boolean; noVerify?: boolean }
+  | { type: 'COMMIT_DO_COMMIT_PUSH'; requestId: string; repoId: string; message: string; amend: boolean; noVerify?: boolean }
+  | { type: 'COMMIT_DO_COMMIT_MULTI'; requestId: string; repos: Array<{ repoId: string; message: string; amend: boolean; filesToStage: string[]; filesToUnstage: string[] }>; andPush: boolean; noVerify?: boolean }
   | { type: 'COMMIT_DO_STASH_MULTI'; requestId: string; message: string; repos: Array<{ repoId: string; paths: string[] }> }
   | { type: 'COMMIT_DO_SHELVE_MULTI'; requestId: string; name: string; repos: Array<{ repoId: string; paths: string[] }> }
   | { type: 'COMMIT_GET_LAST_COMMIT_MESSAGE'; requestId: string; repoId: string }

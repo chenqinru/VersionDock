@@ -7,7 +7,7 @@ import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { GitService } from '../git/GitService';
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
-import { ShelveDocumentProvider, applyPatchToContent } from '../utils/ShelveDocumentProvider';
+import { ShelveDocumentProvider, applyPatchToContent, extractBaseAndTargetFromPatch } from '../utils/ShelveDocumentProvider';
 import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../types/messages';
 import type { FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { CHANGELIST_UNVERSIONED_ID } from '../types/git';
@@ -433,6 +433,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       if (m.defaultCommitAction === undefined) m.defaultCommitAction = this.getDefaultCommitAction();
       if (m.defaultSaveAction === undefined) m.defaultSaveAction = this.getDefaultSaveAction();
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+      if (m.noVerify === undefined) m.noVerify = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.noVerify', false);
     }
     const broadcast = msg.type === 'COMMIT_STATUS_UPDATE'
       || msg.type === 'COMMIT_BRANCHES_UPDATE'
@@ -2206,7 +2207,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
           const output = await repo.commit(msg.message, msg.amend, creds, detail => {
             this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
-          });
+          }, msg.noVerify);
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output });
           this.logger?.info('Commit', 'Commit completed', {
             repoId: msg.repoId,
@@ -2252,7 +2253,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             async () => {
               await repo.commit(msg.message, msg.amend, creds, detail => {
                 this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
-              });
+              }, msg.noVerify);
             },
           );
           if (repo.kind !== 'svn') {
@@ -2372,7 +2373,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   const creds = await this.getCommitCredentials(repo.repoId);
                   await repo.commit(r.message, r.amend, creds, detail => {
                     this.logger?.debug('Commit', detail, { repoId: r.repoId, requestId: msg.requestId });
-                  });
+                  }, msg.noVerify);
                 });
                 if (msg.andPush) {
                   const pushResult = await runPushWithProtection(repo, {
@@ -3346,36 +3347,57 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const diffChunk = svc.getFileDiff(msg.shelveId, resolvedPath.relativePath);
           const absFilePath = resolvedPath.absolutePath;
           const fileName = resolvedPath.relativePath.split('/').pop() ?? resolvedPath.relativePath;
+          const shelves = await svc.list();
+          const shelfName = shelves.find(s => s.id === msg.shelveId)?.name || msg.shelveId;
 
-          // Read current working tree content (empty string if file doesn't exist)
-          let currentContent = '';
-          const fileExists = fs.existsSync(absFilePath);
-          if (fileExists) {
-            try { currentContent = fs.readFileSync(absFilePath, 'utf8'); } catch { /* unreadable */ }
-          }
+          const comparisonBase = vscode.workspace
+            .getConfiguration('versiondock')
+            .get<'local' | 'parent'>('diff.shelveComparisonBase', 'local');
 
-          // Apply the patch to get what the file would look like after unshelving
-          const afterContent = applyPatchToContent(diffChunk, currentContent);
+          if (comparisonBase === 'parent') {
+            const { baseContent, targetContent } = extractBaseAndTargetFromPatch(diffChunk);
+            const leftUri = ShelveDocumentProvider.buildUri(msg.repoId, `${msg.shelveId}-base`, resolvedPath.relativePath);
+            this.shelveDocProvider.set(leftUri, baseContent);
+            const rightUri = ShelveDocumentProvider.buildUri(msg.repoId, `${msg.shelveId}-target`, resolvedPath.relativePath);
+            this.shelveDocProvider.set(rightUri, targetContent);
 
-          // Right side: virtual doc showing post-unshelve content
-          const afterUri = ShelveDocumentProvider.buildUri(msg.repoId, msg.shelveId, resolvedPath.relativePath);
-          this.shelveDocProvider.set(afterUri, afterContent);
-
-          // Left side: actual current working tree file, or virtual empty doc if file doesn't exist
-          let leftUri: vscode.Uri;
-          if (fileExists) {
-            leftUri = vscode.Uri.file(absFilePath);
+            await vscode.commands.executeCommand(
+              'vscode.diff',
+              leftUri,
+              rightUri,
+              t('{0} (Base Commit ↔ Shelve: {1})', fileName, shelfName),
+            );
           } else {
-            leftUri = ShelveDocumentProvider.buildUri(msg.repoId, `${msg.shelveId}-before`, resolvedPath.relativePath);
-            this.shelveDocProvider.set(leftUri, '');
-          }
+            // Read current working tree content (empty string if file doesn't exist)
+            let currentContent = '';
+            const fileExists = fs.existsSync(absFilePath);
+            if (fileExists) {
+              try { currentContent = fs.readFileSync(absFilePath, 'utf8'); } catch { /* unreadable */ }
+            }
 
-          await vscode.commands.executeCommand(
-            'vscode.diff',
-            leftUri,    // left = current file (or empty if deleted)
-            afterUri,   // right = after applying shelf
-            `${fileName} (Working Tree ↔ After Unshelve)`
-          );
+            // Apply the patch to get what the file would look like after unshelving
+            const afterContent = applyPatchToContent(diffChunk, currentContent);
+
+            // Right side: virtual doc showing post-unshelve content
+            const afterUri = ShelveDocumentProvider.buildUri(msg.repoId, msg.shelveId, resolvedPath.relativePath);
+            this.shelveDocProvider.set(afterUri, afterContent);
+
+            // Left side: actual current working tree file, or virtual empty doc if file doesn't exist
+            let leftUri: vscode.Uri;
+            if (fileExists) {
+              leftUri = vscode.Uri.file(absFilePath);
+            } else {
+              leftUri = ShelveDocumentProvider.buildUri(msg.repoId, `${msg.shelveId}-before`, resolvedPath.relativePath);
+              this.shelveDocProvider.set(leftUri, '');
+            }
+
+            await vscode.commands.executeCommand(
+              'vscode.diff',
+              leftUri,
+              afterUri,
+              t('{0} (Working Tree ↔ Shelve: {1})', fileName, shelfName),
+            );
+          }
         } catch { /* silently ignore if file cannot be diffed */ }
         break;
       }
@@ -3389,25 +3411,46 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const absPath = resolvedPath.absolutePath;
           const safeRef = msg.stashRef.replace(/[{}]/g, '_');
 
-          // Left: current working tree content (virtual doc to avoid VSCode git extension interference)
-          let currentContent = '';
-          try {
-            if (fs.existsSync(absPath)) currentContent = fs.readFileSync(absPath, 'utf8');
-          } catch { /* unreadable, keep empty */ }
-          const currentUri = ShelveDocumentProvider.buildUri(msg.repoId, `${safeRef}-current`, resolvedPath.relativePath);
-          this.shelveDocProvider.set(currentUri, currentContent);
+          const comparisonBase = vscode.workspace
+            .getConfiguration('versiondock')
+            .get<'local' | 'parent'>('diff.shelveComparisonBase', 'local');
 
-          // Right: stashed version — tracked path first, then untracked (stash@{N}^3)
-          const stashedContent = await repo.getStashFileContent(msg.stashRef, resolvedPath.relativePath);
-          const stashUri = ShelveDocumentProvider.buildUri(msg.repoId, safeRef, resolvedPath.relativePath);
-          this.shelveDocProvider.set(stashUri, stashedContent);
+          if (comparisonBase === 'parent') {
+            const parentContent = await repo.getStashParentFileContent(msg.stashRef, resolvedPath.relativePath);
+            const leftUri = ShelveDocumentProvider.buildUri(msg.repoId, `${safeRef}-base`, resolvedPath.relativePath);
+            this.shelveDocProvider.set(leftUri, parentContent);
 
-          await vscode.commands.executeCommand(
-            'vscode.diff',
-            currentUri,
-            stashUri,
-            `${fileName} (Working Tree ↔ ${msg.stashRef})`
-          );
+            const stashedContent = await repo.getStashFileContent(msg.stashRef, resolvedPath.relativePath);
+            const rightUri = ShelveDocumentProvider.buildUri(msg.repoId, safeRef, resolvedPath.relativePath);
+            this.shelveDocProvider.set(rightUri, stashedContent);
+
+            await vscode.commands.executeCommand(
+              'vscode.diff',
+              leftUri,
+              rightUri,
+              t('{0} (Base Commit ↔ {1})', fileName, msg.stashRef),
+            );
+          } else {
+            // Left: current working tree content (virtual doc to avoid VSCode git extension interference)
+            let currentContent = '';
+            try {
+              if (fs.existsSync(absPath)) currentContent = fs.readFileSync(absPath, 'utf8');
+            } catch { /* unreadable, keep empty */ }
+            const currentUri = ShelveDocumentProvider.buildUri(msg.repoId, `${safeRef}-current`, resolvedPath.relativePath);
+            this.shelveDocProvider.set(currentUri, currentContent);
+
+            // Right: stashed version — tracked path first, then untracked (stash@{N}^3)
+            const stashedContent = await repo.getStashFileContent(msg.stashRef, resolvedPath.relativePath);
+            const stashUri = ShelveDocumentProvider.buildUri(msg.repoId, safeRef, resolvedPath.relativePath);
+            this.shelveDocProvider.set(stashUri, stashedContent);
+
+            await vscode.commands.executeCommand(
+              'vscode.diff',
+              currentUri,
+              stashUri,
+              t('{0} (Working Tree ↔ {1})', fileName, msg.stashRef),
+            );
+          }
         } catch (e) {
           vscode.window.showErrorMessage(t('VersionDock: Cannot open stash diff — {0}', String(e)));
         }

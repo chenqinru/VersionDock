@@ -179,3 +179,54 @@ export function applyPatchToContent(diffChunk: string, currentContent: string): 
 
   return output.join('\n');
 }
+
+export function extractBaseAndTargetFromPatch(diffChunk: string): { baseContent: string; targetContent: string } {
+  const isNewFile = /^--- \/dev\/null/m.test(diffChunk) || /^--- a\/dev\/null/m.test(diffChunk);
+  const isDeletedFile = /^\+\+\+ \/dev\/null/m.test(diffChunk) || /^\+\+\+ b\/dev\/null/m.test(diffChunk);
+
+  const hunks = parseHunks(diffChunk);
+  if (hunks.length === 0) {
+    return { baseContent: '', targetContent: '' };
+  }
+
+  if (isNewFile) {
+    const targetLines: string[] = [];
+    for (const hunk of hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith('+')) targetLines.push(line.slice(1));
+      }
+    }
+    return { baseContent: '', targetContent: targetLines.join('\n') };
+  }
+
+  if (isDeletedFile) {
+    const baseLines: string[] = [];
+    for (const hunk of hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith('-') || line.startsWith(' ')) baseLines.push(line.slice(1));
+      }
+    }
+    return { baseContent: baseLines.join('\n'), targetContent: '' };
+  }
+
+  const baseLines: string[] = [];
+  const targetLines: string[] = [];
+
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.startsWith(' ')) {
+        baseLines.push(line.slice(1));
+        targetLines.push(line.slice(1));
+      } else if (line.startsWith('-')) {
+        baseLines.push(line.slice(1));
+      } else if (line.startsWith('+')) {
+        targetLines.push(line.slice(1));
+      }
+    }
+  }
+
+  return {
+    baseContent: baseLines.join('\n'),
+    targetContent: targetLines.join('\n'),
+  };
+}

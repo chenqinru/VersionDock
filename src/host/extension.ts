@@ -26,18 +26,6 @@ import { RemoteRepositoryService } from './remote/RemoteRepositoryService';
 import type { WorkspaceStatus } from './types/git';
 import { UpdateSummaryService } from './update/UpdateSummaryService';
 
-async function maybeResetViewLocationsOnStartup(logger: VersionDockLogger): Promise<void> {
-  const enabled = vscode.workspace.getConfiguration('versiondock').get<boolean>('resetViewLocationsOnStartup', false);
-  if (!enabled) return;
-
-  try {
-    await vscode.commands.executeCommand('workbench.action.resetViewLocations');
-    logger.info('Startup', 'Reset view locations');
-  } catch (error) {
-    logger.error('Startup', 'Failed to reset view locations', error);
-  }
-}
-
 async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void> {
   const SHOWN_KEY = 'hasShownViewModeQuickpick';
   if (globalState.get<boolean>(SHOWN_KEY)) return;
@@ -234,8 +222,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const initialFileViewMode = context.globalState.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
   void vscode.commands.executeCommand('setContext', 'versiondock.isTreeFileView', initialFileViewMode === 'tree');
   void vscode.commands.executeCommand('setContext', 'versiondock.isFlatFileView', initialFileViewMode === 'flat');
-
-  await maybeResetViewLocationsOnStartup(logger);
 
   const remoteRepositoryService = new RemoteRepositoryService(context, logger);
   const manager = new WorkspaceVcsManager(context, logger, remoteRepositoryService.publishMissingRemote);

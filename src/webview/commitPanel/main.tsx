@@ -570,7 +570,7 @@ export function CommitApp() {
         }
         case 'COMMIT_STATUS_UPDATE':
           commitStatusRefreshPendingRef.current = false;
-          store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder);
+          store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder, msg.noVerify);
           if (Array.isArray(msg.status.repos) && useCommitStore.getState().changesViewMode === 'vscode') {
             const prevCounts = prevUnstagedCountsRef.current;
             let hasNewChanges = false;
@@ -1618,7 +1618,7 @@ export function CommitApp() {
       store.setLoading(true);
       const requestId = generateId();
       pendingCommitMessagesRef.current.set(requestId, freshState.commitMessage.trim());
-      getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush } satisfies CommitToHostMsg);
+      getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush, noVerify: freshState.noVerify } satisfies CommitToHostMsg);
       return;
     }
 
@@ -1650,7 +1650,7 @@ export function CommitApp() {
     store.setError(null);
     const requestId = generateId();
     pendingCommitMessagesRef.current.set(requestId, freshState.commitMessage.trim());
-    getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush } satisfies CommitToHostMsg);
+    getVsCodeApi().postMessage({ type: 'COMMIT_DO_COMMIT_MULTI', requestId, repos: targets, andPush, noVerify: freshState.noVerify } satisfies CommitToHostMsg);
   };
   commitActionRef.current = doCommit;
 
@@ -2029,6 +2029,8 @@ export function CommitApp() {
                 repos: targets,
               } satisfies CommitToHostMsg);
             }}
+            noVerify={store.noVerify}
+            onNoVerifyChange={v => store.setNoVerify(v)}
           />
 
         </>)}

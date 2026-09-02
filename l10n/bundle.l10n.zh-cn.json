@@ -213,7 +213,7 @@
   "Discard": "丢弃",
   "VersionDock: Git Menu": "VersionDock：Git 菜单",
   "No repo": "无仓库",
-  "Branches have diverged across repositories": "多个仓库的分支已分叉",
+  "Branches have diverged across repositories": "多个仓库的分支不一致",
   "Uncommitted changes present": "存在未提交的更改",
   "Unpushed commits or branch not on remote": "存在未推送的提交或分支未关联远程",
   "Incoming commits available": "有可拉取的提交",
@@ -258,7 +258,7 @@
   "Merge in progress — abort and restore previous state": "合并进行中，终止并恢复到之前状态",
   "SVN conflicts detected — revert conflicted files": "检测到 SVN 冲突，回滚发生冲突的文件",
   "Rebase in progress — abort and restore previous state": "变基进行中，终止并恢复到之前状态",
-  "Branches have diverged": "分支已分叉",
+  "Branches have diverged": "多个仓库分支不一致",
   "Repositories are not on the same branch": "多个仓库当前不在同一分支",
   "Update Project…": "更新项目…",
   "Pull all repositories (incoming commits available)": "拉取所有仓库（有可拉取提交）",
@@ -1798,5 +1798,14 @@
   "VersionDock [{0}]: Stashed local changes before update.": "VersionDock [{0}]：已在更新前自动暂存本地修改。",
   "VersionDock [{0}]: Restored local changes after update.": "VersionDock [{0}]：已在更新完成后自动恢复本地修改。",
   "VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: \"{1}\".": "VersionDock [{0}]：恢复本地修改时发生冲突，已保留搁置备份: \"{1}\"。",
-  "VersionDock [{0}]: Conflicts detected while restoring stashed changes.": "VersionDock [{0}]：恢复暂存修改时发生冲突。"
+  "VersionDock [{0}]: Conflicts detected while restoring stashed changes.": "VersionDock [{0}]：恢复暂存修改时发生冲突。",
+  "Bypass hooks (--no-verify)": "跳过钩子 (--no-verify)",
+  "Bypass Git pre-commit hooks": "跳过 Git pre-commit 提交钩子",
+  "Merge & Push": "合并并推送",
+  "VersionDock [{0}]: Merging remote changes…": "VersionDock [{0}]：正在合并远程更改…",
+  "VersionDock [{0}]: Merged and pushed successfully.": "VersionDock [{0}]：已合并远程更改并成功推送。",
+  "VersionDock [{0}]: Update stopped with conflicts. Please resolve conflicts before pushing.": "VersionDock [{0}]：更新因冲突中断，请先解决冲突后再行推送。",
+  "{0} (Base Commit ↔ Shelve: {1})": "{0} (父提交 ↔ 搁置: {1})",
+  "{0} (Base Commit ↔ {1})": "{0} (父提交 ↔ {1})",
+  "{0} (Working Tree ↔ Shelve: {1})": "{0} (工作区 ↔ 搁置: {1})"
 }

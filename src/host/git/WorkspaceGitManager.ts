@@ -11,6 +11,9 @@ import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { PublishMissingRemote } from '../remote/types';
+import { GitHubRemoteProvider } from '../remote/GitHubRemoteProvider';
+import { GitLabRemoteProvider } from '../remote/GitLabRemoteProvider';
+import { setRemoteProtectedBranches } from '../utils/branchProtection';
 
 const MAX_SUBMODULE_DEPTH = 5;
 const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
@@ -291,6 +294,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private refreshFollowUp: NodeJS.Timeout | null = null;
   private branchDebounce: NodeJS.Timeout | null = null;
   private autoRefreshTimer: NodeJS.Timeout | null = null;
+  private autoFetchTimer: NodeJS.Timeout | null = null;
   /** Watchers for .git creation under workspace folders — rebuilt when folders/settings change. */
   private gitInitWatchers: vscode.Disposable[] = [];
   private prevHeads = new Map<string, string>();      // repoId → branch name
@@ -347,6 +351,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
         if (e.affectsConfiguration('versiondock.autoRefreshInterval')) {
           this.setupAutoRefreshTimer();
         }
+        if (e.affectsConfiguration('versiondock.git.autoFetchInterval')) {
+          this.setupAutoFetchTimer();
+        }
       }),
 
       // A folder already in the workspace may become a git repo (via git init or clone).
@@ -357,6 +364,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.reinitialize();
     this.setupGitInitWatchers();
     this.setupAutoRefreshTimer();
+    this.setupAutoFetchTimer();
 
     // If vscode.git is not yet initialized at startup, re-run setup once it is.
     // This ensures watchers use the VS Code git API rather than the filesystem fallback,
@@ -611,6 +619,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     if (getRepositoryMetadataSignature(metas) !== previousMetadataSignature) {
       this.reposListeners.forEach(l => l());
     }
+    void this.syncRemoteProtectedBranchesSilently();
   }
 
   private getRepositoryScanMaxDepth(): number {
@@ -848,6 +857,23 @@ export class WorkspaceGitManager implements vscode.Disposable {
       // Only set up watcher if the submodule is initialized (has .git)
       if (fs.existsSync(subGitDir)) {
         this.setupWatcher(subAbsPath, subRepoId);
+      } else {
+        const autoInit = vscode.workspace
+          .getConfiguration('versiondock')
+          .get<boolean>('git.cloneRecursiveSubmodules', true);
+        if (autoInit) {
+          const parentRepo = this.repos.get(parentRepoId);
+          if (parentRepo && parentRepo.kind === 'git') {
+            void parentRepo.updateSubmodule(subRelPath, true, true).then(() => {
+              if (fs.existsSync(subGitDir)) {
+                this.setupWatcher(subAbsPath, subRepoId);
+                this.scheduleRefresh();
+              }
+            }).catch(error => {
+              this.logger.debug('WorkspaceGitManager', 'Failed to auto-init submodule', { subRelPath, error: String(error) });
+            });
+          }
+        }
       }
 
       // Recurse into nested submodules
@@ -1132,6 +1158,78 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
     const intervalMs = Math.min(2_147_483_647, Math.max(1000, configuredSeconds * 1000));
     this.autoRefreshTimer = setInterval(() => this.scheduleRefresh(), intervalMs);
+  }
+
+  private setupAutoFetchTimer(): void {
+    if (this.autoFetchTimer) {
+      clearInterval(this.autoFetchTimer);
+      this.autoFetchTimer = null;
+    }
+
+    const configuredMinutes = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<number>('git.autoFetchInterval', 15);
+    if (typeof configuredMinutes !== 'number' || !Number.isFinite(configuredMinutes) || configuredMinutes <= 0) return;
+
+    const intervalMs = Math.min(2_147_483_647, Math.max(60_000, configuredMinutes * 60_000));
+    this.autoFetchTimer = setInterval(() => {
+      void this.autoFetchSilently();
+    }, intervalMs);
+  }
+
+  private async autoFetchSilently(): Promise<void> {
+    const repos = Array.from(this.repos.values()).filter(r => r.kind !== 'svn');
+    if (repos.length === 0) return;
+    try {
+      await Promise.allSettled(repos.map(repo => repo.fetchAll()));
+      this.scheduleRefresh();
+      this.notifyBranchesChanged();
+      void this.syncRemoteProtectedBranchesSilently();
+    } catch (error) {
+      this.logger.warn('WorkspaceGitManager', 'Background auto-fetch failed', { error: String(error) });
+    }
+  }
+
+  private async syncRemoteProtectedBranchesSilently(): Promise<void> {
+    const syncEnabled = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<boolean>('git.syncProtectedBranchesFromGitHub', true);
+    if (!syncEnabled) return;
+
+    const githubProvider = new GitHubRemoteProvider(this.logger);
+    let gitlabProvider: GitLabRemoteProvider | undefined;
+
+    for (const [repoId, repo] of this.repos.entries()) {
+      if (repo.kind !== 'git') continue;
+      try {
+        const remotes = await repo.getRemotes();
+        const originUrl = remotes[0];
+        if (!originUrl) continue;
+
+        let protectedBranches: string[] = [];
+        if (/github\.com/i.test(originUrl)) {
+          protectedBranches = await githubProvider.getProtectedBranches(originUrl);
+        } else {
+          if (!gitlabProvider && this.context) {
+            gitlabProvider = new GitLabRemoteProvider(this.context, this.logger);
+          }
+          if (gitlabProvider) {
+            protectedBranches = await gitlabProvider.getProtectedBranches(originUrl);
+          }
+        }
+
+        if (protectedBranches.length > 0) {
+          setRemoteProtectedBranches(repoId, protectedBranches);
+          this.logger.debug('WorkspaceGitManager', 'Synced remote protected branches', {
+            repoId,
+            count: protectedBranches.length,
+            branches: protectedBranches,
+          });
+        }
+      } catch (err) {
+        this.logger.debug('WorkspaceGitManager', 'Silent sync of remote protected branches skipped', { repoId, error: String(err) });
+      }
+    }
   }
 
   reinitializeAndRefresh(): void {
@@ -1714,6 +1812,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
     if (this.autoRefreshTimer) {
       clearInterval(this.autoRefreshTimer);
       this.autoRefreshTimer = null;
+    }
+    if (this.autoFetchTimer) {
+      clearInterval(this.autoFetchTimer);
+      this.autoFetchTimer = null;
     }
     this.gitInitWatchers.forEach(d => d.dispose());
     this.globalListeners.forEach(d => d.dispose());

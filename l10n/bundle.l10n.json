@@ -1798,5 +1798,14 @@
   "VersionDock [{0}]: Stashed local changes before update.": "VersionDock [{0}]: Stashed local changes before update.",
   "VersionDock [{0}]: Restored local changes after update.": "VersionDock [{0}]: Restored local changes after update.",
   "VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: \"{1}\".": "VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: \"{1}\".",
-  "VersionDock [{0}]: Conflicts detected while restoring stashed changes.": "VersionDock [{0}]: Conflicts detected while restoring stashed changes."
+  "VersionDock [{0}]: Conflicts detected while restoring stashed changes.": "VersionDock [{0}]: Conflicts detected while restoring stashed changes.",
+  "Bypass hooks (--no-verify)": "Bypass hooks (--no-verify)",
+  "Bypass Git pre-commit hooks": "Bypass Git pre-commit hooks",
+  "Merge & Push": "Merge & Push",
+  "VersionDock [{0}]: Merging remote changes…": "VersionDock [{0}]: Merging remote changes…",
+  "VersionDock [{0}]: Merged and pushed successfully.": "VersionDock [{0}]: Merged and pushed successfully.",
+  "VersionDock [{0}]: Update stopped with conflicts. Please resolve conflicts before pushing.": "VersionDock [{0}]: Update stopped with conflicts. Please resolve conflicts before pushing.",
+  "{0} (Base Commit ↔ Shelve: {1})": "{0} (Base Commit ↔ Shelve: {1})",
+  "{0} (Base Commit ↔ {1})": "{0} (Base Commit ↔ {1})",
+  "{0} (Working Tree ↔ Shelve: {1})": "{0} (Working Tree ↔ Shelve: {1})"
 }
