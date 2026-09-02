@@ -35,10 +35,10 @@ import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
-import { withGitPushProgress } from '../utils/pushProgress';
 import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 import { checkCommitSafety } from '../utils/commitSafetyCheck';
+import { sanitizeBranchName, validateBranchNameInput, getBranchCleanCharacter } from '../utils/branchNameSanitizer';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -4516,6 +4516,56 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   async validateCommitSafety(repo: GitService, selectedFilePaths?: string[]): Promise<boolean> {
     if (repo.kind === 'svn') return true;
+
+    // 1. Detached HEAD or Rebase in progress pre-flight check
+    const warnDetached = vscode.workspace.getConfiguration('versiondock').get<boolean>('guard.warnOnDetachedHead', true);
+    if (warnDetached) {
+      const current = await repo.getCurrentBranch().catch(() => undefined);
+      const isDetached = current && (current.name === 'HEAD' || Boolean(current.detachedTag) || Boolean(current.detachedHash));
+      const opState = await repo.getOperationState().catch(() => null);
+
+      if (isDetached) {
+        const createBranchAndCommit = t('Create Branch & Commit');
+        const commitAnyway = t('Commit Anyway');
+        const warningMessage = t('VersionDock Warning: You are committing to a detached HEAD. To keep these changes safe on a branch, create a branch now or commit anyway.');
+        const choice = await vscode.window.showWarningMessage(
+          warningMessage,
+          { modal: true },
+          createBranchAndCommit,
+          commitAnyway,
+        );
+        if (!choice) return false;
+        if (choice === createBranchAndCommit) {
+          const defaultCleanChar = getBranchCleanCharacter();
+          const newBranchInput = await vscode.window.showInputBox({
+            title: t('Create Branch & Commit'),
+            prompt: t('Enter new branch name'),
+            validateInput: v => validateBranchNameInput(v, defaultCleanChar),
+          });
+          if (!newBranchInput || !newBranchInput.trim()) return false;
+          const sanitizedBranch = sanitizeBranchName(newBranchInput.trim(), defaultCleanChar);
+          try {
+            await repo.checkout(sanitizedBranch, true);
+            this.manager.notifyBranchesChanged();
+            this.logProvider?.refresh();
+          } catch (e) {
+            vscode.window.showErrorMessage(t('Failed to create branch: {0}', String(e)));
+            return false;
+          }
+        }
+      } else if (opState === 'rebase') {
+        const commitAnyway = t('Commit Anyway');
+        const warningMessage = t('VersionDock Warning: A rebase operation is currently in progress. Do you want to commit anyway?');
+        const choice = await vscode.window.showWarningMessage(
+          warningMessage,
+          { modal: true },
+          commitAnyway,
+        );
+        if (choice !== commitAnyway) return false;
+      }
+    }
+
+    // 2. File issues pre-flight check
     let filesToCheck = selectedFilePaths;
     if (!filesToCheck || filesToCheck.length === 0) {
       const status = await repo.getStatus().catch(() => undefined);
@@ -4538,9 +4588,17 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const list = safetyResult.largeFiles.map(f => `${f.path} (${f.sizeFormatted})`).join(', ');
       details.push(t('Large files: {0}', list));
     }
+    if (safetyResult.invalidFileNameFiles.length > 0) {
+      const list = safetyResult.invalidFileNameFiles.map(f => `${f.path} (${f.reason})`).join(', ');
+      details.push(t('Incompatible / invalid file names: {0}', list));
+    }
+    if (safetyResult.crlfFiles.length > 0) {
+      const list = safetyResult.crlfFiles.slice(0, 5).join(', ') + (safetyResult.crlfFiles.length > 5 ? ` (+${safetyResult.crlfFiles.length - 5})` : '');
+      details.push(t('CRLF line separators: {0}', list));
+    }
 
     const warningMessage = t(
-      'VersionDock Warning: The commit contains potentially sensitive or large files:\n{0}\nDo you want to commit anyway?',
+      'VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?',
       details.join('\n')
     );
     const commitAnyway = t('Commit Anyway');

@@ -17,9 +17,9 @@ import {
 import { formatRepoLabel } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
 import { isRemoteRepositoryCancelled } from '../remote/types';
-import { withGitPushProgress } from '../utils/pushProgress';
 import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
+import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
 
 type SvnIgnoreRepo = {
   addIgnoreEntry(entryPath: string): Promise<{ entry: string; directoryPath: string; alreadyExists: boolean }>;
@@ -1544,9 +1544,10 @@ export class BranchStatusBar implements vscode.Disposable {
     const branchName = await vscode.window.showInputBox({
       title: t('New Branch — Name'),
       prompt: t('Enter the new branch name'),
-      validateInput: v => (v.trim() ? undefined : t('Branch name cannot be empty')),
+      validateInput: v => validateBranchNameInput(v),
     });
     if (!branchName) return;
+    const sanitizedBranchName = sanitizeBranchName(branchName.trim());
 
     // Step 2: base branch (from any repo)
     const allBranches = await this.manager.getAllBranches();
@@ -1594,7 +1595,7 @@ export class BranchStatusBar implements vscode.Disposable {
 
     // Execute
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating branch "{0}"…', branchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName), cancellable: false },
       async () => {
         const errors: string[] = [];
         for (const item of pickedRepos) {
@@ -1602,9 +1603,9 @@ export class BranchStatusBar implements vscode.Disposable {
           if (!repo) continue;
           try {
             if (doCheckout) {
-              await repo.checkout(branchName, true, baseFrom);
+              await repo.checkout(sanitizedBranchName, true, baseFrom);
             } else {
-              await repo.createBranch(branchName, baseFrom);
+              await repo.createBranch(sanitizedBranchName, baseFrom);
             }
           } catch (e: unknown) {
             errors.push(`${item.label}: ${String(e)}`);
@@ -1614,7 +1615,7 @@ export class BranchStatusBar implements vscode.Disposable {
           vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
         } else {
           vscode.window.showInformationMessage(
-            t('VersionDock: Branch "{0}" created in {1} repos.', branchName, pickedRepos.length)
+            t('VersionDock: Branch "{0}" created in {1} repos.', sanitizedBranchName, pickedRepos.length)
           );
         }
       }
@@ -2112,9 +2113,10 @@ export class BranchStatusBar implements vscode.Disposable {
     const branchName = await vscode.window.showInputBox({
       title: t('New Branch in {0}', meta.name),
       prompt: t('Enter the new branch name'),
-      validateInput: v => (v.trim() ? undefined : t('Branch name cannot be empty')),
+      validateInput: v => validateBranchNameInput(v),
     });
     if (!branchName) return;
+    const sanitizedBranchName = sanitizeBranchName(branchName.trim());
 
     const branches = await repo.getBranches();
     const localBranches = branches.filter(b => !b.isRemote);
@@ -2145,20 +2147,20 @@ export class BranchStatusBar implements vscode.Disposable {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: t('VersionDock: Creating branch "{0}"…', branchName),
+        title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName),
         cancellable: false,
       },
       async () => {
         try {
           if (checkoutPick.value) {
-            await repo.checkout(branchName, true, baseFrom);
+            await repo.checkout(sanitizedBranchName, true, baseFrom);
           } else {
-            await repo.createBranch(branchName, baseFrom);
+            await repo.createBranch(sanitizedBranchName, baseFrom);
           }
           vscode.window.showInformationMessage(
             checkoutPick.value
-              ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, branchName)
-              : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
+              ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, sanitizedBranchName)
+              : t('VersionDock [{0}]: branch "{1}" created.', meta.name, sanitizedBranchName)
           );
         } catch (e: unknown) {
           this.showError(meta, e);
@@ -2313,9 +2315,10 @@ export class BranchStatusBar implements vscode.Disposable {
     const branchName = await vscode.window.showInputBox({
       title: t("New Branch from '{0}' in {1}", fromBranch, meta.name),
       prompt: t('Enter the new branch name'),
-      validateInput: v => (v.trim() ? undefined : t('Branch name cannot be empty')),
+      validateInput: v => validateBranchNameInput(v),
     });
     if (!branchName) return;
+    const sanitizedBranchName = sanitizeBranchName(branchName.trim());
 
     const checkoutPick = await vscode.window.showQuickPick(
       [
@@ -2329,20 +2332,20 @@ export class BranchStatusBar implements vscode.Disposable {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: t('VersionDock: Creating branch "{0}"…', branchName),
+        title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName),
         cancellable: false,
       },
       async () => {
         try {
           if (checkoutPick.value) {
-            await repo.checkout(branchName, true, fromBranch);
+            await repo.checkout(sanitizedBranchName, true, fromBranch);
           } else {
-            await repo.createBranch(branchName, fromBranch);
+            await repo.createBranch(sanitizedBranchName, fromBranch);
           }
           vscode.window.showInformationMessage(
             checkoutPick.value
-              ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, branchName)
-              : t('VersionDock [{0}]: branch "{1}" created.', meta.name, branchName)
+              ? t('VersionDock [{0}]: branch "{1}" created and checked out.', meta.name, sanitizedBranchName)
+              : t('VersionDock [{0}]: branch "{1}" created.', meta.name, sanitizedBranchName)
           );
         } catch (e: unknown) {
           this.showError(meta, e);
@@ -2380,13 +2383,15 @@ export class BranchStatusBar implements vscode.Disposable {
     const newName = await vscode.window.showInputBox({
       title: t("Rename branch '{0}' in {1}", oldName, meta.name),
       value: oldName,
-      validateInput: v => (v.trim() ? undefined : t('Branch name cannot be empty')),
+      validateInput: v => validateBranchNameInput(v),
     });
     if (!newName || newName === oldName) return;
+    const sanitizedNewName = sanitizeBranchName(newName.trim());
+    if (sanitizedNewName === oldName) return;
 
     try {
-      await repo.renameBranch(oldName, newName);
-      vscode.window.showInformationMessage(t('VersionDock [{0}]: renamed "{1}" → "{2}".', meta.name, oldName, newName));
+      await repo.renameBranch(oldName, sanitizedNewName);
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: renamed "{1}" → "{2}".', meta.name, oldName, sanitizedNewName));
     } catch (e: unknown) {
       this.showError(meta, e);
     }
@@ -2491,9 +2496,10 @@ export class BranchStatusBar implements vscode.Disposable {
     const branchName = await vscode.window.showInputBox({
       title: t("New Branch from '{0}'", fromBranch),
       prompt: t('Enter the new branch name'),
-      validateInput: v => (v.trim() ? undefined : t('Branch name cannot be empty')),
+      validateInput: v => validateBranchNameInput(v),
     });
     if (!branchName) return;
+    const sanitizedBranchName = sanitizeBranchName(branchName.trim());
 
     const checkoutPick = await vscode.window.showQuickPick(
       [
@@ -2505,7 +2511,7 @@ export class BranchStatusBar implements vscode.Disposable {
     if (!checkoutPick) return;
 
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating branch "{0}"…', branchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName), cancellable: false },
       async () => {
         const errors: string[] = [];
         for (const meta of metas) {
@@ -2513,9 +2519,9 @@ export class BranchStatusBar implements vscode.Disposable {
           if (!repo) continue;
           try {
             if (checkoutPick.value) {
-              await repo.checkout(branchName, true, fromBranch);
+              await repo.checkout(sanitizedBranchName, true, fromBranch);
             } else {
-              await repo.createBranch(branchName, fromBranch);
+              await repo.createBranch(sanitizedBranchName, fromBranch);
             }
           } catch (e: unknown) {
             errors.push(`${meta.name}: ${String(e)}`);
@@ -2524,7 +2530,7 @@ export class BranchStatusBar implements vscode.Disposable {
         if (errors.length > 0) {
           vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Branch "{0}" created in {1} repos.', branchName, metas.length));
+          vscode.window.showInformationMessage(t('VersionDock: Branch "{0}" created in {1} repos.', sanitizedBranchName, metas.length));
         }
       }
     );
@@ -2561,12 +2567,14 @@ export class BranchStatusBar implements vscode.Disposable {
     const newName = await vscode.window.showInputBox({
       title: t("Rename branch '{0}' in all repos", oldName),
       value: oldName,
-      validateInput: v => (v.trim() ? undefined : t('Branch name cannot be empty')),
+      validateInput: v => validateBranchNameInput(v),
     });
     if (!newName || newName === oldName) return;
+    const sanitizedNewName = sanitizeBranchName(newName.trim());
+    if (sanitizedNewName === oldName) return;
 
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Renaming "{0}" → "{1}"…', oldName, newName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Renaming "{0}" → "{1}"…', oldName, sanitizedNewName), cancellable: false },
       async () => {
         const errors: string[] = [];
         for (const meta of metas) {

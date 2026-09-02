@@ -118,5 +118,14 @@
   "configuration.git.onPushRejected.description": "当因远程分支存在新提交而被拒绝推送（非快进推送）时的行为。",
   "configuration.git.onPushRejected.enum.prompt": "弹出提示询问是否拉取变基并重试、强制推送或取消（类似 JetBrains 行为）。",
   "configuration.git.onPushRejected.enum.rebaseAndRetry": "自动拉取变基后再重试推送。",
-  "configuration.git.onPushRejected.enum.error": "仅显示错误通知，不提供交互恢复。"
+  "configuration.git.onPushRejected.enum.error": "仅显示错误通知，不提供交互恢复。",
+  "configuration.guard.warnOnLargeFiles.description": "提交大于指定大小限制的文件时发出警告。",
+  "configuration.guard.largeFileSizeLimitMB.description": "提交大文件警告的大小阈值（单位：MB，默认 50MB）。",
+  "configuration.guard.warnOnDetachedHead.description": "在游离的 HEAD 中或变基期间提交时发出警告，并提供创建分支选项。",
+  "configuration.guard.warnOnCrlf.description": "如果即将提交 CRLF 行分隔符，则发出警告。",
+  "configuration.guard.warnOnInvalidFileNames.description": "提交名称可能会导致 Windows 或其他系统出现问题的文件时发出警告（如非法字符或大小写冲突）。",
+  "configuration.git.protectedBranches.description": "受保护分支名称模式列表（例如 master, main, release/*），在推送或强推时触发安全防护。",
+  "configuration.git.showPushDialogForProtectedBranches.description": "推送至受保护分支时显示确认对话框。",
+  "configuration.git.branchCleanCharacter.description": "在 Git 分支名称中代替空格和禁用符号的符号（例如 '-'）。",
+  "configuration.git.cherryPickAddSuffix.description": "在挑选 (cherry-pick) 提交时，添加 'cherry-picked from <hash>' 后缀 (git cherry-pick -x)。"
 }

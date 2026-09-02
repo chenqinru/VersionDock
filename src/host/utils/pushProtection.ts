@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { t } from './l10n';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from './pushProgress';
+import { isBranchProtected } from './branchProtection';
 
 export interface PushProtectionTargetRepo {
   repoId?: string;
@@ -10,6 +11,7 @@ export interface PushProtectionTargetRepo {
   push(force?: boolean, remote?: string): Promise<void>;
   pullRebase?(): Promise<string>;
   getRemotes(): Promise<string[]>;
+  getCurrentBranch?(): Promise<{ name: string } | undefined>;
 }
 
 export interface RunPushOptions {
@@ -55,6 +57,64 @@ export function isPushRejectedError(error: unknown): boolean {
 }
 
 /**
+ * Validates whether the push operation is allowed on protected branches.
+ */
+async function validateProtectedBranchPush(
+  repo: PushProtectionTargetRepo,
+  repoName: string,
+  force: boolean,
+): Promise<boolean> {
+  if (!repo.getCurrentBranch) return true;
+  try {
+    const currentBranch = await repo.getCurrentBranch();
+    const branchName = currentBranch?.name;
+    if (!branchName || branchName === 'HEAD') return true;
+
+    if (!isBranchProtected(branchName)) {
+      return true;
+    }
+
+    // High-severity warning for Force Push to protected branch
+    if (force) {
+      const forceAnyway = t('Force Push Anyway');
+      const choice = await vscode.window.showWarningMessage(
+        t(
+          'VersionDock [{0}]: You are about to Force Push to protected branch "{1}"! This may permanently overwrite remote commits. Are you sure you want to proceed?',
+          repoName,
+          branchName,
+        ),
+        { modal: true },
+        forceAnyway,
+      );
+      return choice === forceAnyway;
+    }
+
+    // Normal push confirmation for protected branch if configured
+    const showPushDialog = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<boolean>('git.showPushDialogForProtectedBranches', true);
+
+    if (showPushDialog) {
+      const pushBtn = t('Push');
+      const choice = await vscode.window.showWarningMessage(
+        t(
+          'VersionDock [{0}]: You are pushing to protected branch "{1}". Do you want to proceed?',
+          repoName,
+          branchName,
+        ),
+        { modal: true },
+        pushBtn,
+      );
+      return choice === pushBtn;
+    }
+
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Runs a Git push operation wrapped with JetBrains-style protection:
  * If the push is rejected because the remote is ahead, it prompts the user to
  * Rebase & Push, Force Push, or Cancel, and automatically handles the rebase + retry workflow.
@@ -66,6 +126,12 @@ export async function runPushWithProtection(
   const repoName = options?.repoName || repo.name || repo.repoId || 'Repository';
   const force = options?.force ?? false;
   const remote = options?.remote;
+
+  // 0. Protected branch pre-check
+  const allowed = await validateProtectedBranchPush(repo, repoName, force);
+  if (!allowed) {
+    return { success: false, cancelled: true };
+  }
 
   // 1. Initial push attempt (wrapped with push progress)
   try {
@@ -173,6 +239,11 @@ export async function runPushWithProtection(
 
     // 4. Handle Force Push
     if (shouldForce) {
+      const forceAllowed = await validateProtectedBranchPush(repo, repoName, true);
+      if (!forceAllowed) {
+        return { success: false, cancelled: true };
+      }
+
       options?.logger?.info('Git', 'Executing force push per user request', { repoName, remote });
       try {
         await withGitPushProgress(

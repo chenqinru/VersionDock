@@ -24,10 +24,10 @@ import type { AiCommitMessageService } from '../aiCommitMessage/AiCommitMessageS
 import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHistoricalCommitMessage';
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 import { isRemoteRepositoryCancelled } from '../remote/types';
-import { withGitPushProgress } from '../utils/pushProgress';
 import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
+import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const SVN_CHANGE_RESOURCE_CONCURRENCY = 4;
@@ -1922,14 +1922,14 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const branchName = await vscode.window.showInputBox({
           prompt: repo.kind === 'svn' ? t('Create SVN branch from revision {0}', shortRef) : t('Create new branch from {0}', shortRef),
           placeHolder: t('my-feature-branch'),
-          validateInput: v => v.trim() ? undefined : t('Branch name cannot be empty'),
+          validateInput: v => validateBranchNameInput(v),
         });
         if (!branchName) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
           return;
         }
         try {
-          await repo.createBranchFromCommit(branchName.trim(), msg.hash);
+          await repo.createBranchFromCommit(sanitizeBranchName(branchName.trim()), msg.hash);
           const branches = await repo.getBranches();
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches });
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });

@@ -915,6 +915,69 @@
           "type": "boolean",
           "default": false,
           "description": "%configuration.suppressDivergedBranchWarning.description%"
+        },
+        "versiondock.guard.warnOnLargeFiles": {
+          "order": 130,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.guard.warnOnLargeFiles.description%"
+        },
+        "versiondock.guard.largeFileSizeLimitMB": {
+          "order": 131,
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 1000,
+          "description": "%configuration.guard.largeFileSizeLimitMB.description%"
+        },
+        "versiondock.guard.warnOnDetachedHead": {
+          "order": 132,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.guard.warnOnDetachedHead.description%"
+        },
+        "versiondock.guard.warnOnCrlf": {
+          "order": 133,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.guard.warnOnCrlf.description%"
+        },
+        "versiondock.guard.warnOnInvalidFileNames": {
+          "order": 134,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.guard.warnOnInvalidFileNames.description%"
+        },
+        "versiondock.git.protectedBranches": {
+          "order": 140,
+          "type": "array",
+          "default": [
+            "master",
+            "main"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.git.protectedBranches.description%"
+        },
+        "versiondock.git.showPushDialogForProtectedBranches": {
+          "order": 141,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.git.showPushDialogForProtectedBranches.description%"
+        },
+        "versiondock.git.branchCleanCharacter": {
+          "order": 142,
+          "type": "string",
+          "default": "-",
+          "maxLength": 1,
+          "description": "%configuration.git.branchCleanCharacter.description%"
+        },
+        "versiondock.git.cherryPickAddSuffix": {
+          "order": 143,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.git.cherryPickAddSuffix.description%"
         }
       }
     }

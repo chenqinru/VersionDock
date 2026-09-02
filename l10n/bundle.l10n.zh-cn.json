@@ -1782,5 +1782,16 @@
   "VersionDock [{0}]: Force pushed successfully.": "VersionDock [{0}]：强制推送成功。",
   "VersionDock [{0}]: Force pushing…": "VersionDock [{0}]：正在强制推送…",
   "VersionDock [{0}]: Rebase is not supported on this repository.": "VersionDock [{0}]：此仓库不支持变基。",
-  "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.": "VersionDock：远程有新提交，请先拉取或变基后再推送。"
+  "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.": "VersionDock：远程有新提交，请先拉取或变基后再推送。",
+  "Branch name must contain at least one valid character": "分支名称必须包含至少一个有效字符",
+  "Contains invalid characters. Will be formatted as: \"{0}\"": "包含非法字符，将被自动格式化为: \"{0}\"",
+  "Create Branch & Commit": "创建新分支并提交",
+  "VersionDock Warning: You are committing to a detached HEAD. To keep these changes safe on a branch, create a branch now or commit anyway.": "VersionDock 警告：你正在游离 HEAD 状态下提交。为防止提交历史丢失，建议创建新分支保存，或仍然提交。",
+  "VersionDock Warning: A rebase operation is currently in progress. Do you want to commit anyway?": "VersionDock 警告：当前正在进行变基（Rebase）操作。是否仍要提交？",
+  "Incompatible / invalid file names: {0}": "跨平台冲突/非法文件名: {0}",
+  "CRLF line separators: {0}": "包含 CRLF 行分隔符: {0}",
+  "VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?": "VersionDock 警告：即将提交的内容存在潜在风险:\n{0}\n是否仍要继续提交？",
+  "Force Push Anyway": "仍然强制推送",
+  "VersionDock [{0}]: You are about to Force Push to protected branch \"{1}\"! This may permanently overwrite remote commits. Are you sure you want to proceed?": "VersionDock [{0}]：你即将对受保护分支 \"{1}\" 执行强制推送！这可能会永久覆盖远程提交历史。确定要继续吗？",
+  "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?": "VersionDock [{0}]：你即将推送到受保护分支 \"{1}\"。是否继续推送？"
 }

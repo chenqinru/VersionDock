@@ -25,6 +25,7 @@ import { t } from '../utils/l10n';
 import { BlameService, type BlameLine } from './BlameService';
 import { assertNoSymlinkAncestors, isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
 import { createGitClient, getGitWriteGeneration, waitForGitWrite, withGitWriteLock, withGitWriteLocks } from './GitOperationLock';
+import { isBranchProtected } from '../utils/branchProtection';
 import type { PublishMissingRemote } from '../remote/types';
 import type { GitUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
 
@@ -923,6 +924,7 @@ export class GitService {
         aheadBehind,
         detachedTag,
         detachedHash,
+        isProtected: !isDetached && isBranchProtected(branchName),
       };
     }
     const status = await this.git.status();
@@ -953,6 +955,7 @@ export class GitService {
       aheadBehind,
       detachedTag,
       detachedHash,
+      isProtected: !isDetached && isBranchProtected(branchName),
     };
   }
 
@@ -989,6 +992,7 @@ export class GitService {
             ?? ((isHead && head?.ahead !== undefined && head?.behind !== undefined)
               ? { ahead: head.ahead, behind: head.behind }
               : undefined),
+          isProtected: isBranchProtected(name),
         });
       }
 
@@ -1006,6 +1010,7 @@ export class GitService {
           isRemote: true,
           remoteName,
           lastCommitHash: ref.commit,
+          isProtected: isBranchProtected(name),
         });
       }
 
@@ -1050,6 +1055,7 @@ export class GitService {
         remoteName,
         lastCommitHash: fullHashMap.get(cleanName) ?? branch.commit,
         aheadBehind,
+        isProtected: isBranchProtected(cleanName),
       });
     }
     return branches;
@@ -2759,7 +2765,11 @@ export class GitService {
   }
 
   async cherryPick(hash: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['cherry-pick', hash]).then(() => undefined));
+    const addSuffix = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.cherryPickAddSuffix', true);
+    const args = ['cherry-pick'];
+    if (addSuffix) args.push('-x');
+    args.push(hash);
+    return this.withWriteLock(() => this.git.raw(args).then(() => undefined));
   }
 
   async cherryPickContinue(): Promise<void> {
@@ -2833,9 +2843,13 @@ export class GitService {
   }
 
   async cherryPickMulti(hashes: string[]): Promise<void> {
+    const addSuffix = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.cherryPickAddSuffix', true);
     return this.runStatusSensitiveOperation(async () => {
       for (const hash of hashes) {
-        await this.git.raw(['cherry-pick', hash]);
+        const args = ['cherry-pick'];
+        if (addSuffix) args.push('-x');
+        args.push(hash);
+        await this.git.raw(args);
       }
     }, 'cherry-pick');
   }

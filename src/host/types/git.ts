@@ -37,6 +37,7 @@ export interface BranchInfo {
   lastCommitDate?: string;
   detachedTag?: string;   // set when HEAD is detached on a tag
   detachedHash?: string;  // short commit hash when HEAD is detached without a tag
+  isProtected?: boolean;  // true if branch matches protected branch patterns
 }
 
 export interface LineRange {

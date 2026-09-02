@@ -11,6 +11,7 @@ import { showGitErrorMessage } from '../utils/gitError';
 import type { LineRange } from '../types/git';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { formatRepoLabel } from '../utils/repoLabels';
+import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
 
 function getScmResourceUri(resource: unknown): vscode.Uri | undefined {
   if (resource instanceof vscode.Uri) return resource;
@@ -478,10 +479,10 @@ export function registerCommands(
       const name = await vscode.window.showInputBox({
         title: t('SVN Create Branch'),
         prompt: t('Branch name under /branches'),
-        validateInput: v => v.trim() ? undefined : t('Branch name cannot be empty'),
+        validateInput: v => validateBranchNameInput(v),
       });
       if (!name) return;
-      await picked.repo.createBranch(name.trim());
+      await picked.repo.createBranch(sanitizeBranchName(name.trim()));
       logPanel.refresh();
     }),
 

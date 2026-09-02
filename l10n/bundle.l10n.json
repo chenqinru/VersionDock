@@ -1782,5 +1782,16 @@
   "VersionDock [{0}]: Force pushed successfully.": "VersionDock [{0}]: Force pushed successfully.",
   "VersionDock [{0}]: Force pushing…": "VersionDock [{0}]: Force pushing…",
   "VersionDock [{0}]: Rebase is not supported on this repository.": "VersionDock [{0}]: Rebase is not supported on this repository.",
-  "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.": "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing."
+  "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.": "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.",
+  "Branch name must contain at least one valid character": "Branch name must contain at least one valid character",
+  "Contains invalid characters. Will be formatted as: \"{0}\"": "Contains invalid characters. Will be formatted as: \"{0}\"",
+  "Create Branch & Commit": "Create Branch & Commit",
+  "VersionDock Warning: You are committing to a detached HEAD. To keep these changes safe on a branch, create a branch now or commit anyway.": "VersionDock Warning: You are committing to a detached HEAD. To keep these changes safe on a branch, create a branch now or commit anyway.",
+  "VersionDock Warning: A rebase operation is currently in progress. Do you want to commit anyway?": "VersionDock Warning: A rebase operation is currently in progress. Do you want to commit anyway?",
+  "Incompatible / invalid file names: {0}": "Incompatible / invalid file names: {0}",
+  "CRLF line separators: {0}": "CRLF line separators: {0}",
+  "VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?": "VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?",
+  "Force Push Anyway": "Force Push Anyway",
+  "VersionDock [{0}]: You are about to Force Push to protected branch \"{1}\"! This may permanently overwrite remote commits. Are you sure you want to proceed?": "VersionDock [{0}]: You are about to Force Push to protected branch \"{1}\"! This may permanently overwrite remote commits. Are you sure you want to proceed?",
+  "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?": "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?"
 }
