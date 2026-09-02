@@ -6,6 +6,7 @@ import { type SimpleGit } from 'simple-git';
 import type { ShelveEntry } from '../types/messages';
 import { t } from '../utils/l10n';
 import { createGitClient, withGitWriteLock } from './GitOperationLock';
+import type { SuppressStatusUpdates } from './GitService';
 
 type ChangelistAssignment = NonNullable<ShelveEntry['changelistAssignments']>[number];
 
@@ -34,7 +35,11 @@ export class ShelveService {
   private shelfDir: string;
   private metaPath: string;
 
-  constructor(public readonly rootPath: string, globalStorage: string) {
+  constructor(
+    public readonly rootPath: string,
+    globalStorage: string,
+    private readonly suppressStatusUpdates?: SuppressStatusUpdates,
+  ) {
     // Keep read-only shelf queries concurrent; Git writes are serialized by
     // GitOperationLock and optional index refreshes are disabled below.
     this.git = createGitClient(rootPath);
@@ -304,7 +309,8 @@ export class ShelveService {
   }
 
   async push(name: string, paths?: string[], changelistAssignments?: ChangelistAssignment[]): Promise<ShelveEntry> {
-    return withGitWriteLock(this.rootPath, () => this.pushLocked(name, paths, changelistAssignments));
+    const run = () => withGitWriteLock(this.rootPath, () => this.pushLocked(name, paths, changelistAssignments));
+    return this.suppressStatusUpdates ? this.suppressStatusUpdates(run, 'stash', name) : run();
   }
 
   private async pushLocked(name: string, paths?: string[], changelistAssignments?: ChangelistAssignment[]): Promise<ShelveEntry> {
@@ -473,7 +479,8 @@ export class ShelveService {
   }
 
   async apply(shelveId: string, paths?: string[]): Promise<ChangelistAssignment[] | undefined> {
-    return withGitWriteLock(this.rootPath, () => this.applyLocked(shelveId, paths));
+    const run = () => withGitWriteLock(this.rootPath, () => this.applyLocked(shelveId, paths));
+    return this.suppressStatusUpdates ? this.suppressStatusUpdates(run, 'stash', shelveId) : run();
   }
 
   private async applyLocked(shelveId: string, paths?: string[]): Promise<ChangelistAssignment[] | undefined> {

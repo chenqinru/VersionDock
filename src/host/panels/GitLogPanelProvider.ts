@@ -698,7 +698,6 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     switch (msg.type) {
       case 'LOG_REQUEST_GRAPH_COMMITS': {
         const maxCommits = vscode.workspace.getConfiguration('versiondock').get<number>('graphMaxCommits', 1000);
-        const metadataGeneration = this.managerSyncGeneration;
         const logRepoIds = this.getRequestedVisibleRepoIds(msg.repoIds);
         if (logRepoIds.length === 0 || maxCommits <= 0) {
           this.post({
@@ -709,14 +708,23 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
           break;
         }
-        const commits = await this.manager.getInterleavedGraphLog(logRepoIds, maxCommits);
-        if (metadataGeneration !== this.managerSyncGeneration) break;
-        this.post({
-          type: 'LOG_GRAPH_COMMITS',
-          commits,
-          generation: msg.generation,
-          requestId: msg.requestId,
-        });
+        try {
+          const commits = await this.manager.getInterleavedGraphLog(logRepoIds, maxCommits);
+          this.post({
+            type: 'LOG_GRAPH_COMMITS',
+            commits,
+            generation: msg.generation,
+            requestId: msg.requestId,
+          });
+        } catch (error) {
+          this.logger.error('GitLog', 'Failed to load graph commits', error);
+          this.post({
+            type: 'LOG_GRAPH_COMMITS',
+            commits: [],
+            generation: msg.generation,
+            requestId: msg.requestId,
+          });
+        }
         break;
       }
 
@@ -734,18 +742,22 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         // later commit pages. Avoid repeating branch/tag CLI calls and theme
         // parsing on every scroll batch.
         if (msg.skip === 0) {
-          const [branches, iconTheme] = await Promise.all([
-            this.getFilteredBranches(repos),
-            this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
-          ]);
-          if (metadataGeneration === this.managerSyncGeneration) {
-            this.acknowledgeFreshLogSnapshot(repos, branches);
-            this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
+          try {
+            const [branches, iconTheme] = await Promise.all([
+              this.getFilteredBranches(repos),
+              this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
+            ]);
+            if (metadataGeneration === this.managerSyncGeneration) {
+              this.acknowledgeFreshLogSnapshot(repos, branches);
+              this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
 
-            // Send tags for all visible repos without blocking the commit batch.
-            for (const meta of repos) {
-              void this.refreshTags(meta.id).catch(() => {});
+              // Send tags for all visible repos without blocking the commit batch.
+              for (const meta of repos) {
+                void this.refreshTags(meta.id).catch(() => {});
+              }
             }
+          } catch (error) {
+            this.logger.error('GitLog', 'Failed to load branches on commit request', error);
           }
         }
 
@@ -766,16 +778,21 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.flushPendingHistoryFilter();
           break;
         }
-        const commits = await this.manager.getInterleavedLog(logRepoIds, limit, msg.skip, {
-          filterText: msg.filterText,
-          filterAuthor: msg.filterAuthor,
-          filterBranch: msg.filterBranch,
-          filterDateFrom: msg.filterDateFrom,
-          filterDateTo: msg.filterDateTo,
-          filterPath: msg.filterPath,
-          lineRange: msg.lineRange,
-        });
-        this.post({ type: 'LOG_COMMITS_BATCH', commits, isLast: commits.length < limit, batchIndex: 0, generation: msg.generation, requestId: msg.requestId });
+        try {
+          const commits = await this.manager.getInterleavedLog(logRepoIds, limit, msg.skip, {
+            filterText: msg.filterText,
+            filterAuthor: msg.filterAuthor,
+            filterBranch: msg.filterBranch,
+            filterDateFrom: msg.filterDateFrom,
+            filterDateTo: msg.filterDateTo,
+            filterPath: msg.filterPath,
+            lineRange: msg.lineRange,
+          });
+          this.post({ type: 'LOG_COMMITS_BATCH', commits, isLast: commits.length < limit, batchIndex: 0, generation: msg.generation, requestId: msg.requestId });
+        } catch (error) {
+          this.logger.error('GitLog', 'Failed to load interleaved log', error);
+          this.post({ type: 'LOG_COMMITS_BATCH', commits: [], isLast: true, batchIndex: 0, generation: msg.generation, requestId: msg.requestId });
+        }
         this.flushPendingHistoryFilter();
         break;
       }

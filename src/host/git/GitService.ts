@@ -39,6 +39,52 @@ const MAX_INLINE_DIFF_FILE_BYTES = 8 * 1024 * 1024;
 const LOG_RECORD_FORMAT = '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%ai%x00%ci%x00%x00%s';
 const GRAPH_LOG_RECORD_FORMAT = '--format=%H%x00%P%x00%ci';
 
+export function formatRelativeTime(dateOrTimestamp: number | Date | string): string {
+  let seconds: number;
+  if (typeof dateOrTimestamp === 'number') {
+    seconds = dateOrTimestamp > 1e11 ? Math.floor(dateOrTimestamp / 1000) : dateOrTimestamp;
+  } else if (dateOrTimestamp instanceof Date) {
+    seconds = Math.floor(dateOrTimestamp.getTime() / 1000);
+  } else {
+    const num = Number(dateOrTimestamp);
+    if (!Number.isNaN(num) && num > 0) {
+      seconds = num > 1e11 ? Math.floor(num / 1000) : num;
+    } else {
+      const parsed = Date.parse(dateOrTimestamp);
+      seconds = Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000);
+    }
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const diff = Math.max(0, now - seconds);
+
+  if (diff < 60) {
+    return t('just now');
+  }
+  const minutes = Math.floor(diff / 60);
+  if (minutes < 60) {
+    return minutes === 1 ? t('{0} minute ago', 1) : t('{0} minutes ago', minutes);
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return hours === 1 ? t('{0} hour ago', 1) : t('{0} hours ago', hours);
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return days === 1 ? t('{0} day ago', 1) : t('{0} days ago', days);
+  }
+  const weeks = Math.floor(days / 7);
+  if (days < 30) {
+    return weeks === 1 ? t('{0} week ago', 1) : t('{0} weeks ago', weeks);
+  }
+  const months = Math.floor(days / 30);
+  if (days < 365) {
+    return months === 1 ? t('{0} month ago', 1) : t('{0} months ago', months);
+  }
+  const years = Math.floor(days / 365);
+  return years === 1 ? t('{0} year ago', 1) : t('{0} years ago', years);
+}
+
 export interface CommitMessageHistoryEntry {
   message: string;
   timestamp: number;
@@ -262,9 +308,9 @@ function gitErrorDetail(error: unknown): string {
   return 'Unknown error';
 }
 
-type StatusOperationKind = 'checkout' | 'squash' | 'merge';
-type SuppressStatusUpdates = <T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string) => Promise<T>;
-type RefreshStatus = () => Promise<void>;
+export type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
+export type SuppressStatusUpdates = <T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string) => Promise<T>;
+export type RefreshStatus = () => Promise<void>;
 
 export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
@@ -306,7 +352,7 @@ export class GitService {
     return getVscodeRepository(this.rootPath);
   }
 
-  private runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
+  protected runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
     // Hold the repository lock only for the Git mutation itself. The status
     // suppression helper may wait for a refresh after the mutation; keeping
     // the lock during that wait could block the auto-commit triggered by that
@@ -1018,6 +1064,47 @@ export class GitService {
       if (info.isGone) gone.push(name);
     }
     return gone;
+  }
+
+  async getHeadCommit(): Promise<{ hash: string; shortHash: string; message: string; relativeDate: string; author: string } | undefined> {
+    try {
+      const raw = await this.git.raw(['log', '-1', '--format=%H%x00%h%x00%s%x00%ct%x00%an']);
+      const parts = raw.trim().split('\x00');
+      if (parts.length >= 5 && parts[0] && parts[1]) {
+        return {
+          hash: parts[0],
+          shortHash: parts[1],
+          message: parts[2] || '',
+          relativeDate: formatRelativeTime(parts[3] || 0),
+          author: parts[4] || '',
+        };
+      }
+    } catch { /* ignore */ }
+    return undefined;
+  }
+
+  async getBranchLastCommits(): Promise<Map<string, { message: string; relativeDate: string; author: string }>> {
+    const map = new Map<string, { message: string; relativeDate: string; author: string }>();
+    try {
+      const raw = await this.git.raw([
+        'for-each-ref',
+        '--format=%(refname:short)%00%(contents:subject)%00%(committerdate:unix)%00%(authorname)',
+        'refs/heads/',
+        'refs/remotes/',
+      ]);
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        const [ref, message, relativeDate, author] = line.split('\x00');
+        if (ref) {
+          map.set(ref, {
+            message: (message || '').trim(),
+            relativeDate: formatRelativeTime(relativeDate || 0),
+            author: (author || '').trim(),
+          });
+        }
+      }
+    } catch { /* ignore */ }
+    return map;
   }
 
   async captureUpdateSnapshot(branchName?: string): Promise<VcsUpdateSnapshot | undefined> {
@@ -2110,28 +2197,28 @@ export class GitService {
   }
 
   async commit(message: string, amend: boolean, credentials?: { gitName: string; gitEmail: string }, log?: (s: string) => void): Promise<string> {
-    return this.withWriteLock(async () => {
-    log?.(`GitService.commit — credentials=${credentials ? 'provided' : 'default'} amend=${amend}`);
-    if (credentials?.gitName && credentials?.gitEmail) {
-      const flags = [
-        '-c', `user.name=${credentials.gitName}`,
-        '-c', `user.email=${credentials.gitEmail}`,
-        'commit', '-m', message,
-        ...(amend ? ['--amend'] : []),
-      ];
-      log?.('GitService.commit — running git commit with an explicit identity');
-      await this.git.raw(flags);
-      return '';
-    }
-    log?.(`GitService.commit — no credentials, using vsRepo/simple-git`);
-    const vsRepo = this.vsRepo();
-    if (vsRepo) {
-      await vsRepo.commit(message, { amend });
-      return '';
-    }
-    const result = await this.git.commit(message, undefined, amend ? { '--amend': null } : {});
-    return result.summary.changes.toString();
-    });
+    return this.runStatusSensitiveOperation(async () => {
+      log?.(`GitService.commit — credentials=${credentials ? 'provided' : 'default'} amend=${amend}`);
+      if (credentials?.gitName && credentials?.gitEmail) {
+        const flags = [
+          '-c', `user.name=${credentials.gitName}`,
+          '-c', `user.email=${credentials.gitEmail}`,
+          'commit', '-m', message,
+          ...(amend ? ['--amend'] : []),
+        ];
+        log?.('GitService.commit — running git commit with an explicit identity');
+        await this.git.raw(flags);
+        return '';
+      }
+      log?.(`GitService.commit — no credentials, using vsRepo/simple-git`);
+      const vsRepo = this.vsRepo();
+      if (vsRepo) {
+        await vsRepo.commit(message, { amend });
+        return '';
+      }
+      const result = await this.git.commit(message, undefined, amend ? { '--amend': null } : {});
+      return result.summary.changes.toString();
+    }, 'commit', message);
   }
 
   private async getAbsoluteGitDir(): Promise<string | undefined> {
@@ -2592,16 +2679,16 @@ export class GitService {
   }
 
   async rebase(onto: string): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       await this.assertBranchOperationAllowed();
       const vsRepo = this.vsRepo();
       if (vsRepo) { await vsRepo.rebase(onto); return; }
       await this.git.rebase([onto]);
-    });
+    }, 'rebase', onto);
   }
 
   async rebaseContinue(): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       const vsRepo = this.vsRepo();
       if (vsRepo) {
         try {
@@ -2610,7 +2697,7 @@ export class GitService {
         } catch { /* fallback to simple-git */ }
       }
       await this.git.raw(['rebase', '--continue']);
-    });
+    }, 'rebase');
   }
 
   async deleteBranch(branchName: string, force: boolean): Promise<void> {
@@ -2638,9 +2725,9 @@ export class GitService {
   }
 
   async pullFromRemote(remote: string, branch: string, rebase: boolean): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       await this.pullWithStrategy(rebase ? 'rebase' : 'merge', remote, branch);
-    });
+    }, rebase ? 'rebase' : 'merge', `${remote}/${branch}`);
   }
 
   async cherryPick(hash: string): Promise<void> {
@@ -2718,19 +2805,19 @@ export class GitService {
   }
 
   async cherryPickMulti(hashes: string[]): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       for (const hash of hashes) {
         await this.git.raw(['cherry-pick', hash]);
       }
-    });
+    }, 'cherry-pick');
   }
 
   async revertCommits(hashes: string[]): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       for (const hash of hashes) {
         await this.git.raw(['revert', '--no-edit', hash]);
       }
-    });
+    }, 'revert');
   }
 
   async dropCommits(oldestHash: string): Promise<void> {
@@ -2738,7 +2825,7 @@ export class GitService {
   }
 
   async undoCommit(): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       const parentCount = await this.git.raw(['rev-list', '--count', 'HEAD']).then(s => parseInt(s.trim(), 10)).catch(() => 0);
       if (parentCount <= 1) {
         // First commit: unstage all files and delete HEAD so the branch goes back to unborn state
@@ -2747,7 +2834,7 @@ export class GitService {
       } else {
         await this.git.raw(['reset', '--soft', 'HEAD~1']);
       }
-    });
+    }, 'squash');
   }
 
   async editCommitMessage(message: string): Promise<void> {
@@ -2877,11 +2964,11 @@ export class GitService {
   }
 
   async pushTag(name: string, remote: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['push', remote, `refs/tags/${name}`]).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['push', remote, `refs/tags/${name}`]).then(() => undefined), 'sync', name);
   }
 
   async deleteTagRemote(name: string, remote: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['push', remote, `--delete`, `refs/tags/${name}`]).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['push', remote, `--delete`, `refs/tags/${name}`]).then(() => undefined), 'sync', name);
   }
 
   async checkoutTag(name: string): Promise<void> {
@@ -3051,7 +3138,7 @@ export class GitService {
   }
 
   async stashPush(message: string, paths?: string[]): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
     const hasHead = await this.git.raw(['rev-parse', '--verify', 'HEAD']).then(() => true).catch(() => false);
     if (!hasHead) {
       // Native `git stash` cannot create its commit graph without an initial
@@ -3141,19 +3228,19 @@ export class GitService {
       );
     }
     if (primaryError) throw primaryError;
-    });
+    }, 'stash', message);
   }
 
   async stashApply(stashRef: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['stash', 'apply', stashRef]).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['stash', 'apply', stashRef]).then(() => undefined), 'stash', stashRef);
   }
 
   async stashPop(stashRef = 'stash@{0}'): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['stash', 'pop', stashRef]).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['stash', 'pop', stashRef]).then(() => undefined), 'stash', stashRef);
   }
 
   async stashDrop(stashRef: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['stash', 'drop', stashRef]).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['stash', 'drop', stashRef]).then(() => undefined), 'stash', stashRef);
   }
 
   async getStashFileContent(stashRef: string, filePath: string): Promise<string> {
@@ -3174,17 +3261,17 @@ export class GitService {
   // ── Submodule push/pull helpers ───────────────────────────────────────────
 
   async pushSubmodule(): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       const status = await this.git.status();
       if (status.detached) {
         throw new Error(t('Submodule is in detached HEAD — checkout a branch before pushing.'));
       }
       await this.push();
-    });
+    }, 'sync', 'push submodule');
   }
 
   async pullSubmodule(rebase = false): Promise<string> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       await this.assertPullAllowed();
       const status = await this.git.status();
       if (status.detached) {
@@ -3193,7 +3280,7 @@ export class GitService {
         return t('fetched (detached HEAD — use Update Submodule to advance to a new commit)');
       }
       return rebase ? this.pullRebase() : this.pull();
-    });
+    }, 'sync', 'pull submodule');
   }
 
   // ── Submodule operations ──────────────────────────────────────────────────
@@ -3371,45 +3458,49 @@ export class GitService {
   }
 
   async createWorktree(worktreePath: string, opts: { branch?: string; newBranch?: string; commitish?: string; noTrack?: boolean }): Promise<void> {
-    return withGitWriteLocks([this.rootPath, worktreePath], async () => {
-      const args = ['worktree', 'add'];
-      if (opts.newBranch) {
-        args.push('-b', opts.newBranch);
-      } else if (opts.branch) {
-        // checkout existing branch — no -b flag, just add path + branch
-      }
-      if (opts.noTrack) args.push('--no-track');
-      args.push(worktreePath);
-      if (opts.branch) args.push(opts.branch);
-      else if (opts.commitish) args.push(opts.commitish);
-      await this.git.raw(args);
-    });
+    return this.runStatusSensitiveOperation(async () => {
+      return withGitWriteLocks([this.rootPath, worktreePath], async () => {
+        const args = ['worktree', 'add'];
+        if (opts.newBranch) {
+          args.push('-b', opts.newBranch);
+        } else if (opts.branch) {
+          // checkout existing branch — no -b flag, just add path + branch
+        }
+        if (opts.noTrack) args.push('--no-track');
+        args.push(worktreePath);
+        if (opts.branch) args.push(opts.branch);
+        else if (opts.commitish) args.push(opts.commitish);
+        await this.git.raw(args);
+      });
+    }, 'checkout', worktreePath);
   }
 
   async deleteWorktree(worktreePath: string, force = false): Promise<void> {
-    return withGitWriteLocks([this.rootPath, worktreePath], async () => {
-      const args = ['worktree', 'remove'];
-      if (force) args.push('--force');
-      args.push(worktreePath);
-      await this.git.raw(args);
-    });
+    return this.runStatusSensitiveOperation(async () => {
+      return withGitWriteLocks([this.rootPath, worktreePath], async () => {
+        const args = ['worktree', 'remove'];
+        if (force) args.push('--force');
+        args.push(worktreePath);
+        await this.git.raw(args);
+      });
+    }, 'sync', worktreePath);
   }
 
   async pruneWorktrees(): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['worktree', 'prune']).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['worktree', 'prune']).then(() => undefined), 'sync', 'prune worktrees');
   }
 
   async lockWorktree(worktreePath: string, reason?: string): Promise<void> {
-    return this.withWriteLock(async () => {
+    return this.runStatusSensitiveOperation(async () => {
       const args = ['worktree', 'lock'];
       if (reason) args.push('--reason', reason);
       args.push(worktreePath);
       await this.git.raw(args);
-    });
+    }, 'sync', worktreePath);
   }
 
   async unlockWorktree(worktreePath: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['worktree', 'unlock', worktreePath]).then(() => undefined));
+    return this.runStatusSensitiveOperation(() => this.git.raw(['worktree', 'unlock', worktreePath]).then(() => undefined), 'sync', worktreePath);
   }
 }
 

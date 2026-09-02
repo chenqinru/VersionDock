@@ -205,7 +205,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const repo = this.manager.getRepo(repoId);
     if (!repo) return undefined;
     if (!this.shelveServices.has(repoId)) {
-      this.shelveServices.set(repoId, new ShelveService(repo.rootPath, this.globalStoragePath));
+      this.shelveServices.set(
+        repoId,
+        new ShelveService(
+          repo.rootPath,
+          this.globalStoragePath,
+          (op, kind, label) => this.manager.runWithStatusUpdatesSuppressed(op, kind, label),
+        ),
+      );
     }
     return this.shelveServices.get(repoId);
   }

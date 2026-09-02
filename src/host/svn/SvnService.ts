@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { GitService, type CommitMessageHistoryEntry } from '../git/GitService';
+import { GitService, type CommitMessageHistoryEntry, type SuppressStatusUpdates, type RefreshStatus } from '../git/GitService';
 import { detectLanguage, parseDiff } from '../git/DiffParser';
 import type { BlameLine } from '../git/BlameService';
 import type {
@@ -349,8 +349,14 @@ export class SvnService extends GitService {
   private pendingRevert?: PendingSvnRevert;
   private pendingMerge?: PendingSvnMerge;
 
-  constructor(repoId: string, rootPath: string) {
-    super(repoId, rootPath);
+  constructor(
+    repoId: string,
+    rootPath: string,
+    suppressStatusUpdates?: SuppressStatusUpdates,
+    refreshStatus?: RefreshStatus,
+    publishMissingRemote?: import('../remote/types').PublishMissingRemote,
+  ) {
+    super(repoId, rootPath, suppressStatusUpdates, refreshStatus, publishMissingRemote);
   }
 
   private async svn(args: string[], options: SvnCommandOptions = {}): Promise<string> {
@@ -2033,62 +2039,66 @@ export class SvnService extends GitService {
   }
 
   async commitPaths(message: string, paths: string[]): Promise<string> {
-    const uniquePaths = Array.from(new Set(paths.map(filePath => this.normalizeSvnTarget(filePath))));
-    if (uniquePaths.length === 0) throw new Error(t('No SVN files selected to commit.'));
-    const statuses = await this.parseSvnStatus();
-    const selected = new Set(uniquePaths);
-    const pathsToAdd = statuses.filter(file => file.svnItem === 'unversioned' && selected.has(file.path)).map(file => file.path);
-    const pathsToDelete = statuses.filter(file => file.svnItem === 'missing' && selected.has(file.path)).map(file => file.path);
-    if (pathsToAdd.length > 0) await this.runWithTargets(['add', '--parents'], pathsToAdd);
-    if (pathsToDelete.length > 0) await this.runWithTargets(['delete', '--force'], pathsToDelete);
-    let commitTargets = uniquePaths;
-    const commitArgs = ['commit', '-m', message, '--depth', 'empty'];
-    // SVN directory commit targets recurse by default and can silently include
-    // unchecked child changes. Keep every target depth-empty. A newly selected
-    // unversioned directory is the one exception: it had no visible child status
-    // rows before `svn add`, so explicitly include the descendants it just added.
-    const newlyAddedDirectories = pathsToAdd.filter(filePath => {
-      if (filePath === '.') return false;
-      const absolutePath = path.join(this.rootPath, filePath);
-      try { return fs.lstatSync(absolutePath).isDirectory(); } catch { return false; }
-    });
-    if (newlyAddedDirectories.length > 0) {
-      const refreshedStatuses = await this.parseSvnStatus();
-      commitTargets = Array.from(new Set([
-        ...uniquePaths,
-        ...refreshedStatuses
-          .filter(status => newlyAddedDirectories.some(directory => status.path.startsWith(`${directory}/`)))
-          .map(status => status.path),
-      ]));
-    }
-    const output = await this.runWithTargets(commitArgs, commitTargets);
-    const outputNumbers = Array.from(output.matchAll(/\d+/g), match => Number(match[0]));
-    const committedRevision = outputNumbers.at(-1);
-    if (committedRevision !== undefined && Number.isSafeInteger(committedRevision)) {
-      this.localRevisionFloor = Math.max(this.localRevisionFloor ?? 0, committedRevision);
-      this.localRevisionMetadataMtimeMs = this.getWorkingCopyMetadataMtime();
-    }
-    this.clearIncomingStateCache();
-    this.blameCache.clear();
-    if (this.pendingMerge) {
-      const remainingStatuses = await this.parseSvnStatus().catch(() => []);
-      const remainingPaths = new Set(remainingStatuses.map(file => file.path));
-      this.pendingMerge.paths = this.pendingMerge.paths.filter(filePath => remainingPaths.has(filePath));
-      this.pendingMerge.addedPaths = this.pendingMerge.addedPaths.filter(filePath => remainingPaths.has(filePath));
-      if (this.pendingMerge.paths.length === 0) this.pendingMerge = undefined;
-    }
-    return output;
+    return this.runStatusSensitiveOperation(async () => {
+      const uniquePaths = Array.from(new Set(paths.map(filePath => this.normalizeSvnTarget(filePath))));
+      if (uniquePaths.length === 0) throw new Error(t('No SVN files selected to commit.'));
+      const statuses = await this.parseSvnStatus();
+      const selected = new Set(uniquePaths);
+      const pathsToAdd = statuses.filter(file => file.svnItem === 'unversioned' && selected.has(file.path)).map(file => file.path);
+      const pathsToDelete = statuses.filter(file => file.svnItem === 'missing' && selected.has(file.path)).map(file => file.path);
+      if (pathsToAdd.length > 0) await this.runWithTargets(['add', '--parents'], pathsToAdd);
+      if (pathsToDelete.length > 0) await this.runWithTargets(['delete', '--force'], pathsToDelete);
+      let commitTargets = uniquePaths;
+      const commitArgs = ['commit', '-m', message, '--depth', 'empty'];
+      // SVN directory commit targets recurse by default and can silently include
+      // unchecked child changes. Keep every target depth-empty. A newly selected
+      // unversioned directory is the one exception: it had no visible child status
+      // rows before `svn add`, so explicitly include the descendants it just added.
+      const newlyAddedDirectories = pathsToAdd.filter(filePath => {
+        if (filePath === '.') return false;
+        const absolutePath = path.join(this.rootPath, filePath);
+        try { return fs.lstatSync(absolutePath).isDirectory(); } catch { return false; }
+      });
+      if (newlyAddedDirectories.length > 0) {
+        const refreshedStatuses = await this.parseSvnStatus();
+        commitTargets = Array.from(new Set([
+          ...uniquePaths,
+          ...refreshedStatuses
+            .filter(status => newlyAddedDirectories.some(directory => status.path.startsWith(`${directory}/`)))
+            .map(status => status.path),
+        ]));
+      }
+      const output = await this.runWithTargets(commitArgs, commitTargets);
+      const outputNumbers = Array.from(output.matchAll(/\d+/g), match => Number(match[0]));
+      const committedRevision = outputNumbers.at(-1);
+      if (committedRevision !== undefined && Number.isSafeInteger(committedRevision)) {
+        this.localRevisionFloor = Math.max(this.localRevisionFloor ?? 0, committedRevision);
+        this.localRevisionMetadataMtimeMs = this.getWorkingCopyMetadataMtime();
+      }
+      this.clearIncomingStateCache();
+      this.blameCache.clear();
+      if (this.pendingMerge) {
+        const remainingStatuses = await this.parseSvnStatus().catch(() => []);
+        const remainingPaths = new Set(remainingStatuses.map(file => file.path));
+        this.pendingMerge.paths = this.pendingMerge.paths.filter(filePath => remainingPaths.has(filePath));
+        this.pendingMerge.addedPaths = this.pendingMerge.addedPaths.filter(filePath => remainingPaths.has(filePath));
+        if (this.pendingMerge.paths.length === 0) this.pendingMerge = undefined;
+      }
+      return output;
+    }, 'commit', message);
   }
 
   async pull(): Promise<string> {
-    await this.assertPullAllowed();
-    const output = await this.svn(['update']);
-    this.localRevisionGeneration++;
-    this.localRevisionFloor = undefined;
-    this.localRevisionFloorTask = undefined;
-    this.clearIncomingStateCache();
-    this.blameCache.clear();
-    return output;
+    return this.runStatusSensitiveOperation(async () => {
+      await this.assertPullAllowed();
+      const output = await this.svn(['update']);
+      this.localRevisionGeneration++;
+      this.localRevisionFloor = undefined;
+      this.localRevisionFloorTask = undefined;
+      this.clearIncomingStateCache();
+      this.blameCache.clear();
+      return output;
+    }, 'sync', 'svn update');
   }
 
   async pullRebase(): Promise<string> {

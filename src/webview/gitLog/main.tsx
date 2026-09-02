@@ -765,7 +765,7 @@ export function GitLogApp() {
               repos={store.repos.filter(repo => !repo.isWorktree)}
               branches={store.branches}
               tags={store.tags}
-              loading={isCommitListReloading}
+              loading={!store.initialized}
               filter={store.branchFilter}
               selectedBranchFilter={store.commitFilters.branch}
               selectedBranchRepoIds={store.commitFilters.repoIds}

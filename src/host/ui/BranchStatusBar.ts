@@ -30,12 +30,34 @@ type SvnIgnorePickItem = vscode.QuickPickItem & { entry: SvnIgnoreEntry };
 type SvnIgnoreActionPickItem = vscode.QuickPickItem & { action: 'add' | 'remove' };
 type SvnIgnoreCandidatePickItem = vscode.QuickPickItem & { filePath?: string; custom?: boolean };
 
+function truncateBranchName(name: string, maxLength = 28): string {
+  if (name.length <= maxLength) return name;
+  const keep = Math.floor((maxLength - 3) / 2);
+  return `${name.slice(0, keep)}...${name.slice(name.length - keep)}`;
+}
+
+function formatOperationStateLabel(state: string): string {
+  switch (state.toLowerCase()) {
+    case 'merge':
+      return t('MERGE');
+    case 'rebase':
+      return t('REBASE');
+    case 'cherry-pick':
+      return t('CHERRY-PICK');
+    case 'revert':
+      return t('REVERT');
+    default:
+      return state.toUpperCase();
+  }
+}
+
 export class BranchStatusBar implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
   private statusDisposable?: vscode.Disposable;
   private statusOperationDisposable?: vscode.Disposable;
   private branchDisposable?: vscode.Disposable;
   private configDisposable?: vscode.Disposable;
+  private editorDisposable?: vscode.Disposable;
   private hasBehind = false;
   private hasUnpushed = false;
   private hasNoUpstream = false;
@@ -48,6 +70,18 @@ export class BranchStatusBar implements vscode.Disposable {
   private conflictRepoCount = 0;
   private refreshVersion = 0;
   private statusOperationInProgress = false;
+  private activeOperationKind?: import('../git/GitService').StatusOperationKind;
+  private activeOperationLabel?: string;
+  private windowStateDisposable?: vscode.Disposable;
+  private recentBranches = new Map<string, string[]>();
+
+  private recordRecentBranch(repoId: string, branchName: string): void {
+    if (!branchName || branchName === 'HEAD') return;
+    const existing = this.recentBranches.get(repoId) ?? [];
+    const filtered = existing.filter(name => name !== branchName);
+    filtered.unshift(branchName);
+    this.recentBranches.set(repoId, filtered.slice(0, 3));
+  }
 
   constructor(
     private readonly manager: WorkspaceGitManager,
@@ -68,16 +102,11 @@ export class BranchStatusBar implements vscode.Disposable {
         this.logger.error('BranchStatus', 'Failed to refresh status', error);
       });
     });
-    this.statusOperationDisposable = this.manager.onStatusOperationChange(inProgress => {
-      this.statusOperationInProgress = inProgress;
+    this.statusOperationDisposable = this.manager.onStatusOperationChange((inProgress, kind, label) => {
       if (inProgress) {
-        // Show feedback immediately, before the first repository refresh arrives.
-        this.statusBarItem.text = this.statusBarItem.text.replace(
-          /\$\((?:git-branch|tag|git-commit)\)/,
-          '$(loading~spin)',
-        );
+        this.showLoadingSpin(kind, label);
       } else {
-        this.refreshFromManager();
+        this.hideLoadingSpin(() => this.refreshFromManager());
       }
     });
     // Also refresh on branch change: the status change fires at 300ms and may catch
@@ -91,13 +120,127 @@ export class BranchStatusBar implements vscode.Disposable {
         });
       }
     });
+    this.editorDisposable = vscode.window.onDidChangeActiveTextEditor(() => {
+      void this.refresh().catch(error => {
+        this.logger.error('BranchStatus', 'Failed to refresh on active editor change', error);
+      });
+    });
+    this.windowStateDisposable = vscode.window.onDidChangeWindowState(state => {
+      if (state.focused) {
+        // Auto-sync: if spinner is stuck while returning to foreground, calibrate and refresh
+        if (this.statusOperationInProgress && Date.now() - this.loadingStartTime > this.minLoadingDuration) {
+          this.refreshFromManager();
+        }
+      }
+    });
     this.refreshFromManager();
+  }
+
+  private loadingDepth = 0;
+  private loadingTimer?: NodeJS.Timeout;
+  private safetyTimeoutTimer?: NodeJS.Timeout;
+  private loadingStartTime = 0;
+  private readonly minLoadingDuration = 180;
+  private readonly safetyTimeoutDuration = 45_000;
+
+  showLoadingSpin(kind?: import('../git/GitService').StatusOperationKind, label?: string): void {
+    this.loadingDepth++;
+    this.statusOperationInProgress = true;
+    this.activeOperationKind = kind ?? this.activeOperationKind;
+    this.activeOperationLabel = label ?? this.activeOperationLabel;
+    this.loadingStartTime = Date.now();
+
+    if (this.loadingTimer) {
+      clearTimeout(this.loadingTimer);
+      this.loadingTimer = undefined;
+    }
+
+    // Set safety timeout to prevent permanent spinner hang if an operation never settles
+    if (!this.safetyTimeoutTimer) {
+      this.safetyTimeoutTimer = setTimeout(() => {
+        this.logger.warn('BranchStatus', 'Safety timeout reached for status loading; resetting spinner');
+        this.forceResetLoading();
+      }, this.safetyTimeoutDuration);
+    }
+
+    // Neutralize background during loading to focus on the animation
+    this.statusBarItem.backgroundColor = undefined;
+    this.statusBarItem.text = this.statusBarItem.text.replace(
+      /\$\((?:git-branch|tag|git-commit)\)/,
+      '$(loading~spin)',
+    );
+  }
+
+  hideLoadingSpin(onSettled?: () => void): void {
+    this.loadingDepth = Math.max(0, this.loadingDepth - 1);
+    if (this.loadingDepth > 0) {
+      // Still other concurrent operations in flight
+      onSettled?.();
+      return;
+    }
+
+    this.activeOperationKind = undefined;
+    this.activeOperationLabel = undefined;
+
+    // Clear safety timeout when all operations settle
+    if (this.safetyTimeoutTimer) {
+      clearTimeout(this.safetyTimeoutTimer);
+      this.safetyTimeoutTimer = undefined;
+    }
+
+    const elapsed = Date.now() - this.loadingStartTime;
+    const remaining = Math.max(0, this.minLoadingDuration - elapsed);
+
+    const settle = () => {
+      this.statusOperationInProgress = false;
+      this.loadingTimer = undefined;
+      onSettled?.();
+      void this.refresh();
+    };
+
+    if (remaining > 0) {
+      if (this.loadingTimer) clearTimeout(this.loadingTimer);
+      this.loadingTimer = setTimeout(settle, remaining);
+    } else {
+      settle();
+    }
+  }
+
+  private forceResetLoading(): void {
+    this.loadingDepth = 0;
+    this.statusOperationInProgress = false;
+    this.activeOperationKind = undefined;
+    this.activeOperationLabel = undefined;
+    if (this.safetyTimeoutTimer) {
+      clearTimeout(this.safetyTimeoutTimer);
+      this.safetyTimeoutTimer = undefined;
+    }
+    if (this.loadingTimer) {
+      clearTimeout(this.loadingTimer);
+      this.loadingTimer = undefined;
+    }
+    this.refreshFromManager();
+  }
+
+  async withOperationProgress<T>(
+    operation: () => Promise<T>,
+    kind?: import('../git/GitService').StatusOperationKind,
+    label?: string,
+  ): Promise<T> {
+    this.showLoadingSpin(kind, label);
+    try {
+      return await operation();
+    } finally {
+      this.hideLoadingSpin(() => this.refreshFromManager());
+    }
   }
 
   private refreshFromManager(): void {
     const version = ++this.refreshVersion;
     void this.manager.getAllStatusesFresh()
-      .then(status => this.refresh(status, version))
+      .then(status => {
+        void this.refresh(status, version);
+      })
       .catch(error => {
         this.logger.error('BranchStatus', 'Failed to load status', error);
       });
@@ -161,7 +304,6 @@ export class BranchStatusBar implements vscode.Disposable {
     // Diverged-branch warnings are Git-only; SVN branches are URL/layout based.
     const gitMetaIds = new Set(metas.filter(m => m.kind !== 'svn').map(m => m.id));
     const gitBranches = branches.filter(branch => gitMetaIds.has(branch.repoId));
-    const effectiveNames = [...new Set(branches.map(b => b.detachedTag ?? b.detachedHash ?? b.name))];
     const gitEffectiveNames = [...new Set(branches
       .filter(b => gitMetaIds.has(b.repoId))
       .map(b => b.detachedTag ?? b.detachedHash ?? b.name))];
@@ -178,15 +320,51 @@ export class BranchStatusBar implements vscode.Disposable {
     this.conflictRepoCount = visibleRepoStatuses.filter(repo => repo.conflictCount > 0).length;
     this.hasConflicts = this.totalConflicts > 0;
 
-    const headLabel = effectiveNames.length === 1
-      ? effectiveNames[0]
-      : `${effectiveNames[0]} +${effectiveNames.length - 1}`;
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeService = activeUri?.scheme === 'file'
+      ? this.manager.getServicesForFile(activeUri.fsPath)[0]
+      : undefined;
+    const activeRepoId = activeService?.repoId;
+    const activeRepoStatus = visibleRepoStatuses.find(r => r.repoId === activeRepoId);
+    const activeBranchName = activeRepoStatus?.branch
+      ? (activeRepoStatus.branch.detachedTag ?? activeRepoStatus.branch.detachedHash ?? activeRepoStatus.branch.name)
+      : undefined;
 
-    // Append worktree branch names after a separator
+    // Order branch names so the active repository's branch is always primary
+    let orderedNames = [...new Set(branches.map(b => b.detachedTag ?? b.detachedHash ?? b.name))];
+    if (activeBranchName && orderedNames.includes(activeBranchName)) {
+      orderedNames = [activeBranchName, ...orderedNames.filter(n => n !== activeBranchName)];
+    }
+
+    const ongoingOperations = visibleRepoStatuses
+      .map(r => r.operationState)
+      .filter((op): op is NonNullable<import('../types/git').RepoStatus['operationState']> => !!op);
+    const hasOngoingOperation = ongoingOperations.length > 0;
+    const uniqueOngoingOps = [...new Set(ongoingOperations)];
+    const opLabel = uniqueOngoingOps.length === 1
+      ? uniqueOngoingOps[0] === 'merge'
+        ? t('MERGING')
+        : uniqueOngoingOps[0] === 'rebase'
+        ? t('REBASING')
+        : uniqueOngoingOps[0] === 'cherry-pick'
+        ? t('CHERRY-PICKING')
+        : t('REVERTING')
+      : uniqueOngoingOps.map(op => formatOperationStateLabel(op)).join('/');
+    const opSuffix = hasOngoingOperation ? ` (${opLabel})` : '';
+
+    const primaryName = orderedNames[0] ?? 'HEAD';
+    const headLabel = orderedNames.length === 1
+      ? truncateBranchName(primaryName)
+      : `${truncateBranchName(primaryName)} +${orderedNames.length - 1}`;
+
+    // Append worktree branch names after a separator with auto-collapse protection
     const worktreeEffectiveNames = [...new Set(worktreeBranches.map(b => b.detachedTag ?? b.detachedHash ?? b.name))];
-    const worktreeSuffix = worktreeEffectiveNames.length > 0
-      ? '  |  ' + worktreeEffectiveNames.join('  |  ')
-      : '';
+    let worktreeSuffix = '';
+    if (worktreeEffectiveNames.length === 1) {
+      worktreeSuffix = `  |  ${truncateBranchName(worktreeEffectiveNames[0])}`;
+    } else if (worktreeEffectiveNames.length > 1) {
+      worktreeSuffix = `  |  +${worktreeEffectiveNames.length} ${t('worktrees')}`;
+    }
 
     // Icon: git-branch on a named branch, tag on detached tag, git-commit on detached hash
     const anyOnNamedBranch = branches.some(b => !b.detachedTag && !b.detachedHash && b.name !== 'HEAD');
@@ -197,36 +375,135 @@ export class BranchStatusBar implements vscode.Disposable {
 
     const suppressDiverged = vscode.workspace.getConfiguration('versiondock').get<boolean>('suppressDivergedBranchWarning') === true;
     const showDivergedWarning = this.branchesDiverged && !suppressDiverged;
-    const divergeIcon = this.hasConflicts || showDivergedWarning ? '$(warning) ' : '';
+    // Diverge warning is kept clean in text/tooltip; warning icon and high-contrast background are reserved for conflicts/ongoing ops
+    const alertIcon = this.hasConflicts || hasOngoingOperation ? '$(warning) ' : '';
     const dirtyDot = this.hasUncommitted ? ' ●' : '';
     const pullPart = this.totalBehind > 0 ? ` $(arrow-down)${this.totalBehind}` : '';
     const pushPart = this.totalAhead > 0 ? ` $(arrow-up)${this.totalAhead}` : '';
     const conflictPart = this.totalConflicts > 0 ? ` $(git-merge)${this.totalConflicts}` : '';
-    this.statusBarItem.text = `${divergeIcon}${headIcon} ${headLabel}${worktreeSuffix}${dirtyDot}${conflictPart}${pullPart}${pushPart}`;
+    this.statusBarItem.text = `${alertIcon}${headIcon} ${headLabel}${opSuffix}${worktreeSuffix}${dirtyDot}${conflictPart}${pullPart}${pushPart}`;
 
-    const tooltipParts: string[] = [];
-    if (this.hasConflicts) {
-      tooltipParts.push(
-        this.conflictRepoCount === 1
-          ? t('Merge conflicts in {0} repository ({1} files)', this.conflictRepoCount, this.totalConflicts)
-          : t('Merge conflicts in {0} repositories ({1} files)', this.conflictRepoCount, this.totalConflicts)
-      );
+    // Rich Markdown Tooltip
+    const md = new vscode.MarkdownString('', true);
+    md.isTrusted = true;
+    md.supportThemeIcons = true;    const titleSuffix = metas.length > 1
+      ? ` &nbsp;•&nbsp; ${t('{0} repositories', metas.length)}`
+      : '';
+    md.appendMarkdown(`**VersionDock**${titleSuffix}\n\n`);
+
+    if (this.statusOperationInProgress) {
+      let opDetail = t('Version control operation in progress…');
+      if (this.activeOperationKind === 'commit') {
+        opDetail = t('Committing changes…');
+      } else if (this.activeOperationKind === 'checkout') {
+        opDetail = this.activeOperationLabel
+          ? t('Checking out "{0}"…', this.activeOperationLabel)
+          : t('Checking out branch…');
+      } else if (this.activeOperationKind === 'rebase') {
+        opDetail = this.activeOperationLabel
+          ? t('Rebasing onto "{0}"…', this.activeOperationLabel)
+          : t('Rebasing commits…');
+      } else if (this.activeOperationKind === 'merge') {
+        opDetail = this.activeOperationLabel
+          ? t('Merging "{0}"…', this.activeOperationLabel)
+          : t('Merging branches…');
+      } else if (this.activeOperationKind === 'sync') {
+        opDetail = t('Synchronizing with remote repository…');
+      } else if (this.activeOperationKind === 'stash') {
+        opDetail = t('Stashing/Shelving changes…');
+      } else if (this.activeOperationKind === 'cherry-pick') {
+        opDetail = t('Cherry-picking commits…');
+      } else if (this.activeOperationKind === 'revert') {
+        opDetail = t('Reverting commits…');
+      }
+      md.appendMarkdown(`$(loading~spin) **${opDetail}**\n\n`);
     }
-    if (showDivergedWarning) tooltipParts.push(t('Branches have diverged across repositories'));
-    if (this.hasUncommitted) tooltipParts.push(t('Uncommitted changes present'));
-    if (this.hasUnpushed) tooltipParts.push(t('Unpushed commits or branch not on remote'));
-    if (this.hasBehind) tooltipParts.push(t('Incoming commits available'));
-    this.statusBarItem.tooltip = tooltipParts.length > 0
-      ? t('VersionDock: {0}', tooltipParts.join(' · '))
-      : t('VersionDock: Git/SVN Menu');
 
-    if (this.hasConflicts || showDivergedWarning) {
+    if (this.hasConflicts) {
+      const conflictMsg = this.conflictRepoCount === 1
+        ? t('Merge conflicts in {0} repository ({1} files)', this.conflictRepoCount, this.totalConflicts)
+        : t('Merge conflicts in {0} repositories ({1} files)', this.conflictRepoCount, this.totalConflicts);
+      md.appendMarkdown(`$(warning) **${conflictMsg}**\n\n`);
+    }
+    if (hasOngoingOperation) {
+      md.appendMarkdown(`$(info) **${t('Git operation in progress: {0}', opLabel)}**\n\n`);
+    }
+    if (showDivergedWarning) {
+      md.appendMarkdown(`$(info) ${t('Branches have diverged across repositories')}\n\n`);
+    }
+
+    if (metas.length > 0) {
+      md.appendMarkdown(`| ${t('Repository')} | ${t('Branch')} | ${t('Sync')} | ${t('Changes')} |\n`);
+      md.appendMarkdown(`| :--- | :--- | :---: | :---: |\n`);
+
+      for (const meta of metas) {
+        const repoStatus = visibleRepoStatuses.find(r => r.repoId === meta.id);
+        const b = repoStatus?.branch;
+        const branchDisplay = b
+          ? (b.detachedTag ? `$(tag) ${b.detachedTag}` : b.detachedHash ? `$(git-commit) ${b.detachedHash}` : `\`${b.name}\``)
+          : '-';
+        const repoOp = repoStatus?.operationState ? ` *(${formatOperationStateLabel(repoStatus.operationState)})*` : '';
+
+        let syncText = '-';
+        if (meta.kind !== 'svn') {
+          if (!b?.upstream) {
+            syncText = `*(${t('no upstream')})*`;
+          } else {
+            const ahead = b.aheadBehind?.ahead ?? 0;
+            const behind = b.aheadBehind?.behind ?? 0;
+            const parts: string[] = [];
+            if (behind > 0) parts.push(`$(arrow-down) ${behind}`);
+            if (ahead > 0) parts.push(`$(arrow-up) ${ahead}`);
+            syncText = parts.length > 0 ? parts.join(' ') : '$(check)';
+          }
+        }
+
+        const changesParts: string[] = [];
+        if (repoStatus && repoStatus.conflictCount > 0) {
+          changesParts.push(`$(git-merge) ${repoStatus.conflictCount}`);
+        }
+        const stagedCount = repoStatus?.stagedFiles.length ?? 0;
+        const unstagedCount = repoStatus?.unstagedFiles.length ?? 0;
+        if (stagedCount > 0 || unstagedCount > 0) {
+          changesParts.push(`● ${stagedCount + unstagedCount}`);
+        }
+        if (changesParts.length === 0) {
+          changesParts.push(`$(check)`);
+        }
+        const changesText = changesParts.join(' ');
+
+        const isMixedVcs = hasGitRepo && hasSvnRepo;
+        const isActive = meta.id === activeRepoId;
+        const activeMarker = isActive && metas.length > 1 ? ` *(${t('Current')})*` : '';
+        const repoDisplayName = isMixedVcs
+          ? (meta.kind === 'svn' ? `${meta.name} (SVN)` : `${meta.name} (Git)`)
+          : meta.name;
+        const repoCol = isActive && metas.length > 1
+          ? `**${repoDisplayName}**${activeMarker}`
+          : `${repoDisplayName}`;
+        md.appendMarkdown(`| ${repoCol} | ${branchDisplay}${repoOp} | ${syncText} | ${changesText} |\n`);
+      }
+      md.appendMarkdown('\n');
+    }
+
+    if (worktreeMetas.length > 0) {
+      const wtSummary = worktreeMetas.map(m => {
+        const branch = worktreeBranches.find(b => b.repoId === m.id);
+        const bName = branch ? (branch.detachedTag ?? branch.detachedHash ?? branch.name) : 'HEAD';
+        return `\`${m.name}\` (${bName})`;
+      }).join(', ');
+      md.appendMarkdown(`**${t('Worktrees')}**: ${wtSummary}\n\n`);
+    }
+
+    this.statusBarItem.tooltip = md;
+
+    if (this.hasConflicts || hasOngoingOperation) {
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       this.statusBarItem.color = undefined;
-    } else if (this.hasBehind) {
+    } else if (this.totalBehind > 0) {
       this.statusBarItem.backgroundColor = undefined;
       this.statusBarItem.color = new vscode.ThemeColor('versiondock.statusBarPullForeground');
-    } else if (this.hasUnpushed) {
+    } else if (this.totalAhead > 0) {
       this.statusBarItem.backgroundColor = undefined;
       this.statusBarItem.color = new vscode.ThemeColor('versiondock.statusBarPushForeground');
     } else if (this.hasUncommitted) {
@@ -260,6 +537,22 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   async showMenu(repoId?: string): Promise<void> {
+    if (this.statusOperationInProgress) {
+      const waitChoice = await vscode.window.showWarningMessage(
+        t('A Git/VCS operation is currently in progress. Please wait for it to complete.'),
+        t('Wait and Open Menu'),
+      );
+      if (waitChoice === t('Wait and Open Menu')) {
+        let waited = 0;
+        while (this.statusOperationInProgress && waited < 30000) {
+          await new Promise(r => setTimeout(r, 200));
+          waited += 200;
+        }
+      } else {
+        return;
+      }
+    }
+
     const metas = this.manager.getRepoMetas();
     const gitMetas = metas.filter(meta => meta.kind !== 'svn');
     const showRepoKinds = gitMetas.length > 0 && gitMetas.length < metas.length;
@@ -271,6 +564,39 @@ export class BranchStatusBar implements vscode.Disposable {
     }
 
     type MenuItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
+
+    // Empty workspace / Zero-repo state guidance
+    if (metas.length === 0) {
+      const emptyItems: MenuItem[] = [
+        {
+          label: `$(repo-create) ${t('Initialize Git Repository…')}`,
+          description: t('Initialize a new Git repository in the current workspace'),
+          action: async () => {
+            await vscode.commands.executeCommand('git.init');
+            this.manager.reinitializeAndRefresh();
+          },
+        },
+        {
+          label: `$(refresh) ${t('Reload Repositories')}`,
+          description: t('Re-scan workspace folders for Git and SVN repositories'),
+          action: () => {
+            this.manager.reinitializeAndRefresh();
+          },
+        },
+      ];
+      const pick = await vscode.window.showQuickPick(emptyItems, {
+        title: t('VersionDock: No Repository Found'),
+        placeHolder: t('Select an action to get started…'),
+      });
+      if (pick) await pick.action();
+      return;
+    }
+
+    // Single SVN repo direct shortcut
+    if (metas.length === 1 && metas[0].kind === 'svn') {
+      await this.showSvnRepoMenu(metas[0], { showBack: false });
+      return;
+    }
 
     const items: MenuItem[] = [];
 
@@ -314,6 +640,13 @@ export class BranchStatusBar implements vscode.Disposable {
       items.push({ label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} } as unknown as MenuItem);
     }
 
+    if (gitMetas.length > 0) {
+      items.push({
+        label: `$(sync) ${t('Fetch All')}`,
+        description: t('Fetch all branches and tags from remote repositories'),
+        action: () => this.fetchAll(),
+      });
+    }
     items.push({
       label: `${this.hasBehind ? '$(arrow-down) ' : '$(cloud-download) '}${t('Update Project…')}`,
       description: this.hasBehind ? t('Pull all repositories (incoming commits available)') : t('Pull all repositories'),
@@ -359,6 +692,12 @@ export class BranchStatusBar implements vscode.Disposable {
         action: async () => {},
       } as unknown as MenuItem);
 
+      const activeUri = vscode.window.activeTextEditor?.document.uri;
+      const activeService = activeUri?.scheme === 'file'
+        ? this.manager.getServicesForFile(activeUri.fsPath)[0]
+        : undefined;
+      const activeRepoId = activeService?.repoId;
+
       for (const meta of metas) {
         const repo = this.manager.getRepo(meta.id);
         let branchName = 'HEAD';
@@ -366,23 +705,31 @@ export class BranchStatusBar implements vscode.Disposable {
         let isDetachedOnTag = false;
         let repoAhead = 0;
         let repoBehind = 0;
+        let repoOpState: string | null = null;
         if (repo) {
           try {
-            const current = await repo.getCurrentBranch();
+            const [current, opState] = await Promise.all([
+              repo.getCurrentBranch(),
+              repo.getOperationState?.() ?? Promise.resolve(null),
+            ]);
             isDetachedOnTag = !!current.detachedTag;
             branchName = current.detachedTag ?? current.detachedHash ?? current.name;
             repoAhead = current.aheadBehind?.ahead ?? 0;
             repoBehind = current.aheadBehind?.behind ?? 0;
             repoHasUnpushed = repoAhead > 0;
+            repoOpState = opState;
           } catch { /* */ }
         }
         const refIcon = isDetachedOnTag ? '$(tag)' : '$(git-branch)';
         const repoIcon = meta.isSubmodule ? '$(package)' : '$(root-folder)';
         const repoPushLabel = repoHasUnpushed ? `  $(arrow-up)${repoAhead > 0 ? repoAhead : ''}` : '';
         const repoPullLabel = repoBehind > 0 ? `  $(arrow-down)${repoBehind}` : '';
+        const isActive = metas.length > 1 && meta.id === activeRepoId;
+        const activeLabel = isActive ? `  $(edit) ${t('active')}` : '';
+        const opLabel = repoOpState ? `  *(${formatOperationStateLabel(repoOpState)})*` : '';
         items.push({
           label: showRepoKinds ? formatRepoLabel(meta, repoIcon) : `${repoIcon} ${meta.name}`,
-          description: `${refIcon} ${branchName}${repoPushLabel}${repoPullLabel}`,
+          description: `${refIcon} ${branchName}${opLabel}${repoPushLabel}${repoPullLabel}${activeLabel}`,
           action: () => this.showRepoBranchMenu(meta),
         });
       }
@@ -1092,22 +1439,23 @@ export class BranchStatusBar implements vscode.Disposable {
     const repo = this.manager.getRepo(pick.repoId);
     if (!repo) return;
 
-    await withGitPushProgress(
-      repo,
-      pick.remote ? t('VersionDock: Pushing to {0}…', pick.remote) : t('VersionDock: Creating remote and pushing…'),
-      async () => {
-        try {
-          await repo.push(false, pick.remote);
-          vscode.window.showInformationMessage(pick.remote
-            ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
-            : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
-        } catch (e: unknown) {
-          if (isRemoteRepositoryCancelled(e)) return;
-          vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(e)));
-        }
-      },
-    );
-    await this.refresh();
+    await this.withOperationProgress(async () => {
+      await withGitPushProgress(
+        repo,
+        pick.remote ? t('VersionDock: Pushing to {0}…', pick.remote) : t('VersionDock: Creating remote and pushing…'),
+        async () => {
+          try {
+            await repo.push(false, pick.remote);
+            vscode.window.showInformationMessage(pick.remote
+              ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
+              : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
+          } catch (e: unknown) {
+            if (isRemoteRepositoryCancelled(e)) return;
+            vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(e)));
+          }
+        },
+      );
+    });
   }
 
   private async abortOperation(meta: RepoMeta, state: 'merge' | 'rebase'): Promise<void> {
@@ -1115,30 +1463,31 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async abortOperations(items: AbortOperationTarget[]): Promise<void> {
-    const result = await runAbortOperationFlow(this.manager, items);
-    if (result.ok) {
-      vscode.window.showInformationMessage(
-        t('VersionDock [{0}]: {1} aborted successfully.', result.target.meta.name, getAbortOperationName(result.target.state))
-      );
-      await this.refresh();
-    } else if (!('cancelled' in result)) {
-      vscode.window.showErrorMessage(result.error);
-      await this.refresh();
-    }
+    await this.withOperationProgress(async () => {
+      const result = await runAbortOperationFlow(this.manager, items);
+      if (result.ok) {
+        vscode.window.showInformationMessage(
+          t('VersionDock [{0}]: {1} aborted successfully.', result.target.meta.name, getAbortOperationName(result.target.state))
+        );
+      } else if (!('cancelled' in result)) {
+        vscode.window.showErrorMessage(result.error);
+      }
+    });
   }
 
   async fetchAll(): Promise<void> {
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: t('VersionDock: Fetching all remotes…'),
-        cancellable: false,
-      },
-      async () => {
-        await this.manager.fetchAll();
-      }
-    );
-    await this.refresh();
+    await this.withOperationProgress(async () => {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: t('VersionDock: Fetching all remotes…'),
+          cancellable: false,
+        },
+        async () => {
+          await this.manager.fetchAll();
+        }
+      );
+    });
     vscode.window.showInformationMessage(t('VersionDock: Fetch complete.'));
   }
 
@@ -1167,25 +1516,27 @@ export class BranchStatusBar implements vscode.Disposable {
     }
 
     let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: t('VersionDock: Updating all projects…'),
-        cancellable: false,
-      },
-      async () => {
-        results = await this.updateSummaryService.runAll(metas.map(meta => ({
-          repoId: meta.id,
-          execute: repo => meta.kind === 'svn'
-            ? repo.pull()
-            : useRebase
-              ? repo.pullRebase()
-              : repo.pull(),
-        })));
-      }
-    );
-    this.manager.notifyBranchesChanged();
-    await this.updateSummaryService.notify(results);
+    await this.withOperationProgress(async () => {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: t('VersionDock: Updating all projects…'),
+          cancellable: false,
+        },
+        async () => {
+          results = await this.updateSummaryService.runAll(metas.map(meta => ({
+            repoId: meta.id,
+            execute: repo => meta.kind === 'svn'
+              ? repo.pull()
+              : useRebase
+                ? repo.pullRebase()
+                : repo.pull(),
+          })));
+        }
+      );
+      this.manager.notifyBranchesChanged();
+      await this.updateSummaryService.notify(results);
+    });
   }
 
   private async newBranch(metas: RepoMeta[]): Promise<void> {
@@ -1279,11 +1630,12 @@ export class BranchStatusBar implements vscode.Disposable {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
 
-    const [branches, currentBranch, tags, operationState] = await Promise.all([
+    const [branches, currentBranch, tags, operationState, lastCommitsMap] = await Promise.all([
       repo.getBranches(),
       repo.getCurrentBranch(),
       repo.getTags(),
       repo.getMergeRebaseState(),
+      repo.getBranchLastCommits().catch(() => new Map<string, { message: string; relativeDate: string; author: string }>()),
     ]);
     const local = branches.filter(b => !b.isRemote);
     const remote = branches.filter(b => b.isRemote);
@@ -1298,6 +1650,14 @@ export class BranchStatusBar implements vscode.Disposable {
         action: () => this.showMenu(),
       },
       { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
+      ...(isDetached ? [
+        {
+          label: `$(plus) ${t('Create Branch from HEAD ({0})…', effectiveBranchName)}`,
+          description: t('Fix detached HEAD — create a branch to safely commit changes'),
+          action: () => this.newBranchSingleRepo(meta),
+        },
+        { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
+      ] : []),
       {
         label: `$(add) ${t('New Branch…')}`,
         description: t('Create a new branch in {0}', meta.name),
@@ -1320,6 +1680,34 @@ export class BranchStatusBar implements vscode.Disposable {
         },
         { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
       ] : []),
+    ];
+
+    // Recent branches group
+    const recent = this.recentBranches.get(meta.id) ?? [];
+    const validRecent = recent
+      .map(name => local.find(b => b.name === name))
+      .filter((b): b is typeof local[0] => Boolean(b && !b.isHead));
+
+    if (validRecent.length > 0) {
+      items.push({ label: t('RECENT'), kind: vscode.QuickPickItemKind.Separator, action: async () => {} });
+      for (const b of validRecent) {
+        const remoteNames = new Set(remote.map(r => r.name.replace(/^[^/]+\//, '')));
+        const hasRemote = remoteNames.has(b.name);
+        const hasUnpushed = !hasRemote || (b.aheadBehind?.ahead ?? 0) > 0;
+        const commitInfo = lastCommitsMap.get(b.name);
+        const commitDetail = commitInfo?.message
+          ? `$(git-commit) ${commitInfo.message} · ${commitInfo.relativeDate}`
+          : undefined;
+        items.push({
+          label: `$(history) ${b.name}`,
+          description: b.aheadBehind ? `↑${b.aheadBehind.ahead} ↓${b.aheadBehind.behind}` : '',
+          detail: commitDetail,
+          action: () => this.showSingleBranchActionMenu(b.name, meta, false, false, hasUnpushed, effectiveBranchName),
+        });
+      }
+    }
+
+    items.push(
       { label: t('LOCAL'), kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
       ...local.map(b => {
         const primary = isPrimaryBranch(b.name);
@@ -1327,9 +1715,14 @@ export class BranchStatusBar implements vscode.Disposable {
         const remoteNames = new Set(remote.map(r => r.name.replace(/^[^/]+\//, '')));
         const hasRemote = b.isHead ? !!currentBranch.upstream : remoteNames.has(b.name);
         const hasUnpushed = !hasRemote || (b.aheadBehind?.ahead ?? 0) > 0;
+        const commitInfo = lastCommitsMap.get(b.name);
+        const commitDetail = commitInfo?.message
+          ? `$(git-commit) ${commitInfo.message} · ${commitInfo.relativeDate}`
+          : undefined;
         return {
           label: `${icon} ${b.name}`,
-          description: b.aheadBehind ? `↑${b.aheadBehind.ahead} ↓${b.aheadBehind.behind}` : '',
+          description: b.aheadBehind ? `↑${b.aheadBehind.ahead} ↓${b.aheadBehind.behind}` : (b.isHead ? t('current') : ''),
+          detail: commitDetail,
           action: () => this.showSingleBranchActionMenu(b.name, meta, b.isHead, false, hasUnpushed, effectiveBranchName),
         };
       }),
@@ -1341,13 +1734,18 @@ export class BranchStatusBar implements vscode.Disposable {
           : b.name.slice(b.name.indexOf('/') + 1);
         const primary = isPrimaryBranch(branchName);
         const icon = primary ? '$(star)' : '$(cloud)';
+        const commitInfo = lastCommitsMap.get(b.name);
+        const commitDetail = commitInfo?.message
+          ? `$(git-commit) ${commitInfo.message} · ${commitInfo.relativeDate}`
+          : undefined;
         return {
           label: `${icon} ${b.name}`,
           description: '',
+          detail: commitDetail,
           action: () => this.showSingleBranchActionMenu(b.name, meta, false, true, false, effectiveBranchName),
         };
       }),
-    ];
+    );
 
     if (tags.length > 0) {
       items.push({ label: t('TAGS'), kind: vscode.QuickPickItemKind.Separator, action: async () => {} });
@@ -1394,6 +1792,7 @@ export class BranchStatusBar implements vscode.Disposable {
     const pick = await vscode.window.showQuickPick(items, {
       title: t('{0} — Branches', meta.name),
       matchOnDescription: true,
+      matchOnDetail: true,
     }) as BranchItem | undefined;
 
     if (pick) await pick.action();
@@ -1777,6 +2176,7 @@ export class BranchStatusBar implements vscode.Disposable {
       async () => {
         try {
           await repo.checkout(branchName);
+          this.recordRecentBranch(meta.id, branchName);
           vscode.window.showInformationMessage(t('VersionDock [{0}]: switched to "{1}"', meta.name, branchName));
         } catch (e: unknown) {
           const handled = await this.handleDirtyCheckout(repo, meta, branchName, e);
@@ -1886,6 +2286,7 @@ export class BranchStatusBar implements vscode.Disposable {
           if (!repo) continue;
           try {
             await repo.checkout(fullName ?? branchName);
+            this.recordRecentBranch(meta.id, branchName);
           } catch (e: unknown) {
             const handled = await this.handleDirtyCheckout(repo, meta, fullName ?? branchName, e);
             if (!handled) errors.push(`${meta.name}: ${String(e)}`);
@@ -2504,10 +2905,20 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.safetyTimeoutTimer) {
+      clearTimeout(this.safetyTimeoutTimer);
+      this.safetyTimeoutTimer = undefined;
+    }
+    if (this.loadingTimer) {
+      clearTimeout(this.loadingTimer);
+      this.loadingTimer = undefined;
+    }
     this.statusBarItem.dispose();
     this.statusDisposable?.dispose();
     this.statusOperationDisposable?.dispose();
     this.branchDisposable?.dispose();
     this.configDisposable?.dispose();
+    this.editorDisposable?.dispose();
+    this.windowStateDisposable?.dispose();
   }
 }

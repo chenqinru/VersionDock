@@ -17,8 +17,8 @@ const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
 const DEFAULT_REPOSITORY_SCAN_IGNORED_FOLDERS = ['node_modules'];
 
 type StatusListener = (status: WorkspaceStatus) => void;
-type StatusOperationListener = (inProgress: boolean) => void;
-type StatusOperationKind = 'checkout' | 'squash' | 'merge';
+export type StatusOperationListener = (inProgress: boolean, kind?: StatusOperationKind, label?: string) => void;
+type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
 type BranchListener = () => void;
 type WorktreeListener = (repoId: string) => void;
 type RepoKind = NonNullable<RepoMeta['kind']>;
@@ -402,6 +402,16 @@ export class WorkspaceGitManager implements vscode.Disposable {
     );
   }
 
+  private createSvnService(repoId: string, rootPath: string): SvnService {
+    return new SvnService(
+      repoId,
+      rootPath,
+      (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
+      async () => { await this.refreshStatusNow(); },
+      this.publishMissingRemote,
+    );
+  }
+
   private attachGitApiRepoListeners(): void {
     const gitApi = getVscodeGitApi();
     if (!gitApi) return;
@@ -583,7 +593,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
         const meta = this.buildSvnRepoMeta(repoPath, colorIdx.value++, folders, customColors);
         if (this.repos.has(meta.id)) continue;
         this.repoMetas.set(meta.id, meta);
-        this.repos.set(meta.id, new SvnService(meta.id, meta.rootPath));
+        this.repos.set(meta.id, this.createSvnService(meta.id, meta.rootPath));
         this.setupSvnWatcher(meta.rootPath);
       }
     }
@@ -1100,14 +1110,15 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
     const repo = this.repos.get(repoId);
     if (!repo) return undefined;
-    const task = repo.commitMergeIfResolved().then(result => {
+    const task = this.runWithStatusUpdatesSuppressed(async () => {
+      const result = await repo.commitMergeIfResolved();
       if (result) {
         vscode.window.showInformationMessage(
           t('VersionDock: Merged "{0}" into "{1}" and committed.', result.sourceBranch ?? t('the incoming branch'), result.targetBranch)
         );
       }
       return result;
-    }).finally(() => {
+    }, 'merge').finally(() => {
       if (this.mergeCompletionTasks.get(repoId) === task) this.mergeCompletionTasks.delete(repoId);
     });
     this.mergeCompletionTasks.set(repoId, task);
@@ -1276,13 +1287,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
     });
   }
 
-  async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, _kind?: StatusOperationKind, _label?: string): Promise<T> {
+  async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, kind?: StatusOperationKind, label?: string): Promise<T> {
     if (this.statusUpdateSuppressionDepth === 0) {
       this.beginStatusStabilization();
       this.statusOperationSettled = new Promise<void>(resolve => {
         this.resolveStatusOperationSettled = resolve;
       });
-      this.statusOperationListeners.forEach(listener => listener(true));
+      this.statusOperationListeners.forEach(listener => listener(true, kind, label));
     }
     this.statusUpdateSuppressionDepth += 1;
     try {
@@ -1293,7 +1304,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
         const settled = this.statusOperationSettled;
         this.scheduleRefresh();
         if (settled) await this.waitForStatusOperationSettled(settled);
-        this.statusOperationListeners.forEach(listener => listener(false));
+        this.statusOperationListeners.forEach(listener => listener(false, kind, label));
       }
     }
   }
