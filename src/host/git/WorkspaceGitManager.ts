@@ -302,8 +302,6 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private refreshPending = false;
   private statusUpdateSuppressionDepth = 0;
   private lastPublishedStatus: WorkspaceStatus | null = null;
-  private statusOperationSettled: Promise<void> | null = null;
-  private resolveStatusOperationSettled: (() => void) | null = null;
   private mergeCompletionTasks = new Map<string, Promise<MergeCommitResult | undefined>>();
   /** Set after a branch/HEAD change so intermediate checkout states are never published. */
   private statusStabilizationSignature: string | null | undefined;
@@ -990,11 +988,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private publishStatus(status: WorkspaceStatus): void {
     this.detectNewUntrackedFiles(status);
     this.lastPublishedStatus = status;
-    const resolveStatusOperationSettled = this.resolveStatusOperationSettled;
-    this.statusOperationSettled = null;
-    this.resolveStatusOperationSettled = null;
     this.statusListeners.forEach(l => l(status));
-    resolveStatusOperationSettled?.();
 
     for (const repoStatus of status.repos) {
       if (repoStatus.operationState === 'merge' && repoStatus.conflictCount === 0) {
@@ -1290,9 +1284,6 @@ export class WorkspaceGitManager implements vscode.Disposable {
   async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, kind?: StatusOperationKind, label?: string): Promise<T> {
     if (this.statusUpdateSuppressionDepth === 0) {
       this.beginStatusStabilization();
-      this.statusOperationSettled = new Promise<void>(resolve => {
-        this.resolveStatusOperationSettled = resolve;
-      });
       this.statusOperationListeners.forEach(listener => listener(true, kind, label));
     }
     this.statusUpdateSuppressionDepth += 1;
@@ -1301,24 +1292,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
     } finally {
       this.statusUpdateSuppressionDepth -= 1;
       if (this.statusUpdateSuppressionDepth === 0) {
-        const settled = this.statusOperationSettled;
         this.scheduleRefresh();
-        if (settled) await this.waitForStatusOperationSettled(settled);
         this.statusOperationListeners.forEach(listener => listener(false, kind, label));
       }
     }
-  }
-
-  private async waitForStatusOperationSettled(settled: Promise<void>): Promise<void> {
-    let timer: NodeJS.Timeout | undefined;
-    await new Promise<void>(resolve => {
-      const finish = () => {
-        if (timer) clearTimeout(timer);
-        resolve();
-      };
-      timer = setTimeout(finish, 30_000);
-      void settled.then(finish, finish);
-    });
   }
 
   getRepoMetas(): RepoMeta[] {
