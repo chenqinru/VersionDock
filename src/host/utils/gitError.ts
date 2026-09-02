@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { t } from './l10n';
+import { isPushRejectedError } from './pushProtection';
 
 export interface ShowGitErrorOptions {
   onUnlocked?: () => void | Promise<void>;
@@ -52,6 +53,12 @@ export async function showGitErrorMessage(
 
   if (isAuthError) {
     const diagnostic = t('VersionDock: Remote authentication failed (SSH key not configured or access token expired). Please check your credentials.');
+    return vscode.window.showErrorMessage(`${diagnostic}\n\n${message}`);
+  }
+
+  // Detect push rejection (non-fast-forward)
+  if (isPushRejectedError(errorOrMessage)) {
+    const diagnostic = t('VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.');
     return vscode.window.showErrorMessage(`${diagnostic}\n\n${message}`);
   }
 

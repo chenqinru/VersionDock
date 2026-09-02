@@ -772,6 +772,22 @@
           "default": true,
           "description": "%configuration.notifyOnUnpushedCommits.description%"
         },
+        "versiondock.git.onPushRejected": {
+          "order": 58,
+          "type": "string",
+          "enum": [
+            "prompt",
+            "rebaseAndRetry",
+            "error"
+          ],
+          "enumDescriptions": [
+            "%configuration.git.onPushRejected.enum.prompt%",
+            "%configuration.git.onPushRejected.enum.rebaseAndRetry%",
+            "%configuration.git.onPushRejected.enum.error%"
+          ],
+          "default": "prompt",
+          "description": "%configuration.git.onPushRejected.description%"
+        },
         "versiondock.projectColors": {
           "order": 110,
           "type": "object",

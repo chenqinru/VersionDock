@@ -1736,7 +1736,6 @@
   "RECENT": "RECENT",
   "Create Branch from HEAD ({0})…": "Create Branch from HEAD ({0})…",
   "Fix detached HEAD — create a branch to safely commit changes": "Fix detached HEAD — create a branch to safely commit changes",
-  "Current": "Current",
   "VersionDock: Stashing {0} repository": "VersionDock: Stashing {0} repository",
   "VersionDock: Stashing {0} repositories": "VersionDock: Stashing {0} repositories",
   "VersionDock: Shelving {0} repository": "VersionDock: Shelving {0} repository",
@@ -1765,7 +1764,6 @@
   "VersionDock: Cannot open file": "VersionDock: Cannot open file",
   "{0} week ago": "{0} week ago",
   "{0} weeks ago": "{0} weeks ago",
-  "just now": "just now",
   "MERGE": "MERGE",
   "REBASE": "REBASE",
   "CHERRY-PICK": "CHERRY-PICK",
@@ -1774,5 +1772,15 @@
   "REBASING": "REBASING",
   "CHERRY-PICKING": "CHERRY-PICKING",
   "REVERTING": "REVERTING",
-  "no upstream": "no upstream"
+  "no upstream": "no upstream",
+  "Rebase & Push": "Rebase & Push",
+  "Force Push": "Force Push",
+  "VersionDock [{0}]: Push was rejected because the remote contains work that you do not have locally.": "VersionDock [{0}]: Push was rejected because the remote contains work that you do not have locally.",
+  "VersionDock [{0}]: Rebasing on remote…": "VersionDock [{0}]: Rebasing on remote…",
+  "VersionDock [{0}]: Retrying push…": "VersionDock [{0}]: Retrying push…",
+  "VersionDock [{0}]: Rebased and pushed successfully.": "VersionDock [{0}]: Rebased and pushed successfully.",
+  "VersionDock [{0}]: Force pushed successfully.": "VersionDock [{0}]: Force pushed successfully.",
+  "VersionDock [{0}]: Force pushing…": "VersionDock [{0}]: Force pushing…",
+  "VersionDock [{0}]: Rebase is not supported on this repository.": "VersionDock [{0}]: Rebase is not supported on this repository.",
+  "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.": "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing."
 }

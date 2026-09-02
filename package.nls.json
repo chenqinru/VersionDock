@@ -114,5 +114,9 @@
   "configuration.defaultSaveAction.enum.stash": "The main Save button stashes selected changes",
   "configuration.defaultSaveAction.enum.shelve": "The main Save button shelves selected changes",
   "configuration.defaultSaveAction.description": "Default action for the Save button in the Commit Panel.",
-  "configuration.suppressDivergedBranchWarning.description": "Suppress the 'Branches have diverged' warning in the Git Menu and status bar."
+  "configuration.suppressDivergedBranchWarning.description": "Suppress the 'Branches have diverged' warning in the Git Menu and status bar.",
+  "configuration.git.onPushRejected.description": "Behavior when a push is rejected because the remote is ahead (non-fast-forward).",
+  "configuration.git.onPushRejected.enum.prompt": "Prompt to Rebase & Push, Force Push, or Cancel (JetBrains-style).",
+  "configuration.git.onPushRejected.enum.rebaseAndRetry": "Automatically pull and rebase before retrying push.",
+  "configuration.git.onPushRejected.enum.error": "Show the error notification without interactive recovery."
 }

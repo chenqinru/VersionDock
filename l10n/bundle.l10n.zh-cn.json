@@ -1736,7 +1736,6 @@
   "RECENT": "最近使用",
   "Create Branch from HEAD ({0})…": "从当前 HEAD ({0}) 创建分支…",
   "Fix detached HEAD — create a branch to safely commit changes": "修复游离 HEAD 状态 — 创建分支以便安全提交并保留修改",
-  "Current": "当前",
   "VersionDock: Stashing {0} repository": "VersionDock：正在暂存 {0} 个仓库",
   "VersionDock: Stashing {0} repositories": "VersionDock：正在暂存 {0} 个仓库",
   "VersionDock: Shelving {0} repository": "VersionDock：正在搁置 {0} 个仓库",
@@ -1765,7 +1764,6 @@
   "VersionDock: Cannot open file": "VersionDock：无法打开文件",
   "{0} week ago": "{0} 周前",
   "{0} weeks ago": "{0} 周前",
-  "just now": "刚刚",
   "MERGE": "合并中",
   "REBASE": "变基中",
   "CHERRY-PICK": "拣选中",
@@ -1774,5 +1772,15 @@
   "REBASING": "变基中",
   "CHERRY-PICKING": "拣选中",
   "REVERTING": "还原中",
-  "no upstream": "未关联远程"
+  "no upstream": "未关联远程",
+  "Rebase & Push": "变基并推送",
+  "Force Push": "强制推送",
+  "VersionDock [{0}]: Push was rejected because the remote contains work that you do not have locally.": "VersionDock [{0}]：远程有新提交，推送被拒。",
+  "VersionDock [{0}]: Rebasing on remote…": "VersionDock [{0}]：正在变基…",
+  "VersionDock [{0}]: Retrying push…": "VersionDock [{0}]：正在重试推送…",
+  "VersionDock [{0}]: Rebased and pushed successfully.": "VersionDock [{0}]：变基并推送成功。",
+  "VersionDock [{0}]: Force pushed successfully.": "VersionDock [{0}]：强制推送成功。",
+  "VersionDock [{0}]: Force pushing…": "VersionDock [{0}]：正在强制推送…",
+  "VersionDock [{0}]: Rebase is not supported on this repository.": "VersionDock [{0}]：此仓库不支持变基。",
+  "VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.": "VersionDock：远程有新提交，请先拉取或变基后再推送。"
 }

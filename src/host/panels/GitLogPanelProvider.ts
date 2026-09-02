@@ -25,6 +25,7 @@ import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHist
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from '../utils/pushProgress';
+import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
 
@@ -1170,22 +1171,31 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_PUSH': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        await withGitPushProgress(repo, t('VersionDock: Pushing'), async () => {
-          try {
-            await repo.push(msg.force, msg.remote);
-            this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-            void this.notifyPushSuccess(repo, undefined, msg.remote);
-            const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
-            const merged = mergeCurrentIntoBranches(branches, current);
-            this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
-            this.manager.notifyBranchesChanged();
-            this.post({ type: 'LOG_REFRESH' });
-          } catch (e: unknown) {
-            const cancelled = isRemoteRepositoryCancelled(e);
-            this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e) });
-            if (!cancelled) this.showOperationError(e);
-          }
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || msg.repoId;
+        const pushResult = await runPushWithProtection(repo, {
+          repoName,
+          force: msg.force,
+          remote: msg.remote,
+          logger: this.logger,
         });
+
+        if (pushResult.success) {
+          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+          if (!pushResult.rebased && !pushResult.forced) {
+            void this.notifyPushSuccess(repo, undefined, msg.remote);
+          }
+          const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+          const merged = mergeCurrentIntoBranches(branches, current);
+          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+          this.manager.notifyBranchesChanged();
+          this.post({ type: 'LOG_REFRESH' });
+        } else if (pushResult.cancelled) {
+          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+        } else {
+          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(pushResult.error) });
+          this.showOperationError(pushResult.error);
+        }
         break;
       }
 
@@ -2203,21 +2213,22 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             ) as { label: string; remote: string } | undefined)?.remote
             : undefined;
         if (remotes.length > 1 && !remotePick) return;
-        await withGitPushProgress(
-          repo,
-          remotePick ? t('VersionDock: Pushing to {0}…', remotePick) : t('VersionDock: Creating remote and pushing…'),
-          async () => {
-            try {
-              await repo.push(false, remotePick);
-              vscode.window.showInformationMessage(remotePick
-                ? t('VersionDock: Pushed to "{0}" successfully.', remotePick)
-                : t('VersionDock: Remote created and branch pushed successfully.'));
-            } catch (e: unknown) {
-              if (isRemoteRepositoryCancelled(e)) return;
-              this.showOperationError(e, t('VersionDock: Push failed'));
-            }
-          },
-        );
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || msg.repoId;
+        const pushResult = await runPushWithProtection(repo, {
+          repoName,
+          remote: remotePick,
+          logger: this.logger,
+        });
+        if (pushResult.success) {
+          if (!pushResult.rebased && !pushResult.forced) {
+            vscode.window.showInformationMessage(remotePick
+              ? t('VersionDock: Pushed to "{0}" successfully.', remotePick)
+              : t('VersionDock: Remote created and branch pushed successfully.'));
+          }
+        } else if (!pushResult.cancelled) {
+          this.showOperationError(pushResult.error, t('VersionDock: Push failed'));
+        }
         this.post({ type: 'LOG_REFRESH' });
         break;
       }

@@ -36,6 +36,7 @@ import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup 
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from '../utils/pushProgress';
+import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 import { checkCommitSafety } from '../utils/commitSafetyCheck';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
@@ -2255,8 +2256,20 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             },
           );
           if (repo.kind !== 'svn') {
-            await withGitPushProgress(repo, t('VersionDock: Pushing'), () => repo.push());
-            void this.notifyPushSuccess(repo);
+            const pushResult = await runPushWithProtection(repo, {
+              repoName: this.manager.getRepoMeta(msg.repoId)?.name ?? path.basename(repo.rootPath),
+              logger: this.logger,
+            });
+            if (!pushResult.success) {
+              if (pushResult.cancelled) {
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+                return;
+              }
+              throw pushResult.error;
+            }
+            if (!pushResult.rebased && !pushResult.forced) {
+              void this.notifyPushSuccess(repo);
+            }
           }
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
           this.logger?.info('Commit', 'Commit and push completed', {
@@ -2362,7 +2375,17 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   });
                 });
                 if (msg.andPush) {
-                  await withGitPushProgress(repo, t('VersionDock: Pushing'), () => repo.push());
+                  const pushResult = await runPushWithProtection(repo, {
+                    repoName: (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId,
+                    logger: this.logger,
+                  });
+                  if (!pushResult.success) {
+                    if (pushResult.cancelled) {
+                      cancelled = true;
+                    } else {
+                      throw pushResult.error;
+                    }
+                  }
                 }
               } catch (e: unknown) {
                 const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
@@ -2632,45 +2655,52 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const startedAt = Date.now();
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
         this.logger?.info('Git', 'Push started', {
           repoId: msg.repoId,
           requestId: msg.requestId,
           remote: msg.remote,
         });
-        await withGitPushProgress(repo, t('VersionDock: Pushing'), async () => {
-          try {
-            await repo.push(false, msg.remote);
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-            void this.notifyPushSuccess(repo, undefined, msg.remote);
-            this.logger?.info('Git', 'Push completed', {
-              repoId: msg.repoId,
-              requestId: msg.requestId,
-              remote: msg.remote,
-              durationMs: Date.now() - startedAt,
-            });
-            this.logProvider?.refresh();
-            const status = await this.manager.getAllStatusesFresh();
-            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-          } catch (e: unknown) {
-            const cancelled = isRemoteRepositoryCancelled(e);
-            if (!cancelled) {
-              this.logger?.error('Git', 'Push failed', e, {
-                repoId: msg.repoId,
-                requestId: msg.requestId,
-                remote: msg.remote,
-                durationMs: Date.now() - startedAt,
-              });
-            } else {
-              this.logger?.info('Git', 'Push cancelled', {
-                repoId: msg.repoId,
-                requestId: msg.requestId,
-                remote: msg.remote,
-                durationMs: Date.now() - startedAt,
-              });
-            }
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e) });
-          }
+        const pushResult = await runPushWithProtection(repo, {
+          repoName,
+          remote: msg.remote,
+          logger: this.logger,
         });
+
+        if (pushResult.success) {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          if (!pushResult.rebased && !pushResult.forced) {
+            void this.notifyPushSuccess(repo, undefined, msg.remote);
+          }
+          this.logger?.info('Git', 'Push completed', {
+            repoId: msg.repoId,
+            requestId: msg.requestId,
+            remote: msg.remote,
+            rebased: pushResult.rebased,
+            forced: pushResult.forced,
+            durationMs: Date.now() - startedAt,
+          });
+          this.logProvider?.refresh();
+          const status = await this.manager.getAllStatusesFresh();
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+        } else if (pushResult.cancelled) {
+          this.logger?.info('Git', 'Push cancelled', {
+            repoId: msg.repoId,
+            requestId: msg.requestId,
+            remote: msg.remote,
+            durationMs: Date.now() - startedAt,
+          });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+        } else {
+          this.logger?.error('Git', 'Push failed', pushResult.error, {
+            repoId: msg.repoId,
+            requestId: msg.requestId,
+            remote: msg.remote,
+            durationMs: Date.now() - startedAt,
+          });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(pushResult.error) });
+        }
         break;
       }
 

@@ -114,5 +114,9 @@
   "configuration.defaultSaveAction.enum.stash": "主“保存”按钮暂存选中的更改",
   "configuration.defaultSaveAction.enum.shelve": "主“保存”按钮搁置选中的更改",
   "configuration.defaultSaveAction.description": "提交面板中“保存”按钮的默认操作。",
-  "configuration.suppressDivergedBranchWarning.description": "在 Git 菜单和状态栏中隐藏“分支已发散”警告。"
+  "configuration.suppressDivergedBranchWarning.description": "在 Git 菜单和状态栏中隐藏“分支已发散”警告。",
+  "configuration.git.onPushRejected.description": "当因远程分支存在新提交而被拒绝推送（非快进推送）时的行为。",
+  "configuration.git.onPushRejected.enum.prompt": "弹出提示询问是否拉取变基并重试、强制推送或取消（类似 JetBrains 行为）。",
+  "configuration.git.onPushRejected.enum.rebaseAndRetry": "自动拉取变基后再重试推送。",
+  "configuration.git.onPushRejected.enum.error": "仅显示错误通知，不提供交互恢复。"
 }

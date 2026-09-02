@@ -18,6 +18,7 @@ import { formatRepoLabel } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { withGitPushProgress } from '../utils/pushProgress';
+import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 
 type SvnIgnoreRepo = {
@@ -1440,21 +1441,20 @@ export class BranchStatusBar implements vscode.Disposable {
     if (!repo) return;
 
     await this.withOperationProgress(async () => {
-      await withGitPushProgress(
-        repo,
-        pick.remote ? t('VersionDock: Pushing to {0}…', pick.remote) : t('VersionDock: Creating remote and pushing…'),
-        async () => {
-          try {
-            await repo.push(false, pick.remote);
-            vscode.window.showInformationMessage(pick.remote
-              ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
-              : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
-          } catch (e: unknown) {
-            if (isRemoteRepositoryCancelled(e)) return;
-            vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(e)));
-          }
-        },
-      );
+      const pushResult = await runPushWithProtection(repo, {
+        repoName: pick.repoLabel,
+        remote: pick.remote,
+        logger: this.logger,
+      });
+      if (pushResult.success) {
+        if (!pushResult.rebased && !pushResult.forced) {
+          vscode.window.showInformationMessage(pick.remote
+            ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
+            : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
+        }
+      } else if (!pushResult.cancelled) {
+        vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(pushResult.error)));
+      }
     });
   }
 
@@ -2396,13 +2396,16 @@ export class BranchStatusBar implements vscode.Disposable {
   private async pushSingleRepo(meta: RepoMeta): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
-    try {
-      await repo.push();
-      vscode.window.showInformationMessage(t('VersionDock [{0}]: pushed successfully.', meta.name));
-    } catch (e: unknown) {
-      if (!isRemoteRepositoryCancelled(e)) {
-        this.showError(meta, e);
+    const pushResult = await runPushWithProtection(repo, {
+      repoName: meta.name,
+      logger: this.logger,
+    });
+    if (pushResult.success) {
+      if (!pushResult.rebased && !pushResult.forced) {
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: pushed successfully.', meta.name));
       }
+    } else if (!pushResult.cancelled) {
+      this.showError(meta, pushResult.error);
     }
     await this.refresh();
   }
