@@ -236,7 +236,25 @@ export class UpdateSummaryService {
         : t('VersionDock: Updated {0} files in {1} commits.', fileCount, commits.length);
       notification = vscode.window.showInformationMessage(message, viewDetails);
     } else if (skipped.length > 0) {
-      void vscode.window.showWarningMessage(t('VersionDock: Update skipped: {0}', skipped[0].skippedReason ?? ''));
+      const skipItem = skipped[0];
+      const noUpstreamMsg = t('Current branch has no upstream tracking branch.');
+      if (skipItem.skippedReason === noUpstreamMsg) {
+        const pushLabel = t('Push to Remote');
+        void vscode.window.showWarningMessage(
+          t('VersionDock: Update skipped because the current branch has no remote tracking branch.'),
+          pushLabel
+        ).then(async choice => {
+          if (choice === pushLabel) {
+            const repo = this.manager.getRepo(skipItem.repoId);
+            if (repo) {
+              await repo.push();
+              vscode.window.showInformationMessage(t('VersionDock: Pushed and configured remote tracking.'));
+            }
+          }
+        });
+      } else {
+        void vscode.window.showWarningMessage(t('VersionDock: Update skipped: {0}', skipItem.skippedReason ?? ''));
+      }
       return;
     } else {
       void vscode.window.showInformationMessage(t('VersionDock: Already up to date. No files updated.'));

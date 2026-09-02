@@ -5,7 +5,7 @@ import { GitService, type MergeCommitResult } from './GitService';
 import { SvnService } from '../svn/SvnService';
 import type { WorktreeEntry } from './GitService';
 import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
-import type { BranchInfo, CommitNode, GraphCommitNode, LineRange, RepoMeta, WorkspaceStatus } from '../types/git';
+import type { BranchInfo, CommitNode, GraphCommitNode, LineRange, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
@@ -987,10 +987,110 @@ export class WorkspaceGitManager implements vscode.Disposable {
     resolveStatusOperationSettled?.();
 
     for (const repoStatus of status.repos) {
-      if (repoStatus.operationState !== 'merge' || repoStatus.conflictCount > 0) continue;
-      void this.completeMergeIfResolved(repoStatus.repoId).catch(error => {
-        this.logger.error('Repositories', 'Failed to auto-commit resolved merge', error, { repoId: repoStatus.repoId });
-      });
+      if (repoStatus.operationState === 'merge' && repoStatus.conflictCount === 0) {
+        void this.completeMergeIfResolved(repoStatus.repoId).catch(error => {
+          this.logger.error('Repositories', 'Failed to auto-commit resolved merge', error, { repoId: repoStatus.repoId });
+        });
+      } else {
+        this.promptResolvedOperationIfApplicable(repoStatus);
+      }
+    }
+  }
+
+  private promptedResolvedOps = new Set<string>();
+
+  private promptResolvedOperationIfApplicable(repoStatus: RepoStatus): void {
+    if (repoStatus.conflictCount > 0) {
+      this.promptedResolvedOps.delete(repoStatus.repoId);
+      return;
+    }
+    const op = repoStatus.operationState;
+    if (!op || op === 'merge') {
+      this.promptedResolvedOps.delete(repoStatus.repoId);
+      return;
+    }
+    if (op !== 'rebase' && op !== 'cherry-pick' && op !== 'revert') return;
+
+    const opKey = `${repoStatus.repoId}:${op}`;
+    if (this.promptedResolvedOps.has(opKey)) return;
+    this.promptedResolvedOps.add(opKey);
+
+    const repo = this.repos.get(repoStatus.repoId);
+    if (!repo) return;
+    const meta = this.repoMetas.get(repoStatus.repoId);
+    const repoName = meta?.name ?? repoStatus.repoId;
+
+    const continueLabel = op === 'rebase'
+      ? t('Continue Rebase')
+      : op === 'cherry-pick'
+        ? t('Continue Cherry-Pick')
+        : t('Continue Revert');
+    const abortLabel = op === 'rebase'
+      ? t('Abort Rebase')
+      : op === 'cherry-pick'
+        ? t('Abort Cherry-Pick')
+        : t('Abort Revert');
+
+    const message = op === 'rebase'
+      ? t('VersionDock [{0}]: All conflicts resolved. Continue rebase?', repoName)
+      : op === 'cherry-pick'
+        ? t('VersionDock [{0}]: All conflicts resolved. Continue cherry-pick?', repoName)
+        : t('VersionDock [{0}]: All conflicts resolved. Continue revert?', repoName);
+
+    void vscode.window.showInformationMessage(message, continueLabel, abortLabel).then(async choice => {
+      if (!choice) return;
+      if (choice === continueLabel) {
+        try {
+          if (op === 'rebase') await repo.rebaseContinue();
+          else if (op === 'cherry-pick') await repo.cherryPickContinue();
+          else if (op === 'revert') await repo.revertContinue();
+          this.notifyBranchesChanged();
+        } catch (error: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, String(error)));
+        }
+      } else if (choice === abortLabel) {
+        try {
+          if (op === 'rebase') await repo.abortRebase();
+          else if (op === 'cherry-pick') await repo.cherryPickAbort();
+          else if (op === 'revert') await repo.revertAbort();
+          this.notifyBranchesChanged();
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Operation aborted. The repository has been restored.', repoName));
+        } catch (error: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, String(error)));
+        }
+      }
+    });
+  }
+
+  async checkAndNotifyGoneBranches(): Promise<void> {
+    const gitRepos = Array.from(this.repos.values()).filter(r => r.kind !== 'svn');
+    for (const repo of gitRepos) {
+      const goneBranches = await repo.getGoneBranches().catch(() => []);
+      if (goneBranches.length > 0) {
+        const meta = this.repoMetas.get(repo.repoId);
+        const repoName = meta?.name ?? repo.repoId;
+        const pruneAction = t('Prune Branches');
+        const count = goneBranches.length;
+        const msg = count === 1
+          ? t('VersionDock [{0}]: Local branch "{1}" has a deleted remote tracking branch.', repoName, goneBranches[0])
+          : t('VersionDock [{0}]: {1} local branches have deleted remote tracking branches.', repoName, count);
+        void vscode.window.showInformationMessage(msg, pruneAction, t('Dismiss')).then(async choice => {
+          if (choice === pruneAction) {
+            const picked = await vscode.window.showQuickPick(
+              goneBranches.map(b => ({ label: `$(git-branch) ${b}`, branchName: b })),
+              { canPickMany: true, title: t('Select branches to delete in {0}', repoName) }
+            );
+            if (picked && picked.length > 0) {
+              for (const item of picked) {
+                await repo.deleteBranch(item.branchName, false).catch(e => {
+                  vscode.window.showErrorMessage(t('Failed to delete branch {0}: {1}', item.branchName, String(e)));
+                });
+              }
+              this.notifyBranchesChanged();
+            }
+          }
+        });
+      }
     }
   }
 
@@ -1558,6 +1658,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       failedCount,
       durationMs: Date.now() - startedAt,
     });
+    void this.checkAndNotifyGoneBranches();
   }
 
   async pullAll(rebase = false): Promise<Array<{ repoId: string; ok: boolean; message: string }>> {

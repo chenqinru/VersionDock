@@ -43,6 +43,18 @@ export async function showGitErrorMessage(
     return action;
   }
 
+  // Detect authentication / permission errors
+  const isAuthError =
+    message.includes('Permission denied (publickey)') ||
+    message.includes('Authentication failed') ||
+    message.includes('could not read Username for') ||
+    message.includes('Invalid username or password');
+
+  if (isAuthError) {
+    const diagnostic = t('VersionDock: Remote authentication failed (SSH key not configured or access token expired). Please check your credentials.');
+    return vscode.window.showErrorMessage(`${diagnostic}\n\n${message}`);
+  }
+
   // Normal error toast
   const formattedMsg = message.startsWith('VersionDock') ? message : t('VersionDock: {0}', message);
   return vscode.window.showErrorMessage(formattedMsg);

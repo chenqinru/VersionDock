@@ -220,6 +220,7 @@ function splitStatusEntry(entry: string, fieldCount: number): string[] {
 type BranchTrackingInfo = Pick<BranchInfo, 'upstream' | 'aheadBehind'> & {
   upstreamRemote?: string;
   upstreamRemoteRef?: string;
+  isGone?: boolean;
 };
 
 type PullStrategy = 'merge' | 'rebase';
@@ -992,6 +993,7 @@ export class GitService {
         if (!line.trim()) continue;
         const [name, upstream, upstreamRemote, upstreamRemoteRef, track] = line.split('\0');
         if (!name) continue;
+        const isGone = Boolean(track && track.includes('[gone]'));
         const aheadBehind = upstream
           ? (parseAheadBehindTrack(track ?? '') ?? { ahead: 0, behind: 0 })
           : undefined;
@@ -1000,12 +1002,22 @@ export class GitService {
           upstreamRemote: upstreamRemote || undefined,
           upstreamRemoteRef: upstreamRemoteRef || undefined,
           aheadBehind,
+          isGone,
         });
       }
     } catch {
       // Branch list rendering should not fail just because tracking metadata is unavailable.
     }
     return map;
+  }
+
+  async getGoneBranches(): Promise<string[]> {
+    const tracking = await this.getLocalBranchTrackingInfo();
+    const gone: string[] = [];
+    for (const [name, info] of tracking.entries()) {
+      if (info.isGone) gone.push(name);
+    }
+    return gone;
   }
 
   async captureUpdateSnapshot(branchName?: string): Promise<VcsUpdateSnapshot | undefined> {
@@ -2585,6 +2597,19 @@ export class GitService {
       const vsRepo = this.vsRepo();
       if (vsRepo) { await vsRepo.rebase(onto); return; }
       await this.git.rebase([onto]);
+    });
+  }
+
+  async rebaseContinue(): Promise<void> {
+    return this.withWriteLock(async () => {
+      const vsRepo = this.vsRepo();
+      if (vsRepo) {
+        try {
+          await vsRepo.rebase('--continue' as string);
+          return;
+        } catch { /* fallback to simple-git */ }
+      }
+      await this.git.raw(['rebase', '--continue']);
     });
   }
 
