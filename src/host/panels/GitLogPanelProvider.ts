@@ -1090,6 +1090,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               });
               if (!trackedResult.ok) throw new Error(trackedResult.error ?? t('Unknown error'));
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true, output: trackedResult.output });
+              const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+              const merged = mergeCurrentIntoBranches(branches, current);
+              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+              this.manager.notifyBranchesChanged();
               this.post({ type: 'LOG_REFRESH' });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -1108,6 +1112,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await repo.push(msg.force, msg.remote);
             this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+            const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+            const merged = mergeCurrentIntoBranches(branches, current);
+            this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+            this.manager.notifyBranchesChanged();
             this.post({ type: 'LOG_REFRESH' });
           } catch (e: unknown) {
             const cancelled = isRemoteRepositoryCancelled(e);
@@ -1137,6 +1145,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await repo.merge(msg.from);
             this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+            const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+            const merged = mergeCurrentIntoBranches(branches, current);
+            this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+            this.manager.notifyBranchesChanged();
             this.post({ type: 'LOG_REFRESH' });
             vscode.window.showInformationMessage(t('VersionDock: Merged SVN branch "{0}" into the working copy.', msg.from));
           } catch (e: unknown) {
@@ -1152,6 +1164,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             try {
               await repo.merge(msg.from);
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+              const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+              const merged = mergeCurrentIntoBranches(branches, current);
+              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+              this.manager.notifyBranchesChanged();
+              this.post({ type: 'LOG_REFRESH' });
             } catch (e: unknown) {
               const errMsg = String(e);
               const isDirty = errMsg.includes('Your local changes') || errMsg.includes('overwritten by merge') || (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree';
@@ -1202,6 +1219,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 await repo.merge(msg.from);
               });
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+              const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+              const merged = mergeCurrentIntoBranches(branches, current);
+              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+              this.manager.notifyBranchesChanged();
+              this.post({ type: 'LOG_REFRESH' });
             } catch (e2: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });
               this.showOperationError(e2);
@@ -1217,6 +1239,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await repo.rebase(msg.onto);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
+          const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+          const merged = mergeCurrentIntoBranches(branches, current);
+          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+          this.manager.notifyBranchesChanged();
+          this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e);
@@ -1402,6 +1429,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Fetching all'), cancellable: false },
           async () => { await this.manager.fetchAll(); }
         );
+        this.manager.notifyBranchesChanged();
         const branches = await this.getFilteredBranches();
         const repos = this.getVisibleRepos();
         this.post({ type: 'LOG_INIT_DATA', repos, branches });
@@ -1415,8 +1443,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await repo.fetchAll();
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          const branches = await repo.getBranches();
-          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches });
+          const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+          const merged = mergeCurrentIntoBranches(branches, current);
+          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+          this.manager.notifyBranchesChanged();
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e);

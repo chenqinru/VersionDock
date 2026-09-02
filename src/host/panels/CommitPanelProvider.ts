@@ -2552,6 +2552,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }
           }
         );
+        this.manager.notifyBranchesChanged();
+        const pullStatus = await this.manager.getAllStatusesFresh();
+        this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status: pullStatus });
         if (trackedResults) await this.updateSummaryService?.notify(trackedResults);
         break;
       }
@@ -2573,6 +2576,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             vcs: repo.kind,
             durationMs: Date.now() - startedAt,
           });
+          this.manager.notifyBranchesChanged();
           const pullStatus = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status: pullStatus });
           await this.updateSummaryService?.notify([result]);

@@ -1088,6 +1088,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.scheduleRefresh();
   }
 
+  notifyBranchesChanged(): void {
+    this.scheduleRefresh();
+    this.scheduleBranchRefresh();
+  }
+
   private scheduleBranchRefresh(): void {
     if (this.branchDebounce) clearTimeout(this.branchDebounce);
     this.branchDebounce = setTimeout(() => {
@@ -1573,6 +1578,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       failedCount: results.filter(result => !result.ok).length,
       durationMs: Date.now() - startedAt,
     });
+    this.notifyBranchesChanged();
     return results;
   }
 

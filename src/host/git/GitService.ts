@@ -821,7 +821,8 @@ export class GitService {
           if (raw && raw !== 'HEAD') resolvedBranchName = raw;
         } catch { /* ignore, treat as genuinely detached */ }
       }
-      const isDetached = !resolvedBranchName || head?.type === RefType.Tag;
+      const isNamedBranch = Boolean(resolvedBranchName) && head?.type !== RefType.Tag;
+      const isDetached = !isNamedBranch;
       const branchName = isDetached ? 'HEAD' : resolvedBranchName!;
       // If VS Code API now reports the same tag as pending, the update has arrived — clear it.
       if (this._pendingDetachedTag && vsTagName === this._pendingDetachedTag) {
@@ -833,16 +834,31 @@ export class GitService {
       const detachedHash = (isDetached && !detachedTag)
         ? (head?.commit ? head.commit.slice(0, 8) : await this.getShortHash())
         : undefined;
+      let upstream = head?.upstream ? `${head.upstream.remote}/${head.upstream.name}` : undefined;
+      let aheadBehind = (head?.ahead !== undefined && head?.behind !== undefined)
+        ? { ahead: head.ahead, behind: head.behind }
+        : undefined;
+
+      if (isNamedBranch) {
+        try {
+          const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
+          if (tracking) {
+            upstream = tracking.upstream ?? upstream;
+            if (tracking.aheadBehind !== undefined) {
+              aheadBehind = tracking.aheadBehind;
+            }
+          }
+        } catch { /* ignore fallback */ }
+      }
+
       return {
         repoId: this.repoId,
         name: branchName,
         fullName: isDetached ? `HEAD` : `refs/heads/${branchName}`,
         isHead: true,
         isRemote: false,
-        upstream: head?.upstream ? `${head.upstream.remote}/${head.upstream.name}` : undefined,
-        aheadBehind: (head?.ahead !== undefined && head?.behind !== undefined)
-          ? { ahead: head.ahead, behind: head.behind }
-          : undefined,
+        upstream,
+        aheadBehind,
         detachedTag,
         detachedHash,
       };
@@ -895,8 +911,8 @@ export class GitService {
           upstream: tracking?.upstream,
           lastCommitHash: ref.commit,
           aheadBehind: tracking?.aheadBehind
-            ?? ((isHead && head!.ahead !== undefined && head!.behind !== undefined)
-              ? { ahead: head!.ahead, behind: head!.behind }
+            ?? ((isHead && head?.ahead !== undefined && head?.behind !== undefined)
+              ? { ahead: head.ahead, behind: head.behind }
               : undefined),
         });
       }
@@ -976,7 +992,9 @@ export class GitService {
         if (!line.trim()) continue;
         const [name, upstream, upstreamRemote, upstreamRemoteRef, track] = line.split('\0');
         if (!name) continue;
-        const aheadBehind = parseAheadBehindTrack(track ?? '');
+        const aheadBehind = upstream
+          ? (parseAheadBehindTrack(track ?? '') ?? { ahead: 0, behind: 0 })
+          : undefined;
         map.set(name, {
           upstream: upstream || undefined,
           upstreamRemote: upstreamRemote || undefined,

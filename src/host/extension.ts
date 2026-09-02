@@ -170,6 +170,7 @@ async function maybeNotifyIncomingCommits(
         })));
       }
     );
+    manager.notifyBranchesChanged();
     await updateSummaryService.notify(results);
   }
 }

@@ -1184,6 +1184,7 @@ export class BranchStatusBar implements vscode.Disposable {
         })));
       }
     );
+    this.manager.notifyBranchesChanged();
     await this.updateSummaryService.notify(results);
   }
 
@@ -1419,6 +1420,7 @@ export class BranchStatusBar implements vscode.Disposable {
         description: t('Run svn update for {0}', meta.name),
         action: async () => {
           const result = await this.updateSummaryService.run({ repoId: meta.id, execute: target => target.pull() });
+          this.manager.notifyBranchesChanged();
           await this.updateSummaryService.notify([result]);
           await this.refresh();
         },
@@ -1966,6 +1968,7 @@ export class BranchStatusBar implements vscode.Disposable {
     if (result?.tracked) await this.updateSummaryService.notify([result]);
     else if (result?.ok) vscode.window.showInformationMessage(t('VersionDock [{0}]: pulled successfully.', meta.name));
     else if (result) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, result.error ?? t('Unknown error')));
+    this.manager.notifyBranchesChanged();
     await this.refresh();
   }
 
@@ -2136,6 +2139,7 @@ export class BranchStatusBar implements vscode.Disposable {
         })));
       }
     );
+    this.manager.notifyBranchesChanged();
     if (results.some(result => result.tracked)) {
       await this.updateSummaryService.notify(results);
     } else {
