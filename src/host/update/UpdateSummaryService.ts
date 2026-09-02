@@ -7,6 +7,7 @@ import { t } from '../utils/l10n';
 import type { VersionDockLogger } from '../utils/Logger';
 import { scopedKey } from '../utils/scopedKey';
 import type { UpdateCommitSelection, VcsUpdateSnapshot } from './types';
+import { ShelveService } from '../git/ShelveService';
 
 const UPDATE_DETAILS_CONCURRENCY = 4;
 
@@ -51,12 +52,30 @@ function errorText(error: unknown): string {
 }
 
 export class UpdateSummaryService {
+  private readonly shelveServices = new Map<string, ShelveService>();
+
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly manager: WorkspaceGitManager,
     private readonly aiCommitExplanationService: AiCommitExplanationService,
     private readonly logger: VersionDockLogger,
+    private readonly globalStoragePath?: string,
   ) {}
+
+  private getShelveService(repo: GitService): ShelveService | undefined {
+    if (!this.globalStoragePath || repo.kind === 'svn') return undefined;
+    if (!this.shelveServices.has(repo.repoId)) {
+      this.shelveServices.set(
+        repo.repoId,
+        new ShelveService(
+          repo.rootPath,
+          this.globalStoragePath,
+          (op, kind, label) => this.manager.runWithStatusUpdatesSuppressed(op, kind, label),
+        ),
+      );
+    }
+    return this.shelveServices.get(repo.repoId);
+  }
 
   async run(target: UpdateTarget): Promise<TrackedUpdateResult> {
     const repo = this.manager.getRepo(target.repoId);
@@ -71,6 +90,7 @@ export class UpdateSummaryService {
       };
     }
 
+    const repoName = this.manager.getRepoMeta(target.repoId)?.name ?? target.repoId;
     let snapshot: VcsUpdateSnapshot | undefined;
     let snapshotError: string | undefined;
     let trackingRequested = !this.manager.getRepoMeta(target.repoId)?.isSubmodule;
@@ -91,8 +111,66 @@ export class UpdateSummaryService {
       }
     }
 
+    // Working tree auto-clean before update (JetBrains-style)
+    let shelvedBackupId: string | undefined;
+    let shelfBackupName = '';
+    let stashedBackup = false;
+    let shelveSvc: ShelveService | undefined;
+
+    if (repo.kind === 'git') {
+      const statusBefore = await repo.getStatus().catch(() => undefined);
+      const isDirty = Boolean(
+        statusBefore && (statusBefore.stagedFiles.length > 0 || statusBefore.unstagedFiles.length > 0),
+      );
+
+      if (isDirty) {
+        const cleanStrategy = vscode.workspace
+          .getConfiguration('versiondock')
+          .get<'shelve' | 'stash'>('updateProject.cleanWorkingTree', 'shelve');
+        const timestamp = new Date().toLocaleTimeString();
+
+        if (cleanStrategy === 'shelve') {
+          shelveSvc = this.getShelveService(repo);
+          if (shelveSvc) {
+            try {
+              shelfBackupName = `Auto-shelved before update (${timestamp})`;
+              const shelf = await shelveSvc.push(shelfBackupName);
+              shelvedBackupId = shelf.id;
+              this.logger.info('UpdateSummary', 'Auto-shelved local changes before update', {
+                repoId: target.repoId,
+                shelfId: shelf.id,
+              });
+            } catch (shelveErr) {
+              this.logger.warn('UpdateSummary', 'Auto-shelve failed, falling back to stash', {
+                repoId: target.repoId,
+                error: errorText(shelveErr),
+              });
+            }
+          }
+        }
+
+        if (!shelvedBackupId) {
+          try {
+            await repo.stashPush(`Auto-stashed before update (${timestamp})`);
+            stashedBackup = true;
+            this.logger.info('UpdateSummary', 'Auto-stashed local changes before update', {
+              repoId: target.repoId,
+            });
+          } catch (stashErr) {
+            this.logger.error('UpdateSummary', 'Failed to auto-stash local changes', stashErr, {
+              repoId: target.repoId,
+            });
+          }
+        }
+      }
+    }
+
     try {
       const output = await target.execute(repo);
+
+      // Restore working tree after update
+      await this.restoreWorkingTreeAfterUpdate(repo, repoName, shelveSvc, shelvedBackupId, shelfBackupName, stashedBackup);
+
       const statusAfterUpdate = await repo.getStatusFresh().catch(() => undefined);
       if (statusAfterUpdate && (statusAfterUpdate.conflictCount > 0 || statusAfterUpdate.operationState)) {
         return {
@@ -155,6 +233,9 @@ export class UpdateSummaryService {
         };
       }
     } catch (error: unknown) {
+      // Ensure working tree is restored even on update error
+      await this.restoreWorkingTreeAfterUpdate(repo, repoName, shelveSvc, shelvedBackupId, shelfBackupName, stashedBackup);
+
       return {
         repoId: target.repoId,
         tracked: trackingRequested,
@@ -163,6 +244,49 @@ export class UpdateSummaryService {
         commits: [],
         files: [],
       };
+    }
+  }
+
+  private async restoreWorkingTreeAfterUpdate(
+    repo: GitService,
+    repoName: string,
+    shelveSvc?: ShelveService,
+    shelvedBackupId?: string,
+    shelfBackupName?: string,
+    stashedBackup?: boolean,
+  ): Promise<void> {
+    if (shelvedBackupId && shelveSvc) {
+      try {
+        await shelveSvc.apply(shelvedBackupId);
+        const statusAfterRestore = await repo.getStatusFresh().catch(() => undefined);
+        if (statusAfterRestore && statusAfterRestore.conflictCount > 0) {
+          void vscode.window.showWarningMessage(
+            t(
+              'VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: "{1}".',
+              repoName,
+              shelfBackupName || 'Auto-shelved backup',
+            ),
+          );
+        } else {
+          shelveSvc.drop(shelvedBackupId);
+        }
+      } catch {
+        void vscode.window.showWarningMessage(
+          t(
+            'VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: "{1}".',
+            repoName,
+            shelfBackupName || 'Auto-shelved backup',
+          ),
+        );
+      }
+    } else if (stashedBackup) {
+      try {
+        await repo.stashPop();
+      } catch {
+        void vscode.window.showWarningMessage(
+          t('VersionDock [{0}]: Conflicts detected while restoring stashed changes.', repoName),
+        );
+      }
     }
   }
 
@@ -195,6 +319,33 @@ export class UpdateSummaryService {
     const updatedRepoCount = new Set(commits.map(commit => commit.repoId)).size;
     const viewDetails = t('View update details');
 
+    const showUpdateInfo = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<boolean>('updateProject.showUpdateInfo', true);
+
+    const openDetailsPanel = (): void => {
+      void Promise.resolve(
+        vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: t('VersionDock: Loading update details…'),
+            cancellable: false,
+          },
+          () => openAggregatedCommitDetailPanel(
+            this.extensionUri,
+            this.manager,
+            this.aiCommitExplanationService,
+            this.logger,
+            commits,
+            false,
+            { title: t('Update details'), message: t('Update details') },
+          ),
+        ),
+      ).catch(error => {
+        this.logger.error('UpdateSummary', 'Failed to open update details', error);
+      });
+    };
+
     let notification: Thenable<string | undefined> | undefined;
     if (succeeded.length === 0) {
       const description = this.describeFailures(failed);
@@ -215,6 +366,9 @@ export class UpdateSummaryService {
         void vscode.window.showWarningMessage(message);
         return;
       }
+      if (showUpdateInfo) {
+        openDetailsPanel();
+      }
       notification = vscode.window.showWarningMessage(message, viewDetails);
     } else if (summaryFailures.length > 0) {
       const message = commits.length > 0
@@ -229,11 +383,18 @@ export class UpdateSummaryService {
         void vscode.window.showWarningMessage(message);
         return;
       }
+      if (showUpdateInfo) {
+        openDetailsPanel();
+      }
       notification = vscode.window.showWarningMessage(message, viewDetails);
     } else if (commits.length > 0) {
       const message = updatedRepoCount > 1
         ? t('VersionDock: {0} repositories updated {1} files in {2} commits.', updatedRepoCount, fileCount, commits.length)
         : t('VersionDock: Updated {0} files in {1} commits.', fileCount, commits.length);
+
+      if (showUpdateInfo) {
+        openDetailsPanel();
+      }
       notification = vscode.window.showInformationMessage(message, viewDetails);
     } else if (skipped.length > 0) {
       const skipItem = skipped[0];
@@ -262,26 +423,12 @@ export class UpdateSummaryService {
     }
 
     if (!notification) return;
-    void Promise.resolve(notification).then(async picked => {
-      if (picked !== viewDetails) return;
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: t('VersionDock: Loading update details…'),
-          cancellable: false,
-        },
-        () => openAggregatedCommitDetailPanel(
-          this.extensionUri,
-          this.manager,
-          this.aiCommitExplanationService,
-          this.logger,
-          commits,
-          false,
-          { title: t('Update details'), message: t('Update details') },
-        ),
-      );
+    void Promise.resolve(notification).then(picked => {
+      if (picked === viewDetails && !showUpdateInfo) {
+        openDetailsPanel();
+      }
     }).catch(error => {
-      this.logger.error('UpdateSummary', 'Failed to open update details', error);
+      this.logger.error('UpdateSummary', 'Failed to handle update notification', error);
     });
   }
 

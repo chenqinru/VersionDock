@@ -264,6 +264,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     manager,
     aiCommitExplanationService,
     logger,
+    context.globalStorageUri.fsPath,
   );
 
   const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger, updateSummaryService);

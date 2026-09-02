@@ -127,5 +127,13 @@
   "configuration.git.protectedBranches.description": "受保护分支名称模式列表（例如 master, main, release/*），在推送或强推时触发安全防护。",
   "configuration.git.showPushDialogForProtectedBranches.description": "推送至受保护分支时显示确认对话框。",
   "configuration.git.branchCleanCharacter.description": "在 Git 分支名称中代替空格和禁用符号的符号（例如 '-'）。",
-  "configuration.git.cherryPickAddSuffix.description": "在挑选 (cherry-pick) 提交时，添加 'cherry-picked from <hash>' 后缀 (git cherry-pick -x)。"
+  "configuration.git.cherryPickAddSuffix.description": "在挑选 (cherry-pick) 提交时，添加 'cherry-picked from <hash>' 后缀 (git cherry-pick -x)。",
+  "configuration.updateProject.method.description": "从远程更新项目时使用的策略（合并或变基）。",
+  "configuration.updateProject.method.enum.rebase": "将本地提交变基到拉取的远程新提交之上（推荐，保持干净的线性历史）。",
+  "configuration.updateProject.method.enum.merge": "将远程传入更改直接合并到当前分支。",
+  "configuration.updateProject.method.enum.prompt": "每次执行更新项目时弹出提示询问更新策略。",
+  "configuration.updateProject.cleanWorkingTree.description": "更新项目时清理并自动恢复本地未提交修改的方式。",
+  "configuration.updateProject.cleanWorkingTree.enum.shelve": "更新前自动搁置（Shelve）未提交更改，更新完成后自动取消搁置恢复（保留 Changelist 归属）。",
+  "configuration.updateProject.cleanWorkingTree.enum.stash": "更新前自动暂存（Stash）未提交更改，更新完成后自动弹出暂存恢复。",
+  "configuration.updateProject.showUpdateInfo.description": "更新项目拉取到新提交后，自动打开“更新详情（Update Details）”面板。"
 }

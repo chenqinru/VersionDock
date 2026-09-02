@@ -978,6 +978,42 @@
           "type": "boolean",
           "default": true,
           "description": "%configuration.git.cherryPickAddSuffix.description%"
+        },
+        "versiondock.updateProject.method": {
+          "order": 150,
+          "type": "string",
+          "enum": [
+            "rebase",
+            "merge",
+            "prompt"
+          ],
+          "enumDescriptions": [
+            "%configuration.updateProject.method.enum.rebase%",
+            "%configuration.updateProject.method.enum.merge%",
+            "%configuration.updateProject.method.enum.prompt%"
+          ],
+          "default": "rebase",
+          "description": "%configuration.updateProject.method.description%"
+        },
+        "versiondock.updateProject.cleanWorkingTree": {
+          "order": 151,
+          "type": "string",
+          "enum": [
+            "shelve",
+            "stash"
+          ],
+          "enumDescriptions": [
+            "%configuration.updateProject.cleanWorkingTree.enum.shelve%",
+            "%configuration.updateProject.cleanWorkingTree.enum.stash%"
+          ],
+          "default": "shelve",
+          "description": "%configuration.updateProject.cleanWorkingTree.description%"
+        },
+        "versiondock.updateProject.showUpdateInfo": {
+          "order": 152,
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.updateProject.showUpdateInfo.description%"
         }
       }
     }

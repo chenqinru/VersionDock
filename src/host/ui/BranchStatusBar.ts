@@ -1494,18 +1494,22 @@ export class BranchStatusBar implements vscode.Disposable {
   async updateProject(): Promise<void> {
     const metas = this.manager.getRepoMetas();
     const hasGitRepos = metas.some(meta => meta.kind !== 'svn');
-    let useRebase = false;
+    const updateMethod = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
 
-    if (hasGitRepos) {
+    let useRebase = updateMethod === 'rebase';
+
+    if (hasGitRepos && updateMethod === 'prompt') {
       const pick = await vscode.window.showQuickPick(
         [
           {
-            label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
-            rebase: false,
-          },
-          {
             label: `$(repo-forked) ${t('Rebase the current branch on top of incoming changes')}`,
             rebase: true,
+          },
+          {
+            label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
+            rebase: false,
           },
         ],
         { title: t('Update Project — Strategy') }

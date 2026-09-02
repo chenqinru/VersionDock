@@ -1793,5 +1793,10 @@
   "VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?": "VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?",
   "Force Push Anyway": "Force Push Anyway",
   "VersionDock [{0}]: You are about to Force Push to protected branch \"{1}\"! This may permanently overwrite remote commits. Are you sure you want to proceed?": "VersionDock [{0}]: You are about to Force Push to protected branch \"{1}\"! This may permanently overwrite remote commits. Are you sure you want to proceed?",
-  "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?": "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?"
+  "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?": "VersionDock [{0}]: You are pushing to protected branch \"{1}\". Do you want to proceed?",
+  "VersionDock [{0}]: Shelved local changes before update.": "VersionDock [{0}]: Shelved local changes before update.",
+  "VersionDock [{0}]: Stashed local changes before update.": "VersionDock [{0}]: Stashed local changes before update.",
+  "VersionDock [{0}]: Restored local changes after update.": "VersionDock [{0}]: Restored local changes after update.",
+  "VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: \"{1}\".": "VersionDock [{0}]: Conflicts detected while restoring local changes. Shelve backup has been retained: \"{1}\".",
+  "VersionDock [{0}]: Conflicts detected while restoring stashed changes.": "VersionDock [{0}]: Conflicts detected while restoring stashed changes."
 }
