@@ -503,15 +503,17 @@ export function UnifiedCommitForm({
             {t('Amend last commit')}
           </label>
         )}
-        <label style={styles.amendLabel} title={t('Bypass Git pre-commit hooks')}>
-          <input
-            type="checkbox"
-            checked={noVerify}
-            onChange={(e) => onNoVerifyChange?.(e.target.checked)}
-            style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
-          />
-          {t('Bypass hooks (--no-verify)')}
-        </label>
+        {showGitActions && (
+          <label style={styles.amendLabel} title={t('Bypass Git pre-commit hooks')}>
+            <input
+              type="checkbox"
+              checked={noVerify}
+              onChange={(e) => onNoVerifyChange?.(e.target.checked)}
+              style={{ ...nativeCheckboxBorderStyle(), marginRight: '4px' }}
+            />
+            {t('Bypass hooks (--no-verify)')}
+          </label>
+        )}
         <div style={styles.commitOptionActions}>
           <button
             data-action-btn=""
