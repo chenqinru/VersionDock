@@ -2250,29 +2250,70 @@ export class GitService {
 
   async discardFile(filePath: string): Promise<void> {
     return this.withWriteLock(async () => {
-    const relPath = this.normalizeRepoPath(filePath);
-    const absPath = path.join(this.rootPath, relPath);
-    assertNoSymlinkAncestors(this.rootPath, absPath);
+      const relPath = this.normalizeRepoPath(filePath);
+      const absPath = path.join(this.rootPath, relPath);
+      assertNoSymlinkAncestors(this.rootPath, absPath);
 
-    // Use git status --porcelain to reliably detect untracked (??) vs tracked files,
-    // regardless of vsRepo API availability.
-    const pathspec = this.literalPathspec(relPath);
-    const status = await this.git.raw(['status', '--porcelain', '--', pathspec]);
-    const isUntracked = status.trimStart().startsWith('??');
+      // Use git status --porcelain to reliably detect untracked (??) vs tracked files,
+      // regardless of vsRepo API availability.
+      const pathspec = this.literalPathspec(relPath);
+      const status = await this.git.raw(['status', '--porcelain', '--', pathspec]);
+      const isUntracked = status.trimStart().startsWith('??');
 
-    if (isUntracked) {
-      try {
-        await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
-      } catch {
-        fs.rmSync(absPath, { recursive: true, force: true });
+      if (isUntracked) {
+        try {
+          await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
+        } catch {
+          fs.rmSync(absPath, { recursive: true, force: true });
+        }
+        return;
       }
-      return;
-    }
 
-    // For tracked changes (modified, staged, deleted): restore both index and working tree.
-    await this.git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', pathspec])
-      .catch(() => this.git.raw(['restore', '--staged', '--worktree', '--', pathspec]))
-      .catch(() => this.git.checkout(['--', pathspec]));
+      // Check if the file actually exists in the current HEAD.
+      const existsInHead = await this.hasFileAtRef('HEAD', relPath);
+
+      if (!existsInHead) {
+        // The file does not exist in HEAD (e.g. newly added & staged, or incoming file during merge conflict).
+        // Discarding changes means returning to the HEAD state (where this file does not exist).
+        // 1. Remove working tree file if it exists
+        try {
+          if (fs.existsSync(absPath)) {
+            await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
+          }
+        } catch {
+          fs.rmSync(absPath, { recursive: true, force: true });
+        }
+        // 2. Remove from index / unstage
+        await this.git.raw(['rm', '-f', '--cached', '--ignore-unmatch', '--', pathspec]).catch(() => '');
+        return;
+      }
+
+      // File exists in HEAD: restore both index and working tree to HEAD version.
+      try {
+        await this.git.raw(['restore', '--source=HEAD', '--staged', '--worktree', '--', pathspec]);
+      } catch {
+        try {
+          await this.git.raw(['restore', '--staged', '--worktree', '--', pathspec]);
+        } catch {
+          try {
+            await this.git.checkout(['HEAD', '--', pathspec]);
+          } catch (checkoutError) {
+            const errStr = String(checkoutError);
+            if (errStr.includes('did not match any file(s) known to git')) {
+              // Path is no longer known to git; ensure working tree file is removed if it shouldn't exist
+              if (fs.existsSync(absPath)) {
+                try {
+                  await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
+                } catch {
+                  fs.rmSync(absPath, { recursive: true, force: true });
+                }
+              }
+              return;
+            }
+            throw checkoutError;
+          }
+        }
+      }
     });
   }
 
@@ -2873,10 +2914,25 @@ export class GitService {
 
   async revertFileToParent(hash: string, filePath: string): Promise<void> {
     return this.withWriteLock(async () => {
-    // For added files, 'A' status: the file was created in this commit, so reverting
-    // means deleting it from working tree by checking out from the empty tree.
-    // For other statuses: restore the file to its state in the parent commit.
-    await this.git.raw(['checkout', `${hash}~1`, '--', this.literalPathspec(filePath)]);
+      const relPath = this.normalizeRepoPath(filePath);
+      const absPath = path.join(this.rootPath, relPath);
+      assertNoSymlinkAncestors(this.rootPath, absPath);
+
+      // Check if parent commit exists and contains this file.
+      const parentRef = `${hash}~1`;
+      const existsInParent = await this.hasFileAtRef(parentRef, relPath);
+      if (existsInParent) {
+        await this.git.raw(['checkout', parentRef, '--', this.literalPathspec(relPath)]);
+      } else {
+        // File was created in commit `hash`, so reverting to parent means removing it from the working tree.
+        try {
+          if (fs.existsSync(absPath)) {
+            await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: false });
+          }
+        } catch {
+          fs.rmSync(absPath, { recursive: true, force: true });
+        }
+      }
     });
   }
 

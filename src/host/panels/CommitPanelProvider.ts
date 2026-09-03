@@ -2798,7 +2798,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const repo = this.manager.getRepo(f.repoId);
               if (!repo) { errors.push(t('{0}: Repo not found', f.path)); continue; }
               try { await repo.discardFile(f.path); }
-              catch (e: unknown) { errors.push(`${f.path}: ${String(e)}`); }
+              catch (e: unknown) {
+                const errStr = String(e);
+                if (errStr.includes('did not match any file(s) known to git')) continue;
+                errors.push(`${f.path}: ${errStr}`);
+              }
             }
           }
         );
@@ -3176,7 +3180,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               try {
                 await target.repo.discardFile(filePath);
               } catch (error: unknown) {
-                errors.push(`${filePath}: ${String(error)}`);
+                const errStr = String(error);
+                if (errStr.includes('did not match any file(s) known to git')) continue;
+                errors.push(`${filePath}: ${errStr}`);
               }
             }
             if (errors.length === errorCountBeforeTarget) {
