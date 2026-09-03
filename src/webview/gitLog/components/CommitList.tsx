@@ -14,7 +14,7 @@ import type { LogToHostMsg } from '../../../host/types/messages';
 import { AuthorAvatar } from './AuthorAvatar';
 import { formatDateTime } from '../../shared/dateUtils';
 import { t } from '../../shared/i18n';
-import { getCommitKey, type CommitSelectionMode } from '../store/logStore';
+import { getCommitKey, useLogStore, type CommitSelectionMode } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
 import { readableAccentColor } from '../../shared/branchColors';
 
@@ -442,7 +442,33 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                     title={t('Open Commit Detail')}
                     onClick={event => {
                       event.stopPropagation();
-                      getVsCodeApi().postMessage({ type: 'LOG_OPEN_EXTENDED_DETAIL', repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg);
+                      const store = useLogStore.getState();
+                      const commitKey = getCommitKey(commit.repoId, commit.hash);
+                      const cachedFiles = store.commitFilesByKey[commitKey];
+                      const cachedMergeChanges = store.mergeParentChangesByKey[commitKey];
+                      const isLoadingFiles = store.loadingFilesByKey[commitKey] === true;
+                      getVsCodeApi().postMessage({
+                        type: 'LOG_OPEN_EXTENDED_DETAIL',
+                        repoId: commit.repoId,
+                        hash: commit.hash,
+                        initialCommit: {
+                          message: commit.message,
+                          authorName: commit.authorName,
+                          authorEmail: commit.authorEmail,
+                          authorDate: commit.authorDate,
+                          committerDate: commit.committerDate,
+                          parents: commit.parents,
+                        },
+                        initialFiles: !isLoadingFiles && cachedFiles
+                          ? cachedFiles.map(file => ({
+                              path: file.path,
+                              status: file.status,
+                              added: file.added,
+                              removed: file.removed,
+                            }))
+                          : undefined,
+                        initialMergeParentChanges: cachedMergeChanges,
+                      } satisfies LogToHostMsg);
                     }}
                   >
                     <Codicon name="open-preview" style={{ fontSize: '15px', lineHeight: 1 }} />
@@ -453,7 +479,23 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                     title={t('Open Changes')}
                     onClick={event => {
                       event.stopPropagation();
-                      getVsCodeApi().postMessage({ type: 'LOG_OPEN_COMMIT_CHANGES', repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg);
+                      const store = useLogStore.getState();
+                      const commitKey = getCommitKey(commit.repoId, commit.hash);
+                      const cachedFiles = store.commitFilesByKey[commitKey];
+                      const isLoadingFiles = store.loadingFilesByKey[commitKey] === true;
+                      getVsCodeApi().postMessage({
+                        type: 'LOG_OPEN_COMMIT_CHANGES',
+                        repoId: commit.repoId,
+                        hash: commit.hash,
+                        files: !isLoadingFiles && cachedFiles
+                          ? cachedFiles.map(file => ({
+                              path: file.path,
+                              status: file.status,
+                              added: file.added,
+                              removed: file.removed,
+                            }))
+                          : undefined,
+                      } satisfies LogToHostMsg);
                     }}
                   >
                     <Codicon name="diff-multiple" style={{ fontSize: '15px', lineHeight: 1 }} />

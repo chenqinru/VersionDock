@@ -66,8 +66,35 @@ export class ShelveDocumentProvider implements vscode.TextDocumentContentProvide
     }
   }
 
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    return this.store.get(uri.toString()) ?? '';
+  private contentResolver?: (repoId: string, shelveId: string, filePath: string) => Promise<string | undefined>;
+
+  setContentResolver(resolver: (repoId: string, shelveId: string, filePath: string) => Promise<string | undefined>): void {
+    this.contentResolver = resolver;
+  }
+
+  async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+    const key = uri.toString();
+    const cached = this.store.get(key);
+    if (cached !== undefined) return cached;
+
+    if (this.contentResolver) {
+      try {
+        const parsed = JSON.parse(uri.query || '{}');
+        if (parsed.shelveId === 'empty' || parsed.shelveId === '') {
+          return '';
+        }
+        if (parsed.repoId && parsed.shelveId && parsed.filePath) {
+          const content = await this.contentResolver(parsed.repoId, parsed.shelveId, parsed.filePath);
+          if (content !== undefined) {
+            this.set(uri, content);
+            return content;
+          }
+        }
+      } catch {
+        // fallback to empty
+      }
+    }
+    return '';
   }
 
   /**

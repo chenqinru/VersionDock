@@ -344,7 +344,8 @@ export type HostToLogMsg =
   | { type: 'LOG_COMMIT_MESSAGE_RESULT'; requestId: string; fullMessage: string; error?: string }
   | { type: 'LOG_COMPARE_STARTED'; repoId: string; repoName: string; baseRef: string; targetRef: string }
   | { type: 'LOG_COMPARE_COMMITS_RESULT'; requestId: string; side: CompareSide; commits: CommitNode[]; isLast: boolean; error?: string }
-  | { type: 'LOG_FILTER_BY_REPO'; repoId: string | null; branch?: string | null };
+  | { type: 'LOG_FILTER_BY_REPO'; repoId: string | null; branch?: string | null }
+  | { type: 'LOG_DIFF_OPENED'; repoId: string; filePath: string; error?: string };
 
 // ─── Git Log: WebView → Host ─────────────────────────────────────────────────
 
@@ -410,11 +411,38 @@ export type LogToHostMsg =
   | { type: 'LOG_INIT_REPO' }
   | { type: 'LOG_OPEN_FOLDER' }
   | { type: 'LOG_CLONE_REPO' }
-  | { type: 'LOG_OPEN_EXTENDED_DETAIL'; repoId: string; hash: string }
-  | { type: 'LOG_OPEN_EXTENDED_DETAIL_MULTI'; commits: Array<{ repoId: string; hash: string }> }
+  | {
+      type: 'LOG_OPEN_EXTENDED_DETAIL';
+      repoId: string;
+      hash: string;
+      initialCommit?: {
+        message?: string;
+        authorName?: string;
+        authorEmail?: string;
+        authorDate?: string;
+        committerDate?: string;
+        parents?: string[];
+      };
+      initialFiles?: Array<{ path: string; status: string; added?: number; removed?: number }>;
+      initialMergeParentChanges?: MergeParentChange[];
+    }
+  | {
+      type: 'LOG_OPEN_EXTENDED_DETAIL_MULTI';
+      commits: Array<{
+        repoId: string;
+        hash: string;
+        message?: string;
+        authorName?: string;
+        authorEmail?: string;
+        authorDate?: string;
+        committerDate?: string;
+        parents?: string[];
+        files?: Array<{ path: string; status: string; added?: number; removed?: number }>;
+      }>;
+    }
   | { type: 'LOG_OPEN_AI_EXPLANATION'; repoId: string; hash: string }
   | { type: 'LOG_OPEN_AI_EXPLANATION_MULTI'; commits: Array<{ repoId: string; hash: string }> }
-  | { type: 'LOG_OPEN_COMMIT_CHANGES'; repoId: string; hash: string }
+  | { type: 'LOG_OPEN_COMMIT_CHANGES'; repoId: string; hash: string; files?: Array<{ path: string; status: string; added?: number; removed?: number }> }
   | { type: 'LOG_OPEN_COMMIT_CHANGES_MULTI'; groups: Array<{ repoId: string; fromHash?: string; toHash: string; files: string[] }> }
   | { type: 'LOG_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'LOG_UNDOCK'; target: 'editorTab' | 'newWindow' | 'pick' };

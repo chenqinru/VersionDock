@@ -26,6 +26,8 @@ import { scopedKey } from '../utils/scopedKey';
 import type { SvnUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
 
 const SVN_REVISION_CONTENT_CACHE_LIMIT = 200;
+const SVN_COMMIT_META_CACHE_LIMIT = 500;
+const SVN_COMMIT_FILES_CACHE_LIMIT = 200;
 const SVN_BLAME_CACHE_LIMIT = 20;
 const SVN_AUTH_REPROMPT_DELAY_MS = 30_000;
 const SVN_INCOMING_STATE_CACHE_TTL_MS = 60_000;
@@ -56,11 +58,18 @@ export interface SvnAuthenticationStatus {
   hasCachedCredentials: boolean;
 }
 
+interface SvnLogPath {
+  path: string;
+  action: string;
+  kind?: string;
+}
+
 interface SvnLogEntry {
   revision: string;
   author: string;
   date: string;
   message: string;
+  paths?: SvnLogPath[];
 }
 
 interface SvnIncomingState {
@@ -335,7 +344,10 @@ export class SvnService extends GitService {
   private static readonly authKeyTasks = new Map<string, Promise<string | undefined>>();
   private static readonly authFailureTimes = new Map<string, number>();
   private readonly revisionContentCache = new Map<string, Promise<string | undefined>>();
+  private readonly commitMetaCache = new Map<string, Promise<{ meta: { hash: string; shortHash: string; message: string; authorName: string; authorEmail: string; authorDate: string; committerDate: string; parents: string[] }; fullMessage: string }>>();
+  private readonly commitFilesCache = new Map<string, Promise<Array<{ path: string; status: string; added?: number; removed?: number }>>>();
   private readonly blameCache = new Map<string, Promise<BlameLine[]>>();
+  private infoCache?: { info: SvnInfo; metadataMtimeMs?: number };
   private incomingStateCache?: SvnIncomingState;
   private incomingStateTask?: Promise<SvnIncomingState>;
   private incomingStateTaskUrl?: string;
@@ -825,13 +837,19 @@ export class SvnService extends GitService {
   }
 
   private async getInfo(): Promise<SvnInfo> {
+    const metadataMtimeMs = this.getWorkingCopyMetadataMtime();
+    if (this.infoCache && this.infoCache.metadataMtimeMs === metadataMtimeMs) {
+      return this.infoCache.info;
+    }
     const raw = await this.svn(['info', '--xml']);
-    return {
+    const info: SvnInfo = {
       url: textTag(raw, 'url'),
       rootUrl: textTag(raw, 'root'),
       relativeUrl: decodeSvnRelativeUrl(textTag(raw, 'relative-url').replace(/^\^\/?/, '')),
       revision: attr(raw.match(/<entry\b[^>]*>/)?.[0] ?? '', 'revision'),
     };
+    this.infoCache = { info, metadataMtimeMs };
+    return info;
   }
 
   private clearIncomingStateCache(): void {
@@ -1657,6 +1675,7 @@ export class SvnService extends GitService {
       throw error;
     }
     const allEntries = this.parseLogEntries(raw);
+    this.populateCommitFilesCacheFromLogEntries(allEntries, info);
     const headRevision = selectionRevisions ? undefined : allEntries[0]?.revision ?? info.revision;
     const entries = allEntries
       .filter(entry => !selectionRevisions || selectionRevisions.has(entry.revision))
@@ -1711,14 +1730,55 @@ export class SvnService extends GitService {
     let match: RegExpExecArray | null;
     while ((match = entryRegex.exec(raw)) !== null) {
       const revision = attr(match[1], 'revision') ?? '';
+      const body = match[2];
+      const paths: SvnLogPath[] = [];
+      const pathsBlock = body.match(/<paths\b[^>]*>([\s\S]*?)<\/paths>/)?.[1];
+      if (pathsBlock) {
+        const pathRegex = /<path\b([^>]*)>([\s\S]*?)<\/path>/g;
+        let pathMatch: RegExpExecArray | null;
+        while ((pathMatch = pathRegex.exec(pathsBlock)) !== null) {
+          const action = attr(pathMatch[1], 'action') ?? 'M';
+          const kind = attr(pathMatch[1], 'kind');
+          const p = decodeXml(pathMatch[2]).trim();
+          paths.push({ path: p, action, kind });
+        }
+      }
       entries.push({
         revision,
-        author: textTag(match[2], 'author'),
-        date: textTag(match[2], 'date'),
-        message: textTag(match[2], 'msg'),
+        author: textTag(body, 'author'),
+        date: textTag(body, 'date'),
+        message: textTag(body, 'msg'),
+        paths: paths.length > 0 ? paths : undefined,
       });
     }
     return entries;
+  }
+
+  private populateCommitFilesCacheFromLogEntries(entries: SvnLogEntry[], info: SvnInfo): void {
+    for (const entry of entries) {
+      if (!entry.revision || !entry.paths) continue;
+      const revision = entry.revision;
+      if (this.commitFilesCache.has(revision)) continue;
+
+      const files: Array<{ path: string; status: string; added?: number; removed?: number }> = [];
+      for (const logPath of entry.paths) {
+        if (logPath.kind === 'dir') continue;
+        const fullUrl = `${info.rootUrl.replace(/\/$/, '')}/${logPath.path.replace(/^\//, '')}`;
+        const workingPath = this.repositoryUrlToWorkingPath(fullUrl, info);
+        if (workingPath === undefined) continue;
+        const pathValue = workingPath || '.';
+        const action = logPath.action.toUpperCase();
+        const status = action === 'A' ? 'A' : action === 'D' ? 'D' : 'M';
+        files.push({ path: pathValue, status });
+      }
+      if (files.length > 0) {
+        this.commitFilesCache.set(revision, Promise.resolve(files));
+        if (this.commitFilesCache.size > SVN_COMMIT_FILES_CACHE_LIMIT) {
+          const oldestKey = this.commitFilesCache.keys().next().value;
+          if (oldestKey) this.commitFilesCache.delete(oldestKey);
+        }
+      }
+    }
   }
 
   private parseBlameEntries(raw: string): Array<{ lineNumber: number; revision?: string; author: string; date: string; isUncommitted: boolean }> {
@@ -1807,25 +1867,42 @@ export class SvnService extends GitService {
 
   async getCommitFiles(hash: string): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
     const revision = requireRevision(hash);
-    const info = await this.getInfo();
-    // Summarizing against the current URL with a stable peg maps inherited
-    // trunk history back into the checked-out branch namespace. `svn log -v`
-    // reports the original `/trunk/...` paths and cannot be prefix-stripped
-    // against `/branches/<name>`.
-    const raw = await this.svn(['diff', '--summarize', '--xml', '-c', revision, `${info.url}@HEAD`]);
-    const files: Array<{ path: string; status: string; added?: number; removed?: number }> = [];
-    const pathRegex = /<path\b([^>]*)>([\s\S]*?)<\/path>/g;
-    let match: RegExpExecArray | null;
-    while ((match = pathRegex.exec(raw)) !== null) {
-      const item = attr(match[1], 'item') ?? 'modified';
-      if (attr(match[1], 'kind') === 'dir') continue;
-      const decodedPath = decodeXml(match[2]).trim();
-      const workingPath = this.repositoryUrlToWorkingPath(decodedPath, info);
-      if (workingPath === undefined) continue;
-      const pathValue = workingPath || '.';
-      files.push({ path: pathValue, status: svnSummaryItemToStatus(item) });
+    const cached = this.commitFilesCache.get(revision);
+    if (cached) return await cached;
+    const task = (async () => {
+      const info = await this.getInfo();
+      // Summarizing against the current URL with a stable peg maps inherited
+      // trunk history back into the checked-out branch namespace. `svn log -v`
+      // reports the original `/trunk/...` paths and cannot be prefix-stripped
+      // against `/branches/<name>`.
+      const raw = await this.svn(['diff', '--summarize', '--xml', '-c', revision, `${info.url}@HEAD`]);
+      const files: Array<{ path: string; status: string; added?: number; removed?: number }> = [];
+      const pathRegex = /<path\b([^>]*)>([\s\S]*?)<\/path>/g;
+      let match: RegExpExecArray | null;
+      while ((match = pathRegex.exec(raw)) !== null) {
+        const item = attr(match[1], 'item') ?? 'modified';
+        if (attr(match[1], 'kind') === 'dir') continue;
+        const decodedPath = decodeXml(match[2]).trim();
+        const workingPath = this.repositoryUrlToWorkingPath(decodedPath, info);
+        if (workingPath === undefined) continue;
+        const pathValue = workingPath || '.';
+        files.push({ path: pathValue, status: svnSummaryItemToStatus(item) });
+      }
+      return files;
+    })().catch(error => {
+      if (this.commitFilesCache.get(revision) === task) this.commitFilesCache.delete(revision);
+      throw error;
+    });
+    this.commitFilesCache.set(revision, task);
+    if (this.commitFilesCache.size > SVN_COMMIT_FILES_CACHE_LIMIT) {
+      const oldestKey = this.commitFilesCache.keys().next().value;
+      if (oldestKey) this.commitFilesCache.delete(oldestKey);
     }
-    return files;
+    return await task;
+  }
+
+  override async getCommitFilesForLogDetail(hash: string): Promise<Array<{ path: string; status: string; added?: number; removed?: number }>> {
+    return this.getCommitFiles(hash);
   }
 
   async getFileDiff(repoId: string, hash: string, filePath: string): Promise<FileDiff | null> {
@@ -1857,12 +1934,27 @@ export class SvnService extends GitService {
       || text.includes('does not exist');
   }
 
-  private async getRevisionContentOrUndefined(revision: string, relPath: string): Promise<string | undefined> {
+  async getRevisionContentOrUndefined(revision: string, relPath: string): Promise<string | undefined> {
     const repositoryUrl = await this.getRepositoryUrl();
     const key = scopedKey(repositoryUrl, revision, relPath);
     const cached = this.revisionContentCache.get(key);
     if (cached) return await cached;
     const task = (async (): Promise<string | undefined> => {
+      try {
+        const info = await this.getInfo();
+        if (info.revision === revision) {
+          const absPath = path.join(this.rootPath, relPath);
+          if (fs.existsSync(absPath)) {
+            const rawStatus = await this.svn(['status', '--xml', absPath]).catch(() => '');
+            if (!rawStatus || !rawStatus.includes('<entry')) {
+              return fs.readFileSync(absPath, 'utf8');
+            }
+          }
+        }
+      } catch {
+        // fallback to standard svn cat
+      }
+
       for (const target of this.repositoryFileTargets(repositoryUrl, relPath, revision)) {
         try {
           return await this.svn(['cat', '-r', revision, target]);
@@ -1881,6 +1973,31 @@ export class SvnService extends GitService {
       if (oldestKey) this.revisionContentCache.delete(oldestKey);
     }
     return await task;
+  }
+
+  async prefetchRevisionFiles(
+    hash: string,
+    filePaths: string[],
+    options?: { maxFiles?: number },
+  ): Promise<void> {
+    const revision = parseRevisionNumber(hash);
+    if (revision === undefined) return;
+    const maxFiles = options?.maxFiles ?? 6;
+    const targets = filePaths.slice(0, maxFiles);
+    const workerCount = Math.min(2, targets.length);
+    let nextIndex = 0;
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const currentIndex = nextIndex++;
+        if (currentIndex >= targets.length) return;
+        try {
+          await this.getRevisionFileContents(String(revision), targets[currentIndex]);
+        } catch {
+          // ignore background prefetch error
+        }
+      }
+    });
+    await Promise.all(workers);
   }
 
   private async getRevisionContent(revision: string, relPath: string): Promise<string> {
@@ -2327,10 +2444,44 @@ export class SvnService extends GitService {
     return { local: [], remote: [], tags: [] };
   }
 
-  async getFullCommitMessage(hash: string): Promise<string> {
+  private async getCommitMetaAndMessage(hash: string): Promise<{
+    meta: { hash: string; shortHash: string; message: string; authorName: string; authorEmail: string; authorDate: string; committerDate: string; parents: string[] };
+    fullMessage: string;
+  }> {
     const revision = requireRevision(hash);
-    const raw = await this.svn(['log', '--xml', '-r', revision]);
-    return this.parseLogEntries(raw)[0]?.message ?? '';
+    const cached = this.commitMetaCache.get(revision);
+    if (cached) return await cached;
+    const task = (async () => {
+      const raw = await this.svn(['log', '--xml', '-r', revision]);
+      const entry = this.parseLogEntries(raw)[0];
+      const revisionHash = `r${revision}`;
+      const fullMessage = entry?.message ?? '';
+      const meta = {
+        hash: revisionHash,
+        shortHash: revisionHash,
+        message: fullMessage.split('\n')[0] ?? t('SVN revision {0}', revision),
+        authorName: entry?.author || t('Unknown'),
+        authorEmail: '',
+        authorDate: entry?.date ?? '',
+        committerDate: entry?.date ?? '',
+        parents: [],
+      };
+      return { meta, fullMessage };
+    })().catch(error => {
+      if (this.commitMetaCache.get(revision) === task) this.commitMetaCache.delete(revision);
+      throw error;
+    });
+    this.commitMetaCache.set(revision, task);
+    if (this.commitMetaCache.size > SVN_COMMIT_META_CACHE_LIMIT) {
+      const oldestKey = this.commitMetaCache.keys().next().value;
+      if (oldestKey) this.commitMetaCache.delete(oldestKey);
+    }
+    return await task;
+  }
+
+  async getFullCommitMessage(hash: string): Promise<string> {
+    const data = await this.getCommitMetaAndMessage(hash);
+    return data.fullMessage;
   }
 
   override async getRecentCommitMessages(limit: number): Promise<CommitMessageHistoryEntry[]> {
@@ -2345,20 +2496,8 @@ export class SvnService extends GitService {
   }
 
   async getCommitMeta(hash: string): Promise<{ hash: string; shortHash: string; message: string; authorName: string; authorEmail: string; authorDate: string; committerDate: string; parents: string[] }> {
-    const revision = requireRevision(hash);
-    const raw = await this.svn(['log', '--xml', '-r', revision]);
-    const entry = this.parseLogEntries(raw)[0];
-    const revisionHash = `r${revision}`;
-    return {
-      hash: revisionHash,
-      shortHash: revisionHash,
-      message: entry?.message.split('\n')[0] ?? t('SVN revision {0}', revision),
-      authorName: entry?.author || t('Unknown'),
-      authorEmail: '',
-      authorDate: entry?.date ?? '',
-      committerDate: entry?.date ?? '',
-      parents: [],
-    };
+    const data = await this.getCommitMetaAndMessage(hash);
+    return data.meta;
   }
 
   async createPatch(hash: string): Promise<string> {

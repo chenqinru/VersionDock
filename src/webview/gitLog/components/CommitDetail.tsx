@@ -324,10 +324,11 @@ function flattenCommitDetailTree(
   return result;
 }
 
-function SingleTreeFileRow({ node, depth, selectedFile, onOpen, onFileContextMenu, iconTheme }: {
+function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, onFileContextMenu, iconTheme }: {
   node: TreeNode;
   depth: number;
   selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
+  isOpeningDiff?: boolean;
   onOpen: (file: LogViewFileEntry) => void;
   onFileContextMenu: (event: React.MouseEvent, file: LogViewFileEntry) => void;
   iconTheme?: IconThemeData | null;
@@ -359,6 +360,9 @@ function SingleTreeFileRow({ node, depth, selectedFile, onOpen, onFileContextMen
         <FileIcon name={node.name} theme={iconTheme} size={14} style={styles.fileIconBase} />
       )}
       <span style={styles.fileName(statusColor, isSelected)}>{displayName}</span>
+      {isOpeningDiff && (
+        <Codicon name="loading~spin" style={{ fontSize: '12px', marginLeft: '6px', color: 'var(--vscode-progressBar-background)' }} />
+      )}
       {(file.added != null || file.removed != null) && (
         <span style={styles.lineStats}>
           {file.added != null && <span style={styles.added}>+{file.added}</span>}
@@ -592,8 +596,13 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const [refsExpanded, setRefsExpanded] = useState(false);
   const [fullCommitMessages, setFullCommitMessages] = useState<Record<string, string>>({});
   const [loadingCommitMessageKeys, setLoadingCommitMessageKeys] = useState<Set<string>>(() => new Set());
-  const [expandedMergeParentKeys, setExpandedMergeParentKeys] = useState<Set<string>>(() => new Set());
-  const [mergeParentFilesByKey, setMergeParentFilesByKey] = useState<Record<string, LogViewFileEntry[]>>({});
+  const [expandedMergeParentKeys, setExpandedMergeParentKeys] = useState<Set<string>>(() => {
+    const saved = getVsCodeApi().getState<{ expandedMergeParentKeys?: string[] }>()?.expandedMergeParentKeys;
+    return new Set(Array.isArray(saved) ? saved : []);
+  });
+  const [mergeParentFilesByKey, setMergeParentFilesByKey] = useState<Record<string, LogViewFileEntry[]>>(() => {
+    return getVsCodeApi().getState<{ mergeParentFilesByKey?: Record<string, LogViewFileEntry[]> }>()?.mergeParentFilesByKey ?? {};
+  });
   const [loadingMergeParentKeys, setLoadingMergeParentKeys] = useState<Set<string>>(() => new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [infoSectionHeight, setInfoSectionHeight] = useState<number | null>(null);
@@ -601,6 +610,8 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const [commitMessagesExpandedByDefault, setCommitMessagesExpandedByDefault] = useState(() => (
     getVsCodeApi().getState<{ commitMessagesExpandedByDefault?: boolean }>()?.commitMessagesExpandedByDefault === true
   ));
+  const [openingDiffPath, setOpeningDiffPath] = useState<string | null>(null);
+  const openingDiffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<Map<string, (msg: HostToLogMsg) => void>>(new Map());
   const commitMessageCacheRef = useRef<Map<string, string>>(new Map());
   const containingBranchesCacheRef = useRef<Map<string, ContainingBranches>>(new Map());
@@ -682,6 +693,14 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     const handler = (event: MessageEvent<HostToLogMsg>) => {
       const msg = event.data;
       if (!msg?.type) return;
+      if (msg.type === 'LOG_DIFF_OPENED') {
+        if (openingDiffTimerRef.current) {
+          clearTimeout(openingDiffTimerRef.current);
+          openingDiffTimerRef.current = null;
+        }
+        setOpeningDiffPath(null);
+        return;
+      }
       if ('requestId' in msg && msg.requestId && pendingRef.current.has(msg.requestId as string)) {
         const resolve = pendingRef.current.get(msg.requestId as string)!;
         pendingRef.current.delete(msg.requestId as string);
@@ -871,9 +890,19 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
 
   const handleOpenDiff = useCallback((file: LogViewFileEntry) => {
     onSelectFile(file);
-    const lineRange = activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path)
+    const lineRange = (!!activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path))
       ? activeLineRange
       : undefined;
+    if (openingDiffTimerRef.current) {
+      clearTimeout(openingDiffTimerRef.current);
+      openingDiffTimerRef.current = null;
+    }
+    openingDiffTimerRef.current = setTimeout(() => {
+      setOpeningDiffPath(file.path);
+    }, 120);
+    setTimeout(() => {
+      setOpeningDiffPath(current => (current === file.path ? null : current));
+    }, 6000);
     if (file.comparisonBaseHash) {
       getVsCodeApi().postMessage({
         type: 'LOG_OPEN_FILE_RANGE_DIFF',
@@ -977,7 +1006,19 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const handleOpenSelectedChanges = useCallback(() => {
     if (!commit) return;
     if (!isMultiCommitSelection) {
-      getVsCodeApi().postMessage({ type: 'LOG_OPEN_COMMIT_CHANGES', repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg);
+      getVsCodeApi().postMessage({
+        type: 'LOG_OPEN_COMMIT_CHANGES',
+        repoId: commit.repoId,
+        hash: commit.hash,
+        files: !loadingFiles
+          ? activeFiles.map(file => ({
+              path: file.path,
+              status: file.status,
+              added: file.added,
+              removed: file.removed,
+            }))
+          : undefined,
+      } satisfies LogToHostMsg);
       return;
     }
 
@@ -1006,19 +1047,69 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
 
     if (groups.length === 0) return;
     getVsCodeApi().postMessage({ type: 'LOG_OPEN_COMMIT_CHANGES_MULTI', groups } satisfies LogToHostMsg);
-  }, [activeFiles, commit, commits, involvedRepoIds, isMultiCommitSelection, repoKindById]);
+  }, [activeFiles, commit, commits, involvedRepoIds, isMultiCommitSelection, loadingFiles, repoKindById]);
 
   const handleOpenExtendedDetail = useCallback(() => {
     if (!commit) return;
     if (!isMultiCommitSelection) {
-      getVsCodeApi().postMessage({ type: 'LOG_OPEN_EXTENDED_DETAIL', repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg);
+      getVsCodeApi().postMessage({
+        type: 'LOG_OPEN_EXTENDED_DETAIL',
+        repoId: commit.repoId,
+        hash: commit.hash,
+        initialCommit: {
+          message: fullCommitMessages[scopedKey(commit.repoId, commit.hash)] || commit.message,
+          authorName: commit.authorName,
+          authorEmail: commit.authorEmail,
+          authorDate: commit.authorDate,
+          committerDate: commit.committerDate,
+          parents: commit.parents,
+        },
+        initialFiles: !loadingFiles
+          ? activeFiles.map(file => ({
+              path: file.path,
+              status: file.status,
+              added: file.added,
+              removed: file.removed,
+            }))
+          : undefined,
+        initialMergeParentChanges: !loadingFiles && mergeParentChanges && mergeParentChanges.length > 0
+          ? mergeParentChanges
+          : undefined,
+      } satisfies LogToHostMsg);
       return;
+    }
+    const filesByCommit = new Map<string, Array<{ path: string; status: string; added?: number; removed?: number }>>();
+    if (!loadingFiles) {
+      for (const file of activeFiles) {
+        const commitKey = scopedKey(file.repoId, file.commitHash);
+        const list = filesByCommit.get(commitKey) ?? [];
+        list.push({
+          path: file.path,
+          status: file.status,
+          added: file.added,
+          removed: file.removed,
+        });
+        filesByCommit.set(commitKey, list);
+      }
     }
     getVsCodeApi().postMessage({
       type: 'LOG_OPEN_EXTENDED_DETAIL_MULTI',
-      commits: commits.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
+      commits: commits.map(selectedCommit => {
+        const commitKey = scopedKey(selectedCommit.repoId, selectedCommit.hash);
+        return {
+          repoId: selectedCommit.repoId,
+          hash: selectedCommit.hash,
+          message: fullCommitMessages[commitKey] || selectedCommit.message,
+          authorName: selectedCommit.authorName,
+          authorEmail: selectedCommit.authorEmail,
+          authorDate: selectedCommit.authorDate,
+          committerDate: selectedCommit.committerDate,
+          parents: selectedCommit.parents,
+          files: !loadingFiles ? filesByCommit.get(commitKey) ?? [] : undefined,
+        };
+      }),
     } satisfies LogToHostMsg);
-  }, [commit, commits, isMultiCommitSelection]);
+  }, [activeFiles, commit, commits, fullCommitMessages, isMultiCommitSelection, loadingFiles]);
 
   const toggleMergeParentChange = useCallback((parentChange: MergeParentChange) => {
     if (!commit || isMultiCommitSelection) return;
@@ -1028,6 +1119,8 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       const next = new Set(current);
       if (next.has(parentKey)) next.delete(parentKey);
       else next.add(parentKey);
+      const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
+      getVsCodeApi().setState({ ...currentState, expandedMergeParentKeys: Array.from(next) });
       return next;
     });
     if (isExpanded || mergeParentFilesByKey[parentKey] || loadingMergeParentKeys.has(parentKey)) {
@@ -1038,15 +1131,20 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     const requestId = generateId();
     pendingRef.current.set(requestId, (msg) => {
       if (msg.type === 'LOG_MERGE_PARENT_FILES_RESULT') {
-        setMergeParentFilesByKey(current => ({
-          ...current,
-          [parentKey]: msg.files.map(file => ({
-          ...file,
-          repoId: commit.repoId,
-            commitHash: commit.hash,
-            comparisonBaseHash: parentChange.hash,
-          })),
-        }));
+        setMergeParentFilesByKey(current => {
+          const next = {
+            ...current,
+            [parentKey]: msg.files.map(file => ({
+              ...file,
+              repoId: commit.repoId,
+              commitHash: commit.hash,
+              comparisonBaseHash: parentChange.hash,
+            })),
+          };
+          const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
+          getVsCodeApi().setState({ ...currentState, mergeParentFilesByKey: next });
+          return next;
+        });
         setLoadingMergeParentKeys(current => {
           const next = new Set(current);
           next.delete(parentKey);
@@ -1182,6 +1280,9 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                     <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
                   )}
                   <span style={styles.fileName(statusColor, isSelected)}>{fileName}</span>
+                  {openingDiffPath === file.path && (
+                    <Codicon name="loading~spin" style={{ fontSize: '12px', marginLeft: '6px', color: 'var(--vscode-progressBar-background)' }} />
+                  )}
                   {dir && <span style={styles.dirPath}>{dir}</span>}
                   {showRepoGrouping && <span style={styles.repoPill}>{repoNameById[file.repoId] ?? file.repoId}</span>}
                   {(file.added != null || file.removed != null) && (
@@ -1203,6 +1304,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                     node={item.node}
                     depth={item.depth}
                     selectedFile={selectedFile}
+                    isOpeningDiff={openingDiffPath === item.node.file?.path}
                     onOpen={handleOpenDiff}
                     onFileContextMenu={showFileContextMenu}
                     iconTheme={iconTheme}

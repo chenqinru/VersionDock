@@ -93,6 +93,13 @@ function singleCommitDetailKey(repoId: string, hash: string): string {
   return scopedKey(repoId, hash);
 }
 
+function formatShortRef(ref?: string): string {
+  if (!ref) return '';
+  const trimmed = ref.trim();
+  if (/^r\d+$/i.test(trimmed)) return trimmed;
+  return trimmed.slice(0, 7);
+}
+
 function aggregatedCommitDetailKey(commits: CommitDetailSelection[], context = 'selection'): string {
   const unique = new Map<string, CommitDetailSelection>();
   for (const commit of commits) {
@@ -103,6 +110,19 @@ function aggregatedCommitDetailKey(commits: CommitDetailSelection[], context = '
   )))}`;
 }
 
+export type SingleCommitInitialData = {
+  initialCommit?: {
+    message?: string;
+    authorName?: string;
+    authorEmail?: string;
+    authorDate?: string;
+    committerDate?: string;
+    parents?: string[];
+  };
+  initialFiles?: Array<{ path: string; status: string; added?: number; removed?: number }>;
+  initialMergeParentChanges?: MergeParentChange[];
+};
+
 export async function openCommitDetailPanel(
   extensionUri: vscode.Uri,
   manager: WorkspaceGitManager,
@@ -111,6 +131,7 @@ export async function openCommitDetailPanel(
   repoId: string,
   hash: string,
   autoExplain = false,
+  initialData?: SingleCommitInitialData,
 ): Promise<void> {
   const panelKey = singleCommitDetailKey(repoId, hash);
   const existingPanel = singleCommitDetailPanels.get(panelKey);
@@ -126,7 +147,17 @@ export async function openCommitDetailPanel(
     return;
   }
 
-  const opening = createCommitDetailPanel(extensionUri, manager, aiCommitExplanationService, logger, repoId, hash, autoExplain);
+  const opening = createCommitDetailPanel(
+    extensionUri,
+    manager,
+    aiCommitExplanationService,
+    logger,
+    repoId,
+    hash,
+    autoExplain,
+    initialData,
+  );
+
   pendingSingleCommitDetails.set(panelKey, opening);
   try {
     await opening;
@@ -145,6 +176,7 @@ async function createCommitDetailPanel(
   repoId: string,
   hash: string,
   autoExplain: boolean,
+  initialData?: SingleCommitInitialData,
 ): Promise<void> {
   const repo = manager.getRepo(repoId);
   if (!repo) {
@@ -158,23 +190,66 @@ async function createCommitDetailPanel(
   let fullMessage = '';
   let branches: { local: string[]; remote: string[]; tags: string[] } = { local: [], remote: [], tags: [] };
 
+  if (initialData?.initialCommit) {
+    fullMessage = initialData.initialCommit.message ?? '';
+    commitInfo = {
+      hash,
+      shortHash: hash.replace(/^r/i, '').slice(0, 7) || hash,
+      message: (initialData.initialCommit.message ?? '').split('\n')[0] || hash,
+      authorName: initialData.initialCommit.authorName ?? t('Unknown'),
+      authorEmail: initialData.initialCommit.authorEmail ?? '',
+      authorDate: initialData.initialCommit.authorDate ?? '',
+      committerDate: initialData.initialCommit.committerDate ?? '',
+      parents: initialData.initialCommit.parents ?? [],
+    };
+  }
+
+  if (initialData?.initialFiles !== undefined) {
+    files = initialData.initialFiles;
+  }
+  if (initialData?.initialMergeParentChanges !== undefined) {
+    mergeParentChanges = initialData.initialMergeParentChanges;
+  }
+
+  const needCommitInfo = !commitInfo;
+  const needFiles = initialData?.initialFiles === undefined;
+
   try {
-    [fullMessage, commitInfo] = await Promise.all([
-      repo.getFullCommitMessage(hash),
-      repo.getCommitMeta(hash),
-    ]);
-    commitInfo ??= { hash, shortHash: hash.slice(0, 7), message: '', authorName: '', authorEmail: '', authorDate: '', committerDate: '', parents: [] };
-    [files, branches, mergeParentChanges] = await Promise.all([
-      repo.getCommitFilesForLogDetail(hash, commitInfo.parents),
-      repo.getBranchesContaining(hash).catch(() => ({ local: [], remote: [], tags: [] })),
-      commitInfo.parents.length >= 2
-        ? repo.getMergeParentChanges(hash, commitInfo.parents).catch(() => [])
-        : Promise.resolve([]),
-    ]);
+    if (!commitInfo) {
+      const [msgResult, metaResult] = await Promise.all([
+        repo.getFullCommitMessage(hash),
+        repo.getCommitMeta(hash),
+      ]);
+      fullMessage = msgResult;
+      commitInfo = metaResult ?? { hash, shortHash: hash.slice(0, 7), message: '', authorName: '', authorEmail: '', authorDate: '', committerDate: '', parents: [] };
+    }
+    const resolvedCommitInfo = commitInfo;
+
+    const needMergeParentChanges = resolvedCommitInfo.parents.length >= 2 && mergeParentChanges.length === 0;
+    const needBranches = branches.local.length === 0 && branches.remote.length === 0 && branches.tags.length === 0;
+
+    if (needFiles || needBranches || needMergeParentChanges) {
+      const [loadedFiles, loadedBranches, loadedMergeChanges] = await Promise.all([
+        needFiles
+          ? repo.getCommitFilesForLogDetail(hash, resolvedCommitInfo.parents)
+          : Promise.resolve(files),
+        needBranches
+          ? repo.getBranchesContaining(hash).catch(() => ({ local: [], remote: [], tags: [] }))
+          : Promise.resolve(branches),
+        needMergeParentChanges
+          ? repo.getMergeParentChanges(hash, resolvedCommitInfo.parents).catch(() => [])
+          : Promise.resolve(mergeParentChanges),
+      ]);
+      if (needFiles) files = loadedFiles;
+      if (needBranches) branches = loadedBranches;
+      if (needMergeParentChanges) mergeParentChanges = loadedMergeChanges;
+    }
   } catch (e: unknown) {
     vscode.window.showErrorMessage(t('VersionDock: Failed to load commit details: {0}', String(e)));
     return;
   }
+
+  if (!commitInfo) return;
 
   const repoMeta = manager.getRepoMetas().find(r => r.id === repoId);
   const repoName = repoMeta?.name ?? repoId;
@@ -191,6 +266,7 @@ async function createCommitDetailPanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
+      retainContextWhenHidden: true,
       localResourceRoots: [
         extensionUri,
         vscode.Uri.file(vscode.env.appRoot),
@@ -289,12 +365,12 @@ async function createCommitDetailPanel(
         const diffHash = msg.hash ?? hash; // support merge commit files
         const fileName = pathMod.basename(msg.filePath);
         const title = msg.fromHash && msg.toHash
-          ? t('{0} ({1}..{2})', fileName, msg.fromHash, msg.toHash)
+          ? t('{0} ({1}..{2})', fileName, formatShortRef(msg.fromHash), formatShortRef(msg.toHash))
           : status === 'A'
-            ? t('{0} (added in {1})', fileName, diffHash.slice(0, 7))
+            ? t('{0} (added in {1})', fileName, formatShortRef(diffHash))
             : status === 'D'
-              ? t('{0} (deleted in {1})', fileName, diffHash.slice(0, 7))
-              : t('{0} ({1})', fileName, diffHash.slice(0, 7));
+              ? t('{0} (deleted in {1})', fileName, formatShortRef(diffHash))
+              : t('{0} ({1})', fileName, formatShortRef(diffHash));
         if (msg.fromHash && msg.toHash) {
           await openCommitRangeFileDiff(repo, msg.fromHash, msg.toHash, msg.filePath, status, title);
         } else {
@@ -355,12 +431,24 @@ async function createCommitDetailPanel(
   });
 }
 
+export type AggregatedCommitInput = {
+  repoId: string;
+  hash: string;
+  message?: string;
+  authorName?: string;
+  authorEmail?: string;
+  authorDate?: string;
+  committerDate?: string;
+  parents?: string[];
+  files?: Array<{ path: string; status: string; added?: number; removed?: number }>;
+};
+
 export async function openAggregatedCommitDetailPanel(
   extensionUri: vscode.Uri,
   manager: WorkspaceGitManager,
   aiCommitExplanationService: AiCommitExplanationService,
   logger: VersionDockLogger,
-  commits: Array<{ repoId: string; hash: string }>,
+  commits: AggregatedCommitInput[],
   autoExplain = false,
   options: AggregatedCommitDetailOptions = {},
 ): Promise<void> {
@@ -378,7 +466,16 @@ export async function openAggregatedCommitDetailPanel(
     return;
   }
 
-  const opening = createAggregatedCommitDetailPanel(extensionUri, manager, aiCommitExplanationService, logger, commits, autoExplain, options);
+  const opening = createAggregatedCommitDetailPanel(
+    extensionUri,
+    manager,
+    aiCommitExplanationService,
+    logger,
+    commits,
+    autoExplain,
+    options,
+  );
+
   pendingAggregatedCommitDetails.set(panelKey, opening);
   try {
     await opening;
@@ -394,7 +491,7 @@ async function createAggregatedCommitDetailPanel(
   manager: WorkspaceGitManager,
   aiCommitExplanationService: AiCommitExplanationService,
   logger: VersionDockLogger,
-  commits: Array<{ repoId: string; hash: string }>,
+  commits: AggregatedCommitInput[],
   autoExplain: boolean,
   options: AggregatedCommitDetailOptions,
 ): Promise<void> {
@@ -409,15 +506,57 @@ async function createAggregatedCommitDetailPanel(
     const details = await mapWithConcurrency(commits, AGGREGATED_DETAIL_CONCURRENCY, async selection => {
       const repo = manager.getRepo(selection.repoId);
       if (!repo) return undefined;
-      const [commitInfo, fullMessage, branches] = await Promise.all([
-        repo.getCommitMeta(selection.hash),
-        repo.getFullCommitMessage(selection.hash),
-        repo.getBranchesContaining(selection.hash).catch(() => ({ local: [], remote: [], tags: [] })),
-      ]);
       const repoMeta = repoMetaById.get(selection.repoId);
       const repoName = repoMeta?.name ?? selection.repoId;
       const repoColor = repoMeta?.color ?? '#4ec9b0';
-      const files = await repo.getCommitFilesForLogDetail(selection.hash, commitInfo.parents);
+
+      let commitInfo: { hash: string; shortHash: string; message: string; authorName: string; authorEmail: string; authorDate: string; committerDate: string; parents: string[] };
+      let fullMessage: string;
+      let files: Array<{ path: string; status: string; added?: number; removed?: number }>;
+      let branches: { local: string[]; remote: string[]; tags: string[] } = { local: [], remote: [], tags: [] };
+
+      if (selection.files !== undefined && selection.message !== undefined && selection.authorName !== undefined) {
+        fullMessage = selection.message;
+        commitInfo = {
+          hash: selection.hash,
+          shortHash: selection.hash.replace(/^r/i, '').slice(0, 7) || selection.hash,
+          message: selection.message.split('\n')[0] || selection.hash,
+          authorName: selection.authorName,
+          authorEmail: selection.authorEmail ?? '',
+          authorDate: selection.authorDate ?? '',
+          committerDate: selection.committerDate ?? '',
+          parents: selection.parents ?? [],
+        };
+        files = selection.files;
+      } else {
+        const [metaData, branchesResult] = await Promise.all([
+          Promise.all([
+            selection.authorName !== undefined
+              ? Promise.resolve({
+                  hash: selection.hash,
+                  shortHash: selection.hash.replace(/^r/i, '').slice(0, 7) || selection.hash,
+                  message: (selection.message ?? '').split('\n')[0] || selection.hash,
+                  authorName: selection.authorName,
+                  authorEmail: selection.authorEmail ?? '',
+                  authorDate: selection.authorDate ?? '',
+                  committerDate: selection.committerDate ?? '',
+                  parents: selection.parents ?? [],
+                })
+              : repo.getCommitMeta(selection.hash),
+            selection.message !== undefined
+              ? Promise.resolve(selection.message)
+              : repo.getFullCommitMessage(selection.hash),
+          ]),
+          repo.getBranchesContaining(selection.hash).catch(() => ({ local: [], remote: [], tags: [] })),
+        ]);
+        commitInfo = metaData[0];
+        fullMessage = metaData[1];
+        branches = branchesResult;
+        files = selection.files !== undefined
+          ? selection.files
+          : await repo.getCommitFilesForLogDetail(selection.hash, commitInfo.parents);
+      }
+
       const summary: CommitSummary = {
         repoId: selection.repoId,
         repoName,
@@ -503,6 +642,7 @@ async function createAggregatedCommitDetailPanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
+      retainContextWhenHidden: true,
       localResourceRoots: [
         extensionUri,
         vscode.Uri.file(vscode.env.appRoot),
@@ -579,8 +719,8 @@ async function createAggregatedCommitDetailPanel(
         const pathMod = await import('path');
         const fileName = pathMod.basename(msg.filePath);
         const title = msg.fromHash && msg.toHash
-          ? t('{0} ({1}..{2})', fileName, msg.fromHash, msg.toHash)
-          : t('{0} ({1})', fileName, (msg.hash ?? firstCommit.hash).slice(0, 7));
+          ? t('{0} ({1}..{2})', fileName, formatShortRef(msg.fromHash), formatShortRef(msg.toHash))
+          : t('{0} ({1})', fileName, formatShortRef(msg.hash ?? firstCommit.hash));
         if (msg.fromHash && msg.toHash) {
           await openCommitRangeFileDiff(targetRepo, msg.fromHash, msg.toHash, msg.filePath, msg.fileStatus ?? 'M', title);
         } else {
@@ -796,12 +936,19 @@ async function openSvnDiffWithProvider(
 ): Promise<void> {
   const provider = ShelveDocumentProvider.shared;
   if (provider) {
-    const requestId = `${toRef}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const leftUri = ShelveDocumentProvider.buildUri(repoId, `svn-${requestId}-${fromRef}`, relativePath);
-    const rightUri = ShelveDocumentProvider.buildUri(repoId, `svn-${requestId}-${toRef}`, relativePath);
+    const leftUri = ShelveDocumentProvider.buildUri(repoId, `svn-${fromRef}`, relativePath);
+    const rightUri = ShelveDocumentProvider.buildUri(repoId, `svn-${toRef}`, relativePath);
     provider.set(leftUri, originalContent);
     provider.set(rightUri, modifiedContent);
-    await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
+
+    const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+    const isAlreadyActiveDiff = activeTab?.input instanceof vscode.TabInputTextDiff
+      && activeTab.input.original.toString() === leftUri.toString()
+      && activeTab.input.modified.toString() === rightUri.toString();
+
+    if (!isAlreadyActiveDiff) {
+      await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
+    }
     return;
   }
 
@@ -2095,11 +2242,26 @@ ${leftPanelContent}
     }
 
     // ── Render state ──
-    let viewMode = 'tree';
+    const persistedState = (typeof vscode !== 'undefined' && typeof vscode.getState === 'function') ? (vscode.getState() || {}) : {};
+    let viewMode = persistedState.viewMode || 'tree';
     // Map<fullPath, boolean> — open/closed state per dir node
-    const dirOpen = new Map();
+    const dirOpen = new Map(Array.isArray(persistedState.dirOpen) ? persistedState.dirOpen : []);
     // forceAll: null = use dirOpen, true = all open, false = all closed
     let forceAll = null;
+
+    function persistState() {
+      try {
+        if (typeof vscode !== 'undefined' && typeof vscode.setState === 'function') {
+          vscode.setState({
+            ...vscode.getState(),
+            viewMode,
+            dirOpen: Array.from(dirOpen.entries()),
+            expandedMergeParentHashes: Array.from(expandedMergeParentHashes),
+            mergeParentFilesByHash: Array.from(mergeParentFilesByHash.entries()),
+          });
+        }
+      } catch {}
+    }
 
     function isDirOpen(fullPath) {
       if (forceAll !== null) return forceAll;
@@ -2109,12 +2271,13 @@ ${leftPanelContent}
     function toggleDir(fullPath) {
       forceAll = null;
       dirOpen.set(fullPath, !isDirOpen(fullPath));
+      persistState();
       render();
     }
 
     const MERGE_PARENT_CHANGES = Array.isArray(__d.mergeParentChanges) ? __d.mergeParentChanges : [];
-    const expandedMergeParentHashes = new Set();
-    const mergeParentFilesByHash = new Map();
+    const expandedMergeParentHashes = new Set(Array.isArray(persistedState.expandedMergeParentHashes) ? persistedState.expandedMergeParentHashes : []);
+    const mergeParentFilesByHash = new Map(Array.isArray(persistedState.mergeParentFilesByHash) ? persistedState.mergeParentFilesByHash : []);
     const loadingMergeParentHashes = new Set();
     const pendingMergeParentRequests = new Map();
 
@@ -2148,10 +2311,12 @@ ${leftPanelContent}
       if (!parentHash) return;
       if (expandedMergeParentHashes.has(parentHash)) {
         expandedMergeParentHashes.delete(parentHash);
+        persistState();
         render();
         return;
       }
       expandedMergeParentHashes.add(parentHash);
+      persistState();
       if (mergeParentFilesByHash.has(parentHash) || loadingMergeParentHashes.has(parentHash)) {
         render();
         return;
@@ -2162,6 +2327,7 @@ ${leftPanelContent}
       pendingMergeParentRequests.set(requestId, result => {
         loadingMergeParentHashes.delete(parentHash);
         mergeParentFilesByHash.set(parentHash, result.files || []);
+        persistState();
         render();
       });
       vscode.postMessage({ type: 'getMergeParentFiles', hash: __d.hash, parentHash, requestId });
@@ -2335,12 +2501,14 @@ ${leftPanelContent}
       viewMode = 'tree'; forceAll = null;
       document.getElementById('btnTree').classList.add('active');
       document.getElementById('btnFlat').classList.remove('active');
+      persistState();
       render();
     });
     document.getElementById('btnFlat').addEventListener('click', () => {
       viewMode = 'flat';
       document.getElementById('btnFlat').classList.add('active');
       document.getElementById('btnTree').classList.remove('active');
+      persistState();
       render();
     });
     document.getElementById('btnExpandAll').addEventListener('click', () => {
@@ -2351,6 +2519,10 @@ ${leftPanelContent}
     });
 
     // ── Initial render ──
+    if (viewMode === 'flat') {
+      document.getElementById('btnFlat')?.classList.add('active');
+      document.getElementById('btnTree')?.classList.remove('active');
+    }
     render();
 
     // ── Author avatars (Gravatar / GitHub) — matches the Git log avatar rules ──

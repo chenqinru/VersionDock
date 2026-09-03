@@ -227,6 +227,19 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly logger: VersionDockLogger,
     private readonly updateSummaryService: UpdateSummaryService,
   ) {
+    this.shelveDocProvider.setContentResolver(async (repoId, shelveId, filePath) => {
+      if (shelveId === 'empty' || !shelveId) return '';
+      const repo = this.manager.getRepo(repoId);
+      if (!repo) return undefined;
+      if (shelveId.startsWith('svn-')) {
+        const revision = shelveId.slice(4);
+        if (repo.kind === 'svn') {
+          return await (repo as SvnService).getRevisionContentOrUndefined(revision, filePath);
+        }
+      }
+      return undefined;
+    });
+
     // Register manager listeners here so they fire even when the panel has never been opened.
     // this.post() silently drops messages when the webview is not yet resolved — that's fine,
     // because resolveWebviewView performs an explicit initial sync when the panel first opens.
@@ -508,40 +521,53 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     const task = (async () => {
-      // The file list already tells us whether this revision added or deleted the file.
-      // Fetching revision contents directly avoids a redundant `svn diff` round trip;
-      // SvnService also caches and coalesces these immutable `svn cat` requests.
-      const contents = fromHash !== undefined
-        ? await repo.getRevisionRangeFileContents(fromHash, hash, relativePath)
-        : await repo.getRevisionFileContents(hash, relativePath, options?.fileStatus);
-      if (contents.isBinary) {
-        vscode.window.showInformationMessage(t('Binary file — no diff available'));
-        return;
-      }
-      const normalizedStatus = (options?.fileStatus ?? '').toUpperCase();
-      if (!contents.originalContent && !contents.modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
-        vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
-        return;
-      }
+      const statusMessage = vscode.window.setStatusBarMessage(t('VersionDock: Loading diff for {0}…', relativePath));
+      try {
+        // The file list already tells us whether this revision added or deleted the file.
+        // Fetching revision contents directly avoids a redundant `svn diff` round trip;
+        // SvnService also caches and coalesces these immutable `svn cat` requests.
+        const contents = fromHash !== undefined
+          ? await repo.getRevisionRangeFileContents(fromHash, hash, relativePath)
+          : await repo.getRevisionFileContents(hash, relativePath, options?.fileStatus);
+        if (contents.isBinary) {
+          vscode.window.showInformationMessage(t('Binary file — no diff available'));
+          return;
+        }
+        const normalizedStatus = (options?.fileStatus ?? '').toUpperCase();
+        if (!contents.originalContent && !contents.modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
+          vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+          return;
+        }
 
-      const requestId = `${hash}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const leftUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${requestId}-${fromHash ?? 'base'}`, relativePath);
-      const rightUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${requestId}-${hash}`, relativePath);
-      this.shelveDocProvider.set(leftUri, contents.originalContent);
-      this.shelveDocProvider.set(rightUri, contents.modifiedContent);
-      await vscode.commands.executeCommand(
-        'vscode.diff',
-        leftUri,
-        rightUri,
-        title,
-        lineRange
-          ? {
-              preview: true,
-              selection: new vscode.Range(lineRange.start - 1, 0, lineRange.end - 1, 0),
-            }
-          : { preview: true },
-      );
-      await this.revealLineRange(rightUri, lineRange);
+        const leftRef = fromHash ?? `r${Math.max(0, Number(hash.replace(/^r/i, '')) - 1)}`;
+        const leftUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${leftRef}`, relativePath);
+        const rightUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${hash}`, relativePath);
+        this.shelveDocProvider.set(leftUri, contents.originalContent);
+        this.shelveDocProvider.set(rightUri, contents.modifiedContent);
+
+        const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+        const isAlreadyActiveDiff = activeTab?.input instanceof vscode.TabInputTextDiff
+          && activeTab.input.original.toString() === leftUri.toString()
+          && activeTab.input.modified.toString() === rightUri.toString();
+
+        if (!isAlreadyActiveDiff) {
+          await vscode.commands.executeCommand(
+            'vscode.diff',
+            leftUri,
+            rightUri,
+            title,
+            lineRange
+              ? {
+                  preview: true,
+                  selection: new vscode.Range(lineRange.start - 1, 0, lineRange.end - 1, 0),
+                }
+              : { preview: true },
+          );
+        }
+        await this.revealLineRange(rightUri, lineRange);
+      } finally {
+        statusMessage.dispose();
+      }
     })();
 
     this.svnDiffOpenTasks.set(taskKey, task);
@@ -554,50 +580,29 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
-  private async buildSvnCommitChangeResources(
+  private buildSvnCommitChangeResourcesSync(
     repo: SvnService,
+    fromRef: string,
+    toRef: string,
     files: Array<{ path: string; status?: string }>,
-    loadContents: (
-      file: { path: string; status?: string },
-      relativePath: string,
-    ) => Promise<{ originalContent: string; modifiedContent: string; isBinary?: boolean }>,
-  ): Promise<ChangesResource[]> {
-    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  ): ChangesResource[] {
     const eligibleFiles = files.filter(file => file.status?.toUpperCase() !== 'U');
     const resources: ChangesResource[] = [];
 
-    for (let offset = 0; offset < eligibleFiles.length; offset += SVN_CHANGE_RESOURCE_CONCURRENCY) {
-      const batch = eligibleFiles.slice(offset, offset + SVN_CHANGE_RESOURCE_CONCURRENCY);
-      const batchResources = await Promise.all(batch.map(async (file, index): Promise<ChangesResource | null> => {
-        try {
-          const resolvedPath = repo.resolveRepoPath(file.path);
-          const relativePath = resolvedPath.relativePath;
-          const contents = await loadContents(file, relativePath);
-          if (contents.isBinary) return null;
-          const normalizedStatus = (file.status ?? '').toUpperCase();
-          if (!contents.originalContent && !contents.modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
-            return null;
-          }
+    for (const file of eligibleFiles) {
+      const resolvedPath = repo.resolveRepoPath(file.path);
+      const relativePath = resolvedPath.relativePath;
+      const status = (file.status ?? 'M').toUpperCase();
 
-          const resourceIndex = offset + index;
-          const leftUri = ShelveDocumentProvider.buildUri(
-            repo.repoId,
-            `svn-changes-${requestId}-${resourceIndex}-base`,
-            relativePath,
-          );
-          const rightUri = ShelveDocumentProvider.buildUri(
-            repo.repoId,
-            `svn-changes-${requestId}-${resourceIndex}-modified`,
-            relativePath,
-          );
-          this.shelveDocProvider.set(leftUri, contents.originalContent);
-          this.shelveDocProvider.set(rightUri, contents.modifiedContent);
-          return [vscode.Uri.file(resolvedPath.absolutePath), leftUri, rightUri];
-        } catch {
-          return null;
-        }
-      }));
-      resources.push(...batchResources.filter((resource): resource is ChangesResource => resource !== null));
+      const leftUri = status === 'A'
+        ? ShelveDocumentProvider.buildUri(repo.repoId, 'empty', relativePath)
+        : ShelveDocumentProvider.buildUri(repo.repoId, `svn-${fromRef}`, relativePath);
+
+      const rightUri = status === 'D'
+        ? ShelveDocumentProvider.buildUri(repo.repoId, 'empty', relativePath)
+        : ShelveDocumentProvider.buildUri(repo.repoId, `svn-${toRef}`, relativePath);
+
+      resources.push([vscode.Uri.file(resolvedPath.absolutePath), leftUri, rightUri]);
     }
 
     return resources;
@@ -829,6 +834,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             files,
             ...(mergeParentChanges ? { mergeParentChanges } : {}),
           });
+          if (repo.kind === 'svn' && files.length > 0 && 'prefetchRevisionFiles' in repo && typeof (repo as any).prefetchRevisionFiles === 'function') {
+            const filePaths = files.map(f => f.path);
+            void (repo as any).prefetchRevisionFiles(msg.hash, filePaths);
+          }
         } catch (e: unknown) {
           this.post({ type: 'LOG_COMMIT_FILES', requestId: msg.requestId, files: [], error: String(e) });
         }
@@ -874,7 +883,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'LOG_OPEN_FILE_DIFF': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) return;
+        if (!repo) {
+          this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
+          return;
+        }
         try {
           const nodePath = await import('path');
           const status = msg.fileStatus ?? 'M';
@@ -892,18 +904,24 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               fileStatus: status,
               lineRange: msg.lineRange,
             });
+            this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
             break;
           }
           await this.openDiffBetweenRefs(repo, msg.filePath, `${msg.hash}~1`, msg.hash, title, msg.lineRange);
         } catch (e: unknown) {
           this.showOperationError(e, t('VersionDock: Cannot open diff'));
+        } finally {
+          this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
         }
         break;
       }
 
       case 'LOG_OPEN_FILE_RANGE_DIFF': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) return;
+        if (!repo) {
+          this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
+          return;
+        }
         try {
           const path = await import('path');
           const fileName = path.basename(msg.filePath);
@@ -915,6 +933,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               t('{0} ({1}..{2})', fileName, msg.fromHash, msg.toHash),
               { fromHash: msg.fromHash, lineRange: msg.lineRange },
             );
+            this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
             break;
           }
           await this.openDiffBetweenRefs(
@@ -927,6 +946,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
         } catch (e: unknown) {
           this.showOperationError(e, t('VersionDock: Cannot open diff'));
+        } finally {
+          this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
         }
         break;
       }
@@ -2322,7 +2343,20 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'LOG_OPEN_EXTENDED_DETAIL': {
         const { openCommitDetailPanel } = await import('./CommitDetailPanel');
-        await openCommitDetailPanel(this.extensionUri, this.manager, this.aiCommitExplanationService, this.logger, msg.repoId, msg.hash);
+        await openCommitDetailPanel(
+          this.extensionUri,
+          this.manager,
+          this.aiCommitExplanationService,
+          this.logger,
+          msg.repoId,
+          msg.hash,
+          false,
+          {
+            initialCommit: msg.initialCommit,
+            initialFiles: msg.initialFiles,
+            initialMergeParentChanges: msg.initialMergeParentChanges,
+          },
+        );
         break;
       }
 
@@ -2347,13 +2381,23 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_OPEN_COMMIT_CHANGES': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) break;
-        const files = await repo.getCommitFiles(msg.hash);
+        const title = t('Changes in {0}', msg.hash.slice(0, 8));
+        const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
+        if (activeTab?.label && (activeTab.label === title || activeTab.label.startsWith(title))) {
+          break;
+        }
+        const files = msg.files && msg.files.length > 0
+          ? msg.files
+          : await repo.getCommitFiles(msg.hash);
         if (repo.kind === 'svn') {
           const svnRepo = repo as SvnService;
-          const resources = await this.buildSvnCommitChangeResources(
+          const fromRef = `r${Math.max(0, Number(msg.hash.replace(/^r/i, '')) - 1)}`;
+          const toRef = msg.hash;
+          const resources = this.buildSvnCommitChangeResourcesSync(
             svnRepo,
+            fromRef,
+            toRef,
             files,
-            (file, relativePath) => svnRepo.getRevisionFileContents(msg.hash, relativePath, file.status),
           );
           if (resources.length === 0) {
             await vscode.window.showInformationMessage(t('No SVN file changes to open.'));
@@ -2361,9 +2405,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
           await vscode.commands.executeCommand(
             'vscode.changes',
-            t('Changes in {0}', msg.hash.slice(0, 8)),
+            title,
             resources,
           );
+          void svnRepo.prefetchRevisionFiles(toRef, files.map(f => f.path));
           break;
         }
         const commitMeta = await repo.getCommitMeta(msg.hash);
@@ -2385,7 +2430,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const modified = gitUri(file.status === 'D' ? EMPTY_TREE : msg.hash, relativePath);
             return [label, original, modified] as [vscode.Uri, vscode.Uri, vscode.Uri];
           });
-        await vscode.commands.executeCommand('vscode.changes', t('Changes in {0}', msg.hash.slice(0, 8)), resources);
+        await vscode.commands.executeCommand('vscode.changes', title, resources);
         break;
       }
 
@@ -2396,11 +2441,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           if (!repo) continue;
           if (repo.kind === 'svn') {
             const svnRepo = repo as SvnService;
-            resources.push(...await this.buildSvnCommitChangeResources(
+            const fromRef = group.fromHash ?? `r${Math.max(0, Number(group.toHash.replace(/^r/i, '')) - 1)}`;
+            const toRef = group.toHash;
+            resources.push(...this.buildSvnCommitChangeResourcesSync(
               svnRepo,
+              fromRef,
+              toRef,
               group.files.map(filePath => ({ path: filePath })),
-              (_file, relativePath) => svnRepo.getRevisionRangeFileContents(group.fromHash, group.toHash, relativePath),
             ));
+            void svnRepo.prefetchRevisionFiles(toRef, group.files);
             continue;
           }
           const gitUri = (ref: string, filePath: string): vscode.Uri => {

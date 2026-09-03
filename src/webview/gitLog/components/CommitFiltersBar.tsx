@@ -268,10 +268,12 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const fallbackOption = value ? { name: value, email: '', value, count: 0 } : null;
-  const mergedOptions = fallbackOption && !options.some(option => option.value === value || option.name === value || option.email === value)
+  const mergedOptions = fallbackOption && !options.some(option => option.value === value || option.name === value || (Boolean(option.email) && option.email === value))
     ? [fallbackOption, ...options]
     : options;
-  const active = mergedOptions.find(option => option.value === value || option.name === value || option.email === value) ?? null;
+  const active = value
+    ? (mergedOptions.find(option => option.value === value || option.name === value || (Boolean(option.email) && option.email === value)) ?? null)
+    : null;
   const displayValue = active?.name ?? value;
   const normalizedQuery = query.trim().toLowerCase();
   const displayed = normalizedQuery
