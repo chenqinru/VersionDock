@@ -752,23 +752,25 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         // later commit pages. Avoid repeating branch/tag CLI calls and theme
         // parsing on every scroll batch.
         if (msg.skip === 0) {
-          try {
-            const [branches, iconTheme] = await Promise.all([
-              this.getFilteredBranches(repos),
-              this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
-            ]);
-            if (metadataGeneration === this.managerSyncGeneration) {
-              this.acknowledgeFreshLogSnapshot(repos, branches);
-              this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
+          void (async () => {
+            try {
+              const [branches, iconTheme] = await Promise.all([
+                this.getFilteredBranches(repos),
+                this.view ? loadIconTheme(this.view.webview) : Promise.resolve(undefined),
+              ]);
+              if (metadataGeneration === this.managerSyncGeneration) {
+                this.acknowledgeFreshLogSnapshot(repos, branches);
+                this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
 
-              // Send tags for all visible repos without blocking the commit batch.
-              for (const meta of repos) {
-                void this.refreshTags(meta.id).catch(() => {});
+                // Send tags for all visible repos without blocking the commit batch.
+                for (const meta of repos) {
+                  void this.refreshTags(meta.id).catch(() => {});
+                }
               }
+            } catch (error) {
+              this.logger.error('GitLog', 'Failed to load branches on commit request', error);
             }
-          } catch (error) {
-            this.logger.error('GitLog', 'Failed to load branches on commit request', error);
-          }
+          })();
         }
 
         const logRepoIds = this.getRequestedVisibleRepoIds(msg.repoIds, repos);

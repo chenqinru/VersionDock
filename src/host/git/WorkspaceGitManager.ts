@@ -1816,8 +1816,6 @@ export class WorkspaceGitManager implements vscode.Disposable {
       ? repoIds.map(id => this.repos.get(id)).filter(Boolean) as GitService[]
       : Array.from(this.repos.values());
 
-    const pageEnd = Math.max(limit + skip, limit);
-
     // Build a map from main repo path → worktree GitServices, so getLog can collect
     // unpushed hashes from worktree branches (which appear in the log via --all)
     const worktreesByMainRepo = new Map<string, GitService[]>();
@@ -1831,6 +1829,17 @@ export class WorkspaceGitManager implements vscode.Disposable {
       }
     }
 
+    // Fast path: When only 1 target repository is active, pass pagination directly
+    // to Git's native --skip and --max-count rather than scanning from 0 to pageEnd.
+    if (targets.length === 1) {
+      const repo = targets[0];
+      return repo.getLog(limit, skip, {
+        ...opts,
+        worktreeServices: worktreesByMainRepo.get(repo.rootPath) ?? [],
+      });
+    }
+
+    const pageEnd = Math.max(limit + skip, limit);
     const results = await Promise.allSettled(
       targets.map(r => r.getLog(pageEnd, 0, { ...opts, worktreeServices: worktreesByMainRepo.get(r.rootPath) ?? [] }))
     );
@@ -1852,17 +1861,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const results = await Promise.allSettled(
       targets.map(repo => {
         const kind = this.repoMetas.get(repo.repoId)?.kind ?? 'git';
-        // JetBrains builds its permanent Git layout from the complete graph.
-        // Truncating this lightweight topology can change layout indices near
-        // the newest commits when older branches merge, so Git must remain
-        // complete even though the detailed commit list stays paginated.
-        // However, in ultra-large repositories (e.g. hundreds of thousands of commits),
-        // an unbounded topology query causes severe memory exhaustion (OOM) and UI freezing.
-        // We cap Git topology at a safe upper bound (50,000 commits) to preserve graph
-        // stability while preventing out-of-memory crashes.
-        // SVN history is linear and may involve a remote request, so its
-        // topology can safely retain the configured display limit.
-        const gitCap = 50_000;
+        // Respect the user-configured maxCommits while ensuring a sensible minimum (2,000)
+        // for stable lane geometry, preventing excessive memory and IPC overhead.
+        const gitCap = Math.max(maxCommits, 2000);
         return repo.getGraphLog(kind === 'svn' ? maxCommits : gitCap);
       }),
     );

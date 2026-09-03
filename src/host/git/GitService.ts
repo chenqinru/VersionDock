@@ -355,7 +355,27 @@ export class GitService {
     return getVscodeRepository(this.rootPath);
   }
 
+  private logMetadataCache: {
+    timestamp: number;
+    refsByHash: Map<string, string[]>;
+    unpushedHashes: Set<string> | 'all';
+    incomingHashes: Set<string>;
+    worktreeUnpushedHashes: Set<string>;
+  } | null = null;
+  private pendingLogMetadataPromise: Promise<{
+    refsByHash: Map<string, string[]>;
+    unpushedHashes: Set<string> | 'all';
+    incomingHashes: Set<string>;
+    worktreeUnpushedHashes: Set<string>;
+  }> | null = null;
+
+  public invalidateLogMetadataCache(): void {
+    this.logMetadataCache = null;
+    this.pendingLogMetadataPromise = null;
+  }
+
   protected runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string): Promise<T> {
+    this.invalidateLogMetadataCache();
     // Hold the repository lock only for the Git mutation itself. The status
     // suppression helper may wait for a refresh after the mutation; keeping
     // the lock during that wait could block the auto-commit triggered by that
@@ -1263,6 +1283,51 @@ export class GitService {
     });
   }
 
+  private async getLogMetadata(worktreeServices: GitService[] = [], forceFresh = false): Promise<{
+    refsByHash: Map<string, string[]>;
+    unpushedHashes: Set<string> | 'all';
+    incomingHashes: Set<string>;
+    worktreeUnpushedHashes: Set<string>;
+  }> {
+    const TTL = 10_000;
+    if (!forceFresh && this.logMetadataCache && (Date.now() - this.logMetadataCache.timestamp < TTL)) {
+      return this.logMetadataCache;
+    }
+    if (!forceFresh && this.pendingLogMetadataPromise) {
+      return this.pendingLogMetadataPromise;
+    }
+
+    const fetchTask = (async () => {
+      const [refsByHash, unpushedHashes, incomingHashes, ...worktreeUnpushedResults] = await Promise.all([
+        this.getDecoratedRefsByCommit(),
+        this.getUnpushedHashes(),
+        this.getIncomingHashes(),
+        ...worktreeServices.map(wt => wt.getUnpushedHashes()),
+      ]);
+
+      const worktreeUnpushedHashes = new Set<string>();
+      for (const wtResult of worktreeUnpushedResults) {
+        if (wtResult !== 'all') {
+          wtResult.forEach(h => worktreeUnpushedHashes.add(h));
+        }
+      }
+
+      const snapshot = {
+        timestamp: Date.now(),
+        refsByHash,
+        unpushedHashes,
+        incomingHashes,
+        worktreeUnpushedHashes,
+      };
+      this.logMetadataCache = snapshot;
+      this.pendingLogMetadataPromise = null;
+      return snapshot;
+    })();
+
+    this.pendingLogMetadataPromise = fetchTask;
+    return fetchTask;
+  }
+
   // Log uses raw git format for graph rendering — VS Code API's log() lacks graph parents/refs.
   async getGraphLog(limit?: number): Promise<GraphCommitNode[]> {
     if (limit !== undefined && limit <= 0) return [];
@@ -1277,11 +1342,11 @@ export class GitService {
       '--exclude=refs/versiondock/ai-composer/*',
       '--all',
     ];
-    const [raw, refsByHash] = await Promise.all([
+    const [raw, metadata] = await Promise.all([
       this.git.raw(args),
-      this.getDecoratedRefsByCommit(),
+      this.getLogMetadata([], false),
     ]);
-    return parseGraphLogOutput(raw, this.repoId, refsByHash);
+    return parseGraphLogOutput(raw, this.repoId, metadata.refsByHash);
   }
 
   // Full log data stays paginated because it also resolves author/message and
@@ -1324,29 +1389,25 @@ export class GitService {
       args.push('HEAD', '--exclude=refs/stash', '--exclude=refs/versiondock/ai-composer/*', '--all');
     }
     if (opts?.filterPath && !lineRange) args.push('--', this.literalPathspec(opts.filterPath));
-    const [raw, refsByHash] = await Promise.all([
+
+    const worktreeServices = opts?.worktreeServices ?? [];
+    const forceFresh = skip === 0;
+    const [raw, metadata] = await Promise.all([
       this.git.raw(args),
-      this.getDecoratedRefsByCommit(),
+      this.getLogMetadata(worktreeServices, forceFresh),
     ]);
-    const commits = parseLogOutput(raw, this.repoId, refsByHash);
+    const commits = parseLogOutput(raw, this.repoId, metadata.refsByHash);
 
     // Mark unpushed commits: hashes ahead of the remote tracking branch.
     // 'all' means there is no upstream — every commit on this branch is local.
-    const worktreeServices = opts?.worktreeServices ?? [];
-    const [unpushedHashes, incomingHashes, ...worktreeUnpushedResults] = await Promise.all([
-      this.getUnpushedHashes(),
-      this.getIncomingHashes(),
-      ...worktreeServices.map(wt => wt.getUnpushedHashes()),
-    ]);
+    const { unpushedHashes, incomingHashes, worktreeUnpushedHashes } = metadata;
     const allUnpushedHashes = new Set<string>();
     if (unpushedHashes === 'all') {
       for (const c of commits) c.unpushed = true;
     } else {
       unpushedHashes.forEach(h => allUnpushedHashes.add(h));
     }
-    for (const wtResult of worktreeUnpushedResults) {
-      if (wtResult !== 'all') wtResult.forEach(h => allUnpushedHashes.add(h));
-    }
+    worktreeUnpushedHashes.forEach(h => allUnpushedHashes.add(h));
     if (allUnpushedHashes.size > 0) {
       for (const c of commits) {
         if (allUnpushedHashes.has(c.hash)) c.unpushed = true;

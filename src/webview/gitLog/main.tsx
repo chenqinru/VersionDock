@@ -406,8 +406,7 @@ export function GitLogApp() {
   ), [store.compareState]);
 
   const activeCommitSource = store.mode === 'compare' ? compareCommits : store.commits;
-  const isCommitListReloading = store.mode === 'log'
-    && (store.loadingCommits || store.loadingGraphCommits);
+  const isCommitListReloading = store.mode === 'log' && store.loadingCommits;
 
   const selectedCommits = useMemo(() => {
     const selected = new Set(store.selectedCommitHashes);
@@ -427,7 +426,7 @@ export function GitLogApp() {
   ), [activeCommitSource, store.primarySelectedHash]);
 
   useEffect(() => {
-    if (isCommitListReloading) return;
+    if (isCommitListReloading && store.commits.length === 0) return;
     selectedCommits.forEach(commit => {
       const key = getCommitKey(commit.repoId, commit.hash);
       if (store.commitFilesByKey[key] || store.loadingFilesByKey[key]) return;
@@ -454,7 +453,7 @@ export function GitLogApp() {
         includeMergeParentChanges: commit.parents.length >= 2,
       } satisfies LogToHostMsg);
     });
-  }, [isCommitListReloading, selectedCommits, setCommitFiles, setLoadingFiles, store.commitFilesByKey, store.loadingFilesByKey]);
+  }, [isCommitListReloading, selectedCommits, setCommitFiles, setLoadingFiles, store.commitFilesByKey, store.commits.length, store.loadingFilesByKey]);
 
   const repoColors = useMemo(() => {
     const map: Record<string, string> = {};
@@ -489,25 +488,24 @@ export function GitLogApp() {
   );
   const laidOutCommits = useMemo(
     () => {
-      // The first commit batch and the permanent graph topology are loaded in
-      // parallel. Rendering the batch provisionally makes anonymous commits
-      // change lanes and colors once the topology arrives, so reveal the graph
-      // only when both halves of the same generation are ready.
-      if (isCommitListReloading) return [];
+      if (isCommitListReloading && store.commits.length === 0) return [];
+      if (store.commits.length === 0) return [];
       if (hasTopologyBreakingFilter) {
         return assignLanes(store.commits, true, repoKindById, remoteNamesByRepo);
       }
       if (hasRevisionFilter) {
-        // JetBrains filters the visible rows but preserves the permanent
-        // --all graph layout, so hidden branch heads still determine which
-        // side of a merge owns the leftmost lane.
         return assignLanes(
           store.commits,
           false,
           repoKindById,
           remoteNamesByRepo,
-          store.graphCommits,
+          store.graphCommits.length > 0 ? store.graphCommits : undefined,
         );
+      }
+      if (laidOutGraphCommits.length === 0) {
+        // Provisional layout while graph commits are arriving in background:
+        // Render commits immediately to make first screen instant!
+        return assignLanes(store.commits, false, repoKindById, remoteNamesByRepo);
       }
       return layoutVisibleCommits(
         store.commits,
@@ -887,8 +885,8 @@ export function GitLogApp() {
             onLoadMore={handleLoadMore}
             hasMore={store.hasMore && !isCommitListReloading && !store.backgroundLoading}
             storeHasMore={store.hasMore}
-            loading={isCommitListReloading}
-            backgroundLoading={store.backgroundLoading}
+            loading={isCommitListReloading && store.commits.length === 0}
+            backgroundLoading={store.backgroundLoading || store.loadingGraphCommits}
             expandedRepoIds={expandedRepoIds}
             onToggleRepoName={toggleRepoName}
             scrollToHash={store.pendingScrollHash}

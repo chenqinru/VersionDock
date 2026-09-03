@@ -113,40 +113,34 @@ function CommitSkeleton() {
   );
 }
 
-const SKELETON_MIN_MS = 400;
-
 export function CommitList({ commits, selectedHashes, primarySelectedHash, repos, currentBranchByRepo, headHashByRepo, remoteNamesByRepo = {}, onSelect, onLoadMore, hasMore, storeHasMore, loading, backgroundLoading, expandedRepoIds, onToggleRepoName, scrollToHash, onScrolledToHash }: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   // Start as true — skeleton is always shown until commits arrive (handles first load correctly)
   const [showSkeleton, setShowSkeleton] = useState(true);
   const skeletonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shownSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (commits.length === 0 && !storeHasMore) {
-      // The server confirmed no commits (isLast=true with an empty batch).
-      // An empty repo list can be a transient state while workspace discovery is still running.
-      if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current);
+    if (skeletonTimerRef.current) {
+      clearTimeout(skeletonTimerRef.current);
+      skeletonTimerRef.current = null;
+    }
+
+    if (commits.length > 0) {
+      // Commits have arrived: hide skeleton immediately for instant responsiveness
       setShowSkeleton(false);
       return;
     }
+
+    if (commits.length === 0 && !storeHasMore) {
+      // The server confirmed no commits (isLast=true with an empty batch).
+      setShowSkeleton(false);
+      return;
+    }
+
     if (loading && commits.length === 0) {
-      // Reset: show skeleton again (e.g. on reload/refresh)
-      if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current);
       setShowSkeleton(true);
-      shownSinceRef.current = shownSinceRef.current ?? Date.now();
-      return () => { if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current); };
     }
-
-    if (showSkeleton) {
-      const elapsed = shownSinceRef.current ? Date.now() - shownSinceRef.current : SKELETON_MIN_MS;
-      const remaining = Math.max(0, SKELETON_MIN_MS - elapsed);
-      if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current);
-      skeletonTimerRef.current = setTimeout(() => setShowSkeleton(false), remaining);
-    }
-
-    return () => { if (skeletonTimerRef.current) clearTimeout(skeletonTimerRef.current); };
-  }, [commits.length, loading, showSkeleton, storeHasMore]);
+  }, [commits.length, loading, storeHasMore]);
 
   const [localExpandedRepos, setLocalExpandedRepos] = useState<Set<string>>(new Set());
   const expandedRepos = expandedRepoIds ?? localExpandedRepos;
