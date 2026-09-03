@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, forwardRef } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, forwardRef } from 'react';
 import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { isPrimaryBranch } from '../../shared/branchUtils';
 import { Codicon } from '../../shared/Codicon';
@@ -143,10 +143,44 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   onCheckout, onMerge, onRebase, onCompareWithCurrent, onShowWorktreeDiff, onDelete, onFetchRepo: _onFetchRepo, onPull, onPush,
   onCheckoutTag, onMergeTag, onPushTag, onDeleteTag, onCollapse,
 }, ref) {
-  const [collapsed, setCollapsed] = useState<Set<SectionKey>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<SectionKey>>(() => {
+    const initial = new Set<SectionKey>();
+    // Auto-collapse tags section when there are many tags and not currently detached on a tag
+    if (tags.length > 25 && !branches.some(b => b.detachedTag)) {
+      initial.add('tags');
+    }
+    return initial;
+  });
+  const [localFilter, setLocalFilter] = useState(filter);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeItem, setActiveItem] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ merged: MergedBranch; x: number; y: number } | null>(null);
   const [tagContextMenu, setTagContextMenu] = useState<{ mergedTag: MergedTag; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    setLocalFilter(filter);
+  }, [filter]);
+
+  useEffect(() => () => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+  }, []);
+
+  const handleInputChange = (value: string) => {
+    setLocalFilter(value);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    if (!value.trim()) {
+      onFilterChange('');
+      return;
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      onFilterChange(value);
+    }, 150);
+  };
 
   function toggle(key: SectionKey) {
     setCollapsed(prev => {
@@ -229,8 +263,8 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
             <Codicon name="filter" style={styles.searchIcon} />
             <input
               style={styles.searchInput}
-              value={filter}
-              onChange={e => onFilterChange(e.target.value)}
+              value={localFilter}
+              onChange={e => handleInputChange(e.target.value)}
               placeholder={t('Filter branches & tags...')}
             />
           </div>
