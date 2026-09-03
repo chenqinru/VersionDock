@@ -450,9 +450,57 @@ export class GitService {
     }
   }
 
+  private getCatFileFlag(): string {
+    const mode = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<'filters' | 'textconv' | 'none'>('git.catFileFilterMode', 'filters');
+    if (mode === 'textconv') return '--textconv';
+    if (mode === 'none') return '-p';
+    return '--filters';
+  }
+
+  /**
+   * Reads file content from a Git revision or stage applying configured content transformations
+   * (e.g. Git LFS smudge filters or format textconv), with safe fallback to raw content.
+   */
+  async readGitFileContent(revision: string, filePath: string): Promise<string> {
+    const relPath = this.normalizeRepoPath(filePath);
+    const spec = revision ? `${this.safeRevisionArg(revision)}:${relPath}` : `:${relPath}`;
+    const flag = this.getCatFileFlag();
+
+    if (flag === '-p') {
+      try {
+        return await this.git.raw(['cat-file', '-p', spec]);
+      } catch {
+        return '';
+      }
+    }
+
+    try {
+      return await this.git.raw(['cat-file', flag, spec]);
+    } catch {
+      // Fall back to raw cat-file -p if filters or textconv fail
+      try {
+        return await this.git.raw(['cat-file', '-p', spec]);
+      } catch {
+        return '';
+      }
+    }
+  }
+
   private async showStageFileBuffer(stage: 1 | 2 | 3, filePath: string): Promise<Buffer> {
     const relPath = this.normalizeRepoPath(filePath);
-    return this.git.showBuffer(`:${stage}:${relPath}`);
+    const spec = `:${stage}:${relPath}`;
+    const flag = this.getCatFileFlag();
+    if (flag === '-p') {
+      return this.git.showBuffer(spec);
+    }
+    try {
+      const output = await this.git.raw(['cat-file', flag, spec]);
+      return Buffer.from(output, 'binary');
+    } catch {
+      return this.git.showBuffer(spec);
+    }
   }
 
   private async showStageFileBufferOrEmpty(stage: 1 | 2 | 3, filePath: string): Promise<Buffer> {
@@ -1616,13 +1664,8 @@ export class GitService {
       if (diff.isBinary) return diff;
       const originalPath = this.normalizeRepoPath(diff.oldPath || relPath);
       const modifiedPath = this.normalizeRepoPath(diff.newPath || relPath);
-      if (vsRepo) {
-        diff.originalContent = await vsRepo.show(`${hash}~1`, originalPath).catch(() => '');
-        diff.modifiedContent = await vsRepo.show(hash, modifiedPath).catch(() => '');
-      } else {
-        diff.originalContent = await this.git.raw(['show', `${hash}~1:${originalPath}`]).catch(() => '');
-        diff.modifiedContent = await this.git.raw(['show', `${hash}:${modifiedPath}`]).catch(() => '');
-      }
+      diff.originalContent = await this.readGitFileContent(`${hash}~1`, originalPath);
+      diff.modifiedContent = await this.readGitFileContent(hash, modifiedPath);
       return diff;
     } catch { return null; }
   }
@@ -1644,17 +1687,9 @@ export class GitService {
         diff.hunks = [];
         return diff;
       }
-      if (vsRepo) {
-        diff.originalContent = await vsRepo.show('HEAD', relPath).catch(() => '');
-        diff.modifiedContent = await vsRepo.show('', relPath).catch(() => {
-          return workingFile?.content ?? '';
-        });
-      } else {
-        diff.originalContent = await this.git.show([`HEAD:${relPath}`]).catch(() => '');
-        diff.modifiedContent = await this.git.raw(['show', `:${relPath}`]).catch(() => {
-          return workingFile?.content ?? '';
-        });
-      }
+      diff.originalContent = await this.readGitFileContent('HEAD', relPath);
+      const stagedModified = await this.readGitFileContent('', relPath);
+      diff.modifiedContent = stagedModified || (workingFile?.content ?? '');
       return diff;
     } catch { return null; }
   }
@@ -1686,9 +1721,7 @@ export class GitService {
       }
       // `git diff` compares index → working tree, so the left side must be the
       // index version (not HEAD when the same file is both staged and modified).
-      diff.originalContent = vsRepo
-        ? await vsRepo.show('', relPath).catch(() => this.git.raw(['show', `:${relPath}`]).catch(() => ''))
-        : await this.git.raw(['show', `:${relPath}`]).catch(() => '');
+      diff.originalContent = await this.readGitFileContent('', relPath);
       diff.modifiedContent = workingFile?.content ?? '';
       return diff;
     } catch { return null; }
@@ -1763,7 +1796,7 @@ export class GitService {
       if (diff.isBinary) return diff;
       const originalPath = this.normalizeRepoPath(diff.oldPath || relPath);
       const workingFile = this.readWorkingTreeFile(diff.newPath || relPath);
-      diff.originalContent = await this.git.show([`${safeBaseRef}:${originalPath}`]).catch(() => '');
+      diff.originalContent = await this.readGitFileContent(safeBaseRef, originalPath);
       if (workingFile?.isBinary) {
         diff.isBinary = true;
         diff.hunks = [];
@@ -2407,11 +2440,17 @@ export class GitService {
       // If remotes are empty VS Code would push to an unknown remote (exit 128).
       // Repos where VS Code lists no remotes are typically SSH-keyed or use a
       // system credential helper, so falling back to simple-git is safe there.
+      const useSafeForcePush = vscode.workspace
+        .getConfiguration('versiondock')
+        .get<boolean>('git.useSafeForcePush', true);
+
       if (vsRepo && vsRepo.state.remotes.length > 0) {
         const branchName = vsRepo.state.HEAD?.name;
         const hasUpstream = !!vsRepo.state.HEAD?.upstream;
         const targetRemote = remote ?? vsRepo.state.HEAD?.upstream?.remote ?? vsRepo.state.remotes[0]?.name ?? 'origin';
-        const forceMode = force ? ForcePushMode.ForceWithLease : undefined;
+        const forceMode = force
+          ? (useSafeForcePush ? ForcePushMode.ForceWithLease : ForcePushMode.Force)
+          : undefined;
         await vsRepo.push(targetRemote, branchName, !hasUpstream, forceMode);
         return;
       }
@@ -2429,7 +2468,7 @@ export class GitService {
       const args = ['push'];
       if (!hasUpstream) args.push('--set-upstream', targetRemote, branchName);
       else if (remote) args.push(remote, branchName);
-      if (force) args.push('--force-with-lease');
+      if (force) args.push(useSafeForcePush ? '--force-with-lease' : '--force');
       await this.git.raw(args);
     });
   }
@@ -2611,9 +2650,23 @@ export class GitService {
 
   async fetchAll(): Promise<void> {
     return this.withWriteLock(async () => {
+      const fetchTags = vscode.workspace
+        .getConfiguration('versiondock')
+        .get<'auto' | 'all' | 'none'>('git.fetchTags', 'auto');
+
       const vsRepo = this.vsRepo();
-      if (vsRepo && vsRepo.state.remotes.length > 0) { await vsRepo.fetch({ all: true, prune: true }); return; }
-      await this.git.fetch(['--all', '--prune']);
+      if (fetchTags === 'auto' && vsRepo && vsRepo.state.remotes.length > 0) {
+        await vsRepo.fetch({ all: true, prune: true });
+        return;
+      }
+
+      const args = ['--all', '--prune'];
+      if (fetchTags === 'all') {
+        args.push('--tags');
+      } else if (fetchTags === 'none') {
+        args.push('--no-tags');
+      }
+      await this.git.fetch(args);
     });
   }
 
@@ -3298,24 +3351,14 @@ export class GitService {
 
   async getStashFileContent(stashRef: string, filePath: string): Promise<string> {
     const relPath = this.normalizeRepoPath(filePath);
-    try {
-      return await this.git.show([`${stashRef}:${relPath}`]);
-    } catch {
-      try {
-        return await this.git.show([`${stashRef}^3:${relPath}`]);
-      } catch {
-        return '';
-      }
-    }
+    const content = await this.readGitFileContent(stashRef, relPath);
+    if (content) return content;
+    return await this.readGitFileContent(`${stashRef}^3`, relPath);
   }
 
   async getStashParentFileContent(stashRef: string, filePath: string): Promise<string> {
     const relPath = this.normalizeRepoPath(filePath);
-    try {
-      return await this.git.show([`${stashRef}^1:${relPath}`]);
-    } catch {
-      return '';
-    }
+    return await this.readGitFileContent(`${stashRef}^1`, relPath);
   }
 
   // ── Unpushed commits ──────────────────────────────────────────────────────

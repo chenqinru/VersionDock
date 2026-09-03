@@ -300,6 +300,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private prevHeads = new Map<string, string>();      // repoId → branch name
   private prevCommits = new Map<string, string>();    // repoId → commit hash
   private prevUntracked = new Map<string, Set<string>>(); // repoId → known untracked paths
+  private readonly gitignoreRulesCache = new Map<string, string[]>();
   private initialStatusDone = false;
   private repositoryGeneration = 0;
   private refreshInFlight = false;
@@ -342,6 +343,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
         if (
           e.affectsConfiguration('versiondock.repositoryScanMaxDepth') ||
           e.affectsConfiguration('versiondock.repositoryScanIgnoredFolders') ||
+          e.affectsConfiguration('versiondock.git.excludeIgnoredDirectories') ||
           e.affectsConfiguration('versiondock.projectColors')
         ) {
           this.reinitialize();
@@ -533,6 +535,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.prevHeads.clear();
     this.prevCommits.clear();
     this.prevUntracked.clear();
+    this.gitignoreRulesCache.clear();
     this.initialStatusDone = false;
 
     const folders = vscode.workspace.workspaceFolders ?? [];
@@ -712,6 +715,29 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return rel.split(path.sep).filter(Boolean).length;
   }
 
+  private getGitignoreRules(dirPath: string): string[] {
+    if (this.gitignoreRulesCache.has(dirPath)) {
+      return this.gitignoreRulesCache.get(dirPath)!;
+    }
+    const gitignorePath = path.join(dirPath, '.gitignore');
+    try {
+      if (fs.existsSync(gitignorePath)) {
+        const content = fs.readFileSync(gitignorePath, 'utf8');
+        const rules = content
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .filter(line => line.length > 0 && !line.startsWith('#') && !line.startsWith('!'))
+          .map(line => line.replace(/\\/g, '/').replace(/\/+$/, ''));
+        this.gitignoreRulesCache.set(dirPath, rules);
+        return rules;
+      }
+    } catch {
+      // ignore read error
+    }
+    this.gitignoreRulesCache.set(dirPath, []);
+    return [];
+  }
+
   private isRepositoryScanIgnored(candidatePath: string, workspaceRoot: string): boolean {
     const rel = path.relative(workspaceRoot, candidatePath);
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false;
@@ -720,12 +746,51 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const parts = normalizedRel.split('/').filter(Boolean);
     if (parts.includes('.git')) return true;
 
-    return this.getRepositoryScanIgnoredFolders().some(rawPattern => {
+    const configuredIgnored = this.getRepositoryScanIgnoredFolders().some(rawPattern => {
       const pattern = rawPattern.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
       if (!pattern) return false;
       if (!pattern.includes('/')) return parts.includes(pattern);
       return normalizedRel === pattern || normalizedRel.startsWith(`${pattern}/`);
     });
+    if (configuredIgnored) return true;
+
+    const excludeIgnored = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<boolean>('git.excludeIgnoredDirectories', true);
+
+    if (excludeIgnored) {
+      const rootRules = this.getGitignoreRules(workspaceRoot);
+      for (const rule of rootRules) {
+        if (!rule) continue;
+        const cleanRule = rule.replace(/^\/+/, '');
+        if (!cleanRule.includes('/')) {
+          if (parts.includes(cleanRule)) return true;
+        } else {
+          if (normalizedRel === cleanRule || normalizedRel.startsWith(`${cleanRule}/`)) return true;
+        }
+      }
+
+      let currentDir = path.dirname(candidatePath);
+      while (currentDir.length >= workspaceRoot.length && currentDir.startsWith(workspaceRoot)) {
+        if (currentDir !== workspaceRoot) {
+          const dirRules = this.getGitignoreRules(currentDir);
+          const relToDir = path.relative(currentDir, candidatePath).split(path.sep).join('/');
+          const relParts = relToDir.split('/').filter(Boolean);
+          for (const rule of dirRules) {
+            if (!rule) continue;
+            const cleanRule = rule.replace(/^\/+/, '');
+            if (!cleanRule.includes('/')) {
+              if (relParts.includes(cleanRule)) return true;
+            } else {
+              if (relToDir === cleanRule || relToDir.startsWith(`${cleanRule}/`)) return true;
+            }
+          }
+        }
+        currentDir = path.dirname(currentDir);
+      }
+    }
+
+    return false;
   }
 
   private discoverNestedRepositories(

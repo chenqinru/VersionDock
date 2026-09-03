@@ -777,6 +777,22 @@
             "type": "object",
             "default": {},
             "description": "%configuration.projectColors.description%"
+          },
+          "versiondock.git.catFileFilterMode": {
+            "order": 15,
+            "type": "string",
+            "enum": [
+              "filters",
+              "textconv",
+              "none"
+            ],
+            "enumDescriptions": [
+              "%configuration.git.catFileFilterMode.enum.filters%",
+              "%configuration.git.catFileFilterMode.enum.textconv%",
+              "%configuration.git.catFileFilterMode.enum.none%"
+            ],
+            "default": "filters",
+            "description": "%configuration.git.catFileFilterMode.description%"
           }
         }
       },
@@ -821,6 +837,22 @@
             "type": "boolean",
             "default": false,
             "description": "%configuration.suppressDivergedBranchWarning.description%"
+          },
+          "versiondock.git.fetchTags": {
+            "order": 36,
+            "type": "string",
+            "enum": [
+              "auto",
+              "all",
+              "none"
+            ],
+            "enumDescriptions": [
+              "%configuration.git.fetchTags.enum.auto%",
+              "%configuration.git.fetchTags.enum.all%",
+              "%configuration.git.fetchTags.enum.none%"
+            ],
+            "default": "auto",
+            "description": "%configuration.git.fetchTags.description%"
           }
         }
       },
@@ -846,8 +878,14 @@
             },
             "description": "%configuration.repositoryScanIgnoredFolders.description%"
           },
-          "versiondock.graphMaxCommits": {
+          "versiondock.git.excludeIgnoredDirectories": {
             "order": 52,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.excludeIgnoredDirectories.description%"
+          },
+          "versiondock.graphMaxCommits": {
+            "order": 53,
             "type": "number",
             "default": 1000,
             "minimum": 100,
@@ -855,13 +893,13 @@
             "description": "%configuration.graphMaxCommits.description%"
           },
           "versiondock.gitAnnotations.enabled": {
-            "order": 53,
+            "order": 54,
             "type": "boolean",
             "default": false,
             "description": "%configuration.gitAnnotationsEnabled.description%"
           },
           "versiondock.gitGhostText.enabled": {
-            "order": 54,
+            "order": 55,
             "type": "boolean",
             "default": true,
             "description": "%configuration.gitGhostTextEnabled.description%"
@@ -966,6 +1004,12 @@
             "type": "boolean",
             "default": true,
             "description": "%configuration.git.cherryPickAddSuffix.description%"
+          },
+          "versiondock.git.useSafeForcePush": {
+            "order": 96,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.useSafeForcePush.description%"
           }
         }
       },
