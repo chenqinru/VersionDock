@@ -12,6 +12,7 @@ import { buildCommitExplanationContext } from '../aiCommitExplanation/buildCommi
 import type { CommitExplanationCommit, CommitExplanationFile } from '../aiCommitExplanation/types';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { MergeParentChange } from '../types/messages';
+import { ShelveDocumentProvider } from '../utils/ShelveDocumentProvider';
 
 type CommitDetailFile = {
   repoId?: string;
@@ -57,6 +58,8 @@ type CommitDetailRepo = {
   repoId: string;
   resolveRepoPath(filePath: string): { absolutePath: string; relativePath: string };
   getFileDiff(repoId: string, hash: string, filePath: string): Promise<{ originalContent?: string; modifiedContent?: string } | null>;
+  getRevisionFileContents?(hash: string, filePath: string, status?: string): Promise<{ originalContent: string; modifiedContent: string; isBinary?: boolean }>;
+  getRevisionRangeFileContents?(fromHash: string | undefined, toHash: string, filePath: string): Promise<{ originalContent: string; modifiedContent: string; isBinary?: boolean }>;
 };
 
 type CommitDetailSelection = { repoId: string; hash: string };
@@ -285,11 +288,13 @@ async function createCommitDetailPanel(
         const status = msg.fileStatus ?? 'M';
         const diffHash = msg.hash ?? hash; // support merge commit files
         const fileName = pathMod.basename(msg.filePath);
-        const title = status === 'A'
-          ? t('{0} (added in {1})', fileName, diffHash.slice(0, 7))
-          : status === 'D'
-            ? t('{0} (deleted in {1})', fileName, diffHash.slice(0, 7))
-            : t('{0} ({1})', fileName, diffHash.slice(0, 7));
+        const title = msg.fromHash && msg.toHash
+          ? t('{0} ({1}..{2})', fileName, msg.fromHash, msg.toHash)
+          : status === 'A'
+            ? t('{0} (added in {1})', fileName, diffHash.slice(0, 7))
+            : status === 'D'
+              ? t('{0} (deleted in {1})', fileName, diffHash.slice(0, 7))
+              : t('{0} ({1})', fileName, diffHash.slice(0, 7));
         if (msg.fromHash && msg.toHash) {
           await openCommitRangeFileDiff(repo, msg.fromHash, msg.toHash, msg.filePath, status, title);
         } else {
@@ -574,7 +579,7 @@ async function createAggregatedCommitDetailPanel(
         const pathMod = await import('path');
         const fileName = pathMod.basename(msg.filePath);
         const title = msg.fromHash && msg.toHash
-          ? t('{0} ({1})', fileName, msg.toHash.slice(0, 7))
+          ? t('{0} ({1}..{2})', fileName, msg.fromHash, msg.toHash)
           : t('{0} ({1})', fileName, (msg.hash ?? firstCommit.hash).slice(0, 7));
         if (msg.fromHash && msg.toHash) {
           await openCommitRangeFileDiff(targetRepo, msg.fromHash, msg.toHash, msg.filePath, msg.fileStatus ?? 'M', title);
@@ -780,6 +785,34 @@ function guessLanguageId(filePath: string): string | undefined {
   return map[ext];
 }
 
+async function openSvnDiffWithProvider(
+  repoId: string,
+  fromRef: string,
+  toRef: string,
+  relativePath: string,
+  originalContent: string,
+  modifiedContent: string,
+  title: string,
+): Promise<void> {
+  const provider = ShelveDocumentProvider.shared;
+  if (provider) {
+    const requestId = `${toRef}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const leftUri = ShelveDocumentProvider.buildUri(repoId, `svn-${requestId}-${fromRef}`, relativePath);
+    const rightUri = ShelveDocumentProvider.buildUri(repoId, `svn-${requestId}-${toRef}`, relativePath);
+    provider.set(leftUri, originalContent);
+    provider.set(rightUri, modifiedContent);
+    await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, { preview: true });
+    return;
+  }
+
+  const language = guessLanguageId(relativePath);
+  const [leftDoc, rightDoc] = await Promise.all([
+    vscode.workspace.openTextDocument({ language, content: originalContent }),
+    vscode.workspace.openTextDocument({ language, content: modifiedContent }),
+  ]);
+  await vscode.commands.executeCommand('vscode.diff', leftDoc.uri, rightDoc.uri, title, { preview: true });
+}
+
 async function openCommitFileDiff(
   repo: CommitDetailRepo,
   diffHash: string,
@@ -790,17 +823,31 @@ async function openCommitFileDiff(
   const resolvedPath = repo.resolveRepoPath(filePath);
   const relativePath = resolvedPath.relativePath;
   if (repo.kind === 'svn') {
-    const diff = await repo.getFileDiff(repo.repoId, diffHash, relativePath);
-    if (!diff) {
+    let originalContent = '';
+    let modifiedContent = '';
+    if (typeof repo.getRevisionFileContents === 'function') {
+      const contents = await repo.getRevisionFileContents(diffHash, relativePath, status);
+      if (contents.isBinary) {
+        vscode.window.showInformationMessage(t('Binary file — no diff available'));
+        return;
+      }
+      originalContent = contents.originalContent;
+      modifiedContent = contents.modifiedContent;
+    } else {
+      const diff = await repo.getFileDiff(repo.repoId, diffHash, relativePath);
+      if (!diff) {
+        vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+        return;
+      }
+      originalContent = diff.originalContent ?? '';
+      modifiedContent = diff.modifiedContent ?? '';
+    }
+    const normalizedStatus = (status ?? '').toUpperCase();
+    if (!originalContent && !modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
       vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
       return;
     }
-    const language = guessLanguageId(relativePath);
-    const [leftDoc, rightDoc] = await Promise.all([
-      vscode.workspace.openTextDocument({ language, content: diff.originalContent ?? '' }),
-      vscode.workspace.openTextDocument({ language, content: diff.modifiedContent ?? '' }),
-    ]);
-    await vscode.commands.executeCommand('vscode.diff', leftDoc.uri, rightDoc.uri, title, { preview: true });
+    await openSvnDiffWithProvider(repo.repoId, 'base', diffHash, relativePath, originalContent, modifiedContent, title);
     return;
   }
 
@@ -820,7 +867,33 @@ async function openCommitRangeFileDiff(
   title: string,
 ): Promise<void> {
   if (repo.kind === 'svn') {
-    await openCommitFileDiff(repo, toHash, filePath, status, title);
+    const resolvedPath = repo.resolveRepoPath(filePath);
+    const relativePath = resolvedPath.relativePath;
+    let originalContent = '';
+    let modifiedContent = '';
+    if (typeof repo.getRevisionRangeFileContents === 'function') {
+      const contents = await repo.getRevisionRangeFileContents(fromHash, toHash, relativePath);
+      if (contents.isBinary) {
+        vscode.window.showInformationMessage(t('Binary file — no diff available'));
+        return;
+      }
+      originalContent = contents.originalContent;
+      modifiedContent = contents.modifiedContent;
+    } else {
+      const diff = await repo.getFileDiff(repo.repoId, toHash, relativePath);
+      if (!diff) {
+        vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+        return;
+      }
+      originalContent = diff.originalContent ?? '';
+      modifiedContent = diff.modifiedContent ?? '';
+    }
+    const normalizedStatus = (status ?? '').toUpperCase();
+    if (!originalContent && !modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
+      vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+      return;
+    }
+    await openSvnDiffWithProvider(repo.repoId, fromHash, toHash, relativePath, originalContent, modifiedContent, title);
     return;
   }
 

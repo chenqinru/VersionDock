@@ -889,9 +889,14 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     if (repoCommits.length > 1) {
       const newest = repoCommits[0];
       const oldest = repoCommits[repoCommits.length - 1];
-      const fromHash = oldest.parents[0];
+      const fromHash = repoKindById[file.repoId] === 'svn'
+        ? previousSvnRevision(oldest.hash)
+        : oldest.parents[0];
       if (!fromHash) {
-        window.alert(t('Cannot compare this file because the oldest selected commit has no parent.'));
+        getVsCodeApi().postMessage({
+          type: 'LOG_WEBVIEW_ERROR',
+          message: t('Cannot compare this file because the oldest selected commit has no parent.'),
+        } satisfies LogToHostMsg);
         return;
       }
       getVsCodeApi().postMessage({
@@ -912,7 +917,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       fileStatus: file.status,
       lineRange,
     } satisfies LogToHostMsg);
-  }, [activeHistoryPath, activeLineRange, commits, onSelectFile]);
+  }, [activeHistoryPath, activeLineRange, commits, onSelectFile, repoKindById]);
 
   const handleOpenSource = useCallback((file: LogViewFileEntry) => {
     const isActiveHistoryFile = !!activeHistoryPath && isSameHistoryFilePath(activeHistoryPath, file.path);

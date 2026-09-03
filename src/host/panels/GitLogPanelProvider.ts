@@ -487,12 +487,14 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     hash: string,
     filePath: string,
     title: string,
-    options?: { fileStatus?: string; lineRange?: LineRange },
+    options?: { fileStatus?: string; lineRange?: LineRange; fromHash?: string },
   ): Promise<void> {
     const relativePath = repo.resolveRepoPath(filePath).relativePath;
     const lineRange = options?.lineRange;
+    const fromHash = options?.fromHash;
     const taskKey = scopedKey(
       repo.repoId,
+      fromHash ?? '',
       hash,
       relativePath,
       options?.fileStatus ?? '',
@@ -507,9 +509,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     const task = (async () => {
       // The file list already tells us whether this revision added or deleted the file.
-      // Fetching both revision contents directly avoids a redundant `svn diff` round trip;
+      // Fetching revision contents directly avoids a redundant `svn diff` round trip;
       // SvnService also caches and coalesces these immutable `svn cat` requests.
-      const contents = await repo.getRevisionFileContents(hash, relativePath, options?.fileStatus);
+      const contents = fromHash !== undefined
+        ? await repo.getRevisionRangeFileContents(fromHash, hash, relativePath)
+        : await repo.getRevisionFileContents(hash, relativePath, options?.fileStatus);
       if (contents.isBinary) {
         vscode.window.showInformationMessage(t('Binary file — no diff available'));
         return;
@@ -521,7 +525,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       const requestId = `${hash}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const leftUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${requestId}-base`, relativePath);
+      const leftUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${requestId}-${fromHash ?? 'base'}`, relativePath);
       const rightUri = ShelveDocumentProvider.buildUri(repo.repoId, `svn-${requestId}-${hash}`, relativePath);
       this.shelveDocProvider.set(leftUri, contents.originalContent);
       this.shelveDocProvider.set(rightUri, contents.modifiedContent);
@@ -908,8 +912,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               repo as SvnService,
               msg.toHash,
               msg.filePath,
-              t('{0} ({1})', fileName, msg.toHash),
-              { lineRange: msg.lineRange },
+              t('{0} ({1}..{2})', fileName, msg.fromHash, msg.toHash),
+              { fromHash: msg.fromHash, lineRange: msg.lineRange },
             );
             break;
           }

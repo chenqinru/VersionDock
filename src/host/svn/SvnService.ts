@@ -1846,11 +1846,15 @@ export class SvnService extends GitService {
 
   private isPathNotFoundError(error: unknown): boolean {
     const text = this.errorText(error).toLowerCase();
-    return text.includes('e160013')
-      || text.includes('e155010')
-      || text.includes('w155010')
+    return text.includes('160013')
+      || text.includes('155010')
+      || text.includes('e200009')
       || text.includes('path not found')
-      || text.includes("doesn't exist");
+      || text.includes('file not found')
+      || text.includes('item not found')
+      || text.includes("doesn't exist")
+      || text.includes("don't exist")
+      || text.includes('does not exist');
   }
 
   private async getRevisionContentOrUndefined(revision: string, relPath: string): Promise<string | undefined> {

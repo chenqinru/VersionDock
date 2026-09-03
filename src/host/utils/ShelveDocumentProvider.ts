@@ -9,6 +9,21 @@ export class ShelveDocumentProvider implements vscode.TextDocumentContentProvide
   static readonly scheme = 'versiondock-shelf';
   private static readonly maxStoredDocuments = 128;
   private static readonly maxStoredCharacters = 32 * 1024 * 1024;
+  private static instance?: ShelveDocumentProvider;
+
+  static register(provider: ShelveDocumentProvider): void {
+    ShelveDocumentProvider.instance = provider;
+  }
+
+  static get shared(): ShelveDocumentProvider | undefined {
+    return ShelveDocumentProvider.instance;
+  }
+
+  constructor() {
+    if (!ShelveDocumentProvider.instance) {
+      ShelveDocumentProvider.instance = this;
+    }
+  }
 
   private readonly _onDidChange = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidChange = this._onDidChange.event;
