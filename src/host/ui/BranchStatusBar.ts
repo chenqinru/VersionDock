@@ -13,6 +13,7 @@ import {
   getAbortOperationName,
   runAbortOperationFlow,
   type AbortOperationTarget,
+  type AbortOperationState,
 } from '../utils/abortOperation';
 import { formatRepoLabel } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
@@ -20,6 +21,7 @@ import { isRemoteRepositoryCancelled } from '../remote/types';
 import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
+import { isBranchProtected } from '../utils/branchProtection';
 
 type SvnIgnoreRepo = {
   addIgnoreEntry(entryPath: string): Promise<{ entry: string; directoryPath: string; alreadyExists: boolean }>;
@@ -609,7 +611,7 @@ export class BranchStatusBar implements vscode.Disposable {
         return state ? { meta: m, state } : null;
       })
     );
-    const inConflict = conflictStates.filter(Boolean) as { meta: RepoMeta; state: 'merge' | 'rebase' }[];
+    const inConflict = conflictStates.filter(Boolean) as { meta: RepoMeta; state: AbortOperationState }[];
 
     if (inConflict.length > 0) {
       const resolveConflictsLabel = inConflict.length === 1
@@ -1458,7 +1460,7 @@ export class BranchStatusBar implements vscode.Disposable {
     });
   }
 
-  private async abortOperation(meta: RepoMeta, state: 'merge' | 'rebase'): Promise<void> {
+  private async abortOperation(meta: RepoMeta, state: AbortOperationState): Promise<void> {
     await this.abortOperations([{ meta, state }]);
   }
 
@@ -2036,12 +2038,8 @@ export class BranchStatusBar implements vscode.Disposable {
       { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
       ...(operationState ? [
         {
-          label: operationState === 'merge'
-            ? `$(error) ${t('Abort Merge')}`
-            : `$(error) ${t('Abort Rebase')}`,
-          description: operationState === 'merge'
-            ? t('Merge in progress — abort and restore previous state')
-            : t('Rebase in progress — abort and restore previous state'),
+          label: `$(error) ${getAbortOperationLabel([{ meta, state: operationState }])}`,
+          description: getAbortOperationDescription([{ meta, state: operationState }]),
           action: () => this.abortOperation(meta, operationState),
         },
         { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
@@ -2462,6 +2460,10 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async deleteSingleRepo(branchName: string, meta: RepoMeta): Promise<void> {
+    if (isBranchProtected(branchName, undefined, meta.id)) {
+      vscode.window.showErrorMessage(t("Cannot delete protected branch '{0}'.", branchName));
+      return;
+    }
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
 
@@ -2695,6 +2697,10 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async deleteBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
+    if (metas.some(meta => isBranchProtected(branchName, undefined, meta.id))) {
+      vscode.window.showErrorMessage(t("Cannot delete protected branch '{0}'.", branchName));
+      return;
+    }
     const confirm = await vscode.window.showQuickPick(
       [
         { label: `$(trash) ${t('Delete')}`, description: branchName, value: 'delete' },

@@ -4,7 +4,7 @@ import type { RepoMeta } from '../types/git';
 import { t } from './l10n';
 import { formatRepoLabel } from './repoLabels';
 
-export type AbortOperationState = 'merge' | 'rebase';
+export type AbortOperationState = 'merge' | 'rebase' | 'cherry-pick' | 'revert';
 
 export type AbortOperationTarget = {
   meta: RepoMeta;
@@ -19,26 +19,33 @@ export type AbortOperationResult =
 export function getAbortOperationLabel(targets: AbortOperationTarget[]): string {
   const states = getTargetStates(targets);
   if (targets.length > 1) return getAbortOperationSelectTitle(states);
-  return states.has('merge') ? t('Abort Merge') : t('Abort Rebase');
+  if (states.has('merge')) return t('Abort Merge');
+  if (states.has('rebase')) return t('Abort Rebase');
+  if (states.has('cherry-pick')) return t('Abort Cherry-pick');
+  return t('Abort Revert');
 }
 
 export function getAbortOperationDescription(targets: AbortOperationTarget[]): string {
   const states = getTargetStates(targets);
   if (targets.length > 1) return getAbortOperationSelectPlaceholder(states);
   if (targets[0]?.meta.kind === 'svn' && states.has('merge')) return t('SVN conflicts detected — revert conflicted files');
-  return states.has('merge')
-    ? t('Merge in progress — abort and restore previous state')
-    : t('Rebase in progress — abort and restore previous state');
+  if (states.has('merge')) return t('Merge in progress — abort and restore previous state');
+  if (states.has('rebase')) return t('Rebase in progress — abort and restore previous state');
+  if (states.has('cherry-pick')) return t('Cherry-pick in progress — abort and restore previous state');
+  return t('Revert in progress — abort and restore previous state');
 }
 
 export function getAbortOperationName(state: AbortOperationState): string {
-  return state === 'merge' ? t('merge') : t('rebase');
+  if (state === 'merge') return t('merge');
+  if (state === 'rebase') return t('rebase');
+  if (state === 'cherry-pick') return t('cherry-pick');
+  return t('revert');
 }
 
 export async function collectAbortOperationTargets(
   manager: WorkspaceGitManager,
   repoIds?: string[],
-  allowedStates: AbortOperationState[] = ['merge', 'rebase'],
+  allowedStates: AbortOperationState[] = ['merge', 'rebase', 'cherry-pick', 'revert'],
 ): Promise<AbortOperationTarget[]> {
   const metas = manager.getRepoMetas();
   const metaById = new Map(metas.map(meta => [meta.id, meta]));
@@ -74,8 +81,12 @@ export async function runAbortOperationFlow(
   try {
     if (target.state === 'merge') {
       await repo.abortMerge();
-    } else {
+    } else if (target.state === 'rebase') {
       await repo.abortRebase();
+    } else if (target.state === 'cherry-pick' && 'cherryPickAbort' in repo) {
+      await (repo as { cherryPickAbort(): Promise<void> }).cherryPickAbort();
+    } else if (target.state === 'revert' && 'revertAbort' in repo) {
+      await (repo as { revertAbort(): Promise<void> }).revertAbort();
     }
     return { ok: true, target };
   } catch (error: unknown) {
@@ -91,14 +102,22 @@ function getAbortOperationSelectTitle(states: Set<AbortOperationState>): string 
   if (states.size > 1) return t('Abort Merge/Rebase — Select repository');
   return states.has('merge')
     ? t('Abort Merge — Select repository')
-    : t('Abort Rebase — Select repository');
+    : states.has('rebase')
+    ? t('Abort Rebase — Select repository')
+    : states.has('cherry-pick')
+    ? t('Abort Cherry-pick — Select repository')
+    : t('Abort Revert — Select repository');
 }
 
 function getAbortOperationSelectPlaceholder(states: Set<AbortOperationState>): string {
   if (states.size > 1) return t('Select the repository whose {0} should be aborted', t('merge/rebase'));
   return states.has('merge')
     ? t('Select the repository whose merge should be aborted')
-    : t('Select the repository whose rebase should be aborted');
+    : states.has('rebase')
+    ? t('Select the repository whose rebase should be aborted')
+    : states.has('cherry-pick')
+    ? t('Select the repository whose cherry-pick should be aborted')
+    : t('Select the repository whose revert should be aborted');
 }
 
 async function pickAbortOperationTarget(targets: AbortOperationTarget[]): Promise<AbortOperationTarget | undefined> {
@@ -122,7 +141,13 @@ async function pickAbortOperationTarget(targets: AbortOperationTarget[]): Promis
 }
 
 async function confirmAbortOperation(target: AbortOperationTarget): Promise<boolean> {
-  const action = target.state === 'merge' ? t('Abort Merge') : t('Abort Rebase');
+  const action = target.state === 'merge'
+    ? t('Abort Merge')
+    : target.state === 'rebase'
+    ? t('Abort Rebase')
+    : target.state === 'cherry-pick'
+    ? t('Abort Cherry-pick')
+    : t('Abort Revert');
   const message = target.meta.kind === 'svn' && target.state === 'merge'
     ? t('Abort SVN merge in {0}? This will revert conflicted SVN files and keep other local changes.', target.meta.name)
     : target.state === 'merge'

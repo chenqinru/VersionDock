@@ -2,13 +2,16 @@ import type { ConflictBlock, MergeConflictFile } from '../types/git';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const OURS_START = /^<{7} (.+)$/m;
-const BASE_START = /^\|{7} (.+)$/m;
-const SEPARATOR = /^={7}$/m;
-const THEIRS_END = /^>{7} (.+)$/m;
+const OURS_START = /^<{7}(?: (.*?))?$/;
+const BASE_START = /^\|{7}(?: (.*?))?$/;
+const SEPARATOR = /^={7}$/;
+const THEIRS_END = /^>{7}(?: (.*?))?$/;
+
+const HAS_OURS_START = /^<{7}(?: .*)?$/m;
+const HAS_THEIRS_END = /^>{7}(?: .*)?$/m;
 
 export function hasConflictMarkers(content: string): boolean {
-  return OURS_START.test(content) && THEIRS_END.test(content);
+  return HAS_OURS_START.test(content) && HAS_THEIRS_END.test(content);
 }
 
 export function parseConflictFile(absolutePath: string, repoId: string, relativePath?: string): MergeConflictFile | null {
@@ -21,7 +24,7 @@ export function parseConflictFile(absolutePath: string, repoId: string, relative
 
   if (!hasConflictMarkers(content)) return null;
 
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   const conflicts: ConflictBlock[] = [];
 
   let state: 'normal' | 'ours' | 'base' | 'theirs' = 'normal';
@@ -36,11 +39,12 @@ export function parseConflictFile(absolutePath: string, repoId: string, relative
     const theirsMatch = line.match(THEIRS_END);
 
     if (oursMatch && state === 'normal') {
-      oursLabel = oursMatch[1];
+      const label = oursMatch[1]?.trim() || 'OURS';
+      oursLabel = label;
       state = 'ours';
       currentBlock = {
         index: conflicts.length,
-        oursLabel: oursMatch[1],
+        oursLabel: label,
         theirsLabel: '',
         oursLines: [],
         baseLines: [],
@@ -49,11 +53,12 @@ export function parseConflictFile(absolutePath: string, repoId: string, relative
       };
     } else if (baseMatch && state === 'ours') {
       state = 'base';
-    } else if (line.match(SEPARATOR) && (state === 'ours' || state === 'base')) {
+    } else if (SEPARATOR.test(line) && (state === 'ours' || state === 'base')) {
       state = 'theirs';
     } else if (theirsMatch && state === 'theirs') {
-      theirsLabel = theirsMatch[1];
-      currentBlock!.theirsLabel = theirsMatch[1];
+      const label = theirsMatch[1]?.trim() || 'THEIRS';
+      theirsLabel = label;
+      currentBlock!.theirsLabel = label;
       currentBlock!.endLine = i;
       conflicts.push(currentBlock as ConflictBlock);
       currentBlock = null;

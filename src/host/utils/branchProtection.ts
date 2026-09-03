@@ -53,22 +53,27 @@ export function isBranchProtected(branchName: string, customPatterns?: string[],
     return false;
   }
 
-  // Strip remote prefix if present (e.g., "origin/main" -> "main")
-  const normalized = name.replace(/^remotes\/[^/]+\//, '');
+  // Strip remote prefix if present (e.g., "origin/main" -> "main", "remotes/origin/main" -> "main")
+  const withoutRemotesPrefix = name.replace(/^remotes\//, '');
+  const slashIdx = withoutRemotesPrefix.indexOf('/');
+  const normalized = slashIdx !== -1 ? withoutRemotesPrefix.slice(slashIdx + 1) : withoutRemotesPrefix;
 
   const patterns = customPatterns ?? getProtectedBranchPatterns(repoId);
   for (const pattern of patterns) {
     if (!pattern) continue;
     // Exact match or glob match
     if (pattern.includes('*') || pattern.includes('?')) {
-      if (globToRegExp(pattern).test(normalized) || globToRegExp(pattern).test(name)) {
+      const rx = globToRegExp(pattern);
+      if (rx.test(normalized) || rx.test(withoutRemotesPrefix) || rx.test(name)) {
         return true;
       }
     } else {
+      const p = pattern.toLowerCase();
       if (
-        normalized.toLowerCase() === pattern.toLowerCase() ||
-        name.toLowerCase() === pattern.toLowerCase() ||
-        name.toLowerCase().endsWith(`/${pattern.toLowerCase()}`)
+        normalized.toLowerCase() === p ||
+        withoutRemotesPrefix.toLowerCase() === p ||
+        name.toLowerCase() === p ||
+        name.toLowerCase().endsWith(`/${p}`)
       ) {
         return true;
       }

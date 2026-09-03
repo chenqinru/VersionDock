@@ -2361,9 +2361,8 @@ export class GitService {
     });
   }
 
-  async getMergeRebaseState(): Promise<'merge' | 'rebase' | null> {
-    const state = await this.getOperationState();
-    return state === 'merge' || state === 'rebase' ? state : null;
+  async getMergeRebaseState(): Promise<'merge' | 'rebase' | 'cherry-pick' | 'revert' | null> {
+    return this.getOperationState();
   }
 
   async abortMerge(): Promise<void> {
@@ -2814,6 +2813,9 @@ export class GitService {
   async deleteBranch(branchName: string, force: boolean): Promise<void> {
     return this.withWriteLock(async () => {
       await this.assertBranchOperationAllowed();
+      if (isBranchProtected(branchName, undefined, this.repoId)) {
+        throw new Error(t("Cannot delete protected branch '{0}'.", branchName));
+      }
       const vsRepo = this.vsRepo();
       if (vsRepo) { await vsRepo.deleteBranch(branchName, force); return; }
       await this.git.deleteLocalBranch(branchName, force);
@@ -2922,19 +2924,55 @@ export class GitService {
   async cherryPickMulti(hashes: string[]): Promise<void> {
     const addSuffix = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.cherryPickAddSuffix', true);
     return this.runStatusSensitiveOperation(async () => {
-      for (const hash of hashes) {
+      for (let i = 0; i < hashes.length; i++) {
+        const hash = hashes[i];
         const args = ['cherry-pick'];
         if (addSuffix) args.push('-x');
         args.push(hash);
-        await this.git.raw(args);
+        try {
+          await this.git.raw(args);
+        } catch (error: unknown) {
+          const remaining = hashes.slice(i + 1);
+          const shortHash = hash.slice(0, 7);
+          const detail = gitErrorDetail(error);
+          if (remaining.length > 0) {
+            throw new Error(t(
+              'Cherry-pick stopped at commit {0} ({1}/{2}): {3}. There are {4} remaining commit(s) not applied. Please resolve conflicts or abort the current cherry-pick before continuing.',
+              shortHash,
+              i + 1,
+              hashes.length,
+              detail,
+              remaining.length,
+            ));
+          }
+          throw new Error(t('Cherry-pick failed at commit {0}: {1}', shortHash, detail));
+        }
       }
     }, 'cherry-pick');
   }
 
   async revertCommits(hashes: string[]): Promise<void> {
     return this.runStatusSensitiveOperation(async () => {
-      for (const hash of hashes) {
-        await this.git.raw(['revert', '--no-edit', hash]);
+      for (let i = 0; i < hashes.length; i++) {
+        const hash = hashes[i];
+        try {
+          await this.git.raw(['revert', '--no-edit', hash]);
+        } catch (error: unknown) {
+          const remaining = hashes.slice(i + 1);
+          const shortHash = hash.slice(0, 7);
+          const detail = gitErrorDetail(error);
+          if (remaining.length > 0) {
+            throw new Error(t(
+              'Revert stopped at commit {0} ({1}/{2}): {3}. There are {4} remaining commit(s) not reverted.',
+              shortHash,
+              i + 1,
+              hashes.length,
+              detail,
+              remaining.length,
+            ));
+          }
+          throw new Error(t('Revert failed at commit {0}: {1}', shortHash, detail));
+        }
       }
     }, 'revert');
   }

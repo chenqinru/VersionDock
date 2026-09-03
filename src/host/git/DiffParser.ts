@@ -133,7 +133,8 @@ export function parseDiff(rawDiff: string, repoId: string): FileDiff[] {
   const results: FileDiff[] = [];
   if (!rawDiff.trim()) return results;
 
-  const fileChunks = rawDiff.split(/^diff --git /m).filter(Boolean);
+  const normalizedDiff = rawDiff.replace(/\r\n/g, '\n');
+  const fileChunks = normalizedDiff.split(/^diff --git /m).filter(Boolean);
 
   for (const chunk of fileChunks) {
     const lines = chunk.split('\n');
