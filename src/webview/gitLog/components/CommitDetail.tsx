@@ -732,18 +732,21 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       }
       return next;
     });
-    setLoadingCommitMessageKeys(new Set(missingTargets.map(target => scopedKey(target.repoId, target.hash))));
-    if (missingTargets.length === 0) return;
 
-    let cancelled = false;
+    if (missingTargets.length === 0) {
+      setLoadingCommitMessageKeys(new Set());
+      return;
+    }
+
     const pendingRequests = pendingRef.current;
     const requestIds: string[] = [];
+    setLoadingCommitMessageKeys(new Set(missingTargets.map(target => scopedKey(target.repoId, target.hash))));
     for (const target of missingTargets) {
       const cacheKey = scopedKey(target.repoId, target.hash);
       const requestId = generateId();
       requestIds.push(requestId);
       pendingRequests.set(requestId, (msg) => {
-        if (cancelled || msg.type !== 'LOG_COMMIT_MESSAGE_RESULT') return;
+        if (msg.type !== 'LOG_COMMIT_MESSAGE_RESULT') return;
         if (!msg.error) commitMessageCacheRef.current.set(cacheKey, msg.fullMessage);
         setFullCommitMessages(current => ({ ...current, [cacheKey]: msg.error ? '' : msg.fullMessage }));
         setLoadingCommitMessageKeys(current => {
@@ -759,11 +762,6 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
         hash: target.hash,
       } satisfies LogToHostMsg);
     }
-
-    return () => {
-      cancelled = true;
-      requestIds.forEach(requestId => pendingRequests.delete(requestId));
-    };
   }, [commit, commits, isMultiCommitSelection]);
 
   useEffect(() => {
@@ -789,14 +787,13 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     setLoadingAggregateBranchKeys(new Set(missingTargets.map(target => target.key)));
     if (missingTargets.length === 0) return;
 
-    let cancelled = false;
     const pendingRequests = pendingRef.current;
     const requestIds: string[] = [];
     for (const target of missingTargets) {
       const requestId = generateId();
       requestIds.push(requestId);
       pendingRequests.set(requestId, (msg) => {
-        if (cancelled || msg.type !== 'LOG_COMMIT_BRANCHES_RESULT') return;
+        if (msg.type !== 'LOG_COMMIT_BRANCHES_RESULT') return;
         containingBranchesCacheRef.current.set(target.key, msg.branches);
         setAggregateContainingBranches(current => ({ ...current, [target.key]: msg.branches }));
         setLoadingAggregateBranchKeys(current => {
@@ -814,8 +811,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     }
 
     return () => {
-      cancelled = true;
-      requestIds.forEach(requestId => pendingRequests.delete(requestId));
+      // do not cancel pending requests so they can populate the cache
     };
   }, [commits, isMultiCommitSelection]);
 
@@ -853,16 +849,24 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     setExpandedMergeParentKeys(new Set());
     setMergeParentFilesByKey({});
     setLoadingMergeParentKeys(new Set());
+
+    const cacheKey = scopedKey(commit.repoId, commit.hash);
+    const cached = containingBranchesCacheRef.current.get(cacheKey);
+    if (cached) {
+      // Instant hit from cache! 0ms rendering
+      setContainingBranches(cached);
+      setLoadingBranches(false);
+      return;
+    }
+
     setLoadingBranches(true);
     const pendingRequests = pendingRef.current;
-    const requestIds: string[] = [];
     const branchesRequestId = generateId();
-    requestIds.push(branchesRequestId);
     pendingRequests.set(branchesRequestId, (msg) => {
-      if (msg.type === 'LOG_COMMIT_BRANCHES_RESULT') {
-        setContainingBranches(msg.branches);
-        setLoadingBranches(false);
-      }
+      if (msg.type !== 'LOG_COMMIT_BRANCHES_RESULT') return;
+      containingBranchesCacheRef.current.set(cacheKey, msg.branches);
+      setContainingBranches(msg.branches);
+      setLoadingBranches(false);
     });
     getVsCodeApi().postMessage({
       type: 'LOG_REQUEST_COMMIT_BRANCHES',
@@ -870,10 +874,6 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       repoId: commit.repoId,
       hash: commit.hash,
     } satisfies LogToHostMsg);
-
-    return () => {
-      requestIds.forEach(requestId => pendingRequests.delete(requestId));
-    };
   }, [commit, isMultiCommitSelection]);
 
   const buildPathEntries = useCallback((targetFiles: LogViewFileEntry[]): LogCommitPathEntry[] => {
