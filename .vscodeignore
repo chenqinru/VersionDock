@@ -17,3 +17,13 @@ vite.config.ts
 MEMORY.md
 .claude/
 .github/
+.idea/**
+.DS_Store
+**/.DS_Store
+scripts/**
+*.vsix
+media/screenshots/**
+media/image/**
+media/icons/versiondock-logo.png
+media/icons/versiondock-logo-light.png
+media/icons/versiondock-logo-v2.png

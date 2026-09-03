@@ -1003,8 +1003,18 @@ export class WorkspaceGitManager implements vscode.Disposable {
     // Fallback: FileSystemWatcher when vscode.git is unavailable.
     // Watch .git/index (stage changes), .git/HEAD + refs (branch changes),
     // and all working-tree file creates/changes/deletes.
-    const onChanged = () => this.scheduleRefresh();
-    const onBranchChanged = () => { this.scheduleRefresh(); this.scheduleBranchRefresh(); };
+    const ignoredPathPattern = /(?:^|[\\/])(node_modules|\.git|\.svn|dist|build|target|out|\.next|\.nuxt|\.cache|vendor)(?:[\\/]|$)/;
+    const shouldIgnore = (uri?: vscode.Uri) => Boolean(uri && ignoredPathPattern.test(uri.fsPath));
+
+    const onChanged = (uri?: vscode.Uri) => {
+      if (shouldIgnore(uri)) return;
+      this.scheduleRefresh();
+    };
+    const onBranchChanged = (uri?: vscode.Uri) => {
+      if (shouldIgnore(uri)) return;
+      this.scheduleRefresh();
+      this.scheduleBranchRefresh();
+    };
 
     // .git internals
     const w1 = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.git/index'));
@@ -1023,8 +1033,18 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private setupSvnWatcher(repoPath: string): void {
-    const onChanged = () => this.scheduleRefresh();
-    const onBranchChanged = () => { this.scheduleRefresh(); this.scheduleBranchRefresh(); };
+    const ignoredPathPattern = /(?:^|[\\/])(node_modules|\.git|\.svn|dist|build|target|out|\.next|\.nuxt|\.cache|vendor)(?:[\\/]|$)/;
+    const shouldIgnore = (uri?: vscode.Uri) => Boolean(uri && ignoredPathPattern.test(uri.fsPath));
+
+    const onChanged = (uri?: vscode.Uri) => {
+      if (shouldIgnore(uri)) return;
+      this.scheduleRefresh();
+    };
+    const onBranchChanged = (uri?: vscode.Uri) => {
+      if (shouldIgnore(uri)) return;
+      this.scheduleRefresh();
+      this.scheduleBranchRefresh();
+    };
 
     const wcDb = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.svn/wc.db'));
     const entries = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(repoPath, '.svn/entries'));
@@ -1098,8 +1118,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.lastPublishedStatus = status;
     this.statusListeners.forEach(l => l(status));
 
+    const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', false);
     for (const repoStatus of status.repos) {
-      if (repoStatus.operationState === 'merge' && repoStatus.conflictCount === 0) {
+      if (repoStatus.operationState === 'merge' && repoStatus.conflictCount === 0 && autoCommitMerge) {
         void this.completeMergeIfResolved(repoStatus.repoId).catch(error => {
           this.logger.error('Repositories', 'Failed to auto-commit resolved merge', error, { repoId: repoStatus.repoId });
         });
@@ -1117,11 +1138,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
       return;
     }
     const op = repoStatus.operationState;
-    if (!op || op === 'merge') {
+    if (!op) {
       this.promptedResolvedOps.delete(repoStatus.repoId);
       return;
     }
-    if (op !== 'rebase' && op !== 'cherry-pick' && op !== 'revert') return;
+    if (op !== 'rebase' && op !== 'cherry-pick' && op !== 'revert' && op !== 'merge') return;
 
     const opKey = `${repoStatus.repoId}:${op}`;
     if (this.promptedResolvedOps.has(opKey)) return;
@@ -1131,6 +1152,33 @@ export class WorkspaceGitManager implements vscode.Disposable {
     if (!repo) return;
     const meta = this.repoMetas.get(repoStatus.repoId);
     const repoName = meta?.name ?? repoStatus.repoId;
+
+    if (op === 'merge') {
+      const commitLabel = t('Commit Merge');
+      const abortLabel = t('Abort Merge');
+      const message = t('VersionDock [{0}]: All conflicts resolved. Complete merge commit?', repoName);
+
+      void vscode.window.showInformationMessage(message, commitLabel, abortLabel).then(async choice => {
+        if (!choice) return;
+        if (choice === commitLabel) {
+          try {
+            await this.completeMergeIfResolved(repoStatus.repoId);
+            this.notifyBranchesChanged();
+          } catch (error: unknown) {
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, String(error)));
+          }
+        } else if (choice === abortLabel) {
+          try {
+            await repo.abortMerge();
+            this.notifyBranchesChanged();
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Operation aborted. The repository has been restored.', repoName));
+          } catch (error: unknown) {
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, String(error)));
+          }
+        }
+      });
+      return;
+    }
 
     const continueLabel = op === 'rebase'
       ? t('Continue Rebase')

@@ -423,11 +423,15 @@ export class MergeEditorProvider implements vscode.Disposable {
         try {
           const repo = this.manager.getRepo(repoId);
           if (!repo) throw new Error(t('Repo not found'));
+          const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', false);
           const mergeCommit = await repo.runWithGitWriteLock(async () => {
             if (msg.deleteFile) await repo.deleteMergedFile(relativePath);
             else await repo.saveMergedContent(relativePath, msg.resolvedContent);
             await repo.stageFiles([relativePath]);
-            return this.manager.completeMergeIfResolved(repoId);
+            if (autoCommitMerge) {
+              return this.manager.completeMergeIfResolved(repoId);
+            }
+            return undefined;
           });
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: true });
           this.logger.info('MergeEditor', 'Resolved file saved and staged', {
@@ -461,10 +465,13 @@ export class MergeEditorProvider implements vscode.Disposable {
         try {
           const repo = this.manager.getRepo(repoId);
           if (!repo) throw new Error(t('Repo not found'));
+          const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', false);
           await repo.runWithGitWriteLock(async () => {
             if (msg.type === 'MERGE_ACCEPT_OURS') await repo.acceptOurs(relativePath);
             else await repo.acceptTheirs(relativePath);
-            await this.manager.completeMergeIfResolved(repoId);
+            if (autoCommitMerge) {
+              await this.manager.completeMergeIfResolved(repoId);
+            }
           });
           post({ type: 'MERGE_SAVE_RESULT', requestId: msg.requestId, ok: true });
           this.logger.info('MergeEditor', 'Conflict side accepted', {

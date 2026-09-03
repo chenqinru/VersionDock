@@ -915,6 +915,12 @@
             "default": false,
             "description": "%configuration.git.noVerify.description%"
           },
+          "versiondock.git.autoCommitResolvedMerge": {
+            "order": 70.5,
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.git.autoCommitResolvedMerge.description%"
+          },
           "versiondock.guard.warnOnLargeFiles": {
             "order": 71,
             "type": "boolean",

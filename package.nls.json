@@ -113,6 +113,7 @@
   "configuration.gitAnnotationsEnabled.description": "Enable Git/SVN annotations in the editor.",
   "configuration.gitGhostTextEnabled.description": "Enable inline Git/SVN ghost text annotations in the editor.",
   "configuration.git.noVerify.description": "Bypass Git pre-commit and commit-msg hooks by running 'git commit --no-verify'.",
+  "configuration.git.autoCommitResolvedMerge.description": "Automatically commit the merge when all conflicts in a repository are resolved.",
   "configuration.guard.warnOnLargeFiles.description": "Warn before committing files larger than the specified size limit.",
   "configuration.guard.largeFileSizeLimitMB.description": "Size threshold in megabytes for large file commit warning (default: 50MB).",
   "configuration.guard.warnOnDetachedHead.description": "Warn before committing in detached HEAD or during an ongoing rebase, offering to create a branch.",

@@ -113,6 +113,7 @@
   "configuration.gitAnnotationsEnabled.description": "在编辑器中启用 Git/SVN 注释。",
   "configuration.gitGhostTextEnabled.description": "在编辑器中启用 Git/SVN 行内提示。",
   "configuration.git.noVerify.description": "通过使用 'git commit --no-verify' 跳过 Git pre-commit 和 commit-msg 钩子。",
+  "configuration.git.autoCommitResolvedMerge.description": "当仓库中的所有合并冲突解决后，自动完成合并提交（默认关闭，需手动或确认提交）。",
   "configuration.guard.warnOnLargeFiles.description": "提交大于指定大小限制的文件时发出警告。",
   "configuration.guard.largeFileSizeLimitMB.description": "提交大文件警告的大小阈值（单位：MB，默认 50MB）。",
   "configuration.guard.warnOnDetachedHead.description": "在游离的 HEAD 中或变基期间提交时发出警告，并提供创建分支选项。",
