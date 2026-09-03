@@ -133,6 +133,35 @@ function buildRepoId(rootPath: string, kind: RepoKind): string {
   return `${normalizePathForId(rootPath)}::${kind}`;
 }
 
+function isPathEqual(a: string, b: string): boolean {
+  const normA = path.normalize(a);
+  const normB = path.normalize(b);
+  return process.platform === 'win32'
+    ? normA.toLowerCase() === normB.toLowerCase()
+    : normA === normB;
+}
+
+function extractMainWorktreePath(repoPath: string): string | undefined {
+  const gitDir = path.join(repoPath, '.git');
+  try {
+    if (!fs.existsSync(gitDir) || !fs.statSync(gitDir).isFile()) return undefined;
+    const content = fs.readFileSync(gitDir, 'utf8').trim();
+    const match = content.match(/^gitdir:\s*(.+)$/m);
+    const gitdirPath = match?.[1]?.trim();
+    if (!gitdirPath) return undefined;
+    const resolvedGitdir = path.resolve(repoPath, gitdirPath);
+    // Worktree pointers point to a directory matching `.../.git/worktrees/<name>`
+    // Support POSIX `/` and Windows `\` delimiters and case insensitivity on Windows.
+    const worktreeMatch = resolvedGitdir.match(/^(.*?)[/\\]\.git[/\\]worktrees(?:[/\\]|$)/i);
+    if (worktreeMatch) {
+      return path.normalize(worktreeMatch[1]);
+    }
+  } catch {
+    // Linked worktree detection is best-effort
+  }
+  return undefined;
+}
+
 interface LogCandidate<T extends GraphCommitNode> {
   commit: T;
   logIndex: number;
@@ -467,24 +496,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const color = owner && !relativePath
       ? (customColors[owner.name] ?? PROJECT_COLORS[repoIndex % PROJECT_COLORS.length])
       : PROJECT_COLORS[repoIndex % PROJECT_COLORS.length];
-    let isWorktree = false;
-    let mainWorktreePath: string | undefined;
-    const gitDir = path.join(repoPath, '.git');
-    try {
-      if (fs.existsSync(gitDir) && fs.statSync(gitDir).isFile()) {
-        const content = fs.readFileSync(gitDir, 'utf8').trim();
-        const match = content.match(/^gitdir:\s*(.+)$/m);
-        const gitdirPath = match?.[1]?.trim();
-        if (gitdirPath) {
-          const worktreesIdx = gitdirPath.indexOf(`${path.sep}.git${path.sep}worktrees${path.sep}`);
-          if (worktreesIdx !== -1) {
-            mainWorktreePath = gitdirPath.slice(0, worktreesIdx);
-          }
-        }
-        const workspacePaths = workspaceFolders.map(folder => folder.uri.fsPath);
-        isWorktree = !!mainWorktreePath && workspacePaths.includes(mainWorktreePath);
-      }
-    } catch { /* linked worktree detection is best-effort */ }
+    const mainWorktreePath = extractMainWorktreePath(repoPath);
+    const workspacePaths = workspaceFolders.map(folder => folder.uri.fsPath);
+    const isWorktree = !!mainWorktreePath && workspacePaths.some(wp => isPathEqual(wp, mainWorktreePath));
     return { id: buildRepoId(repoPath, 'git'), name, rootPath: repoPath, color, depth: 0, isWorktree, mainWorktreePath, kind: 'git' };
   }
 
@@ -664,32 +678,16 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private detectLinkedWorktree(rootPath: string): { isWorktree: boolean; mainWorktreePath?: string } {
-    const gitDir = path.join(rootPath, '.git');
-    let mainWorktreePath: string | undefined;
-
-    try {
-      if (!fs.existsSync(gitDir) || !fs.statSync(gitDir).isFile()) {
-        return { isWorktree: false };
-      }
-
-      const content = fs.readFileSync(gitDir, 'utf8').trim();
-      const match = content.match(/^gitdir:\s*(.+)$/m);
-      if (match) {
-        // e.g. /abs/path/main/.git/worktrees/foo → strip /.git/worktrees/foo
-        const gitdirPath = match[1].trim();
-        const worktreesIdx = gitdirPath.indexOf(`${path.sep}.git${path.sep}worktrees${path.sep}`);
-        if (worktreesIdx !== -1) {
-          mainWorktreePath = gitdirPath.slice(0, worktreesIdx);
-        }
-      }
-    } catch {
+    const mainWorktreePath = extractMainWorktreePath(rootPath);
+    if (!mainWorktreePath) {
       return { isWorktree: false };
     }
 
     // Only treat as worktree if the main repo is also known/open in this workspace.
     // If opened standalone, behave as a normal repo.
     const workspacePaths = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
-    const isWorktree = !!mainWorktreePath && (workspacePaths.includes(mainWorktreePath) || this.repos.has(buildRepoId(mainWorktreePath, 'git')));
+    const isWorktree = workspacePaths.some(wp => isPathEqual(wp, mainWorktreePath))
+      || this.getRepo(buildRepoId(mainWorktreePath, 'git')) !== undefined;
     return { isWorktree, mainWorktreePath };
   }
 

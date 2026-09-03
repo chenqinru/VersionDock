@@ -2013,9 +2013,13 @@ export class SvnService extends GitService {
       const absPath = path.join(this.rootPath, relPath);
       this.assertSafeWorkingFsPath(absPath);
       if (fs.existsSync(absPath)) {
-        const stat = fs.lstatSync(absPath);
-        if (stat.isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
-        else fs.unlinkSync(absPath);
+        try {
+          await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
+        } catch {
+          const stat = fs.lstatSync(absPath);
+          if (stat.isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
+          else fs.unlinkSync(absPath);
+        }
       }
       return;
     }
@@ -2024,9 +2028,13 @@ export class SvnService extends GitService {
     this.assertSafeWorkingFsPath(absPath);
     await this.svn(['revert', '--depth', 'infinity', '--', this.workingCopyTarget(relPath)]);
     if (removeAfterRevert && fs.existsSync(absPath)) {
-      const stat = fs.lstatSync(absPath);
-      if (stat.isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
-      else fs.unlinkSync(absPath);
+      try {
+        await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
+      } catch {
+        const stat = fs.lstatSync(absPath);
+        if (stat.isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
+        else fs.unlinkSync(absPath);
+      }
     }
     this.blameCache.delete(relPath);
   }

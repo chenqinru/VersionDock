@@ -2250,7 +2250,11 @@ export class GitService {
     const isUntracked = status.trimStart().startsWith('??');
 
     if (isUntracked) {
-      fs.rmSync(absPath, { recursive: true, force: true });
+      try {
+        await vscode.workspace.fs.delete(vscode.Uri.file(absPath), { recursive: true, useTrash: true });
+      } catch {
+        fs.rmSync(absPath, { recursive: true, force: true });
+      }
       return;
     }
 
