@@ -1206,13 +1206,6 @@ function formatRefLabel(group: RefGroup): string {
   return group.label;
 }
 
-function headBadgeTitle(group: RefGroup, remoteHeadGroup?: RefGroup): string {
-  if (remoteHeadGroup) {
-    return t('HEAD -> {0} ({1})', group.label, `${remoteHeadGroup.remoteName || t('remote')}/HEAD`);
-  }
-  return t('HEAD -> {0}', group.label);
-}
-
 function badgeTitle(group: RefGroup): string {
   if (group.isSvnRevision) {
     return group.label === 'HEAD' ? t('SVN repository HEAD revision') : t('SVN working copy BASE revision');

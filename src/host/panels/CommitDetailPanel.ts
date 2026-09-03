@@ -188,7 +188,6 @@ async function createCommitDetailPanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
-      retainContextWhenHidden: true,
       localResourceRoots: [
         extensionUri,
         vscode.Uri.file(vscode.env.appRoot),
@@ -499,7 +498,6 @@ async function createAggregatedCommitDetailPanel(
     vscode.ViewColumn.One,
     {
       enableScripts: true,
-      retainContextWhenHidden: true,
       localResourceRoots: [
         extensionUri,
         vscode.Uri.file(vscode.env.appRoot),

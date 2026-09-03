@@ -1640,7 +1640,6 @@ export class GitService {
   async getFileDiff(repoId: string, hash: string, filePath: string): Promise<FileDiff | null> {
     try {
       const relPath = this.normalizeRepoPath(filePath);
-      const vsRepo = this.vsRepo();
       const commitLine = (await this.git.raw(['rev-list', '--parents', '-n', '1', hash])).trim().split(/\s+/);
       const parent = commitLine[1];
       let candidatePaths = [relPath];
@@ -1697,7 +1696,6 @@ export class GitService {
   async getUnstagedDiff(repoId: string, filePath: string): Promise<FileDiff | null> {
     try {
       const relPath = this.normalizeRepoPath(filePath);
-      const vsRepo = this.vsRepo();
       // Repository.diffWithHEAD(path) is `git diff HEAD`: it also includes
       // staged changes. The working-tree section must remain strictly unstaged,
       // matching `git diff -- <path>` and the simple-git fallback.

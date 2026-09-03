@@ -99,6 +99,17 @@ const FALLBACK_SCAN_SKIP_DIRS = new Set([
   'dist',
   'build',
   'out',
+  'target',
+  '.gradle',
+  'venv',
+  '.venv',
+  'coverage',
+  '.cache',
+  'Pods',
+  'DerivedData',
+  '.output',
+  'temp',
+  'tmp',
   '.next',
   '.nuxt',
   '.turbo',
@@ -113,8 +124,13 @@ function isWithinPath(parentPath: string, childPath: string): boolean {
   );
 }
 
+function normalizePathForId(fsPath: string): string {
+  const normalized = path.normalize(fsPath);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 function buildRepoId(rootPath: string, kind: RepoKind): string {
-  return `${path.normalize(rootPath)}::${kind}`;
+  return `${normalizePathForId(rootPath)}::${kind}`;
 }
 
 interface LogCandidate<T extends GraphCommitNode> {
@@ -221,6 +237,7 @@ function findNestedRepoPaths(
     const gitPath = path.join(currentPath, '.git');
     if (fs.existsSync(gitPath)) {
       discovered.push(currentPath);
+      return;
     }
 
     let entries: fs.Dirent[] = [];
@@ -1466,22 +1483,34 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   getRepo(repoId: string): GitService | undefined {
-    return this.repos.get(repoId);
+    const direct = this.repos.get(repoId);
+    if (direct || process.platform !== 'win32') return direct;
+    const lower = repoId.toLowerCase();
+    for (const [id, repo] of this.repos.entries()) {
+      if (id.toLowerCase() === lower) return repo;
+    }
+    return undefined;
   }
 
   normalizeRepoIds(repoIds: string[]): string[] {
     return Array.from(new Set(repoIds.map(repoId => {
-      if (this.repos.has(repoId)) return repoId;
+      if (this.getRepo(repoId)) return repoId;
       const gitRepoId = buildRepoId(repoId, 'git');
-      if (this.repos.has(gitRepoId)) return gitRepoId;
+      if (this.getRepo(gitRepoId)) return gitRepoId;
       const svnRepoId = buildRepoId(repoId, 'svn');
-      if (this.repos.has(svnRepoId)) return svnRepoId;
+      if (this.getRepo(svnRepoId)) return svnRepoId;
       return repoId;
     })));
   }
 
   getRepoMeta(repoId: string): RepoMeta | undefined {
-    return this.repoMetas.get(repoId);
+    const direct = this.repoMetas.get(repoId);
+    if (direct || process.platform !== 'win32') return direct;
+    const lower = repoId.toLowerCase();
+    for (const [id, meta] of this.repoMetas.entries()) {
+      if (id.toLowerCase() === lower) return meta;
+    }
+    return undefined;
   }
 
   getServicesForFile(filePath: string): GitService[] {
@@ -1767,8 +1796,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return allCommits.slice(skip, skip + limit);
   }
 
-  async getInterleavedGraphLog(repoIds: string[], svnLimit: number): Promise<GraphCommitNode[]> {
-    if (svnLimit <= 0) return [];
+  async getInterleavedGraphLog(repoIds: string[], maxCommits: number): Promise<GraphCommitNode[]> {
+    if (maxCommits <= 0) return [];
     const targets = repoIds.length > 0
       ? repoIds.map(id => this.repos.get(id)).filter(Boolean) as GitService[]
       : Array.from(this.repos.values());
@@ -1779,9 +1808,14 @@ export class WorkspaceGitManager implements vscode.Disposable {
         // Truncating this lightweight topology can change layout indices near
         // the newest commits when older branches merge, so Git must remain
         // complete even though the detailed commit list stays paginated.
+        // However, in ultra-large repositories (e.g. hundreds of thousands of commits),
+        // an unbounded topology query causes severe memory exhaustion (OOM) and UI freezing.
+        // We cap Git topology at a safe upper bound (50,000 commits) to preserve graph
+        // stability while preventing out-of-memory crashes.
         // SVN history is linear and may involve a remote request, so its
         // topology can safely retain the configured display limit.
-        return repo.getGraphLog(kind === 'svn' ? svnLimit : undefined);
+        const gitCap = 50_000;
+        return repo.getGraphLog(kind === 'svn' ? maxCommits : gitCap);
       }),
     );
     const graphLogs = results

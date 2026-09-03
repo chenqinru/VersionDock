@@ -25,6 +25,8 @@ import { AiCodeReviewProvider } from './panels/AiCodeReviewProvider';
 import { RemoteRepositoryService } from './remote/RemoteRepositoryService';
 import type { WorkspaceStatus } from './types/git';
 import { UpdateSummaryService } from './update/UpdateSummaryService';
+import { IncomingCommitsNotifier } from './update/IncomingCommitsNotifier';
+import { UnpushedCommitsNotifier } from './update/UnpushedCommitsNotifier';
 
 async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void> {
   const SHOWN_KEY = 'hasShownViewModeQuickpick';
@@ -65,104 +67,6 @@ async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void>
   }
 }
 
-async function maybeNotifyUnpushedCommits(manager: WorkspaceVcsManager, commitPanel: CommitPanelProvider): Promise<void> {
-  if (!vscode.workspace.getConfiguration('versiondock').get<boolean>('notifyOnUnpushedCommits', true)) return;
-
-  // SVN commits are sent directly to the server and do not have a Git-style
-  // "unpushed" state. Avoid invoking the inherited Git implementation for SVN
-  // working copies during startup refresh.
-  const metas = manager.getRepoMetas().filter(m => m.kind !== 'svn');
-  const countResults = await Promise.allSettled(
-    metas.map(async m => {
-      const repo = manager.getRepo(m.id);
-      return repo ? repo.getUnpushedCount() : 0;
-    })
-  );
-
-  const counts = countResults
-    .filter((r): r is PromiseFulfilledResult<number> => r.status === 'fulfilled')
-    .map(r => r.value);
-
-  const totalAhead = counts.reduce((sum, c) => sum + c, 0);
-  if (totalAhead === 0) return;
-
-  const reposWithAhead = counts.filter(c => c > 0).length;
-  const message = reposWithAhead === 1
-    ? (totalAhead === 1
-      ? t('VersionDock: {0} unpushed commit ready to push.', totalAhead)
-      : t('VersionDock: {0} unpushed commits ready to push.', totalAhead))
-    : (totalAhead === 1
-      ? t('VersionDock: {0} unpushed commit across {1} repository.', totalAhead, reposWithAhead)
-      : t('VersionDock: {0} unpushed commits across {1} repositories.', totalAhead, reposWithAhead));
-
-  const goToPush = t('Go to Push');
-  const picked = await vscode.window.showInformationMessage(message, goToPush, t('Dismiss'));
-
-  if (picked === goToPush) {
-    await vscode.commands.executeCommand('versiondock.commitPanel.focus');
-    commitPanel.switchToTab('push');
-  }
-}
-
-async function maybeNotifyIncomingCommits(
-  manager: WorkspaceVcsManager,
-  globalState: vscode.Memento,
-  updateSummaryService: UpdateSummaryService,
-): Promise<void> {
-  const DO_NOT_SHOW_KEY = 'doNotShowIncomingCommitsNotification';
-  if (globalState.get<boolean>(DO_NOT_SHOW_KEY)) return;
-  if (!vscode.workspace.getConfiguration('versiondock').get<boolean>('notifyOnIncomingCommits', true)) return;
-
-  const metas = manager.getRepoMetas().filter(m => !m.isWorktree);
-  const branchResults = await Promise.allSettled(
-    metas.map(async m => {
-      const repo = manager.getRepo(m.id);
-      return repo ? repo.getCurrentBranch() : null;
-    })
-  );
-
-  type BranchInfo = Awaited<ReturnType<NonNullable<ReturnType<WorkspaceVcsManager['getRepo']>>['getCurrentBranch']>>;
-  const branches = branchResults
-    .filter((r): r is PromiseFulfilledResult<BranchInfo | null> => r.status === 'fulfilled')
-    .map(r => r.value)
-    .filter((b): b is BranchInfo => b !== null);
-
-  const totalBehind = branches.reduce((sum, b) => sum + (b.aheadBehind?.behind ?? 0), 0);
-  if (totalBehind === 0) return;
-
-  const reposWithBehind = branches.filter(b => (b.aheadBehind?.behind ?? 0) > 0).length;
-  const message = reposWithBehind === 1
-    ? (totalBehind === 1
-      ? t('VersionDock: {0} incoming commit available to pull.', totalBehind)
-      : t('VersionDock: {0} incoming commits available to pull.', totalBehind))
-    : (totalBehind === 1
-      ? t('VersionDock: {0} incoming commit across {1} repository.', totalBehind, reposWithBehind)
-      : t('VersionDock: {0} incoming commits across {1} repositories.', totalBehind, reposWithBehind));
-
-  const pull = t('Pull');
-  const dismiss = t('Dismiss');
-  const doNotShow = t("Don't show again");
-
-  const picked = await vscode.window.showInformationMessage(message, pull, dismiss, doNotShow);
-
-  if (picked === doNotShow) {
-    await globalState.update(DO_NOT_SHOW_KEY, true);
-  } else if (picked === pull) {
-    let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling…'), cancellable: false },
-      async () => {
-        results = await updateSummaryService.runAll(metas.map(meta => ({
-          repoId: meta.id,
-          execute: repo => repo.pull(),
-        })));
-      }
-    );
-    manager.notifyBranchesChanged();
-    await updateSummaryService.notify(results);
-  }
-}
-
 async function maybeNotifyConflicts(status: WorkspaceStatus): Promise<void> {
   const conflictCount = status.repos.reduce((total, repo) => total + repo.conflictCount, 0);
   if (conflictCount === 0) return;
@@ -183,6 +87,8 @@ async function runStartupRefresh(
   globalState: vscode.Memento,
   logger: VersionDockLogger,
   updateSummaryService: UpdateSummaryService,
+  incomingCommitsNotifier: IncomingCommitsNotifier,
+  unpushedCommitsNotifier: UnpushedCommitsNotifier,
 ): Promise<void> {
   const startedAt = Date.now();
   const fetchOnStartup = vscode.workspace.getConfiguration('versiondock').get<boolean>('fetchOnStartup', false);
@@ -196,8 +102,8 @@ async function runStartupRefresh(
     const status = await manager.getAllStatusesFresh();
     badge.update(status);
     await maybeNotifyConflicts(status);
-    await maybeNotifyIncomingCommits(manager, globalState, updateSummaryService);
-    await maybeNotifyUnpushedCommits(manager, commitPanel);
+    await incomingCommitsNotifier.checkAndNotify();
+    await unpushedCommitsNotifier.checkAndNotify();
     logger.info('Startup', 'Repository refresh completed', {
       repositoryCount: status.repos.length,
       durationMs: Date.now() - startedAt,
@@ -253,7 +159,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.globalStorageUri.fsPath,
   );
 
+  const incomingCommitsNotifier = new IncomingCommitsNotifier(
+    manager,
+    context.globalState,
+    updateSummaryService,
+    logger,
+  );
+
   const commitPanel = new CommitPanelProvider(context.extensionUri, manager, context.globalStorageUri.fsPath, shelveDocProvider, aiCommitMessageService, undefined, profileService, context.globalState, context.workspaceState, logger, updateSummaryService);
+
+  const unpushedCommitsNotifier = new UnpushedCommitsNotifier(
+    manager,
+    commitPanel,
+    logger,
+  );
 
   const logPanel = new GitLogPanelProvider(context.extensionUri, manager, shelveDocProvider, aiCommitMessageService, aiCommitExplanationService, logger, updateSummaryService);
   const mergeEditor = new MergeEditorProvider(context.extensionUri, manager, aiMergeConflictService, logger);
@@ -313,6 +232,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     profileService,
     remoteRepositoryService,
     annotationController,
+    incomingCommitsNotifier,
+    unpushedCommitsNotifier,
     vscode.commands.registerCommand('versiondock.manageRemoteAccounts', () => remoteRepositoryService.manageAccounts()),
     vscode.commands.registerCommand('versiondock.aiCommitMessage.editPrompt', () => aiCommitMessageService.editPrompt()),
     vscode.commands.registerCommand('versiondock.aiCommitMessage.resetPrompt', () => aiCommitMessageService.resetPrompt()),
@@ -338,7 +259,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     gitRepositoryCount: metas.filter(meta => meta.kind !== 'svn').length,
     svnRepositoryCount: metas.filter(meta => meta.kind === 'svn').length,
   });
-  void runStartupRefresh(manager, badge, commitPanel, context.globalState, logger, updateSummaryService);
+  void runStartupRefresh(manager, badge, commitPanel, context.globalState, logger, updateSummaryService, incomingCommitsNotifier, unpushedCommitsNotifier);
 }
 
 export function deactivate(): void {}

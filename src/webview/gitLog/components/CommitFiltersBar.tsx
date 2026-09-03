@@ -741,11 +741,12 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
     if (!open) return;
     const width = wrapRef.current?.clientWidth ?? 340;
     setIsDual(width >= 310);
+    const now = new Date();
     const curFrom = parseYMD(from);
     const curTo = parseYMD(to);
-    const left = curFrom ?? new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const right = curTo ?? new Date(today.getFullYear(), today.getMonth(), 1);
-    const activeSingle = curTo ?? curFrom ?? today;
+    const left = curFrom ?? new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const right = curTo ?? new Date(now.getFullYear(), now.getMonth(), 1);
+    const activeSingle = curTo ?? curFrom ?? now;
     setLeftYM({ year: left.getFullYear(), month: left.getMonth() });
     setRightYM({ year: right.getFullYear(), month: right.getMonth() });
     setSingleYM({ year: activeSingle.getFullYear(), month: activeSingle.getMonth() });
