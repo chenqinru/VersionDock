@@ -37,7 +37,7 @@ import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { runPushWithProtection } from '../utils/pushProtection';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
-import { checkCommitSafety } from '../utils/commitSafetyCheck';
+import { checkCommitSafety, isSensitivePath } from '../utils/commitSafetyCheck';
 import { sanitizeBranchName, validateBranchNameInput, getBranchCleanCharacter } from '../utils/branchNameSanitizer';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
 
@@ -921,9 +921,37 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ...(includeStaged ? [{ label: 'staged' as const, diff: () => service.getStagedDiff(status.repoId, file.path) }] : []),
           ...(includeUnstaged ? [{ label: 'working' as const, diff: () => service.getUnstagedDiff(status.repoId, file.path) }] : []),
         ];
+        const isSensitive = isSensitivePath(file.path);
         const sources: typeof groupEntries[number]['sources'] = [];
         for (const source of diffSources) {
           throwIfCancellationRequested(cancellationToken);
+          if (isSensitive) {
+            // Protect private credentials, env secrets, and keys from being sent to external AI providers.
+            // Provide a synthetic sanitized diff so AI can still acknowledge the file in the commit message.
+            const sanitizedDiff: FileDiff = {
+              repoId: status.repoId,
+              oldPath: file.path,
+              newPath: file.path,
+              isBinary: false,
+              isNew: file.status === 'added' || file.status === 'untracked',
+              isDeleted: file.status === 'deleted',
+              hunks: [{
+                header: '@@ -0,0 +1,1 @@',
+                oldStart: 0,
+                oldLines: 0,
+                newStart: 1,
+                newLines: 1,
+                lines: [{
+                  type: 'add',
+                  content: '[SENSITIVE FILE CONTENT EXCLUDED FOR PRIVACY]',
+                  newLineNo: 1,
+                }],
+              }],
+              language: 'plaintext',
+            };
+            sources.push({ label: source.label, diff: sanitizedDiff });
+            continue;
+          }
           const diff = await source.diff().catch(() => null);
           throwIfCancellationRequested(cancellationToken);
           sources.push({ label: source.label, diff });
@@ -2583,13 +2611,33 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         let trackedResults: Awaited<ReturnType<UpdateSummaryService['runAll']>> | undefined;
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling all repositories'), cancellable: false },
-          async () => {
+          async progress => {
             if (this.updateSummaryService) {
+              const metas = this.manager.getRepoMetas();
+              const count = metas.length;
               trackedResults = await this.updateSummaryService.runAll(
-                this.manager.getRepoMetas().map(meta => ({ repoId: meta.id, execute: repo => repo.pull() })),
+                metas.map(meta => ({ repoId: meta.id, execute: repo => repo.pull() })),
+                (completed, total, target) => {
+                  const name = this.manager.getRepoMeta(target.repoId)?.name ?? target.repoId;
+                  progress.report({
+                    message: `(${completed + 1}/${total}) ${name}`,
+                    increment: count > 0 ? 100 / count : undefined,
+                  });
+                },
               );
             } else {
-              const results = await this.manager.pullAll();
+              const metas = this.manager.getRepoMetas();
+              const count = metas.length;
+              const results = await this.manager.pullAll(
+                false,
+                (completed, total, repo) => {
+                  const name = this.manager.getRepoMeta(repo.repoId)?.name ?? repo.repoId;
+                  progress.report({
+                    message: `(${completed + 1}/${total}) ${name}`,
+                    increment: count > 0 ? 100 / count : undefined,
+                  });
+                },
+              );
               const failed = results.filter(r => !r.ok);
               if (failed.length === 0) return;
               const failedDescription = failed.map(result => {

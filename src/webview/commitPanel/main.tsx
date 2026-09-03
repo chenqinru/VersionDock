@@ -1036,7 +1036,14 @@ export function CommitApp() {
   const requestPushCommitFiles = useCallback((repoId: string, hash: string): Promise<PushCommitFile[]> => {
     const requestId = generateId();
     return new Promise(resolve => {
+      const timeout = setTimeout(() => {
+        if (pendingRef.current.has(requestId)) {
+          pendingRef.current.delete(requestId);
+          resolve([]);
+        }
+      }, 15_000);
       pendingRef.current.set(requestId, msg => {
+        clearTimeout(timeout);
         if (msg.type !== 'PUSH_COMMIT_FILES_RESULT') {
           resolve([]);
           return;
@@ -1101,7 +1108,13 @@ export function CommitApp() {
     setCommitMessageHistory([]);
     setCommitMessageHistoryLoading(true);
     send({ type: 'COMMIT_REQUEST_MESSAGE_HISTORY', requestId, repoIds, limit: COMMIT_MESSAGE_HISTORY_FETCH_LIMIT });
+    const timeout = setTimeout(() => {
+      if (activeCommitMessageHistoryRequestIdRef.current === requestId) {
+        setCommitMessageHistoryLoading(false);
+      }
+    }, 15_000);
     return () => {
+      clearTimeout(timeout);
       if (activeCommitMessageHistoryRequestIdRef.current === requestId) {
         activeCommitMessageHistoryRequestIdRef.current = null;
       }

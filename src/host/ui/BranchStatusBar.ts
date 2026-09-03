@@ -1527,15 +1527,25 @@ export class BranchStatusBar implements vscode.Disposable {
           title: t('VersionDock: Updating all projects…'),
           cancellable: false,
         },
-        async () => {
-          results = await this.updateSummaryService.runAll(metas.map(meta => ({
-            repoId: meta.id,
-            execute: repo => meta.kind === 'svn'
-              ? repo.pull()
-              : useRebase
-                ? repo.pullRebase()
-                : repo.pull(),
-          })));
+        async progress => {
+          const count = metas.length;
+          results = await this.updateSummaryService.runAll(
+            metas.map(meta => ({
+              repoId: meta.id,
+              execute: repo => meta.kind === 'svn'
+                ? repo.pull()
+                : useRebase
+                  ? repo.pullRebase()
+                  : repo.pull(),
+            })),
+            (completed, total, target) => {
+              const name = metas.find(m => m.id === target.repoId)?.name ?? target.repoId;
+              progress.report({
+                message: `(${completed + 1}/${total}) ${name}`,
+                increment: count > 0 ? 100 / count : undefined,
+              });
+            },
+          );
         }
       );
       this.manager.notifyBranchesChanged();

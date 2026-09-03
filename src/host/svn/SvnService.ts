@@ -355,8 +355,9 @@ export class SvnService extends GitService {
     suppressStatusUpdates?: SuppressStatusUpdates,
     refreshStatus?: RefreshStatus,
     publishMissingRemote?: import('../remote/types').PublishMissingRemote,
+    logger?: import('../utils/Logger').VersionDockLogger,
   ) {
-    super(repoId, rootPath, suppressStatusUpdates, refreshStatus, publishMissingRemote);
+    super(repoId, rootPath, suppressStatusUpdates, refreshStatus, publishMissingRemote, logger);
   }
 
   private async svn(args: string[], options: SvnCommandOptions = {}): Promise<string> {

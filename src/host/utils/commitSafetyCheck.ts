@@ -2,11 +2,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-const SENSITIVE_FILENAME_PATTERNS = [
+export const SENSITIVE_FILENAME_PATTERNS = [
   /^\.env(?:\.local|\.production|\.development|\.staging)?$/i,
   /\.(?:pem|key|pfx|p12|pkcs12|kdbx)$/i,
   /^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/i,
 ];
+
+export function isSensitivePath(filePath: string): boolean {
+  const baseName = path.basename(filePath);
+  return SENSITIVE_FILENAME_PATTERNS.some(pattern => pattern.test(baseName));
+}
 
 // Windows-reserved file base names (e.g. CON, PRN, AUX, NUL, COM1-9, LPT1-9)
 const WINDOWS_RESERVED_NAMES = new Set([

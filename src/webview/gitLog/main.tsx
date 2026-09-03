@@ -186,7 +186,17 @@ export function GitLogApp() {
     activeCompareRequestIdsRef.current[side] = requestId;
     const compareKey = scopedKey(compare.repoId, compare.baseRef, compare.targetRef);
     state.setComparePaneState(side, { loading: true }, append);
+    const timeout = setTimeout(() => {
+      if (pendingRef.current.has(requestId)) {
+        pendingRef.current.delete(requestId);
+        if (activeCompareRequestIdsRef.current[side] === requestId) {
+          activeCompareRequestIdsRef.current[side] = null;
+          useLogStore.getState().setComparePaneState(side, { loading: false }, append);
+        }
+      }
+    }, 15_000);
     pendingRef.current.set(requestId, (msg) => {
+      clearTimeout(timeout);
       if (msg.type !== 'LOG_COMPARE_COMMITS_RESULT' || msg.side !== side) return;
       if (activeCompareRequestIdsRef.current[side] !== requestId) return;
       activeCompareRequestIdsRef.current[side] = null;
@@ -423,7 +433,14 @@ export function GitLogApp() {
       if (store.commitFilesByKey[key] || store.loadingFilesByKey[key]) return;
       setLoadingFiles(commit.repoId, commit.hash, true);
       const requestId = generateId();
+      const timeout = setTimeout(() => {
+        if (pendingRef.current.has(requestId)) {
+          pendingRef.current.delete(requestId);
+          setLoadingFiles(commit.repoId, commit.hash, false);
+        }
+      }, 15_000);
       pendingRef.current.set(requestId, (msg) => {
+        clearTimeout(timeout);
         if (msg.type === 'LOG_COMMIT_FILES') {
           setCommitFiles(commit.repoId, commit.hash, msg.files, msg.mergeParentChanges);
         }

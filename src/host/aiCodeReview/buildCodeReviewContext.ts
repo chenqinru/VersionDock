@@ -5,6 +5,7 @@ import { getContextTokenBudget, splitLinesByTokenBudget } from '../ai/inputToken
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { FileDiff, FileStatus } from '../types/git';
 import { t } from '../utils/l10n';
+import { isSensitivePath } from '../utils/commitSafetyCheck';
 import type { CodeReviewAnchor, CodeReviewCandidate, CodeReviewContext, CodeReviewDiffSource } from './types';
 
 const RELATED_CONTEXT_RADIUS = 1;
@@ -212,10 +213,33 @@ export async function buildCodeReviewContext(
           ...(file.staged ? ['staged' as const] : []),
           ...(file.unstaged ? ['working' as const] : []),
         ];
+      const isSensitive = isSensitivePath(filePath);
       for (const source of sources) {
-        const diff = source === 'staged'
-          ? await repo.getStagedDiff(candidate.repoId, filePath).catch(() => null)
-          : await repo.getUnstagedDiff(candidate.repoId, filePath).catch(() => null);
+        const diff: FileDiff | null = isSensitive
+          ? {
+            repoId: candidate.repoId,
+            oldPath: filePath,
+            newPath: filePath,
+            isBinary: false,
+            isNew: file.status === 'added' || file.status === 'untracked',
+            isDeleted: file.status === 'deleted',
+            hunks: [{
+              header: '@@ -0,0 +1,1 @@',
+              oldStart: 0,
+              oldLines: 0,
+              newStart: 1,
+              newLines: 1,
+              lines: [{
+                type: 'add',
+                content: '[SENSITIVE FILE CONTENT EXCLUDED FOR PRIVACY]',
+                newLineNo: 1,
+              }],
+            }],
+            language: 'plaintext',
+          }
+          : (source === 'staged'
+            ? await repo.getStagedDiff(candidate.repoId, filePath).catch(() => null)
+            : await repo.getUnstagedDiff(candidate.repoId, filePath).catch(() => null));
         entries.push({
           summary: `${file.status.toUpperCase()} ${filePath} [${source}]`,
           repoId: candidate.repoId,

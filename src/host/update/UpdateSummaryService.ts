@@ -290,9 +290,32 @@ export class UpdateSummaryService {
     }
   }
 
-  async runAll(targets: readonly UpdateTarget[]): Promise<TrackedUpdateResult[]> {
+  async runAll(
+    targets: readonly UpdateTarget[],
+    onProgress?: (completed: number, total: number, currentTarget: UpdateTarget) => void,
+  ): Promise<TrackedUpdateResult[]> {
     const results: TrackedUpdateResult[] = [];
-    for (const target of targets) results.push(await this.run(target));
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      onProgress?.(i, targets.length, target);
+      // Single-repo timeout safeguard: 45s prevents a single hanging network connection from stalling the entire queue
+      const runPromise = this.run(target);
+      const timeoutPromise = new Promise<TrackedUpdateResult>((_, reject) => {
+        setTimeout(() => reject(new Error(t('Operation timed out after 45 seconds.'))), 45_000);
+      });
+      try {
+        results.push(await Promise.race([runPromise, timeoutPromise]));
+      } catch (error: unknown) {
+        results.push({
+          repoId: target.repoId,
+          tracked: true,
+          ok: false,
+          error: errorText(error),
+          commits: [],
+          files: [],
+        });
+      }
+    }
     return results;
   }
 

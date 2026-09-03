@@ -28,6 +28,7 @@ import { createGitClient, getGitWriteGeneration, waitForGitWrite, withGitWriteLo
 import { isBranchProtected } from '../utils/branchProtection';
 import type { PublishMissingRemote } from '../remote/types';
 import type { GitUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
+import type { VersionDockLogger } from '../utils/Logger';
 
 const STATUS_MAP: Record<string, GitFileStatus> = {
   M: 'modified', A: 'added', D: 'deleted',
@@ -327,6 +328,7 @@ export class GitService {
     private readonly suppressStatusUpdates?: SuppressStatusUpdates,
     private readonly refreshStatus?: RefreshStatus,
     private readonly publishMissingRemote?: PublishMissingRemote,
+    protected readonly logger?: VersionDockLogger,
   ) {
     // Git's optional index refresh in commands such as `status` is a read
     // operation from VersionDock's perspective. Disable that refresh, while
@@ -1666,7 +1668,10 @@ export class GitService {
       diff.originalContent = await this.readGitFileContent(`${hash}~1`, originalPath);
       diff.modifiedContent = await this.readGitFileContent(hash, modifiedPath);
       return diff;
-    } catch { return null; }
+    } catch (error) {
+      this.logger?.debug('GitService', 'Failed to get file diff', { repoId, hash, filePath, error: String(error) });
+      return null;
+    }
   }
 
   async getStagedDiff(repoId: string, filePath: string): Promise<FileDiff | null> {
@@ -1690,7 +1695,10 @@ export class GitService {
       const stagedModified = await this.readGitFileContent('', relPath);
       diff.modifiedContent = stagedModified || (workingFile?.content ?? '');
       return diff;
-    } catch { return null; }
+    } catch (error) {
+      this.logger?.debug('GitService', 'Failed to get staged diff', { repoId, filePath, error: String(error) });
+      return null;
+    }
   }
 
   async getUnstagedDiff(repoId: string, filePath: string): Promise<FileDiff | null> {
@@ -1722,7 +1730,10 @@ export class GitService {
       diff.originalContent = await this.readGitFileContent('', relPath);
       diff.modifiedContent = workingFile?.content ?? '';
       return diff;
-    } catch { return null; }
+    } catch (error) {
+      this.logger?.debug('GitService', 'Failed to get unstaged diff', { repoId, filePath, error: String(error) });
+      return null;
+    }
   }
 
   async getWorktreeDiffFiles(baseRef: string): Promise<FileStatus[]> {

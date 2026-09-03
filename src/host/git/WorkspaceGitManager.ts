@@ -453,6 +453,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
       async () => { await this.refreshStatusNow(); },
       this.publishMissingRemote,
+      this.logger,
     );
   }
 
@@ -463,6 +464,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
       async () => { await this.refreshStatusNow(); },
       this.publishMissingRemote,
+      this.logger,
     );
   }
 
@@ -1844,14 +1846,23 @@ export class WorkspaceGitManager implements vscode.Disposable {
     void this.checkAndNotifyGoneBranches();
   }
 
-  async pullAll(rebase = false): Promise<Array<{ repoId: string; ok: boolean; message: string }>> {
+  async pullAll(
+    rebase = false,
+    onProgress?: (completed: number, total: number, repo: GitService) => void,
+  ): Promise<Array<{ repoId: string; ok: boolean; message: string }>> {
     const startedAt = Date.now();
     const repos = Array.from(this.repos.values());
     this.logger.info('VCS', 'Pulling all repositories', { repositoryCount: repos.length, rebase });
     const results: Array<{ repoId: string; ok: boolean; message: string }> = [];
-    for (const r of repos) {
+    for (let i = 0; i < repos.length; i++) {
+      const r = repos[i];
+      onProgress?.(i, repos.length, r);
       try {
-        const message = rebase ? await r.pullRebase() : await r.pull();
+        const pullPromise = rebase ? r.pullRebase() : r.pull();
+        const timeoutPromise = new Promise<string>((_, reject) => {
+          setTimeout(() => reject(new Error(t('Pull timed out after 45 seconds.'))), 45_000);
+        });
+        const message = await Promise.race([pullPromise, timeoutPromise]);
         results.push({ repoId: r.repoId, ok: true, message });
       } catch (error: unknown) {
         results.push({ repoId: r.repoId, ok: false, message: gitErrorDetail(error) });
