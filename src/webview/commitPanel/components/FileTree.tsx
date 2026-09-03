@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FileStatus, GitFileStatus } from '../../shared/types';
 import type { ViewMode } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
@@ -49,6 +50,8 @@ const STATUS_LETTERS: Record<GitFileStatus, string> = {
 };
 
 const ICON_SIZE = 16;
+const ROW_HEIGHT = 22;
+const VIRTUALIZE_THRESHOLD = 40;
 
 // ── Tree data structure ────────────────────────────────────────────────────
 
@@ -111,6 +114,31 @@ function collapseSingleChildDirs(nodes: TreeNode[]): TreeNode[] {
   });
 }
 
+type FlatTreeItem =
+  | { kind: 'dir'; node: TreeDir; depth: number; path: string; key: string }
+  | { kind: 'file'; file: FileStatus; depth: number; key: string };
+
+function flattenVisibleTree(
+  nodes: TreeNode[],
+  repoId: string,
+  isCollapsed: (key: string) => boolean,
+  depth = 0,
+): FlatTreeItem[] {
+  const result: FlatTreeItem[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'file') {
+      result.push({ kind: 'file', file: node.file, depth, key: `${node.file.repoId}-${node.file.path}` });
+    } else {
+      const collapseKey = scopedKey('tree-dir', repoId, node.path);
+      result.push({ kind: 'dir', node, depth, path: node.path, key: collapseKey });
+      if (!isCollapsed(collapseKey)) {
+        result.push(...flattenVisibleTree(node.children, repoId, isCollapsed, depth + 1));
+      }
+    }
+  }
+  return result;
+}
+
 // ── Checkbox ───────────────────────────────────────────────────────────────
 
 function Checkbox({ checked, indeterminate, onChange, onClick }: {
@@ -131,10 +159,6 @@ function Checkbox({ checked, indeterminate, onChange, onClick }: {
 }
 
 // ── Layout constants ───────────────────────────────────────────────────────
-// Each row: [BASE_PAD left] [checkbox ~14px] [treeDirInner paddingLeft 2px] [chevron 12px] [gap 4px] [folder icon 16px] ...
-// The vertical guide line sits at the horizontal centre of the folder icon of the parent row.
-// Centre of folder icon = BASE_PAD + depth*LEVEL_PAD + 14(checkbox) + 2(padding) + 12(chevron) + 4(gap) + 8(half icon) = BASE_PAD + depth*LEVEL_PAD + 40
-// We encode this as GUIDE_OFFSET so children's guide div can be placed correctly.
 
 const DEFAULT_BASE_PAD = 20;  // left padding at depth-0
 const LEVEL_PAD = 20;  // indent per depth level
@@ -148,9 +172,9 @@ type SharedProps = Pick<Props,
   'activeFolderPath'
 > & { basePad: number };
 
-// ── Directory node ─────────────────────────────────────────────────────────
+// ── Directory row (single row, no recursion) ───────────────────────────────
 
-function TreeDirNode({ node, depth, ...shared }: { node: TreeDir; depth: number } & SharedProps) {
+function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number } & SharedProps) {
   const { repoId, isCollapsed, toggleCollapsed, isFileSelected, onSetFiles, onRollback, onFolderContextMenu, iconTheme, basePad, activeFolderPath } = shared;
   const collapseKey = scopedKey('tree-dir', repoId, node.path);
   const open = !isCollapsed(collapseKey);
@@ -162,43 +186,36 @@ function TreeDirNode({ node, depth, ...shared }: { node: TreeDir; depth: number 
   const ctxActive = activeFolderPath === node.path;
 
   return (
-    <div>
-      <div
-        style={{ ...styles.treeDir, paddingLeft: `${basePad + depth * LEVEL_PAD}px`, background: ctxActive ? 'var(--vscode-list-inactiveSelectionBackground)' : hovered ? 'var(--vscode-list-hoverBackground)' : undefined, borderRadius: '2px' }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onContextMenu={(e) => { e.preventDefault(); onFolderContextMenu(e, repoId, node.path, allFiles); }}
-      >
-        <Checkbox
-          checked={allSelected}
-          indeterminate={someSelected}
-          onChange={() => onSetFiles(repoId, allFiles.map(f => f.path), !allSelected)}
-          onClick={(e) => e.stopPropagation()}
-        />
-        <div style={styles.treeDirInner} onClick={() => toggleCollapsed(collapseKey)} title={node.path}>
-          <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.folderChevron} />
-          <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
-          <span style={styles.folderName}>{node.name}</span>
-        </div>
-        <div style={styles.rowActions}>
-          {hovered && (
-            <button
-              data-action-btn=""
-              style={styles.actionBtn}
-              title={t('Rollback all files in folder')}
-              onClick={(e) => { e.stopPropagation(); onRollback(allFiles); }}
-            >
-              <Codicon name="discard" />
-            </button>
-          )}
-          <span style={styles.dirCount}>{allFiles.length}</span>
-        </div>
+    <div
+      style={{ ...styles.treeDir, paddingLeft: `${basePad + depth * LEVEL_PAD}px`, background: ctxActive ? 'var(--vscode-list-inactiveSelectionBackground)' : hovered ? 'var(--vscode-list-hoverBackground)' : undefined, borderRadius: '2px' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onContextMenu={(e) => { e.preventDefault(); onFolderContextMenu(e, repoId, node.path, allFiles); }}
+    >
+      <Checkbox
+        checked={allSelected}
+        indeterminate={someSelected}
+        onChange={() => onSetFiles(repoId, allFiles.map(f => f.path), !allSelected)}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <div style={styles.treeDirInner} onClick={() => toggleCollapsed(collapseKey)} title={node.path}>
+        <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.folderChevron} />
+        <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
+        <span style={styles.folderName}>{node.name}</span>
       </div>
-      {open && node.children.map((child) =>
-        child.kind === 'dir'
-          ? <TreeDirNode key={child.path} node={child} depth={depth + 1} {...shared} />
-          : <FileRow key={child.file.path} file={child.file} depth={depth + 1} {...shared} />
-      )}
+      <div style={styles.rowActions}>
+        {hovered && (
+          <button
+            data-action-btn=""
+            style={styles.actionBtn}
+            title={t('Rollback all files in folder')}
+            onClick={(e) => { e.stopPropagation(); onRollback(allFiles); }}
+          >
+            <Codicon name="discard" />
+          </button>
+        )}
+        <span style={styles.dirCount}>{allFiles.length}</span>
+      </div>
     </div>
   );
 }
@@ -286,28 +303,86 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
 // ── Public component ───────────────────────────────────────────────────────
 
 export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+
   const nodes = useMemo(() => viewMode === 'tree' ? buildTree(files) : [], [files, viewMode]);
+
+  const flatItems: FlatTreeItem[] = useMemo(() => {
+    if (viewMode === 'flat') {
+      return files.map(file => ({
+        kind: 'file' as const,
+        file,
+        depth: 0,
+        key: `${file.repoId}-${file.path}`,
+      }));
+    }
+    return flattenVisibleTree(nodes, repoId, isCollapsed, 0);
+  }, [files, isCollapsed, nodes, repoId, viewMode]);
+
+  useEffect(() => {
+    if (containerRef.current) {
+      const parent = containerRef.current.closest<HTMLElement>('.versiondock-commit-scroll-container')
+        ?? containerRef.current.parentElement;
+      setScrollEl(parent);
+    }
+  }, []);
+
+  const shouldVirtualize = flatItems.length > VIRTUALIZE_THRESHOLD && Boolean(scrollEl);
+
+  const virtualizer = useVirtualizer({
+    count: shouldVirtualize ? flatItems.length : 0,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => ROW_HEIGHT,
+    scrollMargin: containerRef.current?.offsetTop ?? 0,
+    overscan: 10,
+    enabled: shouldVirtualize,
+  });
+
   if (files.length === 0) return null;
 
   const shared: SharedProps = { repoId, repoName, repoRootPath, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, basePad, activeFolderPath };
 
-  if (viewMode === 'tree') {
+  if (shouldVirtualize) {
+    const virtualItems = virtualizer.getVirtualItems();
     return (
-      <div style={styles.container}>
-        {nodes.map((node) =>
-          node.kind === 'dir'
-            ? <TreeDirNode key={node.path} node={node} depth={0} {...shared} />
-            : <FileRow key={node.file.path} file={node.file} depth={0} {...shared} />
-        )}
+      <div ref={containerRef} style={{ ...styles.container, height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {virtualItems.map((virtualRow) => {
+          const item = flatItems[virtualRow.index];
+          if (!item) return null;
+          return (
+            <div
+              key={item.key}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: `${ROW_HEIGHT}px`,
+                transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
+              }}
+            >
+              {item.kind === 'dir' ? (
+                <TreeDirRow node={item.node} depth={item.depth} {...shared} />
+              ) : (
+                <FileRow file={item.file} depth={item.depth} {...shared} />
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   }
 
   return (
-    <div style={styles.container}>
-      {files.map((file) => (
-        <FileRow key={`${file.repoId}-${file.path}`} file={file} depth={0} {...shared} />
-      ))}
+    <div ref={containerRef} style={styles.container}>
+      {flatItems.map((item) =>
+        item.kind === 'dir' ? (
+          <TreeDirRow key={item.key} node={item.node} depth={item.depth} {...shared} />
+        ) : (
+          <FileRow key={item.key} file={item.file} depth={item.depth} {...shared} />
+        )
+      )}
     </div>
   );
 }

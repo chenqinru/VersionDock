@@ -1779,7 +1779,7 @@ export function CommitApp() {
           )}
 
           {/* File list */}
-          <div style={css.repoList}>
+          <div className="versiondock-commit-scroll-container" style={css.repoList}>
             {store.changesViewMode === 'vscode' ? (
               <VscodeView
                 repos={repos}

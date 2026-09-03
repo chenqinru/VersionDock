@@ -1658,6 +1658,65 @@ function NormalSideBlocks({ blocks, side, startLine, language, selections, onSel
   );
 }
 
+function usePaneVirtualWindow(
+  ref: React.RefObject<HTMLElement>,
+  totalLines: number,
+  lineHeight: number = CODE_LINE_HEIGHT,
+  threshold: number = 40,
+): [number, number] {
+  const [range, setRange] = useState<[number, number]>([0, Math.min(totalLines, 60)]);
+
+  useEffect(() => {
+    if (totalLines <= threshold) {
+      setRange([0, totalLines]);
+      return;
+    }
+
+    const el = ref.current;
+    if (!el) return;
+    const pane = el.closest<HTMLElement>('.versiondock-merge-pane');
+    if (!pane) return;
+
+    let frameId: number | null = null;
+    const update = () => {
+      if (frameId !== null) return;
+      frameId = requestAnimationFrame(() => {
+        frameId = null;
+        if (!ref.current || !pane) return;
+        const paneRect = pane.getBoundingClientRect();
+        const blockRect = ref.current.getBoundingClientRect();
+        const relativeTop = blockRect.top - paneRect.top;
+        const relativeBottom = blockRect.bottom - paneRect.top;
+
+        if (relativeBottom < -200 || relativeTop > paneRect.height + 200) {
+          return;
+        }
+
+        const visibleStartPx = Math.max(0, -relativeTop);
+        const visibleEndPx = Math.min(blockRect.height, paneRect.height - relativeTop);
+
+        const overscan = 20;
+        const start = Math.max(0, Math.floor(visibleStartPx / lineHeight) - overscan);
+        const end = Math.min(totalLines, Math.ceil(visibleEndPx / lineHeight) + overscan);
+
+        setRange(prev => (prev[0] === start && prev[1] === end ? prev : [start, end]));
+      });
+    };
+
+    update();
+    pane.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update, { passive: true });
+
+    return () => {
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      pane.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+    };
+  }, [ref, totalLines, lineHeight, threshold]);
+
+  return totalLines <= threshold ? [0, totalLines] : range;
+}
+
 function CodeLines({ lines, startLine, language, dim, changeFlags, changeTone }: {
   lines: string[];
   startLine: number;
@@ -1666,17 +1725,28 @@ function CodeLines({ lines, startLine, language, dim, changeFlags, changeTone }:
   changeFlags?: boolean[];
   changeTone?: ChangeTone;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const highlighter = useShiki();
   const colorTheme = getVersionDockColorTheme();
   const displayedLines = useMemo(() => lines.length > 0 ? lines : [''], [lines]);
 
+  const [startIdx, endIdx] = usePaneVirtualWindow(containerRef, displayedLines.length);
+
+  const visibleLines = useMemo(() => {
+    return displayedLines.slice(startIdx, endIdx);
+  }, [displayedLines, startIdx, endIdx]);
+
   const renderedLines = useMemo(() => {
-    return renderShikiLines(highlighter, displayedLines, language, colorTheme);
-  }, [colorTheme, displayedLines, highlighter, language]);
+    return renderShikiLines(highlighter, visibleLines, language, colorTheme);
+  }, [colorTheme, highlighter, language, visibleLines]);
+
+  const topPad = startIdx * CODE_LINE_HEIGHT;
+  const bottomPad = (displayedLines.length - endIdx) * CODE_LINE_HEIGHT;
 
   return (
-    <>
-      {displayedLines.map((line, index) => {
+    <div ref={containerRef} style={{ paddingTop: topPad ? `${topPad}px` : undefined, paddingBottom: bottomPad ? `${bottomPad}px` : undefined }}>
+      {visibleLines.map((line, offset) => {
+        const index = startIdx + offset;
         const changed = Boolean(changeFlags?.[index]);
         return (
           <div key={index} style={styles.codeLine(
@@ -1686,11 +1756,11 @@ function CodeLines({ lines, startLine, language, dim, changeFlags, changeTone }:
             changed && !changeFlags?.[index + 1],
           )}>
             <span style={styles.lineNo}>{startLine + index}</span>
-            <span style={styles.codeText}>{renderedLines[index] ?? (line || ' ')}</span>
+            <span style={styles.codeText}>{renderedLines[offset] ?? (line || ' ')}</span>
           </div>
         );
       })}
-    </>
+    </div>
   );
 }
 
@@ -1707,6 +1777,7 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
   aiTyping?: boolean;
   onChange: (value: string) => void;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlighter = useShiki();
   const colorTheme = getVersionDockColorTheme();
@@ -1714,11 +1785,20 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
     const split = value.split('\n');
     return split.length > 0 ? split : [''];
   }, [value]);
-  const renderedLines = useMemo(() => {
-    return renderShikiLines(highlighter, lines, language, colorTheme);
-  }, [colorTheme, highlighter, language, lines]);
+
   const lineTotal = Math.max(lines.length, 1);
-  const lineNumbers = Array.from({ length: lineTotal }, (_, index) => startLine + index);
+  const [startIdx, endIdx] = usePaneVirtualWindow(containerRef, lineTotal);
+
+  const visibleLines = useMemo(() => {
+    return lines.slice(startIdx, endIdx);
+  }, [lines, startIdx, endIdx]);
+
+  const renderedLines = useMemo(() => {
+    return renderShikiLines(highlighter, visibleLines, language, colorTheme);
+  }, [colorTheme, highlighter, language, visibleLines]);
+
+  const topPad = startIdx * CODE_LINE_HEIGHT;
+  const bottomPad = (lineTotal - endIdx) * CODE_LINE_HEIGHT;
   const contentWidth = `${Math.max(24, ...lines.map(line => line.length + 1))}ch`;
 
   useEffect(() => {
@@ -1736,15 +1816,19 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
   }, [autoFocus, value]);
 
   return (
-    <div style={styles.editableBlock(dim, aiTyping)}>
-      <div style={styles.editableLineNumbers}>
-        {lineNumbers.map((line, index) => (
-          <span key={line} style={styles.editableLineNo(
-            changeFlags?.[index] ? changeTones?.[index] : undefined,
-            Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
-            Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
-          )}>{line}</span>
-        ))}
+    <div ref={containerRef} style={styles.editableBlock(dim, aiTyping)}>
+      <div style={{ ...styles.editableLineNumbers, paddingTop: topPad ? `${topPad}px` : undefined, paddingBottom: bottomPad ? `${bottomPad}px` : undefined }}>
+        {visibleLines.map((_, offset) => {
+          const index = startIdx + offset;
+          const line = startLine + index;
+          return (
+            <span key={line} style={styles.editableLineNo(
+              changeFlags?.[index] ? changeTones?.[index] : undefined,
+              Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
+              Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
+            )}>{line}</span>
+          );
+        })}
       </div>
       <div style={styles.editableTextWrap(lineTotal, contentWidth)}>
         {changeBlockRanges?.map(range => (
@@ -1756,17 +1840,20 @@ function EditableCodeBlock({ value, startLine, language, dim, changeFlags, chang
             style={styles.changeBlockMarker(range.startLine, range.lineCount, range.tone, range.applied)}
           />
         ))}
-        <div aria-hidden="true" style={styles.editableHighlight}>
-          {lines.map((line, index) => (
-            <div key={index} className={aiTyping && index === lines.length - 1 ? 'versiondock-ai-typing-line' : undefined} style={styles.editableHighlightLine(
-              changeFlags?.[index] ? changeTones?.[index] : undefined,
-              Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
-              Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
-            )}>
-              {renderedLines[index] ?? (line || ' ')}
-              {aiTyping && index === lines.length - 1 && <span className="versiondock-ai-code-caret" />}
-            </div>
-          ))}
+        <div aria-hidden="true" style={{ ...styles.editableHighlight, paddingTop: topPad ? `${topPad}px` : undefined, paddingBottom: bottomPad ? `${bottomPad}px` : undefined }}>
+          {visibleLines.map((line, offset) => {
+            const index = startIdx + offset;
+            return (
+              <div key={index} className={aiTyping && index === lineTotal - 1 ? 'versiondock-ai-typing-line' : undefined} style={styles.editableHighlightLine(
+                changeFlags?.[index] ? changeTones?.[index] : undefined,
+                Boolean(changeFlags?.[index] && !changeFlags?.[index - 1]),
+                Boolean(changeFlags?.[index] && !changeFlags?.[index + 1]),
+              )}>
+                {renderedLines[offset] ?? (line || ' ')}
+                {aiTyping && index === lineTotal - 1 && <span className="versiondock-ai-code-caret" />}
+              </div>
+            );
+          })}
         </div>
         <textarea
           ref={textareaRef}

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import type { CommitNode, LineRange, RepoMeta } from '../../shared/types';
 import { getVsCodeApi } from '../../shared/vscodeApi';
 import type { HostToLogMsg, LogCommitPathEntry, LogToHostMsg, IconThemeData, MergeParentChange } from '../../../host/types/messages';
@@ -285,6 +286,127 @@ function ContextMenu({ state, onShowDiff, onEditSource, onRevert, onCherryPick, 
   );
 }
 
+type FlatDetailItem =
+  | { kind: 'file'; node: TreeNode; depth: number; key: string }
+  | { kind: 'dir'; node: TreeNode; depth: number; open: boolean; key: string };
+
+function isDetailDirOpen(path: string, allExpanded: boolean | null, collapsedDirs: Record<string, boolean>): boolean {
+  if (collapsedDirs[path] !== undefined) {
+    return !collapsedDirs[path];
+  }
+  return allExpanded !== false;
+}
+
+function flattenCommitDetailTree(
+  nodes: TreeNode[],
+  allExpanded: boolean | null,
+  collapsedDirs: Record<string, boolean>,
+  depth = 0,
+): FlatDetailItem[] {
+  const result: FlatDetailItem[] = [];
+  const sorted = [...nodes].sort((left, right) => {
+    if (!left.file && right.file) return -1;
+    if (left.file && !right.file) return 1;
+    return left.name.localeCompare(right.name);
+  });
+
+  for (const node of sorted) {
+    if (node.file) {
+      result.push({ kind: 'file', node, depth, key: node.fullPath });
+    } else {
+      const open = isDetailDirOpen(node.fullPath, allExpanded, collapsedDirs);
+      result.push({ kind: 'dir', node, depth, open, key: node.fullPath });
+      if (open && node.children.size > 0) {
+        result.push(...flattenCommitDetailTree(Array.from(node.children.values()), allExpanded, collapsedDirs, depth + 1));
+      }
+    }
+  }
+  return result;
+}
+
+function SingleTreeFileRow({ node, depth, selectedFile, onOpen, onFileContextMenu, iconTheme }: {
+  node: TreeNode;
+  depth: number;
+  selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
+  onOpen: (file: LogViewFileEntry) => void;
+  onFileContextMenu: (event: React.MouseEvent, file: LogViewFileEntry) => void;
+  iconTheme?: IconThemeData | null;
+}) {
+  const file = node.file!;
+  const isRepoRootChange = file.path === '.';
+  const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
+  const status = normalizeStatus(file.status);
+  const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
+  const displayName = isRepoRootChange ? node.repoName ?? file.repoId : node.name;
+  const indent = depth * 14;
+
+  return (
+    <div
+      style={styles.fileRow(isSelected)}
+      className="versiondock-detail-row"
+      data-selected={isSelected}
+      onClick={isRepoRootChange ? undefined : () => onOpen(file)}
+      onContextMenu={isRepoRootChange ? undefined : (event => {
+        event.preventDefault();
+        onFileContextMenu(event, file);
+      })}
+      title={isRepoRootChange ? node.repoRootPath ?? node.repoName ?? file.repoId : `${file.path}\n${t('Click to open diff')}`}
+    >
+      <div style={{ width: indent + 18, flexShrink: 0 }} />
+      {isRepoRootChange ? (
+        <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
+      ) : (
+        <FileIcon name={node.name} theme={iconTheme} size={14} style={styles.fileIconBase} />
+      )}
+      <span style={styles.fileName(statusColor, isSelected)}>{displayName}</span>
+      {(file.added != null || file.removed != null) && (
+        <span style={styles.lineStats}>
+          {file.added != null && <span style={styles.added}>+{file.added}</span>}
+          {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
+        </span>
+      )}
+      <span style={styles.statusLetter(statusColor)}>{status}</span>
+    </div>
+  );
+}
+
+function SingleTreeDirRow({ node, depth, open, onToggle, onDirectoryContextMenu, iconTheme }: {
+  node: TreeNode;
+  depth: number;
+  open: boolean;
+  onToggle: () => void;
+  onDirectoryContextMenu: (event: React.MouseEvent, node: TreeNode) => void;
+  iconTheme?: IconThemeData | null;
+}) {
+  const folderBaseName = node.name.includes('/') ? node.name.split('/').pop()! : node.name;
+  const isRepoRoot = !!node.isRepoRoot;
+  const indent = depth * 14;
+
+  return (
+    <div
+      style={isRepoRoot ? styles.repoRootRow : styles.dirRow}
+      className="versiondock-detail-row"
+      data-selected={false}
+      title={node.fullPath}
+      onClick={onToggle}
+      onContextMenu={event => {
+        event.preventDefault();
+        onDirectoryContextMenu(event, node);
+      }}
+    >
+      <div style={{ width: indent, flexShrink: 0 }} />
+      <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.chevron} />
+      {isRepoRoot ? (
+        <span style={styles.repoRootDot(node.repoColor ?? 'var(--vscode-foreground)')} />
+      ) : (
+        <FileIcon name={folderBaseName} isFolder isOpen={open} theme={iconTheme} size={16} style={styles.folderIconBase} />
+      )}
+      <span style={isRepoRoot ? styles.repoRootName : styles.dirName}>{isRepoRoot ? node.name.toUpperCase() : node.name}</span>
+      <span style={styles.fileCountBadge}>{node.fileCount}</span>
+    </div>
+  );
+}
+
 function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirectoryContextMenu, allExpanded, iconTheme }: {
   node: TreeNode;
   depth: number;
@@ -297,70 +419,30 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
 }) {
   const [localOpen, setLocalOpen] = useState(true);
   const open = allExpanded !== null ? allExpanded : localOpen;
-  const indent = depth * 14;
 
   if (node.file) {
-    const file = node.file;
-    const isRepoRootChange = file.path === '.';
-    const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
-    const status = normalizeStatus(file.status);
-    const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
-    const displayName = isRepoRootChange ? node.repoName ?? file.repoId : node.name;
     return (
-      <div
-        style={styles.fileRow(isSelected)}
-        className="versiondock-detail-row"
-        data-selected={isSelected}
-        onClick={isRepoRootChange ? undefined : () => onOpen(file)}
-        onContextMenu={isRepoRootChange ? undefined : (event => {
-          event.preventDefault();
-          onFileContextMenu(event, file);
-        })}
-        title={isRepoRootChange ? node.repoRootPath ?? node.repoName ?? file.repoId : `${file.path}\n${t('Click to open diff')}`}
-      >
-        <div style={{ width: indent + 18, flexShrink: 0 }} />
-        {isRepoRootChange ? (
-          <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
-        ) : (
-          <FileIcon name={node.name} theme={iconTheme} size={14} style={styles.fileIconBase} />
-        )}
-        <span style={styles.fileName(statusColor, isSelected)}>{displayName}</span>
-        {(file.added != null || file.removed != null) && (
-          <span style={styles.lineStats}>
-            {file.added != null && <span style={styles.added}>+{file.added}</span>}
-            {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
-          </span>
-        )}
-        <span style={styles.statusLetter(statusColor)}>{status}</span>
-      </div>
+      <SingleTreeFileRow
+        node={node}
+        depth={depth}
+        selectedFile={selectedFile}
+        onOpen={onOpen}
+        onFileContextMenu={onFileContextMenu}
+        iconTheme={iconTheme}
+      />
     );
   }
 
-  const folderBaseName = node.name.includes('/') ? node.name.split('/').pop()! : node.name;
-  const isRepoRoot = !!node.isRepoRoot;
   return (
     <>
-      <div
-        style={isRepoRoot ? styles.repoRootRow : styles.dirRow}
-        className="versiondock-detail-row"
-        data-selected={false}
-        title={node.fullPath}
-        onClick={() => { if (allExpanded === null) setLocalOpen(current => !current); }}
-        onContextMenu={event => {
-          event.preventDefault();
-          onDirectoryContextMenu(event, node);
-        }}
-      >
-        <div style={{ width: indent, flexShrink: 0 }} />
-        <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.chevron} />
-        {isRepoRoot ? (
-          <span style={styles.repoRootDot(node.repoColor ?? 'var(--vscode-foreground)')} />
-        ) : (
-          <FileIcon name={folderBaseName} isFolder isOpen={open} theme={iconTheme} size={16} style={styles.folderIconBase} />
-        )}
-        <span style={isRepoRoot ? styles.repoRootName : styles.dirName}>{isRepoRoot ? node.name.toUpperCase() : node.name}</span>
-        <span style={styles.fileCountBadge}>{node.fileCount}</span>
-      </div>
+      <SingleTreeDirRow
+        node={node}
+        depth={depth}
+        open={open}
+        onToggle={() => { if (allExpanded === null) setLocalOpen(current => !current); }}
+        onDirectoryContextMenu={onDirectoryContextMenu}
+        iconTheme={iconTheme}
+      />
       {open && Array.from(node.children.values())
         .sort((left, right) => {
           if (!left.file && right.file) return -1;
@@ -501,6 +583,8 @@ function MergeParentChangeGroup({
 export function CommitDetail({ commit, commits, files, mergeParentChanges, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onCollapse }: Props) {
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null);
+  const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
+  const fileListRef = useRef<HTMLDivElement>(null);
   const [containingBranches, setContainingBranches] = useState<ContainingBranches>({ local: [], remote: [], tags: [] });
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [aggregateContainingBranches, setAggregateContainingBranches] = useState<Record<string, ContainingBranches>>({});
@@ -577,6 +661,22 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       })
       .map(child => collapseSingleChildDirs(child))
   ), [tree]);
+
+  const flatTreeItems = useMemo(() => {
+    if (viewMode !== 'tree') return [];
+    return flattenCommitDetailTree(visibleTreeChildren, allExpanded, collapsedDirs, 0);
+  }, [allExpanded, collapsedDirs, viewMode, visibleTreeChildren]);
+
+  const itemCount = viewMode === 'tree' ? flatTreeItems.length : activeFiles.length;
+  const shouldVirtualize = itemCount > 40;
+
+  const virtualizer = useVirtualizer({
+    count: shouldVirtualize ? itemCount : 0,
+    getScrollElement: () => fileListRef.current,
+    estimateSize: () => 22,
+    overscan: 10,
+    enabled: shouldVirtualize,
+  });
 
   useEffect(() => {
     const handler = (event: MessageEvent<HostToLogMsg>) => {
@@ -1013,19 +1113,19 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
           </span>
           {viewMode === 'tree' && (
             <div style={styles.expandBtns}>
-              <button className="versiondock-detail-icon-row" style={styles.toggleBtn(false)} onClick={() => setAllExpanded(true)} title={t('Expand all')}>
+              <button className="versiondock-detail-icon-row" style={styles.toggleBtn(false)} onClick={() => { setAllExpanded(true); setCollapsedDirs({}); }} title={t('Expand all')}>
                 <Codicon name="expand-all" style={{ fontSize: '13px' }} />
               </button>
-              <button className="versiondock-detail-icon-row" style={styles.toggleBtn(false)} onClick={() => setAllExpanded(false)} title={t('Collapse all')}>
+              <button className="versiondock-detail-icon-row" style={styles.toggleBtn(false)} onClick={() => { setAllExpanded(false); setCollapsedDirs({}); }} title={t('Collapse all')}>
                 <Codicon name="collapse-all" style={{ fontSize: '13px' }} />
               </button>
             </div>
           )}
           <div style={styles.viewToggle}>
-            <button className="versiondock-detail-icon-row" style={styles.toggleBtn(viewMode === 'tree')} onClick={() => { setViewMode('tree'); setAllExpanded(null); }} title={t('Tree view')}>
+            <button className="versiondock-detail-icon-row" style={styles.toggleBtn(viewMode === 'tree')} onClick={() => { setViewMode('tree'); setAllExpanded(null); setCollapsedDirs({}); }} title={t('Tree view')}>
               <Codicon name="list-tree" style={{ fontSize: '13px' }} />
             </button>
-            <button className="versiondock-detail-icon-row" style={styles.toggleBtn(viewMode === 'flat')} onClick={() => { setViewMode('flat'); setAllExpanded(null); }} title={t('Flat list')}>
+            <button className="versiondock-detail-icon-row" style={styles.toggleBtn(viewMode === 'flat')} onClick={() => { setViewMode('flat'); setAllExpanded(null); setCollapsedDirs({}); }} title={t('Flat list')}>
               <Codicon name="list-flat" style={{ fontSize: '13px' }} />
             </button>
           </div>
@@ -1044,64 +1144,108 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
           />
         )}
 
-        <div style={styles.fileList}>
+        <div ref={fileListRef} style={styles.fileList}>
           {activeLoadingFiles && <div style={styles.loading}>{t('Loading files...')}</div>}
           {!activeLoadingFiles && activeFiles.length === 0 && !showMergeParentChanges && !showNoMergeConflicts && <div style={styles.loading}>{t('No changed files')}</div>}
           {!activeLoadingFiles && showNoMergeConflicts && <div style={styles.noMergeConflicts}>{t('No merge conflicts')}</div>}
 
-          {!activeLoadingFiles && viewMode === 'tree' && visibleTreeChildren.map(child => (
-            <TreeDir
-              key={child.fullPath}
-              node={child}
-              depth={0}
-              selectedFile={selectedFile}
-              onOpen={handleOpenDiff}
-              onFileContextMenu={showFileContextMenu}
-              onDirectoryContextMenu={showDirectoryContextMenu}
-              allExpanded={allExpanded}
-              iconTheme={iconTheme}
-            />
-          ))}
+          {!activeLoadingFiles && (() => {
+            const renderFlatFileItem = (file: LogViewFileEntry) => {
+              const isRepoRootChange = file.path === '.';
+              const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
+              const status = normalizeStatus(file.status);
+              const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
+              const fileName = isRepoRootChange ? repoNameById[file.repoId] ?? file.repoId : (file.path.split('/').pop() ?? file.path);
+              const dir = isRepoRootChange ? repoRootPathById[file.repoId] ?? fileName : (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '');
+              return (
+                <div
+                  key={scopedKey(file.repoId, file.commitHash, file.path)}
+                  style={styles.fileRow(isSelected)}
+                  className="versiondock-detail-row"
+                  data-selected={isSelected}
+                  onClick={isRepoRootChange ? undefined : () => handleOpenDiff(file)}
+                  onContextMenu={isRepoRootChange ? undefined : (event => {
+                    event.preventDefault();
+                    showFileContextMenu(event, file);
+                  })}
+                  title={isRepoRootChange ? dir : `${file.path}\n${t('Click to open diff')}`}
+                >
+                  <div style={{ width: 4, flexShrink: 0 }} />
+                  {isRepoRootChange ? (
+                    <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
+                  ) : (
+                    <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
+                  )}
+                  <span style={styles.fileName(statusColor, isSelected)}>{fileName}</span>
+                  {dir && <span style={styles.dirPath}>{dir}</span>}
+                  {showRepoGrouping && <span style={styles.repoPill}>{repoNameById[file.repoId] ?? file.repoId}</span>}
+                  {(file.added != null || file.removed != null) && (
+                    <span style={styles.lineStats}>
+                      {file.added != null && <span style={styles.added}>+{file.added}</span>}
+                      {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
+                    </span>
+                  )}
+                  <span style={styles.statusLetter(statusColor)}>{status}</span>
+                </div>
+              );
+            };
 
-          {!activeLoadingFiles && viewMode === 'flat' && activeFiles.map(file => {
-            const isRepoRootChange = file.path === '.';
-            const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
-            const status = normalizeStatus(file.status);
-            const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
-            const fileName = isRepoRootChange ? repoNameById[file.repoId] ?? file.repoId : (file.path.split('/').pop() ?? file.path);
-            const dir = isRepoRootChange ? repoRootPathById[file.repoId] ?? fileName : (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '');
-            return (
-              <div
-                key={scopedKey(file.repoId, file.commitHash, file.path)}
-                style={styles.fileRow(isSelected)}
-                className="versiondock-detail-row"
-                data-selected={isSelected}
-                onClick={isRepoRootChange ? undefined : () => handleOpenDiff(file)}
-                onContextMenu={isRepoRootChange ? undefined : (event => {
-                  event.preventDefault();
-                  showFileContextMenu(event, file);
-                })}
-                title={isRepoRootChange ? dir : `${file.path}\n${t('Click to open diff')}`}
-              >
-                <div style={{ width: 4, flexShrink: 0 }} />
-                {isRepoRootChange ? (
-                <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
-                ) : (
-                  <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
-                )}
-                <span style={styles.fileName(statusColor, isSelected)}>{fileName}</span>
-                {dir && <span style={styles.dirPath}>{dir}</span>}
-                {showRepoGrouping && <span style={styles.repoPill}>{repoNameById[file.repoId] ?? file.repoId}</span>}
-                {(file.added != null || file.removed != null) && (
-                  <span style={styles.lineStats}>
-                    {file.added != null && <span style={styles.added}>+{file.added}</span>}
-                    {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
-                  </span>
-                )}
-                <span style={styles.statusLetter(statusColor)}>{status}</span>
-              </div>
-            );
-          })}
+            const renderTreeItem = (item: FlatDetailItem) => {
+              if (item.kind === 'file') {
+                return (
+                  <SingleTreeFileRow
+                    key={item.key}
+                    node={item.node}
+                    depth={item.depth}
+                    selectedFile={selectedFile}
+                    onOpen={handleOpenDiff}
+                    onFileContextMenu={showFileContextMenu}
+                    iconTheme={iconTheme}
+                  />
+                );
+              }
+              return (
+                <SingleTreeDirRow
+                  key={item.key}
+                  node={item.node}
+                  depth={item.depth}
+                  open={item.open}
+                  onToggle={() => setCollapsedDirs(prev => ({ ...prev, [item.node.fullPath]: item.open }))}
+                  onDirectoryContextMenu={showDirectoryContextMenu}
+                  iconTheme={iconTheme}
+                />
+              );
+            };
+
+            if (shouldVirtualize) {
+              const virtualItems = virtualizer.getVirtualItems();
+              return (
+                <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+                  {virtualItems.map((virtualRow) => (
+                    <div
+                      key={virtualRow.index}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '22px',
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      {viewMode === 'tree'
+                        ? renderTreeItem(flatTreeItems[virtualRow.index])
+                        : renderFlatFileItem(activeFiles[virtualRow.index])}
+                    </div>
+                  ))}
+                </div>
+              );
+            }
+
+            return viewMode === 'tree'
+              ? flatTreeItems.map(item => renderTreeItem(item))
+              : activeFiles.map(file => renderFlatFileItem(file));
+          })()}
 
           {!activeLoadingFiles && showMergeParentChanges && mergeParentChanges.map(parentChange => {
             const parentKey = commit ? scopedKey(commit.repoId, commit.hash, parentChange.hash) : parentChange.hash;
