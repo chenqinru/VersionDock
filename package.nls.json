@@ -134,7 +134,7 @@
   "configuration.updateProject.cleanWorkingTree.description": "How to clean and automatically restore uncommitted local changes during project update.",
   "configuration.updateProject.cleanWorkingTree.enum.shelve": "Automatically shelve uncommitted changes before updating and unshelve them afterward (preserves changelists).",
   "configuration.updateProject.cleanWorkingTree.enum.stash": "Automatically stash uncommitted changes before updating and pop stash afterward.",
-  "configuration.updateProject.showUpdateInfo.description": "Automatically open the Update Details panel when new commits are received after project update.",
+  "configuration.updateProject.showUpdateNotification.description": "Show a notification with update details when new commits are received after project update.",
   "configuration.git.cloneRecursiveSubmodules.description": "Recursively clone submodules when cloning a repository ('git clone --recurse-submodules').",
   "configuration.diff.shelveComparisonBase.description": "Comparison base when viewing differences for shelved or stashed changes.",
   "configuration.diff.shelveComparisonBase.enum.local": "Compare with the current local working tree version of the file.",

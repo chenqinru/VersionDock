@@ -319,9 +319,11 @@ export class UpdateSummaryService {
     const updatedRepoCount = new Set(commits.map(commit => commit.repoId)).size;
     const viewDetails = t('View update details');
 
-    const showUpdateInfo = vscode.workspace
-      .getConfiguration('versiondock')
-      .get<boolean>('updateProject.showUpdateInfo', true);
+    const config = vscode.workspace.getConfiguration('versiondock');
+    const showUpdateNotification = config.get<boolean>(
+      'updateProject.showUpdateNotification',
+      config.get<boolean>('updateProject.showUpdateInfo', true),
+    );
 
     const openDetailsPanel = (): void => {
       void Promise.resolve(
@@ -366,9 +368,6 @@ export class UpdateSummaryService {
         void vscode.window.showWarningMessage(message);
         return;
       }
-      if (showUpdateInfo) {
-        openDetailsPanel();
-      }
       notification = vscode.window.showWarningMessage(message, viewDetails);
     } else if (summaryFailures.length > 0) {
       const message = commits.length > 0
@@ -383,19 +382,15 @@ export class UpdateSummaryService {
         void vscode.window.showWarningMessage(message);
         return;
       }
-      if (showUpdateInfo) {
-        openDetailsPanel();
-      }
       notification = vscode.window.showWarningMessage(message, viewDetails);
     } else if (commits.length > 0) {
       const message = updatedRepoCount > 1
         ? t('VersionDock: {0} repositories updated {1} files in {2} commits.', updatedRepoCount, fileCount, commits.length)
         : t('VersionDock: Updated {0} files in {1} commits.', fileCount, commits.length);
 
-      if (showUpdateInfo) {
-        openDetailsPanel();
+      if (showUpdateNotification) {
+        notification = vscode.window.showInformationMessage(message, viewDetails);
       }
-      notification = vscode.window.showInformationMessage(message, viewDetails);
     } else if (skipped.length > 0) {
       const skipItem = skipped[0];
       const noUpstreamMsg = t('Current branch has no upstream tracking branch.');
@@ -424,7 +419,7 @@ export class UpdateSummaryService {
 
     if (!notification) return;
     void Promise.resolve(notification).then(picked => {
-      if (picked === viewDetails && !showUpdateInfo) {
+      if (picked === viewDetails) {
         openDetailsPanel();
       }
     }).catch(error => {

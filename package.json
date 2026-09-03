@@ -1002,11 +1002,11 @@
             "default": "shelve",
             "description": "%configuration.updateProject.cleanWorkingTree.description%"
           },
-          "versiondock.updateProject.showUpdateInfo": {
+          "versiondock.updateProject.showUpdateNotification": {
             "order": 112,
             "type": "boolean",
             "default": true,
-            "description": "%configuration.updateProject.showUpdateInfo.description%"
+            "description": "%configuration.updateProject.showUpdateNotification.description%"
           },
           "versiondock.git.cloneRecursiveSubmodules": {
             "order": 113,

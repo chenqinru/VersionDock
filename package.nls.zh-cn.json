@@ -134,7 +134,7 @@
   "configuration.updateProject.cleanWorkingTree.description": "更新项目时清理并自动恢复本地未提交修改的方式。",
   "configuration.updateProject.cleanWorkingTree.enum.shelve": "更新前自动搁置（Shelve）未提交更改，更新完成后自动取消搁置恢复（保留 Changelist 归属）。",
   "configuration.updateProject.cleanWorkingTree.enum.stash": "更新前自动暂存（Stash）未提交更改，更新完成后自动弹出暂存恢复。",
-  "configuration.updateProject.showUpdateInfo.description": "更新项目拉取到新提交后，自动打开“更新详情（Update Details）”面板。",
+  "configuration.updateProject.showUpdateNotification.description": "更新项目拉取到新提交后，显示更新详情的消息通知。",
   "configuration.git.cloneRecursiveSubmodules.description": "克隆仓库时递归克隆项目中的子模块（'git clone --recurse-submodules'）。",
   "configuration.diff.shelveComparisonBase.description": "调用“显示差异”时，比较搁置（Shelve）或隐藏（Stash）更改的基准版本。",
   "configuration.diff.shelveComparisonBase.enum.local": "与工作区当前文件的本地版本进行比较。",
