@@ -1118,7 +1118,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.lastPublishedStatus = status;
     this.statusListeners.forEach(l => l(status));
 
-    const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', false);
+    const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', true);
     for (const repoStatus of status.repos) {
       if (repoStatus.operationState === 'merge' && repoStatus.conflictCount === 0 && autoCommitMerge) {
         void this.completeMergeIfResolved(repoStatus.repoId).catch(error => {

@@ -423,7 +423,7 @@ export class MergeEditorProvider implements vscode.Disposable {
         try {
           const repo = this.manager.getRepo(repoId);
           if (!repo) throw new Error(t('Repo not found'));
-          const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', false);
+          const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', true);
           const mergeCommit = await repo.runWithGitWriteLock(async () => {
             if (msg.deleteFile) await repo.deleteMergedFile(relativePath);
             else await repo.saveMergedContent(relativePath, msg.resolvedContent);
@@ -465,7 +465,7 @@ export class MergeEditorProvider implements vscode.Disposable {
         try {
           const repo = this.manager.getRepo(repoId);
           if (!repo) throw new Error(t('Repo not found'));
-          const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', false);
+          const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', true);
           await repo.runWithGitWriteLock(async () => {
             if (msg.type === 'MERGE_ACCEPT_OURS') await repo.acceptOurs(relativePath);
             else await repo.acceptTheirs(relativePath);
