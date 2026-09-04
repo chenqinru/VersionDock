@@ -19,12 +19,34 @@ const MAX_SUBMODULE_DEPTH = 5;
 const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
 const DEFAULT_REPOSITORY_SCAN_IGNORED_FOLDERS = ['node_modules'];
 
-type StatusListener = (status: WorkspaceStatus) => void;
+export interface StatusChangeContext {
+  source?: 'invalidation' | 'auto';
+  scopes?: InvalidationScope[];
+  suppressedRepoIds?: string[];
+}
+export type StatusListener = (status: WorkspaceStatus, context?: StatusChangeContext) => void;
 export type StatusOperationListener = (inProgress: boolean, kind?: StatusOperationKind, label?: string) => void;
 type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
 type BranchChangeOptions = { refreshDerivedData?: boolean };
 type BranchListener = (options?: BranchChangeOptions) => void;
 type WorktreeListener = (repoId: string) => void;
+
+export type InvalidationScope =
+  | 'workingTree' // Changes 变更列表、文件状态、冲突状态
+  | 'unpushed'    // Push 列表与未推送提交
+  | 'stash'       // Stash 列表与数量角标
+  | 'shelf'       // Shelf 列表
+  | 'subtree'     // Subtree 本地衍生状态
+  | 'worktree'    // Worktree 列表
+  | 'workspace';  // 仓库集合变动（如 Submodule 初始化与反初始化）
+
+export interface DataInvalidationEvent {
+  scopes: InvalidationScope[];
+  repoIds?: string[];
+  force?: boolean;
+}
+
+export type DataInvalidationListener = (event: DataInvalidationEvent) => void;
 type RepoKind = NonNullable<RepoMeta['kind']>;
 type ServiceResolutionMode = 'git' | 'svn' | 'prompt' | 'preferGit';
 type ResolveServiceOptions = {
@@ -337,6 +359,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private branchListeners: BranchListener[] = [];
   private reposListeners: BranchListener[] = [];
   private worktreeListeners: WorktreeListener[] = [];
+  private dataInvalidationListeners: DataInvalidationListener[] = [];
   private refreshDebounce: NodeJS.Timeout | null = null;
   private refreshFollowUp: NodeJS.Timeout | null = null;
   private branchDebounce: NodeJS.Timeout | null = null;
@@ -1115,10 +1138,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.statusStabilizationSignature = null;
   }
 
-  private publishStatus(status: WorkspaceStatus): void {
+  private publishStatus(status: WorkspaceStatus, context?: StatusChangeContext): void {
     this.detectNewUntrackedFiles(status);
     this.lastPublishedStatus = status;
-    this.statusListeners.forEach(l => l(status));
+    this.statusListeners.forEach(l => l(status, context));
 
     const autoCommitMerge = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.autoCommitResolvedMerge', true);
     for (const repoStatus of status.repos) {
@@ -1518,6 +1541,23 @@ export class WorkspaceGitManager implements vscode.Disposable {
     });
   }
 
+  onDataInvalidated(listener: DataInvalidationListener): vscode.Disposable {
+    this.dataInvalidationListeners.push(listener);
+    return new vscode.Disposable(() => {
+      this.dataInvalidationListeners = this.dataInvalidationListeners.filter(l => l !== listener);
+    });
+  }
+
+  notifyDataInvalidated(event: DataInvalidationEvent): void {
+    for (const listener of this.dataInvalidationListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger?.error('Workspace', 'Error in data invalidation listener', error);
+      }
+    }
+  }
+
   async runWithStatusUpdatesSuppressed<T>(operation: () => Promise<T>, kind?: StatusOperationKind, label?: string): Promise<T> {
     if (this.statusUpdateSuppressionDepth === 0) {
       this.beginStatusStabilization();
@@ -1766,12 +1806,12 @@ export class WorkspaceGitManager implements vscode.Disposable {
     };
   }
 
-  async refreshStatusNow(): Promise<WorkspaceStatus> {
+  async refreshStatusNow(context?: StatusChangeContext): Promise<WorkspaceStatus> {
     const generation = this.repositoryGeneration;
     const status = await this.getAllStatusesFresh();
     if (this.disposed || generation !== this.repositoryGeneration) return status;
     this.statusStabilizationSignature = undefined;
-    this.publishStatus(status);
+    this.publishStatus(status, context);
     return status;
   }
 

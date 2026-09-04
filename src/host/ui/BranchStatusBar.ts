@@ -1454,6 +1454,7 @@ export class BranchStatusBar implements vscode.Disposable {
             ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
             : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
         }
+        this.manager.notifyDataInvalidated({ scopes: ['unpushed'], repoIds: [pick.repoId] });
       } else if (!pushResult.cancelled) {
         vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(pushResult.error)));
       }
@@ -2421,6 +2422,7 @@ export class BranchStatusBar implements vscode.Disposable {
       if (!pushResult.rebased && !pushResult.forced) {
         vscode.window.showInformationMessage(t('VersionDock [{0}]: pushed successfully.', meta.name));
       }
+      this.manager.notifyDataInvalidated({ scopes: ['unpushed'], repoIds: [meta.id] });
     } else if (!pushResult.cancelled) {
       this.showError(meta, pushResult.error);
     }

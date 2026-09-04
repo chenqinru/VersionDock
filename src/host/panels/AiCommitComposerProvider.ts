@@ -237,7 +237,11 @@ export class AiCommitComposerProvider implements vscode.Disposable {
       }
       result = { commitCount: completed, commitHashes: [], completedGroups: completed };
     }
-    await this.manager.getAllStatusesFresh();
+    this.manager.notifyDataInvalidated({
+      scopes: ['workingTree', 'unpushed', 'subtree'],
+      repoIds: [this.session.source.repoId],
+    });
+    this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
     this.post({ type: 'COMPOSER_APPLY_RESULT', result });
   }
 

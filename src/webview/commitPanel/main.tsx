@@ -313,12 +313,17 @@ export function CommitApp() {
   const visitedTabsRef = useRef<Set<TabId>>(visitedTabs);
   visitedTabsRef.current = visitedTabs;
   const lastTabSyncAtRef = useRef<Partial<Record<TabId, number>>>({});
+  const pendingSyncTimersRef = useRef<Partial<Record<TabId, ReturnType<typeof setTimeout>>>>({});
   const dirtyTabsRef = useRef<Set<TabId>>(new Set());
 
   const markTabDirty = useCallback((...tabs: TabId[]) => {
     for (const tab of tabs) {
       dirtyTabsRef.current.add(tab);
       delete lastTabSyncAtRef.current[tab];
+      if (pendingSyncTimersRef.current[tab]) {
+        clearTimeout(pendingSyncTimersRef.current[tab]);
+        delete pendingSyncTimersRef.current[tab];
+      }
       if (tab === 'subtree') {
         lastSubtreeListRequestAtRef.current = 0;
         lastSubtreeStatusCheckAtRef.current = 0;
@@ -637,10 +642,28 @@ export function CommitApp() {
     send({ type: 'SUBTREE_REQUEST_LIST', checkStatuses, force });
   }, [send]);
 
+  const syncTabDataRef = useRef<(tab: TabId, force?: boolean) => void>(() => {});
+
   const syncTabData = useCallback((tab: TabId, force = false) => {
+    if (pendingSyncTimersRef.current[tab]) {
+      clearTimeout(pendingSyncTimersRef.current[tab]);
+      delete pendingSyncTimersRef.current[tab];
+    }
+
     const now = Date.now();
     const last = lastTabSyncAtRef.current[tab] ?? 0;
     if (!force && now - last < 5000) {
+      if (!pendingSyncTimersRef.current[tab]) {
+        const remaining = Math.max(100, 5000 - (now - last) + 50);
+        pendingSyncTimersRef.current[tab] = setTimeout(() => {
+          delete pendingSyncTimersRef.current[tab];
+          if (activeTabRef.current === tab) {
+            syncTabDataRef.current(tab, true);
+          } else {
+            dirtyTabsRef.current.add(tab);
+          }
+        }, remaining);
+      }
       return;
     }
     lastTabSyncAtRef.current[tab] = now;
@@ -664,6 +687,8 @@ export function CommitApp() {
       requestSubtreeList(false, true);
     }
   }, [requestShelveList, requestStashCount, requestStashList, requestUnpushedCommits, requestWorktreeList, requestSubtreeList]);
+
+  syncTabDataRef.current = syncTabData;
 
   const switchTab = useCallback((tab: TabId) => {
     setActiveTab(tab);
@@ -700,6 +725,10 @@ export function CommitApp() {
       switch (msg.type) {
         case 'COMMIT_REFRESH_START': {
           commitStatusRefreshPendingRef.current = true;
+          for (const timer of Object.values(pendingSyncTimersRef.current)) {
+            if (timer) clearTimeout(timer);
+          }
+          pendingSyncTimersRef.current = {};
           lastTabSyncAtRef.current = {};
           lastSubtreeListRequestAtRef.current = 0;
           lastSubtreeStatusCheckAtRef.current = 0;
@@ -1082,7 +1111,13 @@ export function CommitApp() {
     };
     window.addEventListener('message', handler);
     requestCommitStatus();
-    return () => window.removeEventListener('message', handler);
+    return () => {
+      window.removeEventListener('message', handler);
+      for (const timer of Object.values(pendingSyncTimersRef.current)) {
+        if (timer) clearTimeout(timer);
+      }
+      pendingSyncTimersRef.current = {};
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

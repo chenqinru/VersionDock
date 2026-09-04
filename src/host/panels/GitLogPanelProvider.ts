@@ -1015,6 +1015,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             await repo.revertFileToParent(msg.hash, resolvedPath.relativePath);
           }
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree'],
+            repoIds: [msg.repoId],
+          });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           void showGitErrorMessage(t('VersionDock: Cannot revert file: {0}', String(e)), {
@@ -1051,6 +1055,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await this.applyCommitPathEntries(repo, uniqueEntries, 'apply');
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree'],
+            repoIds: [msg.repoId],
+          });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           void showGitErrorMessage(t('VersionDock: Cannot apply selected changes: {0}', String(e)), {
@@ -1087,6 +1095,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await this.applyCommitPathEntries(repo, uniqueEntries, 'restore');
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree'],
+            repoIds: [msg.repoId],
+          });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           void showGitErrorMessage(t('VersionDock: Cannot revert selected changes: {0}', String(e)), {
@@ -1216,6 +1228,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const merged = mergeCurrentIntoBranches(branches, current);
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
           this.manager.notifyBranchesChanged();
+          this.manager.notifyDataInvalidated({
+            scopes: ['unpushed'],
+            repoIds: [msg.repoId],
+          });
           this.post({ type: 'LOG_REFRESH' });
         } else if (pushResult.cancelled) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
@@ -1564,8 +1580,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
-          await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree', 'unpushed', 'subtree'],
+            repoIds: [msg.repoId],
+          });
         } catch (e: unknown) {
           const errMsg = String(e);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
@@ -1577,15 +1596,27 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (choice === t('Continue')) {
               await repo.cherryPickContinue();
               this.post({ type: 'LOG_REFRESH' });
-              await this.manager.refreshStatusNow();
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
             } else if (choice === t('Skip')) {
               await repo.cherryPickSkip();
               this.post({ type: 'LOG_REFRESH' });
-              await this.manager.refreshStatusNow();
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
             } else if (choice === t('Abort')) {
               await repo.cherryPickAbort();
+              this.post({ type: 'LOG_REFRESH' });
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
               vscode.window.showInformationMessage(t('VersionDock: Cherry-pick aborted. The repository has been restored.'));
             }
           } else {
@@ -1620,8 +1651,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
-          await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree', 'unpushed', 'subtree'],
+            repoIds: [msg.repoId],
+          });
         } catch (e: unknown) {
           const errMsg = String(e);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
@@ -1632,8 +1666,20 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             );
             if (choice === t('Continue')) {
               await repo.revertContinue();
+              this.post({ type: 'LOG_REFRESH' });
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
             } else if (choice === t('Abort')) {
               await repo.revertAbort();
+              this.post({ type: 'LOG_REFRESH' });
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
               vscode.window.showInformationMessage(t('VersionDock: Revert aborted. The repository has been restored.'));
             }
           } else {
@@ -2304,6 +2350,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               ? t('VersionDock: Pushed to "{0}" successfully.', remotePick)
               : t('VersionDock: Remote created and branch pushed successfully.'));
           }
+          this.manager.notifyDataInvalidated({
+            scopes: ['unpushed'],
+            repoIds: [msg.repoId],
+          });
         } else if (!pushResult.cancelled) {
           this.showOperationError(pushResult.error, t('VersionDock: Push failed'));
         }

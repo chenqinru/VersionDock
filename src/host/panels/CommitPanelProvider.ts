@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
-import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
+import { WorkspaceGitManager, type DataInvalidationEvent } from '../git/WorkspaceGitManager';
 import type { GitService } from '../git/GitService';
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
@@ -253,8 +253,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.updateViewAndExpandContext(this.currentTabFileViewMode, false);
 
     this.managerListeners.push(
-      this.manager.onStatusChange((status) => {
+      this.manager.onStatusChange((status, context) => {
         let hasCommitChanged = false;
+        const changedRepoIds: string[] = [];
         if (Array.isArray(status?.repos)) {
           for (const repoStatus of status.repos) {
             const commitHash = repoStatus.branch?.lastCommitHash || repoStatus.branch?.detachedHash;
@@ -262,6 +263,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const prev = this.lastRepoCommitHashes.get(repoStatus.repoId);
               if (prev && prev !== commitHash) {
                 hasCommitChanged = true;
+                changedRepoIds.push(repoStatus.repoId);
               }
               this.lastRepoCommitHashes.set(repoStatus.repoId, commitHash);
             }
@@ -270,12 +272,25 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
         this.postChangelistsUpdate(status);
         this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+
         if (hasCommitChanged) {
-          this.invalidateSubtreeStatus(undefined, { remote: false });
-          if (this.isSubtreeTabActive()) {
-            void this.refreshSubtreeList({ force: false });
+          const unhandledUnpushedRepoIds = context?.source === 'invalidation' && context.scopes?.includes('unpushed')
+            ? changedRepoIds.filter(id => context.suppressedRepoIds && !context.suppressedRepoIds.includes(id))
+            : changedRepoIds;
+
+          const isSubtreeHandledByEvent = context?.source === 'invalidation' && context.scopes?.includes('subtree')
+            && (!context.suppressedRepoIds || changedRepoIds.every(id => context.suppressedRepoIds!.includes(id)));
+
+          if (!isSubtreeHandledByEvent) {
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
           }
-          void this.broadcastUnpushedCommits();
+
+          if (unhandledUnpushedRepoIds.length > 0) {
+            void this.broadcastUnpushedCommits(unhandledUnpushedRepoIds);
+          }
         }
       })
     );
@@ -351,6 +366,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'WORKTREE_LIST_RESULT', repos });
         })().catch(error => {
           this.logger?.error('CommitPanel', 'Failed to refresh worktrees', error);
+        });
+      }),
+    );
+
+    this.managerListeners.push(
+      this.manager.onDataInvalidated((event) => {
+        void this.handleDataInvalidated(event).catch(error => {
+          this.logger?.error('CommitPanel', 'Failed to handle data invalidation', error);
         });
       }),
     );
@@ -1881,20 +1904,91 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
-  private async broadcastUnpushedCommits(): Promise<void> {
+  private async broadcastUnpushedCommits(repoIds?: string[]): Promise<void> {
     try {
-      const repos = this.manager.getRepoMetas().flatMap(meta => {
+      const allMetas = this.manager.getRepoMetas();
+      const targetMetas = repoIds && repoIds.length > 0
+        ? allMetas.filter(m => repoIds.includes(m.id))
+        : allMetas;
+      const repos = targetMetas.flatMap(meta => {
         const repo = this.manager.getRepo(meta.id);
         return repo && repo.kind !== 'svn' ? [{ id: meta.id, repo }] : [];
       });
       const unpushedList = await Promise.all(
         repos.map(async ({ id, repo }) => {
-          const commits = await repo.getUnpushedCommits().catch(() => []);
-          return { repoId: id, commits };
+          try {
+            const commits = await repo.getUnpushedCommits();
+            return { repoId: id, commits };
+          } catch (e: unknown) {
+            return { repoId: id, commits: [], error: String(e) };
+          }
         })
       );
       this.post({ type: 'PUSH_UNPUSHED_RESULT', repos: unpushedList });
     } catch { /* ignore */ }
+  }
+
+  private async handleDataInvalidated(event: DataInvalidationEvent): Promise<void> {
+    const scopes = new Set(event.scopes);
+    if (scopes.has('workspace')) {
+      await this.manager.reinitializeAndRefresh();
+      this.logProvider?.refresh();
+    }
+    if (scopes.has('workingTree') || scopes.has('workspace')) {
+      // refreshStatusNow() internally publishes status with context, which triggers onStatusChange
+      // to send COMMIT_STATUS_UPDATE and CHANGELISTS_UPDATE without redundant derived data checks.
+      await this.manager.refreshStatusNow({
+        source: 'invalidation',
+        scopes: event.scopes,
+        suppressedRepoIds: event.repoIds,
+      });
+    }
+    if (scopes.has('unpushed')) {
+      void this.broadcastUnpushedCommits(event.repoIds);
+    }
+    if (scopes.has('subtree')) {
+      this.invalidateSubtreeStatus(undefined, { remote: event.force ?? false });
+      if (this.isSubtreeTabActive()) {
+        void this.refreshSubtreeList({ force: event.force ?? false });
+      }
+    }
+    if (scopes.has('worktree')) {
+      void (async () => {
+        try {
+          const repos = await this.manager.getAllWorktrees();
+          this.post({ type: 'WORKTREE_LIST_RESULT', repos });
+        } catch (error) {
+          this.logger?.error('CommitPanel', 'Failed to refresh worktrees on invalidation', error);
+        }
+      })();
+    }
+    const targetMetas = event.repoIds && event.repoIds.length > 0
+      ? this.manager.getRepoMetas().filter(m => event.repoIds!.includes(m.id))
+      : this.manager.getRepoMetas();
+
+    if (scopes.has('stash')) {
+      for (const meta of targetMetas) {
+        if (meta.kind !== 'svn') {
+          const repo = this.manager.getRepo(meta.id);
+          if (repo && repo.kind === 'git') {
+            void repo.stashList().then(stashes => {
+              this.post({ type: 'STASH_LIST_RESULT', requestId: '', repoId: meta.id, stashes });
+              this.post({ type: 'STASH_COUNT_RESULT', requestId: '', repoId: meta.id, count: stashes.length });
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+    if (scopes.has('shelf')) {
+      for (const meta of targetMetas) {
+        const svc = this.getShelveService(meta.id);
+        if (svc) {
+          void svc.list().then(shelves => {
+            this.post({ type: 'SHELVE_LIST_RESULT', requestId: '', repoId: meta.id, shelves });
+          }).catch(() => {});
+        }
+      }
+    }
   }
 
   private async refreshAfterSubtreeOp(entryId?: string): Promise<void> {
@@ -4449,8 +4543,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await parentRepo.initSubmodule(msg.submodulePath);
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: true });
-          // Re-discover so the newly-initialized submodule gets its own GitService
-          // scheduleRefresh will re-send status to the webview
+          this.manager.notifyDataInvalidated({
+            scopes: ['workspace', 'workingTree', 'unpushed', 'subtree'],
+          });
         } catch (e: unknown) {
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: false, error: String(e) });
         }
@@ -4474,6 +4569,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await parentRepoD.deinitSubmodule(msg.submodulePath, msg.force);
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'deinit', ok: true });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workspace', 'workingTree', 'unpushed', 'subtree'],
+          });
         } catch (e: unknown) {
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'deinit', ok: false, error: String(e) });
         }
@@ -4492,6 +4590,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             try {
               await parentRepoU.updateSubmodule(msg.submodulePath, true, msg.recursive);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: true });
+              this.logProvider?.refresh();
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.parentRepoId],
+              });
               // Check if the submodule is now in detached HEAD (almost always true after update)
               const subRepoPath = path.join(parentRepoU.rootPath, msg.submodulePath);
               const subMeta = this.manager.getRepoMetas().find(candidate =>

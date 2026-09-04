@@ -267,6 +267,10 @@ export class UpdateSummaryService {
               shelfBackupName || 'Auto-shelved backup',
             ),
           );
+          this.manager.notifyDataInvalidated({
+            scopes: ['shelf', 'workingTree'],
+            repoIds: [repo.repoId],
+          });
         } else {
           shelveSvc.drop(shelvedBackupId);
         }
@@ -278,6 +282,10 @@ export class UpdateSummaryService {
             shelfBackupName || 'Auto-shelved backup',
           ),
         );
+        this.manager.notifyDataInvalidated({
+          scopes: ['shelf', 'workingTree'],
+          repoIds: [repo.repoId],
+        });
       }
     } else if (stashedBackup) {
       try {
@@ -286,6 +294,10 @@ export class UpdateSummaryService {
         void vscode.window.showWarningMessage(
           t('VersionDock [{0}]: Conflicts detected while restoring stashed changes.', repoName),
         );
+        this.manager.notifyDataInvalidated({
+          scopes: ['stash', 'workingTree'],
+          repoIds: [repo.repoId],
+        });
       }
     }
   }
@@ -428,6 +440,10 @@ export class UpdateSummaryService {
             if (repo) {
               await repo.push();
               vscode.window.showInformationMessage(t('VersionDock: Pushed and configured remote tracking.'));
+              this.manager.notifyDataInvalidated({
+                scopes: ['unpushed'],
+                repoIds: [skipItem.repoId],
+              });
             }
           }
         });

@@ -420,6 +420,10 @@ async function createCommitDetailPanel(
         }
         vscode.window.showInformationMessage(t('VersionDock: Reverted "{0}".', resolvedPath.relativePath));
         panel.webview.postMessage({ type: 'revertDone', filePath: resolvedPath.relativePath });
+        manager.notifyDataInvalidated({
+          scopes: ['workingTree'],
+          repoIds: [repo.repoId],
+        });
       } catch (e: unknown) {
         void showGitErrorMessage(t('VersionDock: Revert failed: {0}', String(e)), {
           onUnlocked: async () => {
