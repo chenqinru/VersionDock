@@ -2587,6 +2587,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled by user safety check' });
           return;
         }
+        if (repo.kind !== 'svn') {
+          const safeToPush = await this.checkUnpushedSubmodules(msg.repoId);
+          if (!safeToPush) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+            return;
+          }
+        }
         try {
           const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
           await vscode.window.withProgress(
@@ -2601,6 +2608,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const pushResult = await runPushWithProtection(repo, {
               repoName: this.manager.getRepoMeta(msg.repoId)?.name ?? path.basename(repo.rootPath),
               logger: this.logger,
+              beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
             });
             if (!pushResult.success) {
               if (pushResult.cancelled) {
@@ -2681,6 +2689,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'No remote configured' });
             return;
           }
+
+          for (const r of msg.repos) {
+            const safeToPush = await this.checkUnpushedSubmodules(r.repoId);
+            if (!safeToPush) {
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+              return;
+            }
+          }
         }
         const runMultiCommit = async (): Promise<void> => {
             const errors: string[] = [];
@@ -2725,6 +2741,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   const pushResult = await runPushWithProtection(repo, {
                     repoName: (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId,
                     logger: this.logger,
+                    beforePush: () => this.checkUnpushedSubmodules(r.repoId),
                   });
                   if (!pushResult.success) {
                     if (pushResult.cancelled) {
@@ -3045,6 +3062,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           repoName,
           remote: msg.remote,
           logger: this.logger,
+          beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
         });
 
         if (pushResult.success) {
@@ -4662,7 +4680,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const repos = await this.manager.getAllSubmodules();
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
-              this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: false, error: String(e) });
+              const errMsg = e instanceof Error ? e.message : String(e);
+              void vscode.window.showErrorMessage(t('Failed to update submodule "{0}": {1}', msg.submodulePath, errMsg));
+              this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: false, error: errMsg });
             }
           }
         );
@@ -4680,7 +4700,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 .map(m => this.manager.getRepo(m.id))
                 .filter((r): r is GitService => !!r && r.kind === 'git');
               for (const repo of parentRepos) {
-                await repo.updateAllSubmodules(msg.recursive ?? true, msg.init ?? false);
+                await repo.updateAllSubmodules(msg.recursive ?? true, msg.init ?? true);
               }
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: true });
               this.manager.notifyDataInvalidated({
@@ -4690,7 +4710,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const repos = await this.manager.getAllSubmodules();
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
-              this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: '', submodulePath: '', op: 'update-all', ok: false, error: String(e) });
+              const errMsg = e instanceof Error ? e.message : String(e);
+              void vscode.window.showErrorMessage(t('Failed to update all submodules: {0}', errMsg));
+              this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: false, error: errMsg });
             }
           }
         );
@@ -4754,7 +4776,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Adding submodule {0}', subPath), cancellable: false },
           async () => {
             try {
-              await parentRepoA.addSubmodule(url.trim(), subPath.trim(), branch?.trim() || undefined);
+              await (parentRepoA as GitService).addSubmodule(url.trim(), subPath.trim(), branch?.trim() || undefined);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId, submodulePath: subPath.trim(), op: 'add', ok: true });
               this.manager.notifyDataInvalidated({
                 scopes: ['workspace', 'workingTree', 'unpushed', 'subtree'],
@@ -4774,12 +4796,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'SUBMODULE_SYNC': {
         const parentRepoS = this.manager.getRepo(msg.parentRepoId);
-        if (!parentRepoS) {
+        if (!parentRepoS || parentRepoS.kind !== 'git') {
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath ?? '', op: 'sync', ok: false, error: t('Repo not found') });
           return;
         }
         try {
-          await parentRepoS.syncSubmodule(msg.submodulePath);
+          await (parentRepoS as GitService).syncSubmodule(msg.submodulePath);
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath ?? '', op: 'sync', ok: true });
           const repos = await this.manager.getAllSubmodules();
           this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
@@ -4791,12 +4813,31 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'SUBMODULE_REMOVE': {
         const parentRepoR = this.manager.getRepo(msg.parentRepoId);
-        if (!parentRepoR) {
+        if (!parentRepoR || parentRepoR.kind !== 'git') {
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'remove', ok: false, error: t('Repo not found') });
           return;
         }
+
+        // 探测子模块是否有未提交修改或未推送提交风险
+        let riskWarning = '';
+        try {
+          const allSubs = await this.manager.getAllSubmodules();
+          const pGroup = allSubs.find(g => g.repoId === msg.parentRepoId);
+          const targetSub = pGroup?.submodules.find(s => s.path === msg.submodulePath);
+          if (targetSub) {
+            const risks: string[] = [];
+            if (targetSub.isDirty) risks.push(t('uncommitted local changes'));
+            if ((targetSub.unpushedCount ?? 0) > 0) risks.push(t('{0} unpushed commits', targetSub.unpushedCount ?? 0));
+            if (risks.length > 0) {
+              riskWarning = ' ' + t('WARNING: Submodule has {0}. Removing will permanently delete these modifications!', risks.join(' & '));
+            }
+          }
+        } catch {
+          // ignore risk detection failure
+        }
+
         const confirmRemove = await vscode.window.showWarningMessage(
-          t('Remove submodule "{0}"? This will deinitialize, unregister from .gitmodules, and delete its files.', msg.submodulePath),
+          t('Remove submodule "{0}"? This will deinitialize, unregister from .gitmodules, and delete its files.{1}', msg.submodulePath, riskWarning),
           { modal: true }, t('Remove Submodule')
         );
         if (confirmRemove !== t('Remove Submodule')) {
@@ -4804,7 +4845,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         try {
-          await parentRepoR.removeSubmodule(msg.submodulePath);
+          await (parentRepoR as GitService).removeSubmodule(msg.submodulePath);
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'remove', ok: true });
           this.manager.notifyDataInvalidated({
             scopes: ['workspace', 'workingTree', 'unpushed', 'subtree'],
@@ -4818,14 +4859,35 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       }
 
+      case 'SUBMODULE_RESOLVE_CONFLICT': {
+        const parentRepo = this.manager.getRepo(msg.parentRepoId);
+        if (!parentRepo || parentRepo.kind !== 'git') {
+          this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: t('Repo not found') });
+          return;
+        }
+        try {
+          await (parentRepo as GitService).resolveSubmoduleConflict(msg.submodulePath, msg.side);
+          this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: true });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree', 'workspace'],
+            repoIds: [msg.parentRepoId],
+          });
+          const repos = await this.manager.getAllSubmodules();
+          this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
+        } catch (e: unknown) {
+          this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: String(e) });
+        }
+        break;
+      }
+
       case 'SUBMODULE_GET_DIFF_SUMMARY': {
         const parentRepo = this.manager.getRepo(msg.parentRepoId);
-        if (!parentRepo) {
+        if (!parentRepo || parentRepo.kind !== 'git') {
           this.post({ type: 'SUBMODULE_DIFF_SUMMARY_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, error: t('Repo not found') });
           return;
         }
         try {
-          const diffSummary = await parentRepo.getSubmoduleDiffSummary(msg.submodulePath);
+          const diffSummary = await (parentRepo as GitService).getSubmoduleDiffSummary(msg.submodulePath);
           this.post({
             type: 'SUBMODULE_DIFF_SUMMARY_RESULT',
             requestId: msg.requestId,
@@ -4833,6 +4895,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             submodulePath: msg.submodulePath,
             oldHash: diffSummary.oldHash,
             newHash: diffSummary.newHash,
+            parentCommit: diffSummary.parentCommit,
+            indexCommit: diffSummary.indexCommit,
+            headCommit: diffSummary.headCommit,
             summary: diffSummary.summary,
           });
         } catch (e: unknown) {
@@ -5187,9 +5252,29 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private async checkUnpushedSubmodules(repoId: string): Promise<boolean> {
     try {
       const allSubs = await this.manager.getAllSubmodules();
-      const parentGroup = allSubs.find(g => g.repoId === repoId);
-      if (!parentGroup) return true;
-      const unpushedSubs = parentGroup.submodules.filter(s => (s.unpushedCount ?? 0) > 0);
+      // 收集当前仓库直接与间接下属的所有包含未推送提交的子模块
+      const unpushedSubs: import('../types/git').SubmoduleItem[] = [];
+      const queue = [repoId];
+      const visited = new Set<string>();
+
+      while (queue.length > 0) {
+        const curId = queue.shift()!;
+        if (visited.has(curId)) continue;
+        visited.add(curId);
+
+        const parentGroup = allSubs.find(g => g.repoId === curId);
+        if (!parentGroup) continue;
+
+        for (const sub of parentGroup.submodules) {
+          if ((sub.unpushedCount ?? 0) > 0) {
+            unpushedSubs.push(sub);
+          }
+          if (sub.repoId && !visited.has(sub.repoId)) {
+            queue.push(sub.repoId);
+          }
+        }
+      }
+
       if (unpushedSubs.length > 0) {
         const subNames = unpushedSubs.map(s => `${s.name} (${s.unpushedCount} ${t('unpushed')})`).join(', ');
         const choice = await vscode.window.showWarningMessage(
@@ -5199,7 +5284,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         );
         return choice === t('Push Anyway');
       }
-    } catch {}
+    } catch {
+      // ignore submodule detection error
+    }
     return true;
   }
 

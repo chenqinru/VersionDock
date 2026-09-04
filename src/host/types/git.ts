@@ -24,6 +24,7 @@ export interface SubmoduleEntry {
   initialized: boolean;
   headCommit?: string;
   recordedCommit?: string;
+  indexCommit?: string;
   branch?: string;
   syncStatus?: SubmoduleSyncStatus;
   isDetached?: boolean;

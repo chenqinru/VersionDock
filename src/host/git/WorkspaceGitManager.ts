@@ -558,7 +558,6 @@ export class WorkspaceGitManager implements vscode.Disposable {
       meta.parentRepoId = parent.id;
       meta.submodulePath = path.relative(parent.rootPath, meta.rootPath).split(path.sep).join('/');
       meta.depth = (parent.depth ?? 0) + 1;
-      meta.isSubmodule = true;
     }
   }
 
@@ -1552,7 +1551,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     } else if (/^[0-9a-f]{40}$/i.test(headContent)) {
       return { headCommit: headContent.slice(0, 8), isDetached: true };
     }
-  } catch {}
+  } catch {
+    // ignore read error
+  }
   return { isDetached: true };
 }
 
@@ -1565,7 +1566,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
     const parentRepos = Array.from(this.repos.entries()).filter(([repoId]) => {
       const meta = this.repoMetas.get(repoId);
-      return meta && (meta.kind ?? 'git') === 'git' && !meta.isSubmodule && !meta.parentRepoId && !meta.isWorktree;
+      if (!meta || (meta.kind ?? 'git') !== 'git') return false;
+      const hasGitmodules = fs.existsSync(path.join(meta.rootPath, '.gitmodules'));
+      // 包含 .gitmodules 的仓库或未嵌套的顶级仓库均作为父仓库处理子模块
+      return hasGitmodules || (!meta.isSubmodule && !meta.parentRepoId && !meta.isWorktree);
     });
 
     const results: RepoSubmodules[] = await Promise.all(
@@ -1654,8 +1658,23 @@ export class WorkspaceGitManager implements vscode.Disposable {
                           isDirty = subStatus.stagedFiles.length > 0 || subStatus.unstagedFiles.length > 0 || subStatus.conflictCount > 0;
                           unpushedCount = subStatus.branch.aheadBehind?.ahead ?? 0;
                         }
-                      } catch {}
+                      } catch {
+                        // ignore status timeout or error
+                      }
                     }
+                  }
+                }
+
+                // 子模块通常处于 detached HEAD 且无 tracking upstream 分支，
+                // 此时原生 API 无法提供 ahead 计数。若处于游离态或未检测到未推送，进行精准未推送可达性检查：
+                if (subRepo && (isDetached || !currentBranch || unpushedCount === 0)) {
+                  try {
+                    const reachableCount = await (subRepo as GitService).countUnpushedCommits();
+                    if (reachableCount > 0) {
+                      unpushedCount = reachableCount;
+                    }
+                  } catch {
+                    // ignore count unpushed error
                   }
                 }
               }

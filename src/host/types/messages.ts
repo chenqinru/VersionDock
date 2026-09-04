@@ -8,8 +8,6 @@ import type {
   MergeConflictFile,
   RepoMeta,
   RepoSubmodules,
-  SubmoduleItem,
-  SubmoduleSyncStatus,
   WorkspaceStatus,
   LineRange,
   ConflictNodeKind,
@@ -172,9 +170,9 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_SET_ACTIVE_TAB'; tab: CommitPanelTab }
   | { type: 'COMMIT_TRIGGER_ACTION'; andPush: boolean }
   | { type: 'CHANGELISTS_UPDATE'; changelists: ChangelistData[]; viewMode: 'simplified' | 'changelists' | 'vscode' }
-  | { type: 'SUBMODULE_OP_RESULT'; requestId: string; parentRepoId: string; submodulePath: string; op: 'init' | 'deinit' | 'update' | 'sync' | 'add' | 'remove' | 'update-all'; ok: boolean; error?: string }
+  | { type: 'SUBMODULE_OP_RESULT'; requestId: string; parentRepoId: string; submodulePath: string; op: 'init' | 'deinit' | 'update' | 'sync' | 'add' | 'remove' | 'update-all' | 'resolve-conflict'; ok: boolean; error?: string }
   | { type: 'SUBMODULE_LIST_RESULT'; repos: RepoSubmodules[]; error?: string }
-  | { type: 'SUBMODULE_DIFF_SUMMARY_RESULT'; requestId: string; parentRepoId: string; submodulePath: string; oldHash?: string; newHash?: string; summary?: string; error?: string }
+  | { type: 'SUBMODULE_DIFF_SUMMARY_RESULT'; requestId: string; parentRepoId: string; submodulePath: string; oldHash?: string; newHash?: string; parentCommit?: string; indexCommit?: string; headCommit?: string; summary?: string; error?: string }
   | { type: 'SUBMODULE_PUSH_RESULT'; requestId: string; repoId: string; ok: boolean; error?: string }
   | { type: 'SUBMODULE_PULL_RESULT'; requestId: string; repoId: string; ok: boolean; output?: string; error?: string }
   | { type: 'WORKTREE_LIST_RESULT'; repos: Array<{ repoId: string; repoName: string; repoColor: string; worktrees: WorktreeEntry[]; isLinkedWorktree: boolean }> }
@@ -281,6 +279,7 @@ export type CommitToHostMsg =
   | { type: 'SUBMODULE_ADD_PROMPT'; repoId?: string }
   | { type: 'SUBMODULE_SYNC'; requestId: string; parentRepoId: string; submodulePath?: string }
   | { type: 'SUBMODULE_REMOVE'; requestId: string; parentRepoId: string; submodulePath: string }
+  | { type: 'SUBMODULE_RESOLVE_CONFLICT'; requestId: string; parentRepoId: string; submodulePath: string; side: 'ours' | 'theirs' }
   | { type: 'SUBMODULE_GET_DIFF_SUMMARY'; requestId: string; parentRepoId: string; submodulePath: string }
   | { type: 'SUBMODULE_PUSH'; requestId: string; repoId: string }
   | { type: 'SUBMODULE_PULL'; requestId: string; repoId: string; rebase?: boolean }

@@ -24,6 +24,7 @@ export interface RunPushOptions {
   force?: boolean;
   remote?: string;
   silentOnSuccess?: boolean;
+  beforePush?: () => Promise<boolean>;
   logger?: {
     info(category: string, message: string, detail?: unknown): void;
     warn(category: string, message: string, detail?: unknown): void;
@@ -137,6 +138,13 @@ export async function runPushWithProtection(
   const allowed = await validateProtectedBranchPush(repo, repoName, force);
   if (!allowed) {
     return { success: false, cancelled: true };
+  }
+
+  if (options?.beforePush) {
+    const passed = await options.beforePush();
+    if (!passed) {
+      return { success: false, cancelled: true };
+    }
   }
 
   // 1. Initial push attempt (wrapped with push progress)

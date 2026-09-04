@@ -1987,7 +1987,7 @@ export class SvnService extends GitService {
     const workerCount = Math.min(2, targets.length);
     let nextIndex = 0;
     const workers = Array.from({ length: workerCount }, async () => {
-      while (true) {
+      while (nextIndex < targets.length) {
         const currentIndex = nextIndex++;
         if (currentIndex >= targets.length) return;
         try {

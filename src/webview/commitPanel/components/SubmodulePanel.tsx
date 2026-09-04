@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import type { RepoSubmodules, SubmoduleItem } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
@@ -21,6 +21,7 @@ export interface SubmodulePanelProps {
   onRemove: (parentRepoId: string, submodulePath: string) => void;
   onAdd: (parentRepoId?: string) => void;
   onRefresh: () => void;
+  onResolveConflict?: (parentRepoId: string, submodulePath: string, side: 'ours' | 'theirs') => void;
   onOpenInNewWindow: (absPath: string) => void;
   onOpenInOS: (absPath: string) => void;
   onRevealInExplorer: (parentRepoId: string, relPath: string) => void;
@@ -32,6 +33,13 @@ const REVEAL_OS_LABEL = IS_MAC ? t('Reveal in Finder') : IS_WIN ? t('Show in Exp
 
 function submoduleCtxItems(sub: SubmoduleItem): ContextMenuEntry[] {
   const items: ContextMenuEntry[] = [];
+  if (sub.syncStatus === 'conflict') {
+    items.push(
+      { id: 'resolve-ours', label: t('Resolve Conflict: Use Current (Ours)'), icon: 'check' },
+      { id: 'resolve-theirs', label: t('Resolve Conflict: Use Incoming (Theirs)'), icon: 'fold-down' },
+      { separator: true },
+    );
+  }
   if (!sub.initialized) {
     items.push({ id: 'init', label: t('Initialize Submodule'), icon: 'cloud-download' });
   } else {
@@ -72,6 +80,7 @@ function SubmoduleRow({
   onOpenInNewWindow,
   onOpenInOS,
   onRevealInExplorer,
+  onResolveConflict,
 }: {
   sub: SubmoduleItem;
   parentRepoId: string;
@@ -82,6 +91,7 @@ function SubmoduleRow({
   onSync: SubmodulePanelProps['onSync'];
   onDeinit: SubmodulePanelProps['onDeinit'];
   onRemove: SubmodulePanelProps['onRemove'];
+  onResolveConflict?: SubmodulePanelProps['onResolveConflict'];
   onOpenInNewWindow: SubmodulePanelProps['onOpenInNewWindow'];
   onOpenInOS: SubmodulePanelProps['onOpenInOS'];
   onRevealInExplorer: SubmodulePanelProps['onRevealInExplorer'];
@@ -193,6 +203,17 @@ function SubmoduleRow({
                 </button>
               ) : (
                 <>
+                  {sub.syncStatus === 'conflict' && (
+                    <button
+                      data-primary-action-btn=""
+                      style={{ ...row.primaryBtn, backgroundColor: 'var(--vscode-editorWarning-foreground, #cca700)', color: '#000' }}
+                      title={t('Resolve Conflict: Use Current Pointer (Ours)')}
+                      onClick={e => { e.stopPropagation(); onResolveConflict?.(parentRepoId, sub.path, 'ours'); }}
+                    >
+                      <Codicon name="check" style={{ marginRight: '4px', fontSize: '13px' }} />
+                      {t('Use Ours')}
+                    </button>
+                  )}
                   {sub.syncStatus === 'out-of-sync' && (
                     <button
                       data-primary-action-btn=""
@@ -249,6 +270,8 @@ function SubmoduleRow({
             if (id === 'init') onInit(parentRepoId, sub.path);
             else if (id === 'update') onUpdate(parentRepoId, sub.path, false, false);
             else if (id === 'update-remote') onUpdate(parentRepoId, sub.path, true, true);
+            else if (id === 'resolve-ours') onResolveConflict?.(parentRepoId, sub.path, 'ours');
+            else if (id === 'resolve-theirs') onResolveConflict?.(parentRepoId, sub.path, 'theirs');
             else if (id === 'sync') onSync(parentRepoId, sub.path);
             else if (id === 'deinit') onDeinit(parentRepoId, sub.path);
             else if (id === 'remove') onRemove(parentRepoId, sub.path);
@@ -275,6 +298,7 @@ function SubmoduleRepoGroup({
   onDeinit,
   onRemove,
   onAdd,
+  onResolveConflict,
   onOpenInNewWindow,
   onOpenInOS,
   onRevealInExplorer,
@@ -290,6 +314,7 @@ function SubmoduleRepoGroup({
   onDeinit: SubmodulePanelProps['onDeinit'];
   onRemove: SubmodulePanelProps['onRemove'];
   onAdd: SubmodulePanelProps['onAdd'];
+  onResolveConflict?: SubmodulePanelProps['onResolveConflict'];
   onOpenInNewWindow: SubmodulePanelProps['onOpenInNewWindow'];
   onOpenInOS: SubmodulePanelProps['onOpenInOS'];
   onRevealInExplorer: SubmodulePanelProps['onRevealInExplorer'];
@@ -383,6 +408,7 @@ function SubmoduleRepoGroup({
                   onSync={onSync}
                   onDeinit={onDeinit}
                   onRemove={onRemove}
+                  onResolveConflict={onResolveConflict}
                   onOpenInNewWindow={onOpenInNewWindow}
                   onOpenInOS={onOpenInOS}
                   onRevealInExplorer={onRevealInExplorer}
@@ -411,12 +437,12 @@ export function SubmodulePanel({
   onDeinit,
   onRemove,
   onAdd,
-  onRefresh,
+  onRefresh: _onRefresh,
+  onResolveConflict,
   onOpenInNewWindow,
   onOpenInOS,
   onRevealInExplorer,
 }: SubmodulePanelProps) {
-  const allSubmodules = useMemo(() => repos.flatMap(r => r.submodules), [repos]);
   const isInitialLoading = !initialLoaded && repos.length === 0;
   const showFullLoading = isInitialLoading || (loading && repos.length === 0);
 
@@ -448,6 +474,7 @@ export function SubmodulePanel({
               onDeinit={onDeinit}
               onRemove={onRemove}
               onAdd={onAdd}
+              onResolveConflict={onResolveConflict}
               onOpenInNewWindow={onOpenInNewWindow}
               onOpenInOS={onOpenInOS}
               onRevealInExplorer={onRevealInExplorer}

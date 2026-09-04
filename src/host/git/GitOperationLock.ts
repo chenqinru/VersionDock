@@ -84,20 +84,23 @@ export async function runGitCommandWithIndexLockRetry<T>(
   }
 }
 
-/** Create the standard VersionDock Git client without limiting read concurrency. */
-export function createGitClient(rootPath: string): SimpleGit {
+export function createGitClient(rootPath: string, unsafeOverrides?: Partial<SimpleGitUnsafeOptions>): SimpleGit {
   // simple-git's .env(name, value) replaces the child-process environment
   // instead of extending it. Passing only GIT_OPTIONAL_LOCKS therefore drops
   // HOME, which makes `git config --global` fail with "$HOME not set". Keep
   // the same environment Git would inherit when launched by the extension.
   const environment = getGitEnvironment();
+  const unsafeOptions: SimpleGitUnsafeOptions = {
+    ...getSimpleGitUnsafeOptions(environment),
+    ...unsafeOverrides,
+  };
   const client = simpleGit({
     baseDir: rootPath,
     // Recent simple-git versions validate environment variables passed through
     // .env(). These are inherited from the extension host, not repository
     // input, so allow only the categories that are actually present and keep
     // the previous Git authentication/editor behavior intact.
-    unsafe: getSimpleGitUnsafeOptions(environment),
+    unsafe: unsafeOptions,
   }).env(environment);
   const builderMethods = new Set(['customBinary', 'env', 'outputHandler', 'silent']);
 
@@ -116,13 +119,11 @@ export function createGitClient(rootPath: string): SimpleGit {
   return wrapped;
 }
 
-type SimpleGitUnsafeOptions = NonNullable<SimpleGitOptions['unsafe']>;
+export type SimpleGitUnsafeOptions = NonNullable<SimpleGitOptions['unsafe']>;
 
 function getSimpleGitUnsafeOptions(environment: NodeJS.ProcessEnv): SimpleGitUnsafeOptions {
   const options: SimpleGitUnsafeOptions = {};
   const has = (...names: string[]): boolean => names.some(name => environment[name] !== undefined);
-
-  options.allowUnsafeProtocolOverride = true;
 
   if (has('GIT_ASKPASS', 'SSH_ASKPASS')) options.allowUnsafeAskPass = true;
   if (has('EDITOR', 'VISUAL', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR')) options.allowUnsafeEditor = true;

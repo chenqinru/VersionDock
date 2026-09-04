@@ -399,6 +399,9 @@ export function CommitApp() {
     submodulePath: string;
     oldHash?: string;
     newHash?: string;
+    parentCommit?: string;
+    indexCommit?: string;
+    headCommit?: string;
     summary?: string;
     loading?: boolean;
     error?: string;
@@ -1103,6 +1106,9 @@ export function CommitApp() {
               loading: false,
               oldHash: msg.oldHash,
               newHash: msg.newHash,
+              parentCommit: msg.parentCommit,
+              indexCommit: msg.indexCommit,
+              headCommit: msg.headCommit,
               summary: msg.summary,
               error: msg.error,
             };
@@ -1351,10 +1357,15 @@ export function CommitApp() {
     send({ type: 'SUBMODULE_UPDATE', requestId: generateId(), parentRepoId, submodulePath, recursive, remote });
   }, [send]);
 
-  const handleSubmoduleUpdateAll = useCallback((parentRepoId?: string, recursive = true) => {
+  const handleSubmoduleUpdateAll = useCallback((parentRepoId?: string, recursive = true, init = true) => {
     const opKey = parentRepoId ? `${parentRepoId}:__all__` : '__all__';
     setSubmoduleOps(prev => ({ ...prev, [opKey]: 'update-all' }));
-    send({ type: 'SUBMODULE_UPDATE_ALL', parentRepoId, recursive });
+    send({ type: 'SUBMODULE_UPDATE_ALL', parentRepoId, recursive, init });
+  }, [send]);
+
+  const handleSubmoduleResolveConflict = useCallback((parentRepoId: string, submodulePath: string, side: 'ours' | 'theirs') => {
+    setSubmoduleOps(prev => ({ ...prev, [`${parentRepoId}:${submodulePath}`]: 'update' }));
+    send({ type: 'SUBMODULE_RESOLVE_CONFLICT', requestId: generateId(), parentRepoId, submodulePath, side });
   }, [send]);
 
   const handleSubmoduleSync = useCallback((parentRepoId: string, submodulePath?: string) => {
@@ -2156,7 +2167,9 @@ export function CommitApp() {
                   data-action-btn=""
                   key={tab}
                   style={css.tab(isActive)}
-                  title={`${label} (${count})`}
+                  title={tab === 'submodule' && totalSubmoduleIssues > 0
+                    ? `${label} (${count}, ${t('{0} issues', totalSubmoduleIssues)})`
+                    : `${label} (${count})`}
                   onClick={() => switchTab(tab)}
                 >
                   <Codicon
@@ -2169,7 +2182,9 @@ export function CommitApp() {
                     </span>
                   )}
                   {count > 0 && (
-                    <span style={css.tabBadge(isActive)}>{count}</span>
+                    <span style={css.tabBadge(isActive)}>
+                      {count}
+                    </span>
                   )}
                 </button>
               );
@@ -2567,6 +2582,7 @@ export function CommitApp() {
                 onRemove={handleSubmoduleRemove}
                 onAdd={handleSubmoduleAdd}
                 onRefresh={handleSubmoduleRefresh}
+                onResolveConflict={handleSubmoduleResolveConflict}
                 onOpenInNewWindow={handleSubmoduleOpenInNewWindow}
                 onOpenInOS={handleSubmoduleOpenInOS}
                 onRevealInExplorer={handleSubmoduleRevealInExplorer}
@@ -2869,12 +2885,26 @@ export function CommitApp() {
                 <>
                   <div style={css.compareBox}>
                     <div style={css.compareCol}>
-                      <div style={css.compareLabel}>{t('Recorded in Parent Commit')}</div>
+                      <div style={css.compareLabel}>{t('Recorded in Parent (HEAD)')}</div>
                       <div style={css.compareCommit}>
                         <span className="codicon codicon-git-commit" style={{ marginRight: 4, opacity: 0.7 }} />
-                        {submoduleDiffModal.oldHash ? submoduleDiffModal.oldHash.slice(0, 8) : '00000000'}
+                        {(submoduleDiffModal.parentCommit ?? submoduleDiffModal.oldHash)?.slice(0, 8) || '00000000'}
                       </div>
                     </div>
+                    {submoduleDiffModal.indexCommit && submoduleDiffModal.indexCommit !== submoduleDiffModal.parentCommit && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', opacity: 0.5 }}>
+                          <span className="codicon codicon-arrow-right" />
+                        </div>
+                        <div style={css.compareCol}>
+                          <div style={css.compareLabel}>{t('Staged in Index')}</div>
+                          <div style={{ ...css.compareCommit, color: 'var(--vscode-gitDecoration-stageModifiedResourceForeground, #89d185)' }}>
+                            <span className="codicon codicon-git-commit" style={{ marginRight: 4, opacity: 0.7 }} />
+                            {submoduleDiffModal.indexCommit.slice(0, 8)}
+                          </div>
+                        </div>
+                      </>
+                    )}
                     <div style={{ display: 'flex', alignItems: 'center', opacity: 0.5 }}>
                       <span className="codicon codicon-arrow-right" />
                     </div>
@@ -2882,7 +2912,7 @@ export function CommitApp() {
                       <div style={css.compareLabel}>{t('Current Submodule HEAD')}</div>
                       <div style={css.compareCommit}>
                         <span className="codicon codicon-git-commit" style={{ marginRight: 4, opacity: 0.7 }} />
-                        {submoduleDiffModal.newHash ? submoduleDiffModal.newHash.slice(0, 8) : '00000000'}
+                        {(submoduleDiffModal.headCommit ?? submoduleDiffModal.newHash)?.slice(0, 8) || '00000000'}
                       </div>
                     </div>
                   </div>

@@ -1977,7 +1977,7 @@ export class GitService {
     timeoutMs = 8000,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = execFile(
+      execFile(
         'git',
         ['-c', 'core.quotepath=false', ...args],
         {
@@ -3879,11 +3879,26 @@ export class GitService {
       if (key === 'branch') entry.branch = value.trim();
     }
 
-    // Run `git ls-files --stage` and `git submodule status` in parallel
-    const [lsStageRaw, statusRaw] = await Promise.all([
+    // Run `git ls-tree -r HEAD`, `git ls-files --stage` and `git submodule status` in parallel
+    const [lsTreeRaw, lsStageRaw, statusRaw] = await Promise.all([
+      this.git.raw(['ls-tree', '-r', 'HEAD']).catch(() => ''),
       this.git.raw(['ls-files', '--stage']).catch(() => ''),
       this.git.raw(['submodule', 'status']).catch(() => ''),
     ]);
+
+    const parentHeadCommitMap = new Map<string, string>();
+    for (const line of lsTreeRaw.split('\n')) {
+      if (!line.startsWith('160000 commit ')) continue;
+      const tabIdx = line.indexOf('\t');
+      if (tabIdx === -1) continue;
+      const metaPart = line.slice(0, tabIdx).trim();
+      const subPath = line.slice(tabIdx + 1).trim();
+      const parts = metaPart.split(/\s+/);
+      if (parts.length >= 3) {
+        parentHeadCommitMap.set(subPath, parts[2].slice(0, 8));
+      }
+    }
+
     const recordedCommitMap = new Map<string, string>();
     for (const line of lsStageRaw.split('\n')) {
       // Format: 160000 <hash> 0 <path>
@@ -3913,7 +3928,9 @@ export class GitService {
       if (!mod.path) continue;
       const subFullPath = path.join(this.rootPath, mod.path);
       const st = statusMap.get(mod.path);
-      const recorded = recordedCommitMap.get(mod.path);
+      const indexRecorded = recordedCommitMap.get(mod.path);
+      const parentHeadRecorded = parentHeadCommitMap.get(mod.path);
+      const recorded = parentHeadRecorded ?? indexRecorded;
       const hasGit = fs.existsSync(path.join(subFullPath, '.git'));
       const initialized = st ? st.initialized : hasGit;
       const headCommit = st?.headCommit;
@@ -3936,11 +3953,20 @@ export class GitService {
         initialized,
         headCommit,
         recordedCommit: recorded,
+        indexCommit: indexRecorded,
         syncStatus,
         isDirty: st?.isDirty ?? false,
       });
     }
     return entries;
+  }
+
+  private submoduleGit: SimpleGit | null = null;
+  private getSubmoduleGit(): SimpleGit {
+    if (!this.submoduleGit) {
+      this.submoduleGit = createGitClient(this.rootPath, { allowUnsafeProtocolOverride: true });
+    }
+    return this.submoduleGit;
   }
 
   async addSubmodule(url: string, submodulePath: string, branch?: string): Promise<void> {
@@ -3950,7 +3976,7 @@ export class GitService {
         args.push('-b', branch.trim());
       }
       args.push('--', url.trim(), this.normalizeRepoPath(submodulePath));
-      await this.git.raw(args);
+      await this.getSubmoduleGit().raw(args);
     });
   }
 
@@ -3960,23 +3986,94 @@ export class GitService {
       if (submodulePath) {
         args.push('--', this.literalPathspec(submodulePath));
       }
-      await this.git.raw(args);
+      await this.getSubmoduleGit().raw(args);
     });
   }
 
   async removeSubmodule(submodulePath: string): Promise<void> {
     const normPath = this.normalizeRepoPath(submodulePath);
     const subAbsPath = path.join(this.rootPath, normPath);
+
+    // 1. 从子模块内部 .git 解析真实 gitdir (若存在)
+    let actualGitDir: string | undefined;
+    const dotGitFile = path.join(subAbsPath, '.git');
+    if (fs.existsSync(dotGitFile)) {
+      try {
+        const stat = fs.statSync(dotGitFile);
+        if (stat.isFile()) {
+          const content = fs.readFileSync(dotGitFile, 'utf8').trim();
+          const match = content.match(/^gitdir:\s*(.+)$/i);
+          if (match) {
+            actualGitDir = path.resolve(subAbsPath, match[1].trim());
+          }
+        }
+      } catch {
+        // ignore read error
+      }
+    }
+
+    // 2. 从 .gitmodules 获取该 path 对应的自定义 submodule name
+    let submoduleName = normPath;
+    const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
+    if (fs.existsSync(gitmodulesPath)) {
+      try {
+        const raw = fs.readFileSync(gitmodulesPath, 'utf8');
+        let curName = '';
+        for (const line of raw.split('\n')) {
+          const sec = line.match(/^\s*\[submodule\s+"(.+?)"\]/);
+          if (sec) { curName = sec[1]; continue; }
+          const kv = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
+          if (kv && this.normalizeRepoPath(kv[1].trim()) === normPath && curName) {
+            submoduleName = curName;
+            break;
+          }
+        }
+      } catch {
+        // ignore .gitmodules parse error
+      }
+    }
+
     return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
       // 1. git submodule deinit -f -- <path>
       await this.git.raw(['submodule', 'deinit', '-f', '--', this.literalPathspec(submodulePath)]).catch(() => {});
       // 2. git rm -f -- <path>
       await this.git.raw(['rm', '-f', '--', this.literalPathspec(submodulePath)]);
-      // 3. remove .git/modules/<name or path>
-      const gitmodulesModuleDir = path.join(this.rootPath, '.git', 'modules', normPath);
-      if (fs.existsSync(gitmodulesModuleDir)) {
-        try { fs.rmSync(gitmodulesModuleDir, { recursive: true, force: true }); } catch {}
+      // 3. remove .git/modules/<name or path> safely
+      const modulesBase = path.resolve(this.rootPath, '.git', 'modules');
+      const candidatesToClean = new Set<string>();
+      const isSubmoduleMetaDir = (dir: string) => isSameOrChildPath(modulesBase, dir) && path.relative(modulesBase, dir) !== '';
+
+      if (actualGitDir && isSubmoduleMetaDir(actualGitDir)) {
+        candidatesToClean.add(actualGitDir);
       }
+      const namedDir = path.join(modulesBase, submoduleName);
+      if (isSubmoduleMetaDir(namedDir)) {
+        candidatesToClean.add(namedDir);
+      }
+      const pathDir = path.join(modulesBase, normPath);
+      if (isSubmoduleMetaDir(pathDir)) {
+        candidatesToClean.add(pathDir);
+      }
+
+      for (const dir of candidatesToClean) {
+        if (fs.existsSync(dir)) {
+          try {
+            fs.rmSync(dir, { recursive: true, force: true });
+          } catch (e: unknown) {
+            this.logger?.warn('Git', `Failed to delete submodule metadata directory: ${dir}`, { error: String(e) });
+          }
+        }
+      }
+    });
+  }
+
+  async resolveSubmoduleConflict(submodulePath: string, side: 'ours' | 'theirs'): Promise<void> {
+    const normPath = this.normalizeRepoPath(submodulePath);
+    const subAbsPath = path.join(this.rootPath, normPath);
+    return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
+      const pathspec = this.literalPathspec(submodulePath);
+      await this.git.raw(['checkout', `--${side}`, '--', pathspec]);
+      await this.git.raw(['add', '--', pathspec]);
     });
   }
 
@@ -3984,8 +4081,8 @@ export class GitService {
     const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
     return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
       const pathspec = this.literalPathspec(submodulePath);
-      await this.git.raw(['-c', 'protocol.file.allow=always', 'submodule', 'init', '--', pathspec]);
-      await this.git.raw(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', '--', pathspec]);
+      await this.getSubmoduleGit().raw(['-c', 'protocol.file.allow=always', 'submodule', 'init', '--', pathspec]);
+      await this.getSubmoduleGit().raw(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', '--', pathspec]);
     });
   }
 
@@ -4002,41 +4099,133 @@ export class GitService {
   async updateSubmodule(submodulePath: string, init = true, recursive = false, remote = false): Promise<void> {
     const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
     return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
+      // 当对齐到父仓库记录指针时（非 remote 更新），若父仓库暂存区中存在该子模块指针改动，
+      // 先将暂存区指针恢复至 HEAD，否则 git submodule update 只会对齐至 index，导致如果 index 已被暂存则无任何反应
+      if (!remote) {
+        await this.git.raw(['checkout', 'HEAD', '--', this.literalPathspec(submodulePath)]).catch(() => {});
+      }
       const args = ['-c', 'protocol.file.allow=always', 'submodule', 'update'];
       if (init) args.push('--init');
       if (recursive) args.push('--recursive');
       if (remote) args.push('--remote');
       args.push('--', this.literalPathspec(submodulePath));
-      await this.git.raw(args);
+      await this.getSubmoduleGit().raw(args);
     });
   }
 
-  async updateAllSubmodules(recursive = true, init = false): Promise<void> {
+  async updateAllSubmodules(recursive = true, init = true): Promise<void> {
     return withGitWriteLock(this.rootPath, async () => {
+      // 对齐所有子模块至父仓库 HEAD 记录时，若有子模块指针已被暂存，先将暂存区指针恢复至 HEAD
+      const entries = await this.getSubmoduleList().catch(() => []);
+      for (const entry of entries) {
+        if (entry.indexCommit && entry.recordedCommit && entry.indexCommit !== entry.recordedCommit) {
+          await this.git.raw(['checkout', 'HEAD', '--', this.literalPathspec(entry.path)]).catch(() => {});
+        }
+      }
       const args = ['-c', 'protocol.file.allow=always', 'submodule', 'update'];
       if (init) args.push('--init');
       if (recursive) args.push('--recursive');
-      await this.git.raw(args);
+      await this.getSubmoduleGit().raw(args);
     });
   }
 
-  async getSubmoduleDiffSummary(submodulePath: string): Promise<{ oldHash?: string; newHash?: string; summary?: string }> {
-    const entries = await this.getSubmoduleList().catch(() => []);
-    const entry = entries.find(e => e.path === submodulePath || e.path === this.normalizeRepoPath(submodulePath));
-    const oldHash = entry?.recordedCommit;
-    const newHash = entry?.headCommit;
+  async getSubmoduleDiffSummary(submodulePath: string): Promise<{
+    oldHash?: string;
+    newHash?: string;
+    summary?: string;
+    parentCommit?: string;
+    indexCommit?: string;
+    headCommit?: string;
+  }> {
+    const normPath = this.normalizeRepoPath(submodulePath);
+    const subAbsPath = path.join(this.rootPath, normPath);
+
+    // 1. 从父仓库 HEAD 树解析真实父提交指针
+    let parentCommit: string | undefined;
+    try {
+      const rawHead = (await this.git.raw(['rev-parse', `HEAD:${normPath}`])).trim();
+      if (/^[0-9a-f]{40}$/i.test(rawHead)) {
+        parentCommit = rawHead;
+      }
+    } catch {
+      // HEAD may not exist or new submodule not committed yet
+    }
+
+    // 2. 从 index 读取暂存区指针
+    let indexCommit: string | undefined;
+    try {
+      const lsStageRaw = await this.git.raw(['ls-files', '--stage', '--', this.literalPathspec(normPath)]);
+      for (const line of lsStageRaw.split('\n')) {
+        if (!line.startsWith('160000 ')) continue;
+        const parts = line.split(/\s+/);
+        if (parts.length >= 2 && /^[0-9a-f]{40}$/i.test(parts[1])) {
+          indexCommit = parts[1];
+          break;
+        }
+      }
+    } catch {
+      // ignore stage error
+    }
+
+    // 3. 读取子模块工作区当前检出的 HEAD
+    let headCommit: string | undefined;
+    if (fs.existsSync(path.join(subAbsPath, '.git'))) {
+      try {
+        const rawSubHead = (await createGitClient(subAbsPath, { allowUnsafeProtocolOverride: true }).raw(['rev-parse', 'HEAD'])).trim();
+        if (/^[0-9a-f]{40}$/i.test(rawSubHead)) {
+          headCommit = rawSubHead;
+        }
+      } catch {
+        // ignore submodule rev-parse error
+      }
+    }
+
+    const oldHash = parentCommit ?? indexCommit;
+    const newHash = headCommit ?? indexCommit;
     let summary: string | undefined;
 
-    const subAbsPath = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
-    if (fs.existsSync(path.join(subAbsPath, '.git')) && oldHash && newHash && oldHash !== newHash) {
-      try {
-        const logOutput = await createGitClient(subAbsPath).raw(['log', '--oneline', '-n', '5', `${oldHash}..${newHash}`]);
-        if (logOutput.trim()) {
-          summary = logOutput.trim();
+    if (fs.existsSync(path.join(subAbsPath, '.git'))) {
+      const compareBase = parentCommit ?? indexCommit;
+      const compareTarget = headCommit ?? indexCommit;
+      if (compareBase && compareTarget && compareBase !== compareTarget) {
+        try {
+          const logOutput = await createGitClient(subAbsPath, { allowUnsafeProtocolOverride: true }).raw(['log', '--oneline', '-n', '10', `${compareBase}..${compareTarget}`]);
+          if (logOutput.trim()) {
+            summary = logOutput.trim();
+          }
+        } catch {
+          // commits might not be connected directly
         }
-      } catch {}
+      }
     }
-    return { oldHash, newHash, summary };
+
+    return {
+      oldHash,
+      newHash,
+      summary,
+      parentCommit,
+      indexCommit,
+      headCommit,
+    };
+  }
+
+  async countUnpushedCommits(): Promise<number> {
+    try {
+      const raw = await this.git.raw(['rev-list', '@{u}..HEAD', '--count']);
+      return parseInt(raw.trim(), 10) || 0;
+    } catch {
+      try {
+        const remotes = await this.git.getRemotes();
+        if (remotes.length === 0) {
+          const raw = await this.git.raw(['rev-list', 'HEAD', '--count', '--max-count=100']);
+          return parseInt(raw.trim(), 10) || 0;
+        }
+        const raw = await this.git.raw(['rev-list', 'HEAD', '--not', '--remotes', '--count']);
+        return parseInt(raw.trim(), 10) || 0;
+      } catch {
+        return 0;
+      }
+    }
   }
 
   async getUnpushedCommits(): Promise<UnpushedCommit[]> {
