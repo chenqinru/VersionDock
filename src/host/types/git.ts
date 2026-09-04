@@ -14,14 +14,35 @@ export interface RepoMeta {
   mainWorktreePath?: string; // rootPath of the main worktree repo
 }
 
+export type SubmoduleSyncStatus = 'synced' | 'out-of-sync' | 'uninitialized' | 'conflict';
+
 export interface SubmoduleEntry {
   name: string;
-  path: string;       // relativo al repo padre
+  path: string;       // path relative to parent repo
   url: string;
   repoId: string;     // stable git repo instance id for the submodule
   initialized: boolean;
   headCommit?: string;
+  recordedCommit?: string;
+  branch?: string;
+  syncStatus?: SubmoduleSyncStatus;
+  isDetached?: boolean;
+  currentBranch?: string;
   isDirty: boolean;
+  unpushedCount?: number;
+}
+
+export interface SubmoduleItem extends SubmoduleEntry {
+  absPath: string;
+  parentRepoId: string;
+  syncStatus: SubmoduleSyncStatus;
+}
+
+export interface RepoSubmodules {
+  repoId: string;
+  repoName: string;
+  repoColor: string;
+  submodules: SubmoduleItem[];
 }
 
 export interface BranchInfo {

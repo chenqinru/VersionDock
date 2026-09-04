@@ -96,10 +96,12 @@ const styles = {
     borderRadius: '4px',
     boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
     minWidth: '180px',
+    width: 'max-content',
     padding: '4px 0',
     fontSize: '12px',
     color: 'var(--vscode-menu-foreground, var(--vscode-foreground))',
     userSelect: 'none' as const,
+    whiteSpace: 'nowrap' as const,
   },
   item: (danger: boolean): React.CSSProperties => ({
     display: 'flex',
@@ -108,6 +110,7 @@ const styles = {
     padding: '5px 12px',
     cursor: 'pointer',
     background: 'transparent',
+    whiteSpace: 'nowrap' as const,
     color: danger
       ? 'var(--vscode-errorForeground)'
       : 'var(--vscode-menu-foreground, var(--vscode-foreground))',

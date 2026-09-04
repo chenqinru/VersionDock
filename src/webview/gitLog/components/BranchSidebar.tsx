@@ -318,7 +318,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
                   <span style={styles.repoName}>{displayName}</span>
                   {repo.isSubmodule && (
                     <span style={styles.submoduleBadge} title={repo.submodulePath ? t('Submodule: {0}', repo.submodulePath) : t('Submodule')}>
-                      SUB
+                      {t('SUB')}
                     </span>
                   )}
                   {showVcsBadges && (

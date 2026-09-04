@@ -293,8 +293,9 @@ function parseAheadBehindTrack(track: string): { ahead: number; behind: number }
 }
 
 function parseSubmoduleStatusLine(line: string): { flag: string; path: string } | undefined {
-  const match = line.match(/^([ +\-U])([0-9a-f]{40,64})\s+(.+)$/i);
+  const match = line.match(/^([ +\-U]?)([0-9a-f]{40,64})\s+(.+)$/i);
   if (!match) return undefined;
+  const flag = match[1] || ' ';
   let submodulePath = match[3];
   // The optional describe suffix is separated from the path by " (". Preserve
   // spaces inside the path itself (the previous \S+ parser truncated them).
@@ -302,7 +303,7 @@ function parseSubmoduleStatusLine(line: string): { flag: string; path: string } 
   if (descriptionIndex >= 0 && submodulePath.endsWith(')')) {
     submodulePath = submodulePath.slice(0, descriptionIndex);
   }
-  return submodulePath ? { flag: match[1], path: submodulePath } : undefined;
+  return submodulePath ? { flag, path: submodulePath } : undefined;
 }
 
 function gitErrorDetail(error: unknown): string {
@@ -3860,9 +3861,9 @@ export class GitService {
     const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
     if (!fs.existsSync(gitmodulesPath)) return [];
 
-    // Parse .gitmodules to get names/paths/urls
+    // Parse .gitmodules to get names/paths/urls/branches
     const raw = fs.readFileSync(gitmodulesPath, 'utf8');
-    const moduleMap = new Map<string, { name: string; path: string; url: string }>();
+    const moduleMap = new Map<string, { name: string; path: string; url: string; branch?: string }>();
     let currentName = '';
     for (const line of raw.split('\n')) {
       const sectionMatch = line.match(/^\[submodule "(.+)"\]/);
@@ -3875,19 +3876,32 @@ export class GitService {
       const entry = moduleMap.get(currentName)!;
       if (key === 'path') entry.path = value.trim();
       if (key === 'url') entry.url = value.trim();
+      if (key === 'branch') entry.branch = value.trim();
     }
 
-    // Run `git submodule status` to get init state, HEAD commit, dirty flag
-    const statusRaw = await this.git.raw(['submodule', 'status']).catch(() => '');
-    // Each line: " <hash> <path> (<description>)" or "-<hash> <path>" or "+<hash> <path>"
+    // Run `git ls-files --stage` and `git submodule status` in parallel
+    const [lsStageRaw, statusRaw] = await Promise.all([
+      this.git.raw(['ls-files', '--stage']).catch(() => ''),
+      this.git.raw(['submodule', 'status']).catch(() => ''),
+    ]);
+    const recordedCommitMap = new Map<string, string>();
+    for (const line of lsStageRaw.split('\n')) {
+      // Format: 160000 <hash> 0 <path>
+      if (!line.startsWith('160000 ')) continue;
+      const parts = line.split(/\s+/);
+      if (parts.length >= 4) {
+        recordedCommitMap.set(parts.slice(3).join(' ').trim(), parts[1].slice(0, 8));
+      }
+    }
     // Leading char: ' ' = initialized clean, '-' = not initialized, '+' = different commit, 'U' = conflict
-    const statusMap = new Map<string, { initialized: boolean; headCommit: string; isDirty: boolean }>();
-    for (const line of statusRaw.trim().split('\n')) {
-      if (!line.trim()) continue;
+    const statusMap = new Map<string, { flag: string; initialized: boolean; headCommit: string; isDirty: boolean }>();
+    for (const line of statusRaw.split(/\r?\n/)) {
+      if (!line || !line.trim()) continue;
       const parsed = parseSubmoduleStatusLine(line);
-      const hash = line.match(/^[ +\-U]([0-9a-f]{40,64})/i)?.[1];
+      const hash = line.match(/^([ +\-U]?)([0-9a-f]{40,64})/i)?.[2];
       if (!parsed || !hash) continue;
       statusMap.set(parsed.path, {
+        flag: parsed.flag,
         initialized: parsed.flag !== '-',
         headCommit: hash.slice(0, 8),
         isDirty: parsed.flag === '+',
@@ -3899,25 +3913,79 @@ export class GitService {
       if (!mod.path) continue;
       const subFullPath = path.join(this.rootPath, mod.path);
       const st = statusMap.get(mod.path);
+      const recorded = recordedCommitMap.get(mod.path);
+      const hasGit = fs.existsSync(path.join(subFullPath, '.git'));
+      const initialized = st ? st.initialized : hasGit;
+      const headCommit = st?.headCommit;
+
+      let syncStatus: import('../types/git').SubmoduleSyncStatus = 'synced';
+      if (!initialized) {
+        syncStatus = 'uninitialized';
+      } else if (st?.flag === 'U') {
+        syncStatus = 'conflict';
+      } else if (st?.flag === '+' || (recorded && headCommit && !headCommit.startsWith(recorded) && !recorded.startsWith(headCommit))) {
+        syncStatus = 'out-of-sync';
+      }
+
       entries.push({
         name: mod.name,
         path: mod.path,
         url: mod.url,
+        branch: mod.branch,
         repoId: subFullPath,
-        initialized: st?.initialized ?? false,
-        headCommit: st?.headCommit,
+        initialized,
+        headCommit,
+        recordedCommit: recorded,
+        syncStatus,
         isDirty: st?.isDirty ?? false,
       });
     }
     return entries;
   }
 
+  async addSubmodule(url: string, submodulePath: string, branch?: string): Promise<void> {
+    return withGitWriteLock(this.rootPath, async () => {
+      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'add'];
+      if (branch && branch.trim()) {
+        args.push('-b', branch.trim());
+      }
+      args.push('--', url.trim(), this.normalizeRepoPath(submodulePath));
+      await this.git.raw(args);
+    });
+  }
+
+  async syncSubmodule(submodulePath?: string): Promise<void> {
+    return withGitWriteLock(this.rootPath, async () => {
+      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'sync'];
+      if (submodulePath) {
+        args.push('--', this.literalPathspec(submodulePath));
+      }
+      await this.git.raw(args);
+    });
+  }
+
+  async removeSubmodule(submodulePath: string): Promise<void> {
+    const normPath = this.normalizeRepoPath(submodulePath);
+    const subAbsPath = path.join(this.rootPath, normPath);
+    return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
+      // 1. git submodule deinit -f -- <path>
+      await this.git.raw(['submodule', 'deinit', '-f', '--', this.literalPathspec(submodulePath)]).catch(() => {});
+      // 2. git rm -f -- <path>
+      await this.git.raw(['rm', '-f', '--', this.literalPathspec(submodulePath)]);
+      // 3. remove .git/modules/<name or path>
+      const gitmodulesModuleDir = path.join(this.rootPath, '.git', 'modules', normPath);
+      if (fs.existsSync(gitmodulesModuleDir)) {
+        try { fs.rmSync(gitmodulesModuleDir, { recursive: true, force: true }); } catch {}
+      }
+    });
+  }
+
   async initSubmodule(submodulePath: string): Promise<void> {
     const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
     return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
       const pathspec = this.literalPathspec(submodulePath);
-      await this.git.raw(['submodule', 'init', '--', pathspec]);
-      await this.git.raw(['submodule', 'update', '--', pathspec]);
+      await this.git.raw(['-c', 'protocol.file.allow=always', 'submodule', 'init', '--', pathspec]);
+      await this.git.raw(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', '--', pathspec]);
     });
   }
 
@@ -3931,23 +3999,44 @@ export class GitService {
     });
   }
 
-  async updateSubmodule(submodulePath: string, init = true, recursive = false): Promise<void> {
+  async updateSubmodule(submodulePath: string, init = true, recursive = false, remote = false): Promise<void> {
     const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
     return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
-      const args = ['submodule', 'update'];
+      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'update'];
       if (init) args.push('--init');
       if (recursive) args.push('--recursive');
+      if (remote) args.push('--remote');
       args.push('--', this.literalPathspec(submodulePath));
       await this.git.raw(args);
     });
   }
 
-  async updateAllSubmodules(recursive = true): Promise<void> {
+  async updateAllSubmodules(recursive = true, init = false): Promise<void> {
     return withGitWriteLock(this.rootPath, async () => {
-      const args = ['submodule', 'update', '--init'];
+      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'update'];
+      if (init) args.push('--init');
       if (recursive) args.push('--recursive');
       await this.git.raw(args);
     });
+  }
+
+  async getSubmoduleDiffSummary(submodulePath: string): Promise<{ oldHash?: string; newHash?: string; summary?: string }> {
+    const entries = await this.getSubmoduleList().catch(() => []);
+    const entry = entries.find(e => e.path === submodulePath || e.path === this.normalizeRepoPath(submodulePath));
+    const oldHash = entry?.recordedCommit;
+    const newHash = entry?.headCommit;
+    let summary: string | undefined;
+
+    const subAbsPath = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
+    if (fs.existsSync(path.join(subAbsPath, '.git')) && oldHash && newHash && oldHash !== newHash) {
+      try {
+        const logOutput = await createGitClient(subAbsPath).raw(['log', '--oneline', '-n', '5', `${oldHash}..${newHash}`]);
+        if (logOutput.trim()) {
+          summary = logOutput.trim();
+        }
+      } catch {}
+    }
+    return { oldHash, newHash, summary };
   }
 
   async getUnpushedCommits(): Promise<UnpushedCommit[]> {

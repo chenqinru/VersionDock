@@ -78,6 +78,23 @@ export class BranchStatusBar implements vscode.Disposable {
   private windowStateDisposable?: vscode.Disposable;
   private recentBranches = new Map<string, string[]>();
 
+  private tooltipSuppressedUntil = 0;
+  private pendingTooltipMarkdown: vscode.MarkdownString | undefined;
+
+  public suppressTooltipTemporarily(durationMs = 2000): void {
+    this.tooltipSuppressedUntil = Date.now() + durationMs;
+    this.statusBarItem.tooltip = undefined;
+    setTimeout(() => {
+      if (Date.now() >= this.tooltipSuppressedUntil && this.pendingTooltipMarkdown) {
+        this.statusBarItem.tooltip = this.pendingTooltipMarkdown;
+      }
+    }, durationMs + 50);
+  }
+
+  public returnFocusToEditor(): void {
+    void vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+  }
+
   private recordRecentBranch(repoId: string, branchName: string): void {
     if (!branchName || branchName === 'HEAD') return;
     const existing = this.recentBranches.get(repoId) ?? [];
@@ -304,13 +321,14 @@ export class BranchStatusBar implements vscode.Disposable {
       .filter(Boolean) as BranchInfo[];
 
     // Use effective name: detachedTag, detachedHash, or branch name.
-    // Diverged-branch warnings are Git-only; SVN branches are URL/layout based.
+    // Diverged-branch warnings apply to top-level repositories; submodules are pinned to commit pointers.
     const gitMetaIds = new Set(metas.filter(m => m.kind !== 'svn').map(m => m.id));
     const gitBranches = branches.filter(branch => gitMetaIds.has(branch.repoId));
-    const gitEffectiveNames = [...new Set(branches
-      .filter(b => gitMetaIds.has(b.repoId))
+    const topLevelGitMetaIds = new Set(metas.filter(m => m.kind !== 'svn' && !m.isSubmodule).map(m => m.id));
+    const topLevelEffectiveNames = [...new Set(branches
+      .filter(b => topLevelGitMetaIds.has(b.repoId))
       .map(b => b.detachedTag ?? b.detachedHash ?? b.name))];
-    this.branchesDiverged = gitEffectiveNames.length > 1;
+    this.branchesDiverged = topLevelEffectiveNames.length > 1;
     this.totalBehind = branches.reduce((sum, b) => sum + (b.aheadBehind?.behind ?? 0), 0);
     this.totalAhead = branches.reduce((sum, b) => sum + (b.aheadBehind?.ahead ?? 0), 0);
     this.hasBehind = this.totalBehind > 0;
@@ -498,7 +516,12 @@ export class BranchStatusBar implements vscode.Disposable {
       md.appendMarkdown(`**${t('Worktrees')}**: ${wtSummary}\n\n`);
     }
 
-    this.statusBarItem.tooltip = md;
+    this.pendingTooltipMarkdown = md;
+    if (Date.now() >= this.tooltipSuppressedUntil) {
+      this.statusBarItem.tooltip = md;
+    } else {
+      this.statusBarItem.tooltip = undefined;
+    }
 
     if (this.hasConflicts || hasOngoingOperation) {
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
@@ -591,6 +614,8 @@ export class BranchStatusBar implements vscode.Disposable {
         title: t('VersionDock: No Repository Found'),
         placeHolder: t('Select an action to get started…'),
       });
+      this.suppressTooltipTemporarily(2000);
+      this.returnFocusToEditor();
       if (pick) await pick.action();
       return;
     }
@@ -748,6 +773,8 @@ export class BranchStatusBar implements vscode.Disposable {
       matchOnDescription: true,
     });
 
+    this.suppressTooltipTemporarily(2000);
+    this.returnFocusToEditor();
     if (pick) await pick.action();
   }
 
@@ -1813,6 +1840,8 @@ export class BranchStatusBar implements vscode.Disposable {
       matchOnDetail: true,
     }) as BranchItem | undefined;
 
+    this.suppressTooltipTemporarily(2000);
+    this.returnFocusToEditor();
     if (pick) await pick.action();
   }
 

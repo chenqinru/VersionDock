@@ -5,7 +5,7 @@ import { GitService, type MergeCommitResult } from './GitService';
 import { SvnService } from '../svn/SvnService';
 import type { WorktreeEntry } from './GitService';
 import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
-import type { BranchInfo, CommitNode, GraphCommitNode, LineRange, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
+import type { BranchInfo, CommitNode, GraphCommitNode, LineRange, RepoMeta, RepoStatus, RepoSubmodules, SubmoduleItem, WorkspaceStatus } from '../types/git';
 import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
@@ -558,6 +558,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       meta.parentRepoId = parent.id;
       meta.submodulePath = path.relative(parent.rootPath, meta.rootPath).split(path.sep).join('/');
       meta.depth = (parent.depth ?? 0) + 1;
+      meta.isSubmodule = true;
     }
   }
 
@@ -594,6 +595,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.prevCommits.clear();
     this.prevUntracked.clear();
     this.gitignoreRulesCache.clear();
+    this.cachedSubmodules = null;
     this.initialStatusDone = false;
 
     const folders = vscode.workspace.workspaceFolders ?? [];
@@ -603,6 +605,16 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const gitApi = getVscodeGitApi();
     const colorIdx = { value: 0 };
 
+    // 1. 优先将工作区显式打开的顶级主项目加入，确保主项目始终排在第一位并分配第一主题色
+    for (const folder of folders) {
+      const repoPath = folder.uri.fsPath;
+      const gitDir = path.join(repoPath, '.git');
+      if (!fs.existsSync(gitDir) || seenGitRepoPaths.has(repoPath)) continue;
+      seenGitRepoPaths.add(repoPath);
+      discoveredGitRepoPaths.push(repoPath);
+    }
+
+    // 2. 扫描 VS Code 原生 Git API 检测到的仓库与子模块
     if (gitApi?.state === 'initialized') {
       for (const repository of gitApi.repositories) {
         if (repository.kind !== 'repository' && repository.kind !== 'submodule') continue;
@@ -612,14 +624,6 @@ export class WorkspaceGitManager implements vscode.Disposable {
         seenGitRepoPaths.add(repoPath);
         discoveredGitRepoPaths.push(repoPath);
       }
-    }
-
-    for (const folder of folders) {
-      const repoPath = folder.uri.fsPath;
-      const gitDir = path.join(repoPath, '.git');
-      if (!fs.existsSync(gitDir) || seenGitRepoPaths.has(repoPath)) continue;
-      seenGitRepoPaths.add(repoPath);
-      discoveredGitRepoPaths.push(repoPath);
     }
 
     const repositoryScanMaxDepth = this.getRepositoryScanMaxDepth();
@@ -640,7 +644,27 @@ export class WorkspaceGitManager implements vscode.Disposable {
       }
     }
 
+    // 3. 稳定排序：工作区根目录始终置顶，子模块/嵌套仓库按路径深度排在所属父项目下方
+    discoveredGitRepoPaths.sort((a, b) => {
+      const aIsFolder = folders.some(f => f.uri.fsPath === a);
+      const bIsFolder = folders.some(f => f.uri.fsPath === b);
+      if (aIsFolder && !bIsFolder) return -1;
+      if (!aIsFolder && bIsFolder) return 1;
+      return a.length - b.length;
+    });
+
     discoveredGitRepoPaths.forEach((repoPath) => {
+      const repoId = buildRepoId(repoPath, 'git');
+      const existingMeta = this.repoMetas.get(repoId);
+      if (this.repos.has(repoId) || existingMeta?.isSubmodule) {
+        // 如果该仓库已经被父项目的 discoverSubmodules 识别为子模块，跳过重复构建，
+        // 从而完整保留 isSubmodule: true、parentRepoId、submodulePath 与恒定的主题色彩
+        return;
+      }
+      // 若目录不是有效 Git 仓库（如尚未初始化的子模块目录），跳过顶级仓库构建
+      if (!fs.existsSync(path.join(repoPath, '.git'))) {
+        return;
+      }
       const meta = this.buildRepoMeta(repoPath, colorIdx.value++, folders, customColors);
       this.repoMetas.set(meta.id, meta);
       this.repos.set(meta.id, this.createGitService(meta.id, meta.rootPath));
@@ -938,7 +962,15 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
       // Avoid double-registering a path that's already a workspace folder
       const subRepoId = buildRepoId(subAbsPath, 'git');
-      if (this.repos.has(subRepoId)) continue;
+      if (this.repos.has(subRepoId)) {
+        const existing = this.repoMetas.get(subRepoId);
+        if (existing) {
+          existing.isSubmodule = true;
+          existing.parentRepoId = parentRepoId;
+          existing.submodulePath = subRelPath;
+        }
+        continue;
+      }
 
       // A submodule path must stay inside its parent repository.
       if (!isWithinPath(parentPath, subAbsPath)) continue;
@@ -946,6 +978,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
       const subName = path.basename(subRelPath);
       // Each submodule gets its own color slot — same as a regular workspace folder.
       const color = customColors[subName] ?? PROJECT_COLORS[colorIdx.value++ % PROJECT_COLORS.length];
+
+      const isInitialized = fs.existsSync(subGitDir);
 
       const meta: RepoMeta = {
         id: subRepoId,
@@ -958,33 +992,14 @@ export class WorkspaceGitManager implements vscode.Disposable {
         depth,
         kind: 'git',
       };
-      this.repoMetas.set(subRepoId, meta);
-      this.repos.set(subRepoId, this.createGitService(subRepoId, subAbsPath));
-
-      // Only set up watcher if the submodule is initialized (has .git)
-      if (fs.existsSync(subGitDir)) {
+      // Only register repository, set up watcher, and recurse if submodule is initialized (has .git)
+      if (isInitialized) {
+        this.repoMetas.set(subRepoId, meta);
+        this.repos.set(subRepoId, this.createGitService(subRepoId, subAbsPath));
         this.setupWatcher(subAbsPath, subRepoId);
-      } else {
-        const autoInit = vscode.workspace
-          .getConfiguration('versiondock')
-          .get<boolean>('git.cloneRecursiveSubmodules', true);
-        if (autoInit) {
-          const parentRepo = this.repos.get(parentRepoId);
-          if (parentRepo && parentRepo.kind === 'git') {
-            void parentRepo.updateSubmodule(subRelPath, true, true).then(() => {
-              if (fs.existsSync(subGitDir)) {
-                this.setupWatcher(subAbsPath, subRepoId);
-                this.scheduleRefresh();
-              }
-            }).catch(error => {
-              this.logger.debug('WorkspaceGitManager', 'Failed to auto-init submodule', { subRelPath, error: String(error) });
-            });
-          }
-        }
+        // Recurse into nested submodules
+        this.discoverSubmodules(subAbsPath, subRepoId, depth + 1, colorIdx, customColors);
       }
-
-      // Recurse into nested submodules
-      this.discoverSubmodules(subAbsPath, subRepoId, depth + 1, colorIdx, customColors);
     }
   }
 
@@ -1518,6 +1533,178 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return results;
   }
 
+  private readSubmoduleHeadFast(subAbsPath: string): { branch?: string; headCommit?: string; isDetached: boolean } {
+  try {
+    const gitPath = path.join(subAbsPath, '.git');
+    if (!fs.existsSync(gitPath)) return { isDetached: true };
+    let actualGitDir = gitPath;
+    const stat = fs.statSync(gitPath);
+    if (stat.isFile()) {
+      const content = fs.readFileSync(gitPath, 'utf8').trim();
+      const match = content.match(/^gitdir:\s*(.+)$/i);
+      if (match) actualGitDir = path.resolve(subAbsPath, match[1].trim());
+    }
+    const headFile = path.join(actualGitDir, 'HEAD');
+    if (!fs.existsSync(headFile)) return { isDetached: true };
+    const headContent = fs.readFileSync(headFile, 'utf8').trim();
+    if (headContent.startsWith('ref: refs/heads/')) {
+      return { branch: headContent.replace('ref: refs/heads/', ''), isDetached: false };
+    } else if (/^[0-9a-f]{40}$/i.test(headContent)) {
+      return { headCommit: headContent.slice(0, 8), isDetached: true };
+    }
+  } catch {}
+  return { isDetached: true };
+}
+
+  private cachedSubmodules: { data: RepoSubmodules[]; timestamp: number } | null = null;
+
+  async getAllSubmodules(force = false): Promise<RepoSubmodules[]> {
+    if (!force && this.cachedSubmodules && Date.now() - this.cachedSubmodules.timestamp < 3000) {
+      return this.cachedSubmodules.data;
+    }
+
+    const parentRepos = Array.from(this.repos.entries()).filter(([repoId]) => {
+      const meta = this.repoMetas.get(repoId);
+      return meta && (meta.kind ?? 'git') === 'git' && !meta.isSubmodule && !meta.parentRepoId && !meta.isWorktree;
+    });
+
+    const results: RepoSubmodules[] = await Promise.all(
+      parentRepos.map(async ([repoId, repo]) => {
+        const meta = this.repoMetas.get(repoId)!;
+        try {
+          const entries = await (repo as GitService).getSubmoduleList();
+
+          const submodules: SubmoduleItem[] = await Promise.all(
+            entries.map(async entry => {
+              const absPath = path.normalize(path.join(meta.rootPath, entry.path));
+              const subRepoId = buildRepoId(absPath, 'git');
+              const subMeta = Array.from(this.repoMetas.values()).find(
+                m => isPathEqual(m.rootPath, absPath) || (m.isSubmodule && m.parentRepoId === repoId && m.submodulePath === entry.path)
+              );
+              let subRepo = subMeta ? (this.repos.get(subMeta.id) as GitService | undefined) : undefined;
+              if (!subRepo && entry.initialized && fs.existsSync(path.join(absPath, '.git'))) {
+                subRepo = (this.repos.get(subRepoId) as GitService | undefined) ?? this.createGitService(subRepoId, absPath);
+              }
+
+              let isDetached = false;
+              let currentBranch: string | undefined;
+              let isDirty = entry.isDirty;
+              let unpushedCount = 0;
+              let headCommit = entry.headCommit;
+
+              if (entry.initialized && fs.existsSync(path.join(absPath, '.git'))) {
+                // 1. 优先从 VS Code 原生 Git API 内存快照获取（0ms，不产生任何外部进程）
+                const vsRepo = getVscodeRepository(absPath);
+                if (vsRepo?.state?.HEAD) {
+                  const headName = vsRepo.state.HEAD.name;
+                  currentBranch = (headName && headName !== 'HEAD') ? headName : undefined;
+                  isDetached = !currentBranch;
+                  if (vsRepo.state.HEAD.commit) {
+                    headCommit = vsRepo.state.HEAD.commit.slice(0, 8);
+                  }
+                  unpushedCount = vsRepo.state.HEAD.ahead ?? 0;
+                  isDirty = (vsRepo.state.workingTreeChanges.length + vsRepo.state.indexChanges.length) > 0;
+                } else {
+                  // 2. 其次从 VersionDock 自身已发布的最近一次状态缓存获取（0ms）
+                  const cachedStatus = this.lastPublishedStatus?.repos.find(
+                    r => r.repoId === subRepoId
+                  );
+                  if (cachedStatus) {
+                    isDetached = cachedStatus.isDetachedHead;
+                    const bName = cachedStatus.branch?.name;
+                    currentBranch = (!isDetached && bName && bName !== 'HEAD') ? bName : undefined;
+                    if (cachedStatus.branch?.detachedTag) {
+                      currentBranch = cachedStatus.branch.detachedTag;
+                    }
+                    if (cachedStatus.branch?.detachedHash) {
+                      headCommit = cachedStatus.branch.detachedHash;
+                    }
+                    isDirty = cachedStatus.stagedFiles.length > 0 || cachedStatus.unstagedFiles.length > 0 || cachedStatus.conflictCount > 0;
+                    unpushedCount = cachedStatus.branch?.aheadBehind?.ahead ?? 0;
+                  } else {
+                    // 3. 再次从子模块轻量文件系统（.git/HEAD）直接秒读分支与指针（0.05ms，不产生 Git 进程）
+                    const fastHead = this.readSubmoduleHeadFast(absPath);
+                    if (fastHead.branch && fastHead.branch !== 'HEAD') {
+                      currentBranch = fastHead.branch;
+                      isDetached = false;
+                    } else if (fastHead.headCommit) {
+                      headCommit = fastHead.headCommit;
+                      isDetached = true;
+                    } else {
+                      isDetached = fastHead.isDetached;
+                    }
+
+                    // 4. 仅在确实需要且有可用 subRepo 时，兜底做带短超时的并发状态查询，绝不阻塞界面
+                    if (subRepo) {
+                      try {
+                        const statusPromise = subRepo.getStatus();
+                        const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 500));
+                        const subStatus = await Promise.race([statusPromise, timeoutPromise]);
+                        if (subStatus) {
+                          isDetached = subStatus.isDetachedHead;
+                          if (subStatus.isDetachedHead) {
+                            currentBranch = subStatus.branch.detachedTag;
+                          } else {
+                            const bName = subStatus.branch.name;
+                            currentBranch = (bName && bName !== 'HEAD') ? bName : undefined;
+                          }
+                          if (subStatus.branch.detachedHash) {
+                            headCommit = subStatus.branch.detachedHash;
+                          }
+                          isDirty = subStatus.stagedFiles.length > 0 || subStatus.unstagedFiles.length > 0 || subStatus.conflictCount > 0;
+                          unpushedCount = subStatus.branch.aheadBehind?.ahead ?? 0;
+                        }
+                      } catch {}
+                    }
+                  }
+                }
+              }
+
+              // 清洗无意义的 HEAD 占位符：游离状态下未具名分支统一走 headCommit
+              if (currentBranch === 'HEAD') {
+                currentBranch = undefined;
+              }
+
+              // 已初始化的子模块若未处在具名分支上，默认视为游离在 headCommit 上
+              if (entry.initialized && !currentBranch) {
+                isDetached = true;
+              }
+
+              return {
+                ...entry,
+                absPath,
+                headCommit,
+                parentRepoId: repoId,
+                syncStatus: entry.syncStatus ?? (entry.initialized ? 'synced' : 'uninitialized'),
+                isDetached,
+                currentBranch,
+                isDirty,
+                unpushedCount,
+              };
+            })
+          );
+
+          return {
+            repoId,
+            repoName: meta.name,
+            repoColor: meta.color,
+            submodules,
+          };
+        } catch {
+          return {
+            repoId,
+            repoName: meta.name,
+            repoColor: meta.color,
+            submodules: [],
+          };
+        }
+      })
+    );
+
+    this.cachedSubmodules = { data: results, timestamp: Date.now() };
+    return results;
+  }
+
   private disposeWatchers(): void {
     this.watchers.forEach(d => d.dispose());
     this.watchers = [];
@@ -1549,6 +1736,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   notifyDataInvalidated(event: DataInvalidationEvent): void {
+    this.cachedSubmodules = null;
     for (const listener of this.dataInvalidationListeners) {
       try {
         listener(event);

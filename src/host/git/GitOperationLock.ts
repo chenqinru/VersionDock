@@ -122,6 +122,8 @@ function getSimpleGitUnsafeOptions(environment: NodeJS.ProcessEnv): SimpleGitUns
   const options: SimpleGitUnsafeOptions = {};
   const has = (...names: string[]): boolean => names.some(name => environment[name] !== undefined);
 
+  options.allowUnsafeProtocolOverride = true;
+
   if (has('GIT_ASKPASS', 'SSH_ASKPASS')) options.allowUnsafeAskPass = true;
   if (has('EDITOR', 'VISUAL', 'GIT_EDITOR', 'GIT_SEQUENCE_EDITOR')) options.allowUnsafeEditor = true;
   if (has('GIT_PAGER', 'PAGER')) options.allowUnsafePager = true;

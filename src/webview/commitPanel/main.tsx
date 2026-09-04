@@ -12,10 +12,11 @@ import { PushTab } from './components/PushTab';
 import { WorktreeDiffPanel } from './components/WorktreeDiffPanel';
 import { WorktreePanel } from './components/WorktreePanel';
 import { SubtreePanel } from './components/SubtreePanel';
+import { SubmodulePanel } from './components/SubmodulePanel';
 import { ConflictBanner, type ConflictBannerAction } from './components/ConflictBanner';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { Codicon } from '../shared/Codicon';
-import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../shared/msgTypes';
+import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus, RepoSubmodules, SubmoduleItem } from '../shared/msgTypes';
 import type { FileStatus } from '../shared/types';
 import { t } from '../shared/i18n';
 import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../shared/types';
@@ -180,15 +181,25 @@ const VSCODE_REPO_UNSTAGED_ITEMS: ContextMenuEntry[] = [
 ];
 
 const SUBMODULE_FILE_STAGED_ITEMS: ContextMenuEntry[] = [
-  { id: 'unstage',  label: t('Unstage'),   icon: 'remove' },
+  { id: 'unstage',                     label: t('Unstage'),                               icon: 'remove' },
   { separator: true },
-  { id: 'refresh',  label: t('Refresh'),   icon: 'refresh' },
+  { id: 'submodule-update-parent',     label: t('Update Submodule (Sync to Commit)'),    icon: 'sync' },
+  { id: 'submodule-reveal-panel',      label: t('Reveal in Submodules Panel'),           icon: 'repo-clone' },
+  { id: 'submodule-diff',              label: t('Show Pointer Diff'),                     icon: 'diff' },
+  { separator: true },
+  { id: 'submodule-open-window',       label: t('Open in New Window'),                    icon: 'link-external' },
+  { id: 'refresh',                     label: t('Refresh'),                               icon: 'refresh' },
 ];
 
 const SUBMODULE_FILE_UNSTAGED_ITEMS: ContextMenuEntry[] = [
-  { id: 'stage',    label: t('Stage'),     icon: 'add' },
+  { id: 'stage',                       label: t('Stage'),                                 icon: 'add' },
   { separator: true },
-  { id: 'refresh',  label: t('Refresh'),   icon: 'refresh' },
+  { id: 'submodule-update-parent',     label: t('Update Submodule (Sync to Commit)'),    icon: 'sync' },
+  { id: 'submodule-reveal-panel',      label: t('Reveal in Submodules Panel'),           icon: 'repo-clone' },
+  { id: 'submodule-diff',              label: t('Show Pointer Diff'),                     icon: 'diff' },
+  { separator: true },
+  { id: 'submodule-open-window',       label: t('Open in New Window'),                    icon: 'link-external' },
+  { id: 'refresh',                     label: t('Refresh'),                               icon: 'refresh' },
 ];
 
 const CHANGELIST_EMPTY_AREA_ITEMS: ContextMenuEntry[] = [
@@ -232,8 +243,8 @@ const CHANGELIST_HEADER_ITEMS_CUSTOM: ContextMenuEntry[] = [
   { id: 'refresh',     label: t('Refresh'),           icon: 'refresh' },
 ];
 
-type TabId = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree' | 'subtree';
-const ALL_TABS: TabId[] = ['changes', 'shelf', 'stash', 'worktree', 'subtree', 'push'];
+type TabId = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree' | 'subtree' | 'submodule';
+const ALL_TABS: TabId[] = ['changes', 'shelf', 'stash', 'submodule', 'worktree', 'subtree', 'push'];
 const SVN_ONLY_TABS: TabId[] = ['changes'];
 const SUBTREE_LIST_REQUEST_THROTTLE_MS = 60_000;
 
@@ -369,14 +380,33 @@ export function CommitApp() {
   const tabCountBootstrappedRepoIdsRef = useRef<Set<string>>(new Set());
   const tabCountWorktreeRequestedRef = useRef(false);
   const tabCountSubtreeRequestedRef = useRef(false);
+  const tabCountSubmoduleRequestedRef = useRef(false);
+
+  // ── Submodule state ───────────────────────────────────────────────────────
+  const [submoduleRepos, setSubmoduleRepos] = useState<RepoSubmodules[]>([]);
+  const submoduleReposRef = useRef<RepoSubmodules[]>(submoduleRepos);
+  submoduleReposRef.current = submoduleRepos;
+  const [submoduleLoading, setSubmoduleLoading] = useState(false);
+  const [submoduleInitialLoaded, setSubmoduleInitialLoaded] = useState(false);
+  const submoduleInitialLoadedRef = useRef(false);
+  submoduleInitialLoadedRef.current = submoduleInitialLoaded;
+  const [submoduleError, setSubmoduleError] = useState<string | null>(null);
+  const [submoduleOps, setSubmoduleOps] = useState<Record<string, string | undefined>>({});
+  const [highlightSubmodulePath, setHighlightSubmodulePath] = useState<string | null>(null);
+  const [submoduleDiffModal, setSubmoduleDiffModal] = useState<{
+    open: boolean;
+    parentRepoId: string;
+    submodulePath: string;
+    oldHash?: string;
+    newHash?: string;
+    summary?: string;
+    loading?: boolean;
+    error?: string;
+  } | null>(null);
 
   // ── Hidden repositories ───────────────────────────────────────────────────
   const [hiddenRepoIds, setHiddenRepoIds] = useState<string[]>([]);
   const hiddenRepoIdsRef = useRef<Set<string>>(new Set());
-
-  // ── Submodule detached HEAD warnings ─────────────────────────────────────
-  // repoId → headCommit — shown as dismissable banner above the file tree
-  const [detachedWarnings, setDetachedWarnings] = useState<Record<string, string>>({});
 
   // Track unstaged file counts per repo to detect new changes for auto-expand in vscode mode
   const prevUnstagedCountsRef = useRef<Map<string, number>>(new Map());
@@ -594,6 +624,14 @@ export function CommitApp() {
     send({ type: 'WORKTREE_REQUEST_LIST' });
   }, [send]);
 
+  const requestSubmoduleList = useCallback((silent = false) => {
+    if (!silent && (!submoduleInitialLoadedRef.current || submoduleReposRef.current.length === 0)) {
+      setSubmoduleLoading(true);
+    }
+    setSubmoduleError(null);
+    send({ type: 'SUBMODULE_REQUEST_LIST' });
+  }, [send]);
+
   const requestUnpushedCommits = useCallback((repoId: string, silent = false) => {
     setUnpushedMap(prev => ({
       ...prev,
@@ -685,8 +723,10 @@ export function CommitApp() {
       requestWorktreeList(true);
     } else if (tab === 'subtree') {
       requestSubtreeList(false, true);
+    } else if (tab === 'submodule') {
+      requestSubmoduleList(true);
     }
-  }, [requestShelveList, requestStashCount, requestStashList, requestUnpushedCommits, requestWorktreeList, requestSubtreeList]);
+  }, [requestShelveList, requestStashCount, requestStashList, requestUnpushedCommits, requestWorktreeList, requestSubtreeList, requestSubmoduleList]);
 
   syncTabDataRef.current = syncTabData;
 
@@ -747,6 +787,7 @@ export function CommitApp() {
           if (currentTab === 'stash') gitRepoList.forEach(r => { requestStashCount(r.repoId); requestStashList(r.repoId, true); });
           if (currentTab === 'push') gitRepoList.forEach(r => requestUnpushedCommits(r.repoId, true));
           if (currentTab === 'worktree') requestWorktreeList(true);
+          if (currentTab === 'submodule') requestSubmoduleList(true);
           // The host refresh path owns subtree refreshes so expensive split/remote
           // checks are not started twice by the same manual refresh.
           break;
@@ -1026,12 +1067,46 @@ export function CommitApp() {
           else if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
           break;
 
-        case 'SUBMODULE_OP_RESULT':
+        case 'SUBMODULE_OP_RESULT': {
+          setSubmoduleOps(prev => {
+            const next = { ...prev };
+            if (msg.op === 'update-all') {
+              if (msg.parentRepoId) delete next[`${msg.parentRepoId}:__all__`];
+              delete next['__all__'];
+            } else {
+              delete next[`${msg.parentRepoId}:${msg.submodulePath}`];
+            }
+            return next;
+          });
           if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          else if (msg.ok && (msg.op === 'init' || msg.op === 'deinit' || msg.op === 'update' || msg.op === 'sync' || msg.op === 'update-all' || msg.op === 'add' || msg.op === 'remove')) {
+            requestCommitStatus({ refreshSubtrees: false });
+          }
+          break;
+        }
+
+        case 'SUBMODULE_LIST_RESULT':
+          setSubmoduleInitialLoaded(true);
+          submoduleInitialLoadedRef.current = true;
+          setSubmoduleLoading(false);
+          setSubmoduleRepos(msg.repos);
+          dirtyTabsRef.current.delete('submodule');
+          if (msg.error) setSubmoduleError(msg.error);
+          else setSubmoduleError(null);
           break;
 
-        case 'SUBMODULE_DETACHED_HEAD_WARNING':
-          setDetachedWarnings(prev => ({ ...prev, [msg.repoId]: msg.headCommit }));
+        case 'SUBMODULE_DIFF_SUMMARY_RESULT':
+          setSubmoduleDiffModal(prev => {
+            if (!prev || prev.parentRepoId !== msg.parentRepoId || prev.submodulePath !== msg.submodulePath) return prev;
+            return {
+              ...prev,
+              loading: false,
+              oldHash: msg.oldHash,
+              newHash: msg.newHash,
+              summary: msg.summary,
+              error: msg.error,
+            };
+          });
           break;
 
         case 'SUBMODULE_PUSH_RESULT':
@@ -1260,6 +1335,71 @@ export function CommitApp() {
     send({ type: 'SUBTREE_REVEAL_PREFIX', entryId });
   }, [send]);
 
+  // ── Submodule callbacks ──────────────────────────────────────────────────
+
+  const handleSubmoduleRefresh = useCallback(() => {
+    requestSubmoduleList(false);
+  }, [requestSubmoduleList]);
+
+  const handleSubmoduleInit = useCallback((parentRepoId: string, submodulePath: string) => {
+    setSubmoduleOps(prev => ({ ...prev, [`${parentRepoId}:${submodulePath}`]: 'init' }));
+    send({ type: 'SUBMODULE_INIT', requestId: generateId(), parentRepoId, submodulePath });
+  }, [send]);
+
+  const handleSubmoduleUpdate = useCallback((parentRepoId: string, submodulePath: string, recursive = false, remote = false) => {
+    setSubmoduleOps(prev => ({ ...prev, [`${parentRepoId}:${submodulePath}`]: 'update' }));
+    send({ type: 'SUBMODULE_UPDATE', requestId: generateId(), parentRepoId, submodulePath, recursive, remote });
+  }, [send]);
+
+  const handleSubmoduleUpdateAll = useCallback((parentRepoId?: string, recursive = true) => {
+    const opKey = parentRepoId ? `${parentRepoId}:__all__` : '__all__';
+    setSubmoduleOps(prev => ({ ...prev, [opKey]: 'update-all' }));
+    send({ type: 'SUBMODULE_UPDATE_ALL', parentRepoId, recursive });
+  }, [send]);
+
+  const handleSubmoduleSync = useCallback((parentRepoId: string, submodulePath?: string) => {
+    if (submodulePath) {
+      setSubmoduleOps(prev => ({ ...prev, [`${parentRepoId}:${submodulePath}`]: 'sync' }));
+    }
+    send({ type: 'SUBMODULE_SYNC', requestId: generateId(), parentRepoId, submodulePath });
+  }, [send]);
+
+  const handleSubmoduleDeinit = useCallback((parentRepoId: string, submodulePath: string) => {
+    setSubmoduleOps(prev => ({ ...prev, [`${parentRepoId}:${submodulePath}`]: 'deinit' }));
+    send({ type: 'SUBMODULE_DEINIT', requestId: generateId(), parentRepoId, submodulePath });
+  }, [send]);
+
+  const handleSubmoduleRemove = useCallback((parentRepoId: string, submodulePath: string) => {
+    setSubmoduleOps(prev => ({ ...prev, [`${parentRepoId}:${submodulePath}`]: 'remove' }));
+    send({ type: 'SUBMODULE_REMOVE', requestId: generateId(), parentRepoId, submodulePath });
+  }, [send]);
+
+  const handleSubmoduleAdd = useCallback((parentRepoId?: string) => {
+    send({ type: 'SUBMODULE_ADD_PROMPT', repoId: parentRepoId });
+  }, [send]);
+
+  const handleSubmoduleOpenInNewWindow = useCallback((absPath: string) => {
+    send({ type: 'WORKTREE_OPEN_IN_NEW_WINDOW', worktreePath: absPath });
+  }, [send]);
+
+  const handleSubmoduleOpenInOS = useCallback((absPath: string) => {
+    send({ type: 'WORKTREE_OPEN_IN_OS', worktreePath: absPath });
+  }, [send]);
+
+  const handleSubmoduleRevealInExplorer = useCallback((parentRepoId: string, relPath: string) => {
+    send({ type: 'COMMIT_REVEAL_IN_EXPLORER', repoId: parentRepoId, filePath: relPath });
+  }, [send]);
+
+  const openSubmoduleDiffSummary = useCallback((parentRepoId: string, submodulePath: string) => {
+    setSubmoduleDiffModal({
+      open: true,
+      parentRepoId,
+      submodulePath,
+      loading: true,
+    });
+    send({ type: 'SUBMODULE_GET_DIFF_SUMMARY', requestId: generateId(), parentRepoId, submodulePath });
+  }, [send]);
+
   // ── Push / unpushed callbacks ─────────────────────────────────────────────
 
   const requestPushCommitFiles = useCallback((repoId: string, hash: string): Promise<PushCommitFile[]> => {
@@ -1348,12 +1488,12 @@ export function CommitApp() {
     const file = [...(repoStatus?.stagedFiles ?? []), ...(repoStatus?.unstagedFiles ?? [])]
       .find(item => item.path === filePath);
     if (file?.submodule?.isSubmodule) {
-      store.setError(t('Inspect file changes in the submodule repository section. Parent repos only track the gitlink update.'));
+      openSubmoduleDiffSummary(repoId, filePath);
       return;
     }
     const isStaged = repoStatus?.stagedFiles.some(f => f.path === filePath) ?? false;
     send({ type: 'COMMIT_OPEN_DIFF', repoId, filePath, staged: isStaged });
-  }, [store, send]);
+  }, [store, send, openSubmoduleDiffSummary]);
 
   const allRepos = store.status?.repos ?? [];
   const repos = hiddenRepoIds.length > 0 ? allRepos.filter(r => !hiddenRepoIds.includes(r.repoId)) : allRepos;
@@ -1380,7 +1520,7 @@ export function CommitApp() {
   const gitRepos = repos.filter(repo => !isSvnRepo(repo.repoId));
   const showVcsBadges = gitRepos.length > 0 && gitRepos.length < repos.length;
   const gitRepoMetas = store.repoMetas.filter(meta => meta.kind !== 'svn');
-  const visibleTabs = gitRepos.length > 0 ? ALL_TABS : SVN_ONLY_TABS;
+  const visibleTabs = (repos.length > 0 && gitRepos.length === 0) ? SVN_ONLY_TABS : ALL_TABS;
   const visibleRepoIds = new Set(repos.map(repo => repo.repoId));
   const multiRepo = repos.length >= 1;
   const totalConflictCount = repos.reduce((sum, repo) => sum + repo.conflictCount, 0);
@@ -1468,7 +1608,11 @@ export function CommitApp() {
       tabCountSubtreeRequestedRef.current = true;
       requestSubtreeList(false, false);
     }
-  }, [gitRepoKey, requestShelveList, requestStashCount, requestSubtreeList, requestWorktreeList]);
+    if (!tabCountSubmoduleRequestedRef.current) {
+      tabCountSubmoduleRequestedRef.current = true;
+      requestSubmoduleList(true);
+    }
+  }, [gitRepoKey, requestShelveList, requestStashCount, requestSubtreeList, requestWorktreeList, requestSubmoduleList]);
 
   // ── Context menu handlers ─────────────────────────────────────────────────
 
@@ -1537,11 +1681,29 @@ export function CommitApp() {
       case 'delete':
         send({ type: 'COMMIT_DELETE_FILE', requestId: generateId(), repoId: file.repoId, filePath: file.path });
         break;
+      case 'submodule-update-parent':
+        handleSubmoduleUpdate(file.repoId, file.path, false, false);
+        break;
+      case 'submodule-reveal-panel':
+        setHighlightSubmodulePath(file.path);
+        switchTab('submodule');
+        break;
+      case 'submodule-diff':
+        openSubmoduleDiffSummary(file.repoId, file.path);
+        break;
+      case 'submodule-open-window': {
+        const repoMeta = store.repoMetas.find(m => m.id === file.repoId);
+        if (repoMeta) {
+          const abs = `${repoMeta.rootPath}/${file.path}`.replace(/\\/g, '/');
+          handleSubmoduleOpenInNewWindow(abs);
+        }
+        break;
+      }
       case 'refresh':
         requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' });
         break;
     }
-  }, [activeTab, confirmShelve, ctxMenu, openDiff, doStash, requestCommitStatus, send]);
+  }, [activeTab, confirmShelve, ctxMenu, openDiff, doStash, requestCommitStatus, send, handleSubmoduleUpdate, switchTab, openSubmoduleDiffSummary, store.repoMetas, handleSubmoduleOpenInNewWindow]);
 
   const handleFolderContextMenuSelect = useCallback((id: string) => {
     const ctx = folderCtxMenu;
@@ -1954,6 +2116,14 @@ export function CommitApp() {
         const totalStashes = gitRepos.reduce((sum, repo) => (
           sum + (stashCountMap[repo.repoId] ?? stashMap[repo.repoId]?.length ?? 0)
         ), 0);
+        const totalSubmodules = submoduleRepos.reduce((sum, repo) => (
+          visibleRepoIds.has(repo.repoId) ? sum + repo.submodules.length : sum
+        ), 0);
+        const totalSubmoduleIssues = submoduleRepos.reduce((sum, repo) => (
+          visibleRepoIds.has(repo.repoId)
+            ? sum + repo.submodules.filter((s: SubmoduleItem) => !s.initialized || s.syncStatus === 'out-of-sync').length
+            : sum
+        ), 0);
         const totalWorktrees = worktreeRepos.reduce((sum, repo) => (
           visibleRepoIds.has(repo.repoId) ? sum + repo.worktrees.length : sum
         ), 0);
@@ -1968,6 +2138,7 @@ export function CommitApp() {
           changes: totalChanges,
           shelf: totalShelves,
           stash: totalStashes,
+          submodule: totalSubmodules,
           worktree: totalWorktrees,
           subtree: totalSubtrees,
           push: totalToPush,
@@ -1976,8 +2147,8 @@ export function CommitApp() {
           <div style={css.tabBar}>
             {visibleTabs.map(tab => {
               const changesLabel = (store.changesViewMode === 'changelists' || store.changesViewMode === 'vscode') ? t('Commit') : t('Changes');
-              const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Push');
-              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'cloud-upload';
+              const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'submodule' ? t('Submodules') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Push');
+              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'submodule' ? 'repo-clone' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'cloud-upload';
               const count = tabCounts[tab];
               const isActive = activeTab === tab;
               return (
@@ -2111,40 +2282,15 @@ export function CommitApp() {
                 const meta = metaMap.get(repoId);
                 const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
                 const repoColor = meta?.color ?? '#4ec9b0';
-                const detachedCommit = meta?.isSubmodule ? detachedWarnings[repoId] : undefined;
                 return (
-                  <React.Fragment key={repoId}>
-                    {detachedCommit && (
-                      <div style={css.detachedBanner}>
-                        <Codicon name="git-commit" style={{ flexShrink: 0 }} />
-                        <span style={{ flex: 1 }}>
-                          {t('{0} is in detached HEAD ({1}). Checkout a branch to commit.', repoName, detachedCommit)}
-                        </span>
-                        <button
-                          data-secondary-action-btn=""
-                          style={css.detachedBannerBtn}
-                          onClick={() => send({ type: 'COMMIT_SHOW_BRANCH_MENU', repoId })}
-                          title={t('Checkout or create a branch')}
-                        >
-                          {t('Checkout branch')}
-                        </button>
-                        <button
-                          data-action-btn=""
-                          style={{ ...css.detachedBannerBtn, background: 'transparent' }}
-                          onClick={() => setDetachedWarnings(prev => { const n = { ...prev }; delete n[repoId]; return n; })}
-                          title={t('Dismiss')}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    )}
-                    <ProjectGroup
-                      isFirst={idx === 0}
-                      repoStatus={repoStatus}
-                      repoName={repoName}
-                      repoRootPath={meta?.rootPath}
-                      repoColor={repoColor}
-                      showVcsBadge={showVcsBadges}
+                  <ProjectGroup
+                    key={repoId}
+                    isFirst={idx === 0}
+                    repoStatus={repoStatus}
+                    repoName={repoName}
+                    repoRootPath={meta?.rootPath}
+                    repoColor={repoColor}
+                    showVcsBadge={showVcsBadges}
                       isSubmodule={meta?.isSubmodule}
                       submodulePath={meta?.submodulePath}
                       isWorktree={meta?.isWorktree}
@@ -2176,7 +2322,6 @@ export function CommitApp() {
                       activeFolderPath={activeFolderPath}
                       ctxFile={ctxFile}
                     />
-                  </React.Fragment>
                 );
               })
             )}
@@ -2399,6 +2544,34 @@ export function CommitApp() {
               onRevertCommits={doRevertCommits}
               onEditCommitMsg={doEditCommitMsg}
             />
+          </div>
+        )}
+
+        {visitedTabs.has('submodule') && (
+          /* Submodule tab */
+          <div style={{ display: activeTab === 'submodule' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+            <div style={css.repoList}>
+              <SubmodulePanel
+                repos={submoduleRepos}
+                loading={submoduleLoading}
+                initialLoaded={submoduleInitialLoaded}
+                error={submoduleError}
+                multiRepo={multiRepo}
+                activeOps={submoduleOps}
+                highlightSubmodulePath={highlightSubmodulePath}
+                onInit={handleSubmoduleInit}
+                onUpdate={handleSubmoduleUpdate}
+                onUpdateAll={handleSubmoduleUpdateAll}
+                onSync={handleSubmoduleSync}
+                onDeinit={handleSubmoduleDeinit}
+                onRemove={handleSubmoduleRemove}
+                onAdd={handleSubmoduleAdd}
+                onRefresh={handleSubmoduleRefresh}
+                onOpenInNewWindow={handleSubmoduleOpenInNewWindow}
+                onOpenInOS={handleSubmoduleOpenInOS}
+                onRevealInExplorer={handleSubmoduleRevealInExplorer}
+              />
+            </div>
           </div>
         )}
 
@@ -2662,6 +2835,98 @@ export function CommitApp() {
           />
         );
       })()}
+
+      {submoduleDiffModal && (
+        <div style={css.modalOverlay} onClick={() => setSubmoduleDiffModal(null)}>
+          <div style={css.modalBox} onClick={e => e.stopPropagation()}>
+            <div style={css.modalHeader}>
+              <span className="codicon codicon-references" style={{ marginRight: 6, color: 'var(--vscode-editorWarning-foreground)' }} />
+              <span style={{ fontWeight: 600 }}>{t('Submodule Pointer Details')}</span>
+              <button
+                style={css.modalCloseBtn}
+                title={t('Close')}
+                onClick={() => setSubmoduleDiffModal(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={css.modalBody}>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: 'var(--vscode-descriptionForeground)', marginBottom: 2 }}>
+                  {t('Path')}:
+                </div>
+                <div style={{ fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: 12, fontWeight: 500 }}>
+                  {submoduleDiffModal.submodulePath}
+                </div>
+              </div>
+
+              {submoduleDiffModal.loading ? (
+                <div style={{ padding: '16px 0', textAlign: 'center', color: 'var(--vscode-descriptionForeground)' }}>
+                  <span className="codicon codicon-loading codicon-modifier-spin" style={{ marginRight: 6 }} />
+                  {t('Loading...')}
+                </div>
+              ) : (
+                <>
+                  <div style={css.compareBox}>
+                    <div style={css.compareCol}>
+                      <div style={css.compareLabel}>{t('Recorded in Parent Commit')}</div>
+                      <div style={css.compareCommit}>
+                        <span className="codicon codicon-git-commit" style={{ marginRight: 4, opacity: 0.7 }} />
+                        {submoduleDiffModal.oldHash ? submoduleDiffModal.oldHash.slice(0, 8) : '00000000'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', opacity: 0.5 }}>
+                      <span className="codicon codicon-arrow-right" />
+                    </div>
+                    <div style={css.compareCol}>
+                      <div style={css.compareLabel}>{t('Current Submodule HEAD')}</div>
+                      <div style={css.compareCommit}>
+                        <span className="codicon codicon-git-commit" style={{ marginRight: 4, opacity: 0.7 }} />
+                        {submoduleDiffModal.newHash ? submoduleDiffModal.newHash.slice(0, 8) : '00000000'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {submoduleDiffModal.summary && (
+                    <div style={{ marginTop: 10, padding: 6, backgroundColor: 'var(--vscode-textCodeBlock-background, rgba(0,0,0,0.1))', borderRadius: 3, fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: 11, whiteSpace: 'pre-wrap', maxHeight: 100, overflowY: 'auto' }}>
+                      {submoduleDiffModal.summary}
+                    </div>
+                  )}
+
+                  {submoduleDiffModal.error && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--vscode-errorForeground)' }}>
+                      {submoduleDiffModal.error}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div style={css.modalFooter}>
+              <button
+                style={css.modalSecondaryBtn}
+                onClick={() => {
+                  setActiveTab('submodule');
+                  setHighlightSubmodulePath(submoduleDiffModal.submodulePath);
+                  setSubmoduleDiffModal(null);
+                }}
+              >
+                <span className="codicon codicon-link-external" style={{ marginRight: 4, fontSize: 12 }} />
+                {t('View in Submodule Panel')}
+              </button>
+              <button
+                style={css.modalPrimaryBtn}
+                onClick={() => {
+                  handleSubmoduleUpdate(submoduleDiffModal.parentRepoId, submoduleDiffModal.submodulePath, false);
+                  setSubmoduleDiffModal(null);
+                }}
+              >
+                <span className="codicon codicon-refresh" style={{ marginRight: 4, fontSize: 12 }} />
+                {t('Align Submodule with Parent')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2725,18 +2990,6 @@ const css = {
   main: { display: 'flex', flexDirection: 'column' as const, flex: 1, overflow: 'hidden' },
   repoList: { flex: 1, overflowY: 'auto' as const },
   // Shelve name prompt bar (above commit form)
-  detachedBanner: {
-    display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 8px',
-    background: 'color-mix(in srgb, var(--vscode-statusBarItem-warningBackground, #c6a300) 15%, transparent)',
-    borderBottom: '1px solid color-mix(in srgb, var(--vscode-statusBarItem-warningBackground, #c6a300) 35%, transparent)',
-    fontSize: '11px', color: 'var(--vscode-foreground)', flexShrink: 0,
-  } as React.CSSProperties,
-  detachedBannerBtn: {
-    background: 'var(--vscode-button-secondaryBackground, rgba(255,255,255,0.1))',
-    color: 'var(--vscode-button-secondaryForeground, var(--vscode-foreground))',
-    border: 'none', borderRadius: '3px', padding: '2px 7px', cursor: 'pointer',
-    fontSize: '11px', flexShrink: 0,
-  } as React.CSSProperties,
   shelvePromptBar: {
     display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 8px',
     borderTop: '1px solid var(--vscode-panel-border)',
@@ -2772,6 +3025,104 @@ const css = {
     border: 'none', borderRadius: '4px', padding: '6px 16px', cursor: 'pointer',
     fontSize: '13px', fontFamily: 'var(--vscode-font-family)', fontWeight: '500' as const,
   },
+  modalOverlay: {
+    position: 'fixed' as const,
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    padding: '16px',
+  } as React.CSSProperties,
+  modalBox: {
+    backgroundColor: 'var(--vscode-sideBar-background)',
+    border: '1px solid var(--vscode-widget-border, var(--vscode-panel-border))',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+    borderRadius: '4px',
+    width: '100%',
+    maxWidth: '420px',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    overflow: 'hidden',
+  } as React.CSSProperties,
+  modalHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '8px 12px',
+    borderBottom: '1px solid var(--vscode-panel-border)',
+    fontSize: '12px',
+  } as React.CSSProperties,
+  modalCloseBtn: {
+    marginLeft: 'auto',
+    background: 'none',
+    border: 'none',
+    color: 'var(--vscode-foreground)',
+    opacity: 0.7,
+    cursor: 'pointer',
+    fontSize: '12px',
+    padding: '2px 4px',
+  } as React.CSSProperties,
+  modalBody: {
+    padding: '12px',
+    fontSize: '12px',
+  } as React.CSSProperties,
+  compareBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '8px 10px',
+    backgroundColor: 'var(--vscode-editor-background)',
+    borderRadius: '4px',
+    border: '1px solid var(--vscode-widget-border, rgba(128,128,128,0.2))',
+  } as React.CSSProperties,
+  compareCol: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '2px',
+  } as React.CSSProperties,
+  compareLabel: {
+    fontSize: '10px',
+    color: 'var(--vscode-descriptionForeground)',
+  } as React.CSSProperties,
+  compareCommit: {
+    display: 'flex',
+    alignItems: 'center',
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
+    fontSize: '11px',
+    fontWeight: 600,
+  } as React.CSSProperties,
+  modalFooter: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '8px',
+    padding: '8px 12px',
+    borderTop: '1px solid var(--vscode-panel-border)',
+    backgroundColor: 'var(--vscode-sideBarSectionHeader-background, transparent)',
+  } as React.CSSProperties,
+  modalPrimaryBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '4px 10px',
+    backgroundColor: 'var(--vscode-button-background)',
+    color: 'var(--vscode-button-foreground)',
+    border: 'none',
+    borderRadius: '2px',
+    cursor: 'pointer',
+    fontSize: '11px',
+  } as React.CSSProperties,
+  modalSecondaryBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '4px 10px',
+    backgroundColor: 'var(--vscode-button-secondaryBackground)',
+    color: 'var(--vscode-button-secondaryForeground)',
+    border: 'none',
+    borderRadius: '2px',
+    cursor: 'pointer',
+    fontSize: '11px',
+  } as React.CSSProperties,
 };
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: string | null }> {
