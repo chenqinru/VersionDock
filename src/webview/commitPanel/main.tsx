@@ -645,7 +645,8 @@ export function CommitApp() {
     }
     lastTabSyncAtRef.current[tab] = now;
 
-    const currentRepos = useCommitStore.getState().status?.repos ?? [];
+    const currentRepos = (useCommitStore.getState().status?.repos ?? [])
+      .filter(repo => !hiddenRepoIdsRef.current.has(repo.repoId));
     const gitRepoList = currentRepos.filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
 
     if (tab === 'shelf') {
@@ -717,9 +718,8 @@ export function CommitApp() {
           if (currentTab === 'stash') gitRepoList.forEach(r => { requestStashCount(r.repoId); requestStashList(r.repoId, true); });
           if (currentTab === 'push') gitRepoList.forEach(r => requestUnpushedCommits(r.repoId, true));
           if (currentTab === 'worktree') requestWorktreeList(true);
-          if (currentTab === 'subtree') {
-            requestSubtreeList(true, true);
-          }
+          // The host refresh path owns subtree refreshes so expensive split/remote
+          // checks are not started twice by the same manual refresh.
           break;
         }
         case 'COMMIT_STATUS_UPDATE': {
@@ -808,21 +808,7 @@ export function CommitApp() {
               ));
             }
           }
-          if (msg.ok) {
-            if (activeTabRef.current === 'push') {
-              const currentRepos = useCommitStore.getState().status?.repos ?? [];
-              currentRepos.forEach(r => requestUnpushedCommits(r.repoId, true));
-              lastTabSyncAtRef.current['push'] = Date.now();
-            } else {
-              markTabDirty('push');
-            }
-
-            if (activeTabRef.current === 'subtree') {
-              requestSubtreeList(false, true);
-            } else {
-              markTabDirty('subtree');
-            }
-          } else if (msg.error && msg.error !== 'Cancelled') {
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled') {
             notifyError(msg.error);
           }
           break;
@@ -930,6 +916,15 @@ export function CommitApp() {
             setStashError(prev => ({ ...prev, [msg.repoId]: msg.error ?? null }));
           } else {
             setStashMap(prev => ({ ...prev, [msg.repoId]: msg.stashes }));
+            setStashFilesMap(prev => {
+              const validIdentities = new Set(msg.stashes.map(stash => stash.oid ?? stash.ref));
+              const currentRepoCache = prev[msg.repoId] ?? {};
+              const nextRepoCache = Object.fromEntries(
+                Object.entries(currentRepoCache).filter(([identity]) => validIdentities.has(identity)),
+              );
+              if (Object.keys(nextRepoCache).length === Object.keys(currentRepoCache).length) return prev;
+              return { ...prev, [msg.repoId]: nextRepoCache };
+            });
             setStashCountMap(prev => ({ ...prev, [msg.repoId]: msg.stashes.length }));
             setStashError(prev => ({ ...prev, [msg.repoId]: null }));
             dirtyTabsRef.current.delete('stash');
@@ -937,13 +932,16 @@ export function CommitApp() {
           break;
 
         case 'STASH_FILES_RESULT':
-          setStashFilesMap(prev => ({
-            ...prev,
-            [msg.repoId]: {
-              ...(prev[msg.repoId] ?? {}),
-              [msg.stashRef]: { loading: false, files: msg.files, error: msg.error },
-            },
-          }));
+          {
+            const stashIdentity = msg.stashOid ?? msg.stashRef;
+            setStashFilesMap(prev => ({
+              ...prev,
+              [msg.repoId]: {
+                ...(prev[msg.repoId] ?? {}),
+                [stashIdentity]: { loading: false, files: msg.files, error: msg.error },
+              },
+            }));
+          }
           break;
 
         case 'STASH_OP_RESULT':
@@ -1169,27 +1167,16 @@ export function CommitApp() {
   }, [send]);
 
   // ── Stash files callback ──────────────────────────────────────────────────
-  const requestStashFiles = useCallback((repoId: string, stashRef: string) => {
+  const requestStashFiles = useCallback((repoId: string, stashRef: string, stashOid?: string) => {
+    const stashIdentity = stashOid ?? stashRef;
     setStashFilesMap(prev => ({
       ...prev,
       [repoId]: {
         ...(prev[repoId] ?? {}),
-        [stashRef]: { loading: true, files: prev[repoId]?.[stashRef]?.files },
+        [stashIdentity]: { loading: true, files: prev[repoId]?.[stashIdentity]?.files },
       },
     }));
-    const requestId = generateId();
-    pendingRef.current.set(requestId, msg => {
-      if (msg.type === 'STASH_FILES_RESULT') {
-        setStashFilesMap(prev => ({
-          ...prev,
-          [msg.repoId]: {
-            ...(prev[msg.repoId] ?? {}),
-            [msg.stashRef]: { loading: false, files: msg.files, error: msg.error },
-          },
-        }));
-      }
-    });
-    send({ type: 'STASH_GET_FILES', requestId, repoId, stashRef });
+    send({ type: 'STASH_GET_FILES', requestId: generateId(), repoId, stashRef, stashOid });
   }, [send]);
 
   // ── Subtree callbacks ────────────────────────────────────────────────────
@@ -1266,21 +1253,23 @@ export function CommitApp() {
 
   const requestAggregatedPushDiff = useCallback((repoId: string, oldestHash?: string): Promise<PushCommitFile[]> => {
     const requestId = generateId();
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (pendingRef.current.has(requestId)) {
           pendingRef.current.delete(requestId);
-          resolve([]);
+          reject(new Error(t('Timed out loading aggregated changes.')));
         }
       }, 15_000);
       pendingRef.current.set(requestId, msg => {
         clearTimeout(timeout);
         if (msg.type !== 'PUSH_AGGREGATED_DIFF_RESULT') {
-          resolve([]);
+          reject(new Error(t('Unexpected aggregated changes response.')));
           return;
         }
-        if (msg.error && msg.error !== 'Cancelled') {
-          notifyError(msg.error);
+        if (msg.error) {
+          if (msg.error !== 'Cancelled') notifyError(msg.error);
+          reject(new Error(msg.error));
+          return;
         }
         resolve(msg.files ?? []);
       });
@@ -1293,6 +1282,16 @@ export function CommitApp() {
       type: 'PUSH_OPEN_COMMIT_FILE_DIFF',
       repoId,
       hash,
+      filePath: file.path,
+      fileStatus: file.status,
+    });
+  }, [send]);
+
+  const openAggregatedPushFileDiff = useCallback((repoId: string, oldestHash: string | undefined, file: PushCommitFile) => {
+    send({
+      type: 'PUSH_OPEN_AGGREGATED_FILE_DIFF',
+      repoId,
+      oldestHash,
       filePath: file.path,
       fileStatus: file.status,
     });
@@ -1324,8 +1323,6 @@ export function CommitApp() {
   const allRepos = store.status?.repos ?? [];
   const repos = hiddenRepoIds.length > 0 ? allRepos.filter(r => !hiddenRepoIds.includes(r.repoId)) : allRepos;
   const metaMap = new Map(store.repoMetas.map(m => [m.id, m]));
-  const commitMessageHistoryRepoKey = repos.map(repo => repo.repoId).sort().join('\0');
-
   const requestCommitMessageHistory = useCallback(() => {
     const repoIds = repos.map(repo => repo.repoId);
     if (repoIds.length === 0) {
@@ -1338,7 +1335,7 @@ export function CommitApp() {
     activeCommitMessageHistoryRequestIdRef.current = requestId;
     setCommitMessageHistoryLoading(true);
     send({ type: 'COMMIT_REQUEST_MESSAGE_HISTORY', requestId, repoIds, limit: COMMIT_MESSAGE_HISTORY_FETCH_LIMIT });
-    const timeout = setTimeout(() => {
+    setTimeout(() => {
       if (activeCommitMessageHistoryRequestIdRef.current === requestId) {
         setCommitMessageHistoryLoading(false);
       }
@@ -2297,7 +2294,6 @@ export function CommitApp() {
                     onUnshelve={handleUnshelve}
                     onUnshelveFile={handleUnshelveFile}
                     onDrop={handleDropShelve}
-                    onRequestList={requestShelveList}
                     onOpenFileDiff={handleOpenFileDiff}
                   />
                 );
@@ -2361,6 +2357,7 @@ export function CommitApp() {
               onUndoCommit={doUndoCommit}
               onRequestCommitFiles={requestPushCommitFiles}
               onRequestAggregatedDiff={requestAggregatedPushDiff}
+              onOpenAggregatedFile={openAggregatedPushFileDiff}
               onOpenCommitFile={openPushCommitFileDiff}
               onSquash={doSquash}
               onDropCommits={doDropCommits}

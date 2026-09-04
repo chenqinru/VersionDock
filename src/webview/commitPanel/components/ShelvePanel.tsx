@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import type { ShelveEntry } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
@@ -25,7 +25,6 @@ interface Props {
   onUnshelve: (repoId: string, shelveId: string) => void;
   onUnshelveFile: (repoId: string, shelveId: string, filePath: string) => void;
   onDrop: (repoId: string, shelveId: string) => void;
-  onRequestList: (repoId: string) => void;
   onOpenFileDiff: (repoId: string, shelveId: string, filePath: string) => void;
 }
 
@@ -376,8 +375,7 @@ const rowStyle = {
 
 // ── Public component ──────────────────────────────────────────────────────────
 
-export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveFile, onDrop, onRequestList, onOpenFileDiff }: Props) {
-  useEffect(() => { onRequestList(repoId); }, [onRequestList, repoId]);
+export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveFile, onDrop, onOpenFileDiff }: Props) {
   const projectColor = readableAccentColor(repoColor);
 
   return (

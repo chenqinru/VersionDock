@@ -1565,7 +1565,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           const errMsg = String(e);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
@@ -1578,12 +1578,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.cherryPickContinue();
               this.post({ type: 'LOG_REFRESH' });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } else if (choice === t('Skip')) {
               await repo.cherryPickSkip();
               this.post({ type: 'LOG_REFRESH' });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } else if (choice === t('Abort')) {
               await repo.cherryPickAbort();
               vscode.window.showInformationMessage(t('VersionDock: Cherry-pick aborted. The repository has been restored.'));
@@ -1621,7 +1621,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           const errMsg = String(e);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
@@ -1665,7 +1665,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           void showGitErrorMessage(t('VersionDock: Reset failed: {0}', String(e)), {
@@ -1710,7 +1710,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           const errMsg = String(e);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
@@ -1723,12 +1723,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.cherryPickContinue();
               this.post({ type: 'LOG_REFRESH' });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } else if (choice === t('Skip')) {
               await repo.cherryPickSkip();
               this.post({ type: 'LOG_REFRESH' });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } else {
               await repo.cherryPickAbort();
             }
@@ -1760,7 +1760,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           const errMsg = String(e);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
@@ -1773,7 +1773,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.revertContinue();
               this.post({ type: 'LOG_REFRESH' });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } else {
               await repo.revertAbort();
             }
@@ -1803,7 +1803,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e, t('VersionDock: Drop commits failed'));
@@ -1860,7 +1860,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e, t('VersionDock: Drop commit failed'));
@@ -1906,7 +1906,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
           vscode.window.showInformationMessage(t('VersionDock: Squash completed.'));
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -1940,7 +1940,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e, t('VersionDock: Undo commit failed'));
@@ -1978,7 +1978,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
           vscode.window.showInformationMessage(t('VersionDock: Commit message updated.'));
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -2215,7 +2215,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
               this.post({ type: 'LOG_REFRESH' });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}".', msg.tagName));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -2247,7 +2247,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         this.post({ type: 'LOG_REFRESH' });
         await this.manager.refreshStatusNow();
-        this.manager.notifyBranchesChanged();
+        this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         break;
       }
 
@@ -2270,7 +2270,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: reqId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: reqId, ok: false, error: String(e) });
           this.showOperationError(e, t('VersionDock: Reset failed'));
@@ -2387,7 +2387,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const merged = mergeCurrentIntoBranches(branches, current);
               this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
               await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
               this.showOperationError(e);

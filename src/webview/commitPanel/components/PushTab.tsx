@@ -23,6 +23,7 @@ interface Props {
   onUndoCommit: (repoId: string) => void;
   onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
   onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
+  onOpenAggregatedFile: (repoId: string, oldestHash: string | undefined, file: PushCommitFile) => void;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
   onSquash: (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => void;
   onDropCommits: (repoId: string, hashes: string[], oldestHash: string) => void;
@@ -229,13 +230,6 @@ function mergeUniqueFiles(fileGroups: PushCommitFile[][]): PushCommitFile[] {
     }
   }
   return [...merged.values()];
-}
-
-function findSourceCommitHash(commits: UnpushedCommit[], filesByHash: Record<string, PushCommitFile[]>, file: PushCommitFile): string | null {
-  for (const commit of commits) {
-    if ((filesByHash[commit.hash] ?? []).some(item => item.path === file.path)) return commit.hash;
-  }
-  return null;
 }
 
 function MenuItem({ icon, label, danger, onClick }: { icon: string; label: string; danger?: boolean; onClick: () => void }) {
@@ -620,15 +614,13 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile }: {
   );
 }
 
-function AggregatedChangesView({ commits, filesByHash, files, loading, fileViewMode, iconTheme, onFileViewModeChange, onOpenCommitFile }: {
-  commits: UnpushedCommit[];
-  filesByHash: Record<string, PushCommitFile[]>;
+function AggregatedChangesView({ files, loading, fileViewMode, iconTheme, onFileViewModeChange, onOpenFile }: {
   files: PushCommitFile[];
   loading: boolean;
   fileViewMode: PushFileViewMode;
   iconTheme?: IconThemeData | null;
   onFileViewModeChange: (mode: PushFileViewMode) => void;
-  onOpenCommitFile: (hash: string, file: PushCommitFile) => void;
+  onOpenFile: (file: PushCommitFile) => void;
 }) {
   return (
     <PushFileList
@@ -638,15 +630,12 @@ function AggregatedChangesView({ commits, filesByHash, files, loading, fileViewM
       iconTheme={iconTheme}
       description={t('Aggregated changes from all commits to push')}
       onViewModeChange={onFileViewModeChange}
-      onOpenFile={file => {
-        const hash = findSourceCommitHash(commits, filesByHash, file);
-        if (hash) onOpenCommitFile(hash, file);
-      }}
+      onOpenFile={onOpenFile}
     />
   );
 }
 
-function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onToggle, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg, iconTheme, singleRepo }: {
+function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onToggle, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenAggregatedFile, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg, iconTheme, singleRepo }: {
   repoStatus: RepoStatus;
   repoMeta: RepoMeta | undefined;
   unpushed: Props['unpushedMap'][string] | undefined;
@@ -657,6 +646,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   onUndoCommit: (repoId: string) => void;
   onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
   onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
+  onOpenAggregatedFile: (repoId: string, oldestHash: string | undefined, file: PushCommitFile) => void;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
   onSquash: (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => void;
   onDropCommits: (repoId: string, hashes: string[], oldestHash: string) => void;
@@ -671,6 +661,8 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   const [expandedCommitHash, setExpandedCommitHash] = useState<string | null>(null);
   const [autoExpandedCommitsKey, setAutoExpandedCommitsKey] = useState('');
   const [filesByHash, setFilesByHash] = useState<Record<string, PushCommitFile[]>>({});
+  const filesByHashRef = useRef(filesByHash);
+  filesByHashRef.current = filesByHash;
   const [loadingCommitHash, setLoadingCommitHash] = useState<string | null>(null);
   const [aggregatedFiles, setAggregatedFiles] = useState<PushCommitFile[]>([]);
   const [loadingAggregatedFiles, setLoadingAggregatedFiles] = useState(false);
@@ -745,55 +737,41 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
       return () => { active = false; };
     }
 
-    if (onRequestAggregatedDiff) {
-      setLoadingAggregatedFiles(true);
-      const oldestHash = commits[commits.length - 1]?.hash;
-      void onRequestAggregatedDiff(repoStatus.repoId, oldestHash)
-        .then(files => {
-          if (!active) return;
-          setAggregatedFiles(files);
-        })
-        .catch(() => {
-          // fallback to per-commit merge on error
-          if (!active) return;
-          const cachedGroups = commits
-            .map(commit => filesByHash[commit.hash])
-            .filter((files): files is PushCommitFile[] => Array.isArray(files));
-          setAggregatedFiles(mergeUniqueFiles(cachedGroups));
-        })
-        .finally(() => {
-          if (active) setLoadingAggregatedFiles(false);
-        });
-      return () => { active = false; };
-    }
-
-    const cachedGroups = commits
-      .map(commit => filesByHash[commit.hash])
-      .filter((files): files is PushCommitFile[] => Array.isArray(files));
-    const missingCommits = commits.filter(commit => !filesByHash[commit.hash]);
-
-    if (missingCommits.length === 0) {
-      setAggregatedFiles(mergeUniqueFiles(cachedGroups));
-      return () => { active = false; };
-    }
-
     setLoadingAggregatedFiles(true);
-    void Promise.all(missingCommits.map(commit => onRequestCommitFiles(repoStatus.repoId, commit.hash)))
-      .then(groups => {
-        if (!active) return;
-        const fetched = Object.fromEntries(missingCommits.map((commit, index) => [commit.hash, groups[index] ?? []]));
-        setFilesByHash(prev => ({ ...prev, ...fetched }));
-        setAggregatedFiles(mergeUniqueFiles([...cachedGroups, ...groups]));
-      })
-      .catch(() => {
-        if (active) setAggregatedFiles(mergeUniqueFiles(cachedGroups));
-      })
-      .finally(() => {
+    const loadPerCommitFallback = async (): Promise<PushCommitFile[]> => {
+      const currentFilesByHash = filesByHashRef.current;
+      const cachedGroups = commits
+        .map(commit => currentFilesByHash[commit.hash])
+        .filter((files): files is PushCommitFile[] => Array.isArray(files));
+      const missingCommits = commits.filter(commit => !currentFilesByHash[commit.hash]);
+      if (missingCommits.length === 0) return mergeUniqueFiles(cachedGroups);
+
+      const groups = await Promise.all(missingCommits.map(commit => onRequestCommitFiles(repoStatus.repoId, commit.hash)));
+      const fetched = Object.fromEntries(missingCommits.map((commit, index) => [commit.hash, groups[index] ?? []]));
+      if (active) setFilesByHash(prev => ({ ...prev, ...fetched }));
+      return mergeUniqueFiles([...cachedGroups, ...groups]);
+    };
+
+    void (async () => {
+      try {
+        const files = onRequestAggregatedDiff
+          ? await onRequestAggregatedDiff(repoStatus.repoId, commits[commits.length - 1]?.hash)
+          : await loadPerCommitFallback();
+        if (active) setAggregatedFiles(files);
+      } catch {
+        try {
+          const files = await loadPerCommitFallback();
+          if (active) setAggregatedFiles(files);
+        } catch {
+          if (active) setAggregatedFiles([]);
+        }
+      } finally {
         if (active) setLoadingAggregatedFiles(false);
-      });
+      }
+    })();
 
     return () => { active = false; };
-  }, [commitHashesKey, commits, filesByHash, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
+  }, [commitHashesKey, commits, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
 
   const toggleCommitSelection = (hash: string) => {
     setMultiSelectHashes(prev => {
@@ -973,14 +951,12 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
           ) : commits.length > 0 ? (
             pushViewMode === 'changes' ? (
               <AggregatedChangesView
-                commits={commits}
-                filesByHash={filesByHash}
                 files={aggregatedFiles}
                 loading={loadingAggregatedFiles}
                 fileViewMode={fileViewMode}
                 iconTheme={iconTheme}
                 onFileViewModeChange={setFileViewMode}
-                onOpenCommitFile={(hash, file) => onOpenCommitFile(repoStatus.repoId, hash, file)}
+                onOpenFile={file => onOpenAggregatedFile(repoStatus.repoId, commits[commits.length - 1]?.hash, file)}
               />
             ) : (
               <div style={styles.commitList}>
@@ -1040,7 +1016,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
 }
 
 export function PushTab(props: Props) {
-  const { repos, repoMetas, iconTheme, unpushedMap, onPush, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg } = props;
+  const { repos, repoMetas, iconTheme, unpushedMap, onPush, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenAggregatedFile, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg } = props;
   const metaMap = new Map(repoMetas.map(meta => [meta.id, meta]));
   const isSingleRepo = repos.length === 1;
   const [checked, setChecked] = useState<Set<string>>(() => new Set<string>());
@@ -1114,6 +1090,7 @@ export function PushTab(props: Props) {
             onUndoCommit={onUndoCommit}
             onRequestCommitFiles={onRequestCommitFiles}
             onRequestAggregatedDiff={onRequestAggregatedDiff}
+            onOpenAggregatedFile={onOpenAggregatedFile}
             onOpenCommitFile={onOpenCommitFile}
             onSquash={onSquash}
             onDropCommits={onDropCommits}
@@ -1168,6 +1145,7 @@ export function PushTab(props: Props) {
             onUndoCommit={onUndoCommit}
             onRequestCommitFiles={onRequestCommitFiles}
             onRequestAggregatedDiff={onRequestAggregatedDiff}
+            onOpenAggregatedFile={onOpenAggregatedFile}
             onOpenCommitFile={onOpenCommitFile}
             onSquash={onSquash}
             onDropCommits={onDropCommits}

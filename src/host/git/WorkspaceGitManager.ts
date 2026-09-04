@@ -22,7 +22,8 @@ const DEFAULT_REPOSITORY_SCAN_IGNORED_FOLDERS = ['node_modules'];
 type StatusListener = (status: WorkspaceStatus) => void;
 export type StatusOperationListener = (inProgress: boolean, kind?: StatusOperationKind, label?: string) => void;
 type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
-type BranchListener = () => void;
+type BranchChangeOptions = { refreshDerivedData?: boolean };
+type BranchListener = (options?: BranchChangeOptions) => void;
 type WorktreeListener = (repoId: string) => void;
 type RepoKind = NonNullable<RepoMeta['kind']>;
 type ServiceResolutionMode = 'git' | 'svn' | 'prompt' | 'preferGit';
@@ -339,6 +340,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private refreshDebounce: NodeJS.Timeout | null = null;
   private refreshFollowUp: NodeJS.Timeout | null = null;
   private branchDebounce: NodeJS.Timeout | null = null;
+  private pendingBranchChangeOptions: BranchChangeOptions | undefined;
   private autoRefreshTimer: NodeJS.Timeout | null = null;
   private autoFetchTimer: NodeJS.Timeout | null = null;
   /** Watchers for .git creation under workspace folders — rebuilt when folders/settings change. */
@@ -1421,16 +1423,22 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.scheduleRefresh();
   }
 
-  notifyBranchesChanged(): void {
-    this.scheduleRefresh();
-    this.scheduleBranchRefresh();
+  notifyBranchesChanged(options: { refreshStatus?: boolean; refreshDerivedData?: boolean } = {}): void {
+    if (options.refreshStatus !== false) this.scheduleRefresh();
+    this.scheduleBranchRefresh({ refreshDerivedData: options.refreshDerivedData });
   }
 
-  private scheduleBranchRefresh(): void {
+  private scheduleBranchRefresh(options: BranchChangeOptions = {}): void {
+    this.pendingBranchChangeOptions = {
+      refreshDerivedData: Boolean(this.pendingBranchChangeOptions?.refreshDerivedData)
+        || options.refreshDerivedData !== false,
+    };
     if (this.branchDebounce) clearTimeout(this.branchDebounce);
     this.branchDebounce = setTimeout(() => {
       this.branchDebounce = null;
-      this.branchListeners.forEach(l => l());
+      const pendingOptions = this.pendingBranchChangeOptions;
+      this.pendingBranchChangeOptions = undefined;
+      this.branchListeners.forEach(l => l(pendingOptions));
     }, 400);
   }
 
@@ -1493,6 +1501,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     if (this.refreshDebounce) { clearTimeout(this.refreshDebounce); this.refreshDebounce = null; }
     if (this.refreshFollowUp) { clearTimeout(this.refreshFollowUp); this.refreshFollowUp = null; }
     if (this.branchDebounce) { clearTimeout(this.branchDebounce); this.branchDebounce = null; }
+    this.pendingBranchChangeOptions = undefined;
   }
 
   onStatusChange(listener: StatusListener): vscode.Disposable {

@@ -1,4 +1,5 @@
 import { type SimpleGit, type TaskOptions } from 'simple-git';
+import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -24,7 +25,7 @@ import { ForcePushMode, Status, RefType } from './git.d';
 import { t } from '../utils/l10n';
 import { BlameService, type BlameLine } from './BlameService';
 import { assertNoSymlinkAncestors, isSameOrChildPath, resolveRepoPath as resolvePathWithinRepo, type ResolvedRepoPath } from '../utils/repoPath';
-import { createGitClient, getGitWriteGeneration, waitForGitWrite, withGitWriteLock, withGitWriteLocks } from './GitOperationLock';
+import { createGitClient, getGitEnvironment, getGitWriteGeneration, waitForGitWrite, withGitWriteLock, withGitWriteLocks } from './GitOperationLock';
 import { isBranchProtected } from '../utils/branchProtection';
 import type { PublishMissingRemote } from '../remote/types';
 import type { GitUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
@@ -37,6 +38,9 @@ const STATUS_MAP: Record<string, GitFileStatus> = {
 };
 
 const SUBTREE_CANDIDATE_SKIP_DIRS = new Set(['.git', '.hg', '.svn', 'node_modules', 'vendor', 'dist', 'build', 'out']);
+const SUBTREE_REMOTE_CACHE_TTL_MS = 300_000; // 5 minutes for successful remote ref queries
+const SUBTREE_REMOTE_FAILURE_CACHE_TTL_MS = 30_000; // 30 seconds for unreachable/timed out queries
+const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const MAX_INLINE_DIFF_FILE_BYTES = 8 * 1024 * 1024;
 const LOG_RECORD_FORMAT = '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%ai%x00%ci%x00%x00%s';
 const GRAPH_LOG_RECORD_FORMAT = '--format=%H%x00%P%x00%ci';
@@ -323,6 +327,27 @@ export class GitService {
   private _pendingDetachedTag: string | undefined;
   // Cache of { lastCommit: string; splitHash: string } keyed by prefix
   private subtreeSplitCache = new Map<string, { lastCommit: string; splitHash: string }>();
+  // Cache of remote ref lookup results keyed by `${repository}\0${refspec}`
+  private subtreeRemoteHashCache = new Map<string, {
+    result: { hash?: string; ref?: string; unreachable?: boolean; notFound?: boolean; error?: string };
+    cachedAt: number;
+  }>();
+  // In-flight remote ref queries to deduplicate concurrent requests
+  private subtreeRemoteInFlight = new Map<string, Promise<{ hash?: string; ref?: string; unreachable?: boolean; notFound?: boolean; error?: string }>>();
+
+  invalidateSubtreeRemoteCache(repository?: string): void {
+    if (repository) {
+      const cleanRepo = repository.trim().toLowerCase();
+      for (const key of Array.from(this.subtreeRemoteHashCache.keys())) {
+        const repoPart = key.split('\0')[0]?.trim().toLowerCase();
+        if (repoPart === cleanRepo) {
+          this.subtreeRemoteHashCache.delete(key);
+        }
+      }
+      return;
+    }
+    this.subtreeRemoteHashCache.clear();
+  }
 
   restoreSubtreeSplitCache(cache: Record<string, { lastCommit: string; splitHash: string }>): void {
     if (!cache || typeof cache !== 'object') return;
@@ -1946,8 +1971,43 @@ export class GitService {
     return `--prefix=${this.normalizeRepoPath(prefix)}`;
   }
 
+  private async execGitLsRemote(
+    args: string[],
+    timeoutMs = 8000,
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(
+        'git',
+        ['-c', 'core.quotepath=false', ...args],
+        {
+          cwd: this.rootPath,
+          env: getGitEnvironment(),
+          timeout: timeoutMs,
+          killSignal: 'SIGKILL',
+          windowsHide: true,
+          maxBuffer: 10 * 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          const out = stdout?.toString() ?? '';
+          const err = stderr?.toString() ?? '';
+          if (error) {
+            const errObj = error as NodeJS.ErrnoException & { killed?: boolean };
+            if (errObj.code === 'ETIMEDOUT' || errObj.killed) {
+              reject(new Error(`git ls-remote timed out after ${timeoutMs}ms (process killed)`));
+              return;
+            }
+            const detail = err.trim() || out.trim() || error.message;
+            reject(new Error(detail));
+            return;
+          }
+          resolve(out);
+        },
+      );
+    });
+  }
+
   async listSubtreeRepositoryRefs(repository: string): Promise<Array<{ name: string; type: 'branch' | 'tag' }>> {
-    const output = await this.rawPathSafe(['ls-remote', '--heads', '--tags', repository]);
+    const output = await this.execGitLsRemote(['ls-remote', '--heads', '--tags', repository], 10000);
     const refs: Array<{ name: string; type: 'branch' | 'tag' }> = [];
     const seen = new Set<string>();
     for (const line of output.split('\n')) {
@@ -2046,35 +2106,65 @@ export class GitService {
   private async getSubtreeRemoteHash(
     repository: string,
     refspec: string,
+    options?: { forceRemote?: boolean },
   ): Promise<{ hash?: string; ref?: string; unreachable?: boolean; notFound?: boolean; error?: string }> {
     const candidates = this.subtreeRemoteRefCandidates(refspec);
     if (candidates.length === 0) return { error: 'No ref specified' };
 
-    const lsRemotePromise = this.rawPathSafe(['ls-remote', repository, ...candidates]);
-    const timeoutPromise = new Promise<string>((_, reject) => {
-      const timer = setTimeout(() => reject(new Error('ls-remote timeout')), 8000);
-      if (typeof timer.unref === 'function') timer.unref();
-    });
+    const cacheKey = `${repository.trim()}\0${refspec.trim()}`;
+    const now = Date.now();
 
-    let output = '';
-    try {
-      output = await Promise.race([lsRemotePromise, timeoutPromise]);
-    } catch (error) {
-      this.logger?.warn('Subtree', `Failed or timed out querying remote hash for ${repository}`, { error: String(error) });
-      return { unreachable: true, error: String(error) };
+    // 1. Check cache unless forced
+    if (!options?.forceRemote) {
+      const cached = this.subtreeRemoteHashCache.get(cacheKey);
+      if (cached) {
+        const ttl = cached.result.unreachable
+          ? SUBTREE_REMOTE_FAILURE_CACHE_TTL_MS
+          : SUBTREE_REMOTE_CACHE_TTL_MS;
+        if (now - cached.cachedAt < ttl) {
+          return cached.result;
+        }
+      }
     }
 
-    const rows = output.split('\n')
-      .map(line => {
-        const [hash, ref] = line.trim().split(/\s+/);
-        return hash && ref && /^[0-9a-f]{40}$/i.test(hash) ? { hash: hash.toLowerCase(), ref } : undefined;
-      })
-      .filter((row): row is { hash: string; ref: string } => Boolean(row));
-    for (const candidate of candidates) {
-      const exact = rows.find(row => row.ref === candidate);
-      if (exact) return exact;
+    // 2. In-flight deduplication: reuse running query for the same repository & refspec
+    const inFlight = this.subtreeRemoteInFlight.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
     }
-    return { notFound: true, ref: this.normalizeSubtreeRemoteRef(refspec) };
+
+    // 3. Query remote with true process timeout kill
+    const task = (async (): Promise<{ hash?: string; ref?: string; unreachable?: boolean; notFound?: boolean; error?: string }> => {
+      try {
+        const output = await this.execGitLsRemote(['ls-remote', repository, ...candidates], 8000);
+        const rows = output.split('\n')
+          .map(line => {
+            const [hash, ref] = line.trim().split(/\s+/);
+            return hash && ref && /^[0-9a-f]{40}$/i.test(hash) ? { hash: hash.toLowerCase(), ref } : undefined;
+          })
+          .filter((row): row is { hash: string; ref: string } => Boolean(row));
+        for (const candidate of candidates) {
+          const exact = rows.find(row => row.ref === candidate);
+          if (exact) {
+            this.subtreeRemoteHashCache.set(cacheKey, { result: exact, cachedAt: Date.now() });
+            return exact;
+          }
+        }
+        const notFoundResult = { notFound: true, ref: this.normalizeSubtreeRemoteRef(refspec) };
+        this.subtreeRemoteHashCache.set(cacheKey, { result: notFoundResult, cachedAt: Date.now() });
+        return notFoundResult;
+      } catch (error) {
+        this.logger?.warn('Subtree', `Failed or timed out querying remote hash for ${repository}`, { error: String(error) });
+        const failureResult = { unreachable: true, error: String(error) };
+        this.subtreeRemoteHashCache.set(cacheKey, { result: failureResult, cachedAt: Date.now() });
+        return failureResult;
+      } finally {
+        this.subtreeRemoteInFlight.delete(cacheKey);
+      }
+    })();
+
+    this.subtreeRemoteInFlight.set(cacheKey, task);
+    return task;
   }
 
   private async getSubtreeLocalTrackingHash(repository: string, refspec: string): Promise<string | undefined> {
@@ -2094,7 +2184,10 @@ export class GitService {
       if (matchedRemote) {
         candidateRefs.push(`refs/remotes/${matchedRemote.name}/${normalizedRef}`);
       }
-      candidateRefs.push(`refs/remotes/*/${normalizedRef}`);
+      for (const remote of remotes) {
+        const candidate = `refs/remotes/${remote.name}/${normalizedRef}`;
+        if (!candidateRefs.includes(candidate)) candidateRefs.push(candidate);
+      }
 
       for (const refName of candidateRefs) {
         try {
@@ -2147,10 +2240,15 @@ export class GitService {
     }
   }
 
-  async getSubtreePushStatus(prefix: string, repository: string, refspec: string): Promise<SubtreePushStatus> {
+  async getSubtreePushStatus(
+    prefix: string,
+    repository: string,
+    refspec: string,
+    options?: { forceRemote?: boolean },
+  ): Promise<SubtreePushStatus> {
     const [splitHash, remote] = await Promise.all([
       this.getSubtreeSplitHashFast(prefix),
-      this.getSubtreeRemoteHash(repository, refspec),
+      this.getSubtreeRemoteHash(repository, refspec, options),
     ]);
 
     const normalizedRef = this.normalizeSubtreeRemoteRef(refspec);
@@ -2158,6 +2256,7 @@ export class GitService {
     if (remote.unreachable) {
       const localTrackingHash = await this.getSubtreeLocalTrackingHash(repository, refspec);
       if (localTrackingHash) {
+        const unavailableError = t('Unable to reach remote repository; status is based on the last fetched remote reference.');
         if (localTrackingHash === splitHash) {
           return {
             aheadCount: 0,
@@ -2165,6 +2264,7 @@ export class GitService {
             remoteRef: normalizedRef,
             splitHash,
             remoteHash: localTrackingHash,
+            error: unavailableError,
           };
         }
         const aheadCount = await this.countSubtreeAheadCommits(localTrackingHash, splitHash);
@@ -2174,6 +2274,7 @@ export class GitService {
           remoteRef: normalizedRef,
           splitHash,
           remoteHash: localTrackingHash,
+          error: unavailableError,
         };
       }
 
@@ -3532,7 +3633,7 @@ export class GitService {
     const fieldSeparator = '\x1f';
     const recordSeparator = '\x1e';
     const raw = await this.git.raw([
-      'stash', 'list', '--format=%gd%x1f%ci%x1f%s%x1f%B%x1e',
+      'stash', 'list', '--format=%gd%x1f%H%x1f%ci%x1f%s%x1f%B%x1e',
     ]).catch(() => '');
     if (!raw.trim()) return [];
 
@@ -3541,11 +3642,12 @@ export class GitService {
       const record = rawRecord.replace(/^\r?\n/, '');
       if (!record.trim()) continue;
       const parts = record.split(fieldSeparator);
-      if (parts.length < 4) continue;
+      if (parts.length < 5) continue;
       const ref = parts[0].trim();          // stash@{N}
-      const date = parts[1].trim();         // ISO date
-      const subject = parts[2].trim();      // "On branch: message" or "WIP on branch: message"
-      const rawFullMessage = parts.slice(3).join(fieldSeparator).trim();
+      const oid = parts[1].trim();          // stable stash commit id
+      const date = parts[2].trim();         // ISO date
+      const subject = parts[3].trim();      // "On branch: message" or "WIP on branch: message"
+      const rawFullMessage = parts.slice(4).join(fieldSeparator).trim();
 
       const indexMatch = ref.match(/stash@\{(\d+)\}/);
       const index = indexMatch ? parseInt(indexMatch[1], 10) : 0;
@@ -3558,7 +3660,7 @@ export class GitService {
         ? rawFullMessage.slice(branchMatch[0].length).trim()
         : rawFullMessage || message;
 
-      entries.push({ ref, index, message, fullMessage, date, branch, files: [] });
+      entries.push({ ref, oid: oid || undefined, index, message, fullMessage, date, branch, files: [] });
     }
     return entries;
   }
@@ -3910,46 +4012,39 @@ export class GitService {
     }
   }
 
-  async getUnpushedAggregatedChanges(oldestHash?: string): Promise<PushCommitFile[]> {
+  async getUnpushedAggregateBase(oldestHash?: string): Promise<string | undefined> {
     try {
-      let diffArgs: string[] | null = null;
-      try {
-        await this.git.raw(['rev-parse', '--verify', '@{u}']);
-        diffArgs = ['@{u}..HEAD'];
-      } catch {
-        if (oldestHash) {
-          try {
-            const parent = (await this.git.raw(['rev-parse', '--verify', `${oldestHash}^`])).trim();
-            diffArgs = [`${parent}..HEAD`];
-          } catch {
-            diffArgs = [oldestHash];
-          }
-        }
-      }
-
-      if (!diffArgs) {
-        return [];
-      }
-
-      const [nameStatusRaw, numStatRaw] = await Promise.all([
-        this.rawPathSafe(['diff', '--name-status', '-z', '-M', ...diffArgs]).catch(() => ''),
-        this.rawPathSafe(['diff', '--numstat', '-z', '-M', ...diffArgs]).catch(() => ''),
-      ]);
-      const stats = parseNumStatZOutput(numStatRaw);
-      const files: PushCommitFile[] = [];
-      for (const file of parseNameStatusZOutput(nameStatusRaw)) {
-        const stat = stats.get(file.path);
-        files.push({
-          path: file.path,
-          status: file.code.replace(/\d+$/, ''),
-          added: stat?.added,
-          removed: stat?.removed,
-        });
-      }
-      return files;
+      return (await this.git.raw(['rev-parse', '--verify', '@{u}'])).trim() || undefined;
     } catch {
-      return [];
+      if (!oldestHash) return undefined;
+      try {
+        return (await this.git.raw(['rev-parse', '--verify', `${oldestHash}^`])).trim() || undefined;
+      } catch {
+        return EMPTY_TREE_HASH;
+      }
     }
+  }
+
+  async getUnpushedAggregatedChanges(oldestHash?: string): Promise<PushCommitFile[]> {
+    const baseRef = await this.getUnpushedAggregateBase(oldestHash);
+    if (!baseRef) return [];
+
+    const [nameStatusRaw, numStatRaw] = await Promise.all([
+      this.rawPathSafe(['diff', '--name-status', '-z', '-M', baseRef, 'HEAD']),
+      this.rawPathSafe(['diff', '--numstat', '-z', '-M', baseRef, 'HEAD']),
+    ]);
+    const stats = parseNumStatZOutput(numStatRaw);
+    const files: PushCommitFile[] = [];
+    for (const file of parseNameStatusZOutput(nameStatusRaw)) {
+      const stat = stats.get(file.path);
+      files.push({
+        path: file.path,
+        status: file.code.replace(/\d+$/, ''),
+        added: stat?.added,
+        removed: stat?.removed,
+      });
+    }
+    return files;
   }
 
   // ─── Worktree operations ──────────────────────────────────────────────────
