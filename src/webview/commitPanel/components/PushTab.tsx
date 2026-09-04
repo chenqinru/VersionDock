@@ -22,6 +22,7 @@ interface Props {
   onOpenInLog: (hash: string, repoId: string) => void;
   onUndoCommit: (repoId: string) => void;
   onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
   onSquash: (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => void;
   onDropCommits: (repoId: string, hashes: string[], oldestHash: string) => void;
@@ -645,7 +646,7 @@ function AggregatedChangesView({ commits, filesByHash, files, loading, fileViewM
   );
 }
 
-function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onToggle, onOpenInLog, onUndoCommit, onRequestCommitFiles, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg, iconTheme, singleRepo }: {
+function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onToggle, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg, iconTheme, singleRepo }: {
   repoStatus: RepoStatus;
   repoMeta: RepoMeta | undefined;
   unpushed: Props['unpushedMap'][string] | undefined;
@@ -655,6 +656,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   onOpenInLog: (hash: string, repoId: string) => void;
   onUndoCommit: (repoId: string) => void;
   onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
   onSquash: (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => void;
   onDropCommits: (repoId: string, hashes: string[], oldestHash: string) => void;
@@ -743,6 +745,28 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
       return () => { active = false; };
     }
 
+    if (onRequestAggregatedDiff) {
+      setLoadingAggregatedFiles(true);
+      const oldestHash = commits[commits.length - 1]?.hash;
+      void onRequestAggregatedDiff(repoStatus.repoId, oldestHash)
+        .then(files => {
+          if (!active) return;
+          setAggregatedFiles(files);
+        })
+        .catch(() => {
+          // fallback to per-commit merge on error
+          if (!active) return;
+          const cachedGroups = commits
+            .map(commit => filesByHash[commit.hash])
+            .filter((files): files is PushCommitFile[] => Array.isArray(files));
+          setAggregatedFiles(mergeUniqueFiles(cachedGroups));
+        })
+        .finally(() => {
+          if (active) setLoadingAggregatedFiles(false);
+        });
+      return () => { active = false; };
+    }
+
     const cachedGroups = commits
       .map(commit => filesByHash[commit.hash])
       .filter((files): files is PushCommitFile[] => Array.isArray(files));
@@ -769,7 +793,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
       });
 
     return () => { active = false; };
-  }, [commitHashesKey, commits, filesByHash, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
+  }, [commitHashesKey, commits, filesByHash, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
 
   const toggleCommitSelection = (hash: string) => {
     setMultiSelectHashes(prev => {
@@ -939,7 +963,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
               <Codicon name="arrow-down" style={{ marginRight: '6px', flexShrink: 0 }} />
               <span>{behind === 1 ? t('{0} commit to pull from {1}', behind, repoStatus.branch.upstream ?? '') : t('{0} commits to pull from {1}', behind, repoStatus.branch.upstream ?? '')}</span>
             </div>
-          ) : unpushed?.loading ? (
+          ) : unpushed?.loading && commits.length === 0 ? (
             <div style={styles.loadingRow}>{t('Loading commits…')}</div>
           ) : unpushed?.error ? (
             <div style={styles.errorRow}>
@@ -1016,7 +1040,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
 }
 
 export function PushTab(props: Props) {
-  const { repos, repoMetas, iconTheme, unpushedMap, onPush, onOpenInLog, onUndoCommit, onRequestCommitFiles, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg } = props;
+  const { repos, repoMetas, iconTheme, unpushedMap, onPush, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg } = props;
   const metaMap = new Map(repoMetas.map(meta => [meta.id, meta]));
   const isSingleRepo = repos.length === 1;
   const [checked, setChecked] = useState<Set<string>>(() => new Set<string>());
@@ -1089,6 +1113,7 @@ export function PushTab(props: Props) {
             onOpenInLog={onOpenInLog}
             onUndoCommit={onUndoCommit}
             onRequestCommitFiles={onRequestCommitFiles}
+            onRequestAggregatedDiff={onRequestAggregatedDiff}
             onOpenCommitFile={onOpenCommitFile}
             onSquash={onSquash}
             onDropCommits={onDropCommits}
@@ -1142,6 +1167,7 @@ export function PushTab(props: Props) {
             onOpenInLog={onOpenInLog}
             onUndoCommit={onUndoCommit}
             onRequestCommitFiles={onRequestCommitFiles}
+            onRequestAggregatedDiff={onRequestAggregatedDiff}
             onOpenCommitFile={onOpenCommitFile}
             onSquash={onSquash}
             onDropCommits={onDropCommits}

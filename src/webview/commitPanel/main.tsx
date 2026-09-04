@@ -309,6 +309,23 @@ export function CommitApp() {
   const [activeTab, setActiveTab] = useState<TabId>('changes');
   const activeTabRef = useRef<TabId>('changes');
   activeTabRef.current = activeTab;
+  const [visitedTabs, setVisitedTabs] = useState<Set<TabId>>(() => new Set<TabId>(['changes']));
+  const visitedTabsRef = useRef<Set<TabId>>(visitedTabs);
+  visitedTabsRef.current = visitedTabs;
+  const lastTabSyncAtRef = useRef<Partial<Record<TabId, number>>>({});
+  const dirtyTabsRef = useRef<Set<TabId>>(new Set());
+
+  const markTabDirty = useCallback((...tabs: TabId[]) => {
+    for (const tab of tabs) {
+      dirtyTabsRef.current.add(tab);
+      delete lastTabSyncAtRef.current[tab];
+      if (tab === 'subtree') {
+        lastSubtreeListRequestAtRef.current = 0;
+        lastSubtreeStatusCheckAtRef.current = 0;
+        subtreeStatusCheckingRef.current = false;
+      }
+    }
+  }, []);
 
   // ── Shelve state ──────────────────────────────────────────────────────────
   const [shelveMap, setShelveMap]       = useState<Record<string, ShelveEntry[]>>({});
@@ -323,6 +340,7 @@ export function CommitApp() {
   const [stashLoading, setStashLoading] = useState<Record<string, boolean>>({});
   const [stashError, setStashError]   = useState<Record<string, string | null>>({});
   const [stashExpansionCommand, setStashExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: false });
+  const [stashFilesMap, setStashFilesMap] = useState<Record<string, Record<string, { loading: boolean; files?: StashEntry['files']; error?: string }>>>({});
 
   // ── Worktree state ────────────────────────────────────────────────────────
   const [worktreeRepos, setWorktreeRepos] = useState<Array<{ repoId: string; repoName: string; repoColor: string; worktrees: WorktreeEntry[]; isLinkedWorktree: boolean }>>([]);
@@ -334,9 +352,14 @@ export function CommitApp() {
   const [subtreeLoading, setSubtreeLoading] = useState(false);
   const [subtreeOps, setSubtreeOps] = useState<Record<string, SubtreeOp | undefined>>({});
   const [subtreeStatuses, setSubtreeStatuses] = useState<Record<string, SubtreePushStatus | undefined>>({});
+  const subtreeStatusesRef = useRef<Record<string, SubtreePushStatus | undefined>>({});
+  subtreeStatusesRef.current = subtreeStatuses;
   const [subtreeError, setSubtreeError] = useState<string | null>(null);
-  const subtreeEntriesRef = useRef<SubtreeEntry[]>([]);
+  const subtreeEntriesRef = useRef<SubtreeEntry[]>(subtreeEntries);
+  subtreeEntriesRef.current = subtreeEntries;
   const lastSubtreeListRequestAtRef = useRef(0);
+  const lastSubtreeStatusCheckAtRef = useRef(0);
+  const subtreeStatusCheckingRef = useRef(false);
   const commitStatusRefreshPendingRef = useRef(false);
   const tabCountBootstrappedRepoIdsRef = useRef<Set<string>>(new Set());
   const tabCountWorktreeRequestedRef = useRef(false);
@@ -491,6 +514,10 @@ export function CommitApp() {
     }
 
     commitStatusRefreshPendingRef.current = true;
+    lastTabSyncAtRef.current = {};
+    lastSubtreeListRequestAtRef.current = 0;
+    lastSubtreeStatusCheckAtRef.current = 0;
+    subtreeStatusCheckingRef.current = false;
     if (options.refreshSubtrees) {
       setSubtreeLoading(true);
       setSubtreeError(null);
@@ -534,21 +561,134 @@ export function CommitApp() {
     });
   }, [activeTab, currentViewMode, currentExpandMode, send]);
 
+  // ── Tab data request & sync functions ────────────────────────────────────
+
+  const requestShelveList = useCallback((repoId: string, silent = false) => {
+    if (!silent) {
+      setShelveLoading(prev => ({ ...prev, [repoId]: true }));
+    }
+    send({ type: 'SHELVE_LIST', requestId: generateId(), repoId });
+  }, [send]);
+
+  const requestStashCount = useCallback((repoId: string) => {
+    send({ type: 'STASH_COUNT', requestId: generateId(), repoId });
+  }, [send]);
+
+  const requestStashList = useCallback((repoId: string, silent = false) => {
+    if (!silent) {
+      setStashLoading(prev => ({ ...prev, [repoId]: true }));
+    }
+    send({ type: 'STASH_LIST', requestId: generateId(), repoId });
+  }, [send]);
+
+  const requestWorktreeList = useCallback((silent = false) => {
+    if (!silent) {
+      setWorktreeLoading(true);
+    }
+    setWorktreeError(null);
+    send({ type: 'WORKTREE_REQUEST_LIST' });
+  }, [send]);
+
+  const requestUnpushedCommits = useCallback((repoId: string, silent = false) => {
+    setUnpushedMap(prev => ({
+      ...prev,
+      // Keep existing commits visible while refreshing; only clear on first load
+      [repoId]: prev[repoId]
+        ? { ...prev[repoId], loading: !silent }
+        : { loading: true, commits: [] },
+    }));
+    send({ type: 'PUSH_GET_UNPUSHED', requestId: generateId(), repoId });
+  }, [send]);
+
+  const requestSubtreeList = useCallback((force = false, checkStatuses = false) => {
+    const now = Date.now();
+    if (checkStatuses) {
+      if (!force) {
+        if (subtreeStatusCheckingRef.current) {
+          return;
+        }
+        if (lastSubtreeStatusCheckAtRef.current > 0 && now - lastSubtreeStatusCheckAtRef.current < SUBTREE_LIST_REQUEST_THROTTLE_MS) {
+          return;
+        }
+      }
+      subtreeStatusCheckingRef.current = true;
+      lastSubtreeStatusCheckAtRef.current = now;
+      lastSubtreeListRequestAtRef.current = now;
+    } else {
+      if (!force && lastSubtreeListRequestAtRef.current > 0 && now - lastSubtreeListRequestAtRef.current < SUBTREE_LIST_REQUEST_THROTTLE_MS) {
+        return;
+      }
+      lastSubtreeListRequestAtRef.current = now;
+    }
+
+    if (subtreeEntriesRef.current.length === 0) {
+      setSubtreeLoading(true);
+    }
+    setSubtreeError(null);
+    if (force && subtreeEntriesRef.current.length > 0) {
+      setSubtreeStatuses(prev => {
+        const next = { ...prev };
+        for (const entry of subtreeEntriesRef.current) {
+          next[entry.id] = { ...prev[entry.id], loading: true };
+        }
+        return next;
+      });
+    }
+    send({ type: 'SUBTREE_REQUEST_LIST', checkStatuses, force });
+  }, [send]);
+
+  const syncTabData = useCallback((tab: TabId, force = false) => {
+    const now = Date.now();
+    const last = lastTabSyncAtRef.current[tab] ?? 0;
+    if (!force && now - last < 5000) {
+      return;
+    }
+    lastTabSyncAtRef.current[tab] = now;
+
+    const currentRepos = useCommitStore.getState().status?.repos ?? [];
+    const gitRepoList = currentRepos.filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
+
+    if (tab === 'shelf') {
+      gitRepoList.forEach(r => requestShelveList(r.repoId, true));
+    } else if (tab === 'stash') {
+      gitRepoList.forEach(r => {
+        requestStashCount(r.repoId);
+        requestStashList(r.repoId, true);
+      });
+    } else if (tab === 'push') {
+      gitRepoList.forEach(r => requestUnpushedCommits(r.repoId, true));
+    } else if (tab === 'worktree') {
+      requestWorktreeList(true);
+    } else if (tab === 'subtree') {
+      requestSubtreeList(false, true);
+    }
+  }, [requestShelveList, requestStashCount, requestStashList, requestUnpushedCommits, requestWorktreeList, requestSubtreeList]);
+
+  const switchTab = useCallback((tab: TabId) => {
+    setActiveTab(tab);
+    const isFirstVisit = !visitedTabsRef.current.has(tab);
+    if (isFirstVisit) {
+      setVisitedTabs(prev => {
+        const next = new Set(prev).add(tab);
+        visitedTabsRef.current = next;
+        return next;
+      });
+    }
+
+    const isDirty = dirtyTabsRef.current.has(tab);
+    if (isDirty || isFirstVisit) {
+      dirtyTabsRef.current.delete(tab);
+      syncTabData(tab, true);
+    } else {
+      syncTabData(tab, false);
+    }
+  }, [syncTabData]);
+
   // ── Message handler ───────────────────────────────────────────────────────
   useEffect(() => {
     const handler = (event: MessageEvent<HostToCommitMsg>) => {
       const msg = event.data;
       if (!msg?.type) return;
-
-      const requestVisibleGitPushData = () => {
-        const freshState = useCommitStore.getState();
-        const metaById = new Map(freshState.repoMetas.map(meta => [meta.id, meta]));
-        for (const repo of freshState.status?.repos ?? []) {
-          if (hiddenRepoIdsRef.current.has(repo.repoId)) continue;
-          if (metaById.get(repo.repoId)?.kind === 'svn') continue;
-          requestUnpushedCommits(repo.repoId);
-        }
-      };
 
       if ('requestId' in msg && msg.requestId && pendingRef.current.has(msg.requestId as string)) {
         const resolve = pendingRef.current.get(msg.requestId as string)!;
@@ -558,17 +698,32 @@ export function CommitApp() {
 
       switch (msg.type) {
         case 'COMMIT_REFRESH_START': {
+          commitStatusRefreshPendingRef.current = true;
+          lastTabSyncAtRef.current = {};
+          lastSubtreeListRequestAtRef.current = 0;
+          lastSubtreeStatusCheckAtRef.current = 0;
+          subtreeStatusCheckingRef.current = false;
+          dirtyTabsRef.current.clear();
           const currentTab = activeTabRef.current;
+          const visited = visitedTabsRef.current;
+          for (const tab of visited) {
+            if (tab !== currentTab && tab !== 'changes') {
+              markTabDirty(tab);
+            }
+          }
           const freshRepos = useCommitStore.getState().status?.repos ?? [];
           const gitRepoList = freshRepos.filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
-          if (currentTab === 'shelf') gitRepoList.forEach(r => requestShelveList(r.repoId));
-          if (currentTab === 'stash') gitRepoList.forEach(r => requestStashList(r.repoId));
-          if (currentTab === 'push') gitRepoList.forEach(r => requestUnpushedCommits(r.repoId));
-          if (currentTab === 'worktree') requestWorktreeList();
-          if (currentTab === 'subtree') requestSubtreeList();
+          if (currentTab === 'shelf') gitRepoList.forEach(r => requestShelveList(r.repoId, true));
+          if (currentTab === 'stash') gitRepoList.forEach(r => { requestStashCount(r.repoId); requestStashList(r.repoId, true); });
+          if (currentTab === 'push') gitRepoList.forEach(r => requestUnpushedCommits(r.repoId, true));
+          if (currentTab === 'worktree') requestWorktreeList(true);
+          if (currentTab === 'subtree') {
+            requestSubtreeList(true, true);
+          }
           break;
         }
-        case 'COMMIT_STATUS_UPDATE':
+        case 'COMMIT_STATUS_UPDATE': {
+          const isManualRefresh = commitStatusRefreshPendingRef.current;
           commitStatusRefreshPendingRef.current = false;
           store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder, msg.noVerify);
           if (Array.isArray(msg.status.repos) && useCommitStore.getState().changesViewMode === 'vscode') {
@@ -589,7 +744,24 @@ export function CommitApp() {
               prevCounts.set(repo.repoId, (repo.unstagedFiles ?? []).length);
             }
           }
+
+          // Always keep stash count badge updated on status updates
+          const currentGitRepos = (msg.status?.repos ?? []).filter(r => msg.repos.find(m => m.id === r.repoId)?.kind !== 'svn');
+          currentGitRepos.forEach(r => requestStashCount(r.repoId));
+
+          const currentTab = activeTabRef.current;
+          if (!isManualRefresh && currentTab !== 'changes') {
+            syncTabData(currentTab, false);
+          }
+
+          const visited = visitedTabsRef.current;
+          for (const tab of visited) {
+            if (tab !== currentTab && tab !== 'changes') {
+              markTabDirty(tab);
+            }
+          }
           break;
+        }
         case 'COMMIT_ICON_THEME_UPDATE':
           useCommitStore.setState({ iconTheme: msg.iconTheme });
           break;
@@ -637,9 +809,19 @@ export function CommitApp() {
             }
           }
           if (msg.ok) {
-            // Refresh push tab after any successful operation (commit, undo, push, etc.)
-            const currentRepos = useCommitStore.getState().status?.repos ?? [];
-            currentRepos.forEach(r => requestUnpushedCommits(r.repoId));
+            if (activeTabRef.current === 'push') {
+              const currentRepos = useCommitStore.getState().status?.repos ?? [];
+              currentRepos.forEach(r => requestUnpushedCommits(r.repoId, true));
+              lastTabSyncAtRef.current['push'] = Date.now();
+            } else {
+              markTabDirty('push');
+            }
+
+            if (activeTabRef.current === 'subtree') {
+              requestSubtreeList(false, true);
+            } else {
+              markTabDirty('subtree');
+            }
           } else if (msg.error && msg.error !== 'Cancelled') {
             notifyError(msg.error);
           }
@@ -670,13 +852,7 @@ export function CommitApp() {
           store.setCommitMessage(msg.message);
           break;
         case 'COMMIT_SET_ACTIVE_TAB':
-          setActiveTab(msg.tab);
-          if (msg.tab === 'push') requestVisibleGitPushData();
-          if (msg.tab === 'subtree') {
-            setSubtreeLoading(true);
-            setSubtreeError(null);
-            send({ type: 'SUBTREE_REQUEST_LIST' });
-          }
+          switchTab(msg.tab);
           break;
         case 'COMMIT_TRIGGER_ACTION':
           commitActionRef.current(msg.andPush);
@@ -733,9 +909,12 @@ export function CommitApp() {
             if (msg.hasConflicts && msg.conflictFiles?.length) {
               notifyInfo(t('Conflicts in {0} file(s) — merge editor opened', msg.conflictFiles.length));
             }
-            // Refresh the shelf list for the affected repo after any successful op
-            setShelveLoading(prev => ({ ...prev, [msg.repoId]: true }));
-            getVsCodeApi().postMessage({ type: 'SHELVE_LIST', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
+            if (activeTabRef.current === 'shelf') {
+              setShelveLoading(prev => ({ ...prev, [msg.repoId]: true }));
+              getVsCodeApi().postMessage({ type: 'SHELVE_LIST', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
+            } else {
+              markTabDirty('shelf');
+            }
           }
           break;
 
@@ -753,25 +932,58 @@ export function CommitApp() {
             setStashMap(prev => ({ ...prev, [msg.repoId]: msg.stashes }));
             setStashCountMap(prev => ({ ...prev, [msg.repoId]: msg.stashes.length }));
             setStashError(prev => ({ ...prev, [msg.repoId]: null }));
+            dirtyTabsRef.current.delete('stash');
           }
+          break;
+
+        case 'STASH_FILES_RESULT':
+          setStashFilesMap(prev => ({
+            ...prev,
+            [msg.repoId]: {
+              ...(prev[msg.repoId] ?? {}),
+              [msg.stashRef]: { loading: false, files: msg.files, error: msg.error },
+            },
+          }));
           break;
 
         case 'STASH_OP_RESULT':
           if (!msg.ok) {
             if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
           } else {
-            // Refresh stash list for affected repo
-            setStashLoading(prev => ({ ...prev, [msg.repoId]: true }));
+            // Reset cached files for affected repo
+            setStashFilesMap(prev => {
+              const next = { ...prev };
+              delete next[msg.repoId];
+              return next;
+            });
+            // 数量始终刷新更新角标
             getVsCodeApi().postMessage({ type: 'STASH_COUNT', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
-            getVsCodeApi().postMessage({ type: 'STASH_LIST', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
+            if (activeTabRef.current === 'stash') {
+              setStashLoading(prev => ({ ...prev, [msg.repoId]: true }));
+              getVsCodeApi().postMessage({ type: 'STASH_LIST', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
+            } else {
+              markTabDirty('stash');
+            }
           }
           break;
 
         case 'PUSH_UNPUSHED_RESULT':
-          setUnpushedMap(prev => ({
-            ...prev,
-            [msg.repoId]: { loading: false, commits: msg.commits, error: msg.error },
-          }));
+          if (msg.repos) {
+            setUnpushedMap(prev => {
+              const next = { ...prev };
+              for (const item of msg.repos!) {
+                next[item.repoId] = { loading: false, commits: item.commits, error: item.error };
+              }
+              return next;
+            });
+            dirtyTabsRef.current.delete('push');
+          } else if (msg.repoId) {
+            setUnpushedMap(prev => ({
+              ...prev,
+              [msg.repoId!]: { loading: false, commits: msg.commits ?? [], error: msg.error },
+            }));
+            dirtyTabsRef.current.delete('push');
+          }
           break;
 
         case 'PUSH_SQUASH_RESULT':
@@ -803,35 +1015,45 @@ export function CommitApp() {
         case 'WORKTREE_LIST_RESULT':
           setWorktreeLoading(false);
           setWorktreeRepos(msg.repos);
+          dirtyTabsRef.current.delete('worktree');
           break;
 
         case 'WORKTREE_OP_RESULT':
-          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          if (!msg.ok) {
+            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          } else {
+            if (activeTabRef.current === 'worktree') {
+              requestWorktreeList(true);
+            } else {
+              markTabDirty('worktree');
+            }
+          }
           break;
 
         case 'SUBTREE_LIST_RESULT':
+          setSubtreeLoading(false);
           if (msg.error) {
-            setSubtreeLoading(false);
             setSubtreeError(msg.error);
+            subtreeStatusCheckingRef.current = false;
           } else {
             subtreeEntriesRef.current = msg.entries;
             setSubtreeEntries(msg.entries);
-            setSubtreeStatuses(prev => {
-              const next: Record<string, SubtreePushStatus | undefined> = {};
-              for (const entry of msg.entries) {
-                next[entry.id] = { ...prev[entry.id], loading: true };
-              }
-              return next;
-            });
             setSubtreeError(null);
+            dirtyTabsRef.current.delete('subtree');
+            if (msg.entries.length === 0) {
+              subtreeStatusCheckingRef.current = false;
+            }
           }
           break;
 
         case 'SUBTREE_STATUS_RESULT':
           setSubtreeStatuses(prev => {
             const next = { ...prev, ...msg.statuses };
-            const hasLoading = subtreeEntriesRef.current.some(entry => next[entry.id]?.loading);
-            if (!hasLoading) setSubtreeLoading(false);
+            subtreeStatusesRef.current = next;
+            const hasPending = subtreeEntriesRef.current.some(entry => next[entry.id]?.loading);
+            if (!hasPending) {
+              subtreeStatusCheckingRef.current = false;
+            }
             return next;
           });
           break;
@@ -844,6 +1066,10 @@ export function CommitApp() {
               return next;
             });
           }
+          if (msg.ok) {
+            if (activeTabRef.current !== 'push') markTabDirty('push');
+            if (activeTabRef.current !== 'subtree') markTabDirty('subtree');
+          }
           break;
 
         case 'COMMIT_HIDDEN_REPOS_UPDATE':
@@ -852,8 +1078,7 @@ export function CommitApp() {
           break;
 
         case 'COMMIT_SWITCH_TAB':
-          setActiveTab(msg.tab);
-          if (msg.tab === 'push') requestVisibleGitPushData();
+          switchTab(msg.tab);
           break;
       }
     };
@@ -864,11 +1089,6 @@ export function CommitApp() {
   }, []);
 
   // ── Shelve callbacks ──────────────────────────────────────────────────────
-
-  const requestShelveList = useCallback((repoId: string) => {
-    setShelveLoading(prev => ({ ...prev, [repoId]: true }));
-    send({ type: 'SHELVE_LIST', requestId: generateId(), repoId });
-  }, [send]);
 
   const confirmShelve = useCallback((repoId: string, name: string, paths?: string[]) => {
     if (!name.trim()) return;
@@ -894,15 +1114,6 @@ export function CommitApp() {
 
   // ── Stash callbacks ───────────────────────────────────────────────────────
 
-  const requestStashCount = useCallback((repoId: string) => {
-    send({ type: 'STASH_COUNT', requestId: generateId(), repoId });
-  }, [send]);
-
-  const requestStashList = useCallback((repoId: string) => {
-    setStashLoading(prev => ({ ...prev, [repoId]: true }));
-    send({ type: 'STASH_LIST', requestId: generateId(), repoId });
-  }, [send]);
-
   const handleStashApply = useCallback((repoId: string, stashRef: string) => {
     send({ type: 'STASH_APPLY', requestId: generateId(), repoId, stashRef });
   }, [send]);
@@ -920,12 +1131,6 @@ export function CommitApp() {
   }, [send]);
 
   // ── Worktree callbacks ────────────────────────────────────────────────────
-
-  const requestWorktreeList = useCallback(() => {
-    setWorktreeLoading(true);
-    setWorktreeError(null);
-    send({ type: 'WORKTREE_REQUEST_LIST' });
-  }, [send]);
 
   const handleWorktreeDelete = useCallback((repoId: string, worktreePath: string, force: boolean) => {
     send({ type: 'WORKTREE_DELETE', requestId: generateId(), repoId, worktreePath, force });
@@ -963,18 +1168,31 @@ export function CommitApp() {
     send({ type: 'WORKTREE_CREATE_PROMPT', repoId } as CommitToHostMsg);
   }, [send]);
 
-  // ── Subtree callbacks ────────────────────────────────────────────────────
-
-  const requestSubtreeList = useCallback((force = false) => {
-    const now = Date.now();
-    if (!force && lastSubtreeListRequestAtRef.current > 0 && now - lastSubtreeListRequestAtRef.current < SUBTREE_LIST_REQUEST_THROTTLE_MS) {
-      return;
-    }
-    lastSubtreeListRequestAtRef.current = now;
-    setSubtreeLoading(true);
-    setSubtreeError(null);
-    send({ type: 'SUBTREE_REQUEST_LIST' });
+  // ── Stash files callback ──────────────────────────────────────────────────
+  const requestStashFiles = useCallback((repoId: string, stashRef: string) => {
+    setStashFilesMap(prev => ({
+      ...prev,
+      [repoId]: {
+        ...(prev[repoId] ?? {}),
+        [stashRef]: { loading: true, files: prev[repoId]?.[stashRef]?.files },
+      },
+    }));
+    const requestId = generateId();
+    pendingRef.current.set(requestId, msg => {
+      if (msg.type === 'STASH_FILES_RESULT') {
+        setStashFilesMap(prev => ({
+          ...prev,
+          [msg.repoId]: {
+            ...(prev[msg.repoId] ?? {}),
+            [msg.stashRef]: { loading: false, files: msg.files, error: msg.error },
+          },
+        }));
+      }
+    });
+    send({ type: 'STASH_GET_FILES', requestId, repoId, stashRef });
   }, [send]);
+
+  // ── Subtree callbacks ────────────────────────────────────────────────────
 
   const handleSubtreeAdd = useCallback((repoId?: string) => {
     send({ type: 'SUBTREE_ADD_PROMPT', repoId });
@@ -1022,17 +1240,6 @@ export function CommitApp() {
 
   // ── Push / unpushed callbacks ─────────────────────────────────────────────
 
-  const requestUnpushedCommits = useCallback((repoId: string) => {
-    setUnpushedMap(prev => ({
-      ...prev,
-      // Keep existing commits visible while refreshing; only clear on first load
-      [repoId]: prev[repoId]
-        ? { ...prev[repoId], loading: true }
-        : { loading: true, commits: [] },
-    }));
-    send({ type: 'PUSH_GET_UNPUSHED', requestId: generateId(), repoId });
-  }, [send]);
-
   const requestPushCommitFiles = useCallback((repoId: string, hash: string): Promise<PushCommitFile[]> => {
     const requestId = generateId();
     return new Promise(resolve => {
@@ -1054,6 +1261,30 @@ export function CommitApp() {
         resolve(msg.files);
       });
       send({ type: 'PUSH_GET_COMMIT_FILES', requestId, repoId, hash });
+    });
+  }, [notifyError, send]);
+
+  const requestAggregatedPushDiff = useCallback((repoId: string, oldestHash?: string): Promise<PushCommitFile[]> => {
+    const requestId = generateId();
+    return new Promise(resolve => {
+      const timeout = setTimeout(() => {
+        if (pendingRef.current.has(requestId)) {
+          pendingRef.current.delete(requestId);
+          resolve([]);
+        }
+      }, 15_000);
+      pendingRef.current.set(requestId, msg => {
+        clearTimeout(timeout);
+        if (msg.type !== 'PUSH_AGGREGATED_DIFF_RESULT') {
+          resolve([]);
+          return;
+        }
+        if (msg.error && msg.error !== 'Cancelled') {
+          notifyError(msg.error);
+        }
+        resolve(msg.files ?? []);
+      });
+      send({ type: 'PUSH_GET_AGGREGATED_DIFF', requestId, repoId, oldestHash });
     });
   }, [notifyError, send]);
 
@@ -1095,8 +1326,8 @@ export function CommitApp() {
   const metaMap = new Map(store.repoMetas.map(m => [m.id, m]));
   const commitMessageHistoryRepoKey = repos.map(repo => repo.repoId).sort().join('\0');
 
-  useEffect(() => {
-    const repoIds = commitMessageHistoryRepoKey ? commitMessageHistoryRepoKey.split('\0') : [];
+  const requestCommitMessageHistory = useCallback(() => {
+    const repoIds = repos.map(repo => repo.repoId);
     if (repoIds.length === 0) {
       activeCommitMessageHistoryRequestIdRef.current = null;
       setCommitMessageHistory([]);
@@ -1105,7 +1336,6 @@ export function CommitApp() {
     }
     const requestId = generateId();
     activeCommitMessageHistoryRequestIdRef.current = requestId;
-    setCommitMessageHistory([]);
     setCommitMessageHistoryLoading(true);
     send({ type: 'COMMIT_REQUEST_MESSAGE_HISTORY', requestId, repoIds, limit: COMMIT_MESSAGE_HISTORY_FETCH_LIMIT });
     const timeout = setTimeout(() => {
@@ -1113,13 +1343,7 @@ export function CommitApp() {
         setCommitMessageHistoryLoading(false);
       }
     }, 15_000);
-    return () => {
-      clearTimeout(timeout);
-      if (activeCommitMessageHistoryRequestIdRef.current === requestId) {
-        activeCommitMessageHistoryRequestIdRef.current = null;
-      }
-    };
-  }, [commitMessageHistoryRepoKey, send]);
+  }, [repos, send]);
   const isSvnRepo = (repoId: string) => metaMap.get(repoId)?.kind === 'svn';
   const gitRepos = repos.filter(repo => !isSvnRepo(repo.repoId));
   const showVcsBadges = gitRepos.length > 0 && gitRepos.length < repos.length;
@@ -1182,8 +1406,8 @@ export function CommitApp() {
   ] : [];
 
   useEffect(() => {
-    if (!visibleTabs.includes(activeTab)) setActiveTab('changes');
-  }, [activeTab, visibleTabs]);
+    if (!visibleTabs.includes(activeTab)) switchTab('changes');
+  }, [activeTab, visibleTabs, switchTab]);
 
   // Keep unpushed-commit counts fresh for repos without upstream so the Push tab badge
   // shows the correct number even before the tab is opened. Upstream repos are live via aheadBehind.ahead.
@@ -1191,7 +1415,7 @@ export function CommitApp() {
   const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream).map(r => r.repoId).join('\0');
   useEffect(() => {
     if (!noUpstreamKey) return;
-    noUpstreamKey.split('\0').forEach(id => requestUnpushedCommits(id));
+    noUpstreamKey.split('\0').forEach(id => requestUnpushedCommits(id, true));
   }, [noUpstreamKey, requestUnpushedCommits]);
 
   const gitRepoKey = gitRepos.map(repo => repo.repoId).join('\0');
@@ -1202,15 +1426,15 @@ export function CommitApp() {
       if (bootstrappedRepoIds.has(repoId)) continue;
       bootstrappedRepoIds.add(repoId);
       requestStashCount(repoId);
-      requestShelveList(repoId);
+      requestShelveList(repoId, true);
     }
     if (!tabCountWorktreeRequestedRef.current) {
       tabCountWorktreeRequestedRef.current = true;
-      requestWorktreeList();
+      requestWorktreeList(true);
     }
     if (!tabCountSubtreeRequestedRef.current) {
       tabCountSubtreeRequestedRef.current = true;
-      requestSubtreeList();
+      requestSubtreeList(false, false);
     }
   }, [gitRepoKey, requestShelveList, requestStashCount, requestSubtreeList, requestWorktreeList]);
 
@@ -1730,14 +1954,7 @@ export function CommitApp() {
                   key={tab}
                   style={css.tab(isActive)}
                   title={`${label} (${count})`}
-                  onClick={() => {
-                    setActiveTab(tab);
-                    if (tab === 'shelf') gitRepos.forEach(r => requestShelveList(r.repoId));
-                    if (tab === 'stash') gitRepos.forEach(r => requestStashList(r.repoId));
-                    if (tab === 'push') gitRepos.forEach(r => requestUnpushedCommits(r.repoId));
-                    if (tab === 'worktree') requestWorktreeList();
-                    if (tab === 'subtree') requestSubtreeList();
-                  }}
+                  onClick={() => switchTab(tab)}
                 >
                   <Codicon
                     name={iconName}
@@ -1772,7 +1989,8 @@ export function CommitApp() {
       {/* ── Tab content ── */}
       <div style={css.main}>
 
-        {activeTab === 'changes' && (<>
+        {visitedTabs.has('changes') && (
+          <div style={{ display: activeTab === 'changes' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
 
           {totalConflictCount > 0 && (
             <ConflictBanner summary={conflictSummary} actions={conflictBannerActions} />
@@ -2044,87 +2262,94 @@ export function CommitApp() {
             }}
             noVerify={store.noVerify}
             onNoVerifyChange={v => store.setNoVerify(v)}
+            onRequestMessageHistory={requestCommitMessageHistory}
           />
 
-        </>)}
+        </div>)}
 
-        {activeTab === 'shelf' && (
+        {visitedTabs.has('shelf') && (
           /* Shelf tab */
-          <div style={css.repoList}>
-            {gitRepos.map(repoStatus => {
-              const repoId = repoStatus.repoId;
-              const meta = metaMap.get(repoId);
-              const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
-              const repoColor = meta?.color ?? '#4ec9b0';
-              const worktreeBranch = meta?.isWorktree
-                ? (repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name)
-                : undefined;
-              const mainRepoName = baseNameFromPath(meta?.mainWorktreePath);
-              return (
-                <ShelvePanel
-                  key={repoId}
-                  repoId={repoId}
-                  repoName={repoName}
-                  repoColor={repoColor}
-                  worktreeBranch={worktreeBranch}
-                  worktreeBranchColor={meta?.isWorktree ? branchInfoColor(repoStatus.branch) : undefined}
-                  mainRepoName={mainRepoName}
-                  multiRepo={multiRepo}
-                  shelves={shelveMap[repoId] ?? []}
-                  loading={shelveLoading[repoId] ?? false}
-                  error={shelveError[repoId] ?? null}
-                  viewMode={store.shelveViewMode}
-                  onUnshelve={handleUnshelve}
-                  onUnshelveFile={handleUnshelveFile}
-                  onDrop={handleDropShelve}
-                  onRequestList={requestShelveList}
-                  onOpenFileDiff={handleOpenFileDiff}
-                />
-              );
-            })}
+          <div style={{ display: activeTab === 'shelf' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+            <div style={css.repoList}>
+              {gitRepos.map(repoStatus => {
+                const repoId = repoStatus.repoId;
+                const meta = metaMap.get(repoId);
+                const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
+                const repoColor = meta?.color ?? '#4ec9b0';
+                const worktreeBranch = meta?.isWorktree
+                  ? (repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name)
+                  : undefined;
+                const mainRepoName = baseNameFromPath(meta?.mainWorktreePath);
+                return (
+                  <ShelvePanel
+                    key={repoId}
+                    repoId={repoId}
+                    repoName={repoName}
+                    repoColor={repoColor}
+                    worktreeBranch={worktreeBranch}
+                    worktreeBranchColor={meta?.isWorktree ? branchInfoColor(repoStatus.branch) : undefined}
+                    mainRepoName={mainRepoName}
+                    multiRepo={multiRepo}
+                    shelves={shelveMap[repoId] ?? []}
+                    loading={shelveLoading[repoId] ?? false}
+                    error={shelveError[repoId] ?? null}
+                    viewMode={store.shelveViewMode}
+                    onUnshelve={handleUnshelve}
+                    onUnshelveFile={handleUnshelveFile}
+                    onDrop={handleDropShelve}
+                    onRequestList={requestShelveList}
+                    onOpenFileDiff={handleOpenFileDiff}
+                  />
+                );
+              })}
+            </div>
           </div>
         )}
 
-        {activeTab === 'stash' && (
+        {visitedTabs.has('stash') && (
           /* Stash tab */
-          <div style={css.repoList}>
-            {gitRepos.map(repoStatus => {
-              const repoId = repoStatus.repoId;
-              const meta = metaMap.get(repoId);
-              const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
-              const repoColor = meta?.color ?? '#4ec9b0';
-              const worktreeBranch = meta?.isWorktree
-                ? (repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name)
-                : undefined;
-              const mainRepoName = baseNameFromPath(meta?.mainWorktreePath);
-              return (
-                <StashTab
-                  key={repoId}
-                  repoId={repoId}
-                  repoName={repoName}
-                  repoColor={repoColor}
-                  worktreeBranch={worktreeBranch}
-                  worktreeBranchColor={meta?.isWorktree ? branchInfoColor(repoStatus.branch) : undefined}
-                  mainRepoName={mainRepoName}
-                  multiRepo={multiRepo}
-                  stashes={stashMap[repoId] ?? []}
-                  loading={stashLoading[repoId] ?? false}
-                  error={stashError[repoId] ?? null}
-                  viewMode={store.stashViewMode}
-                  onApply={handleStashApply}
-                  onPop={handleStashPop}
-                  onDrop={handleStashDrop}
-                  onOpenFileDiff={handleStashShowFileDiff}
-                  expansionCommand={stashExpansionCommand}
-                />
-              );
-            })}
+          <div style={{ display: activeTab === 'stash' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+            <div style={css.repoList}>
+              {gitRepos.map(repoStatus => {
+                const repoId = repoStatus.repoId;
+                const meta = metaMap.get(repoId);
+                const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
+                const repoColor = meta?.color ?? '#4ec9b0';
+                const worktreeBranch = meta?.isWorktree
+                  ? (repoStatus.branch.detachedTag ?? repoStatus.branch.detachedHash ?? repoStatus.branch.name)
+                  : undefined;
+                const mainRepoName = baseNameFromPath(meta?.mainWorktreePath);
+                return (
+                  <StashTab
+                    key={repoId}
+                    repoId={repoId}
+                    repoName={repoName}
+                    repoColor={repoColor}
+                    worktreeBranch={worktreeBranch}
+                    worktreeBranchColor={meta?.isWorktree ? branchInfoColor(repoStatus.branch) : undefined}
+                    mainRepoName={mainRepoName}
+                    multiRepo={multiRepo}
+                    stashes={stashMap[repoId] ?? []}
+                    loading={stashLoading[repoId] ?? false}
+                    error={stashError[repoId] ?? null}
+                    viewMode={store.stashViewMode}
+                    onApply={handleStashApply}
+                    onPop={handleStashPop}
+                    onDrop={handleStashDrop}
+                    onOpenFileDiff={handleStashShowFileDiff}
+                    expansionCommand={stashExpansionCommand}
+                    stashFilesMap={stashFilesMap[repoId]}
+                    onRequestStashFiles={requestStashFiles}
+                  />
+                );
+              })}
+            </div>
           </div>
         )}
 
-        {activeTab === 'push' && (
+        {visitedTabs.has('push') && (
           /* Push tab — manages its own scroll, footer anchored at bottom */
-          <div style={{ display: 'flex', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ display: activeTab === 'push' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
             <PushTab
               repos={gitRepos}
               repoMetas={gitRepoMetas}
@@ -2135,6 +2360,7 @@ export function CommitApp() {
               onOpenInLog={doOpenInLog}
               onUndoCommit={doUndoCommit}
               onRequestCommitFiles={requestPushCommitFiles}
+              onRequestAggregatedDiff={requestAggregatedPushDiff}
               onOpenCommitFile={openPushCommitFileDiff}
               onSquash={doSquash}
               onDropCommits={doDropCommits}
@@ -2144,49 +2370,53 @@ export function CommitApp() {
           </div>
         )}
 
-        {activeTab === 'worktree' && (
+        {visitedTabs.has('worktree') && (
           /* Worktree tab */
-          <div style={css.repoList}>
-            <WorktreePanel
-              repos={worktreeRepos}
-              loading={worktreeLoading}
-              error={worktreeError}
-              multiRepo={multiRepo}
-              onDelete={handleWorktreeDelete}
-              onLock={handleWorktreeLock}
-              onUnlock={handleWorktreeUnlock}
-              onPrune={handleWorktreePrune}
-              onOpenInExplorer={handleWorktreeOpenInExplorer}
-              onOpenInNewWindow={handleWorktreeOpenInNewWindow}
-              onOpenInOS={handleWorktreeOpenInOS}
-              onAddToWorkspace={handleWorktreeAddToWorkspace}
-              onRequestCreate={handleWorktreeRequestCreate}
-            />
+          <div style={{ display: activeTab === 'worktree' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+            <div style={css.repoList}>
+              <WorktreePanel
+                repos={worktreeRepos}
+                loading={worktreeLoading}
+                error={worktreeError}
+                multiRepo={multiRepo}
+                onDelete={handleWorktreeDelete}
+                onLock={handleWorktreeLock}
+                onUnlock={handleWorktreeUnlock}
+                onPrune={handleWorktreePrune}
+                onOpenInExplorer={handleWorktreeOpenInExplorer}
+                onOpenInNewWindow={handleWorktreeOpenInNewWindow}
+                onOpenInOS={handleWorktreeOpenInOS}
+                onAddToWorkspace={handleWorktreeAddToWorkspace}
+                onRequestCreate={handleWorktreeRequestCreate}
+              />
+            </div>
           </div>
         )}
 
-        {activeTab === 'subtree' && (
+        {visitedTabs.has('subtree') && (
           /* Subtree tab */
-          <div style={css.repoList}>
-            <SubtreePanel
-              entries={subtreeEntries}
-              repoMetas={gitRepoMetas}
-              loading={subtreeLoading}
-              activeOps={subtreeOps}
-              statuses={subtreeStatuses}
-              error={subtreeError}
-              multiRepo={multiRepo}
-              onAdd={handleSubtreeAdd}
-              onRegister={handleSubtreeRegister}
-              onPull={handleSubtreePull}
-              onPush={handleSubtreePush}
-              onSplit={handleSubtreeSplit}
-              onMerge={handleSubtreeMerge}
-              onRemove={handleSubtreeRemove}
-              onEdit={handleSubtreeEdit}
-              onDeleteRegistry={handleSubtreeDeleteRegistry}
-              onReveal={handleSubtreeReveal}
-            />
+          <div style={{ display: activeTab === 'subtree' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+            <div style={css.repoList}>
+              <SubtreePanel
+                entries={subtreeEntries}
+                repoMetas={gitRepoMetas}
+                loading={subtreeLoading}
+                activeOps={subtreeOps}
+                statuses={subtreeStatuses}
+                error={subtreeError}
+                multiRepo={multiRepo}
+                onAdd={handleSubtreeAdd}
+                onRegister={handleSubtreeRegister}
+                onPull={handleSubtreePull}
+                onPush={handleSubtreePush}
+                onSplit={handleSubtreeSplit}
+                onMerge={handleSubtreeMerge}
+                onRemove={handleSubtreeRemove}
+                onEdit={handleSubtreeEdit}
+                onDeleteRegistry={handleSubtreeDeleteRegistry}
+                onReveal={handleSubtreeReveal}
+              />
+            </div>
           </div>
         )}
 

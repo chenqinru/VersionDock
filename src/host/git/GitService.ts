@@ -17,7 +17,7 @@ import type {
   SubmoduleEntry,
   ConflictFileStatus,
 } from '../types/git';
-import type { StashEntry, UnpushedCommit, SubtreePushStatus } from '../types/messages';
+import type { StashEntry, UnpushedCommit, SubtreePushStatus, PushCommitFile } from '../types/messages';
 import { parseDiff, detectLanguage } from './DiffParser';
 import { getVscodeRepository } from './VscodeGitApi';
 import { ForcePushMode, Status, RefType } from './git.d';
@@ -321,6 +321,25 @@ export class GitService {
   private pendingPullAutoStash: PullAutoStash | undefined;
   // Set immediately after a tag checkout, cleared when VS Code API confirms the update.
   private _pendingDetachedTag: string | undefined;
+  // Cache of { lastCommit: string; splitHash: string } keyed by prefix
+  private subtreeSplitCache = new Map<string, { lastCommit: string; splitHash: string }>();
+
+  restoreSubtreeSplitCache(cache: Record<string, { lastCommit: string; splitHash: string }>): void {
+    if (!cache || typeof cache !== 'object') return;
+    for (const [prefix, entry] of Object.entries(cache)) {
+      if (entry && typeof entry.lastCommit === 'string' && typeof entry.splitHash === 'string') {
+        this.subtreeSplitCache.set(prefix, entry);
+      }
+    }
+  }
+
+  exportSubtreeSplitCache(): Record<string, { lastCommit: string; splitHash: string }> {
+    const result: Record<string, { lastCommit: string; splitHash: string }> = {};
+    for (const [prefix, entry] of this.subtreeSplitCache.entries()) {
+      result[prefix] = entry;
+    }
+    return result;
+  }
 
   constructor(
     public readonly repoId: string,
@@ -610,17 +629,23 @@ export class GitService {
     // Override aheadBehind with a direct git count — always attempt rev-list since
     // the VS Code API's HEAD.upstream can lag and arrive undefined even when a tracking
     // branch is configured, causing ahead/behind to be silently skipped.
+    // Also directly query HEAD commit to ensure fresh lastCommitHash after operations like reset/undo.
     let freshBranchInfo = branchInfo;
     try {
-      const [aheadRaw, behindRaw] = await Promise.all([
-        this.git.raw(['rev-list', '--count', '@{u}..HEAD']),
-        this.git.raw(['rev-list', '--count', 'HEAD..@{u}']),
+      const [aheadRaw, behindRaw, headRaw] = await Promise.all([
+        this.git.raw(['rev-list', '--count', '@{u}..HEAD']).catch(() => ''),
+        this.git.raw(['rev-list', '--count', 'HEAD..@{u}']).catch(() => ''),
+        this.git.raw(['rev-parse', 'HEAD']).catch(() => ''),
       ]);
       const ahead = parseInt(aheadRaw.trim(), 10);
       const behind = parseInt(behindRaw.trim(), 10);
-      if (!isNaN(ahead) && !isNaN(behind)) {
-        freshBranchInfo = { ...branchInfo, aheadBehind: { ahead, behind } };
-      }
+      const headCommit = headRaw.trim() || undefined;
+      freshBranchInfo = {
+        ...branchInfo,
+        aheadBehind: (!isNaN(ahead) && !isNaN(behind)) ? { ahead, behind } : branchInfo.aheadBehind,
+        lastCommitHash: headCommit ?? branchInfo.lastCommitHash,
+        detachedHash: status.detached ? (headCommit ? headCommit.slice(0, 8) : branchInfo.detachedHash) : branchInfo.detachedHash,
+      };
     } catch { /* no upstream configured — leave aheadBehind as-is */ }
 
     const stagedFiles: FileStatus[] = [];
@@ -992,6 +1017,7 @@ export class GitService {
         isRemote: false,
         upstream,
         aheadBehind,
+        lastCommitHash: head?.commit,
         detachedTag,
         detachedHash,
         isProtected: !isDetached && isBranchProtected(branchName),
@@ -1001,7 +1027,11 @@ export class GitService {
     const isDetached = status.detached;
     const branchName = await this.resolveHeadName(status.current ?? undefined);
     const detachedTag = isDetached ? await this.getDetachedTag() : undefined;
-    const detachedHash = (isDetached && !detachedTag) ? await this.getShortHash() : undefined;
+    let lastCommitHash: string | undefined;
+    try {
+      lastCommitHash = (await this.git.raw(['rev-parse', 'HEAD'])).trim() || undefined;
+    } catch { /* ignore */ }
+    const detachedHash = (isDetached && !detachedTag) ? (lastCommitHash ? lastCommitHash.slice(0, 8) : await this.getShortHash()) : undefined;
     let upstream = status.tracking ?? undefined;
     let aheadBehind = status.tracking ? { ahead: status.ahead, behind: status.behind } : undefined;
     if (!isDetached) {
@@ -1023,6 +1053,7 @@ export class GitService {
       isRemote: false,
       upstream,
       aheadBehind,
+      lastCommitHash,
       detachedTag,
       detachedHash,
       isProtected: !isDetached && isBranchProtected(branchName),
@@ -1982,10 +2013,57 @@ export class GitService {
     return [ref, `refs/heads/${ref}`, `refs/tags/${ref}`];
   }
 
-  private async getSubtreeRemoteHash(repository: string, refspec: string): Promise<{ hash?: string; ref?: string }> {
+  private async getSubtreePrefixLastCommit(prefix: string): Promise<string> {
+    try {
+      const output = await this.git.raw(['log', '-1', '--format=%H', 'HEAD', '--', prefix]);
+      return output.trim().toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+
+  private async getSubtreeSplitHashFast(prefix: string): Promise<string> {
+    const lastCommit = await this.getSubtreePrefixLastCommit(prefix);
+    if (lastCommit) {
+      const cached = this.subtreeSplitCache.get(prefix);
+      if (cached && cached.lastCommit === lastCommit && cached.splitHash) {
+        return cached.splitHash;
+      }
+    }
+
+    const splitOutput = await this.rawPathSafe(['subtree', 'split', this.subtreePrefixArg(prefix)]);
+    const splitHash = this.parseSubtreeSplitHash(splitOutput);
+    if (!splitHash) {
+      throw new Error(t('Cannot determine subtree split commit.'));
+    }
+
+    if (lastCommit) {
+      this.subtreeSplitCache.set(prefix, { lastCommit, splitHash });
+    }
+    return splitHash;
+  }
+
+  private async getSubtreeRemoteHash(
+    repository: string,
+    refspec: string,
+  ): Promise<{ hash?: string; ref?: string; unreachable?: boolean; notFound?: boolean; error?: string }> {
     const candidates = this.subtreeRemoteRefCandidates(refspec);
-    if (candidates.length === 0) return {};
-    const output = await this.rawPathSafe(['ls-remote', repository, ...candidates]);
+    if (candidates.length === 0) return { error: 'No ref specified' };
+
+    const lsRemotePromise = this.rawPathSafe(['ls-remote', repository, ...candidates]);
+    const timeoutPromise = new Promise<string>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('ls-remote timeout')), 8000);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+
+    let output = '';
+    try {
+      output = await Promise.race([lsRemotePromise, timeoutPromise]);
+    } catch (error) {
+      this.logger?.warn('Subtree', `Failed or timed out querying remote hash for ${repository}`, { error: String(error) });
+      return { unreachable: true, error: String(error) };
+    }
+
     const rows = output.split('\n')
       .map(line => {
         const [hash, ref] = line.trim().split(/\s+/);
@@ -1996,23 +2074,121 @@ export class GitService {
       const exact = rows.find(row => row.ref === candidate);
       if (exact) return exact;
     }
-    return rows[0] ?? {};
+    return { notFound: true, ref: this.normalizeSubtreeRemoteRef(refspec) };
+  }
+
+  private async getSubtreeLocalTrackingHash(repository: string, refspec: string): Promise<string | undefined> {
+    const normalizedRef = this.normalizeSubtreeRemoteRef(refspec);
+    if (!normalizedRef) return undefined;
+
+    try {
+      const remotes = await this.git.getRemotes(true);
+      const cleanRepo = repository.trim().replace(/\.git$/, '').toLowerCase();
+      const matchedRemote = remotes.find(r => {
+        const fetchUrl = (r.refs.fetch || '').trim().replace(/\.git$/, '').toLowerCase();
+        const pushUrl = (r.refs.push || '').trim().replace(/\.git$/, '').toLowerCase();
+        return fetchUrl === cleanRepo || pushUrl === cleanRepo || r.name.toLowerCase() === cleanRepo;
+      });
+
+      const candidateRefs: string[] = [];
+      if (matchedRemote) {
+        candidateRefs.push(`refs/remotes/${matchedRemote.name}/${normalizedRef}`);
+      }
+      candidateRefs.push(`refs/remotes/*/${normalizedRef}`);
+
+      for (const refName of candidateRefs) {
+        try {
+          const hash = (await this.git.raw(['rev-parse', '--verify', refName])).trim().toLowerCase();
+          if (hash && /^[0-9a-f]{40}$/.test(hash)) {
+            return hash;
+          }
+        } catch {
+          // continue
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }
+
+  private async countSubtreeAheadCommits(remoteHash: string, splitHash: string): Promise<number | undefined> {
+    try {
+      if (remoteHash === splitHash) return 0;
+
+      const remoteCommitExists = await this.git.raw(['cat-file', '-e', `${remoteHash}^{commit}`])
+        .then(() => true)
+        .catch(() => false);
+      if (!remoteCommitExists) return undefined;
+
+      const isAncestor = await this.git.raw(['merge-base', '--is-ancestor', remoteHash, splitHash])
+        .then(() => true)
+        .catch(() => false);
+      if (isAncestor) {
+        const count = Number.parseInt((await this.git.raw(['rev-list', '--count', `${remoteHash}..${splitHash}`])).trim(), 10);
+        return Number.isFinite(count) ? count : undefined;
+      }
+
+      const isRemoteAhead = await this.git.raw(['merge-base', '--is-ancestor', splitHash, remoteHash])
+        .then(() => true)
+        .catch(() => false);
+      if (isRemoteAhead) {
+        return 0;
+      }
+
+      const base = (await this.git.raw(['merge-base', remoteHash, splitHash])).trim();
+      if (base) {
+        const count = Number.parseInt((await this.git.raw(['rev-list', '--count', `${base}..${splitHash}`])).trim(), 10);
+        return Number.isFinite(count) ? count : undefined;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async getSubtreePushStatus(prefix: string, repository: string, refspec: string): Promise<SubtreePushStatus> {
-    const splitOutput = await this.rawPathSafe(['subtree', 'split', this.subtreePrefixArg(prefix)]);
-    const splitHash = this.parseSubtreeSplitHash(splitOutput);
-    if (!splitHash) {
-      throw new Error(t('Cannot determine subtree split commit.'));
+    const [splitHash, remote] = await Promise.all([
+      this.getSubtreeSplitHashFast(prefix),
+      this.getSubtreeRemoteHash(repository, refspec),
+    ]);
+
+    const normalizedRef = this.normalizeSubtreeRemoteRef(refspec);
+
+    if (remote.unreachable) {
+      const localTrackingHash = await this.getSubtreeLocalTrackingHash(repository, refspec);
+      if (localTrackingHash) {
+        if (localTrackingHash === splitHash) {
+          return {
+            aheadCount: 0,
+            hasUpdates: false,
+            remoteRef: normalizedRef,
+            splitHash,
+            remoteHash: localTrackingHash,
+          };
+        }
+        const aheadCount = await this.countSubtreeAheadCommits(localTrackingHash, splitHash);
+        return {
+          aheadCount,
+          hasUpdates: aheadCount === undefined || aheadCount > 0,
+          remoteRef: normalizedRef,
+          splitHash,
+          remoteHash: localTrackingHash,
+        };
+      }
+
+      return {
+        remoteRef: normalizedRef,
+        splitHash,
+        error: t('Unable to reach remote repository.'),
+      };
     }
 
-    const remote = await this.getSubtreeRemoteHash(repository, refspec);
-    if (!remote.hash) {
-      const aheadCount = Number.parseInt((await this.git.raw(['rev-list', '--count', splitHash])).trim(), 10);
+    if (remote.notFound || !remote.hash) {
       return {
-        aheadCount: Number.isFinite(aheadCount) ? aheadCount : undefined,
+        aheadCount: undefined,
         hasUpdates: true,
-        remoteRef: this.normalizeSubtreeRemoteRef(refspec),
+        remoteRef: normalizedRef,
         splitHash,
       };
     }
@@ -2040,10 +2216,10 @@ export class GitService {
       };
     }
 
-    const aheadCount = Number.parseInt((await this.git.raw(['rev-list', '--count', `${remote.hash}..${splitHash}`])).trim(), 10);
+    const aheadCount = await this.countSubtreeAheadCommits(remote.hash, splitHash);
     return {
-      aheadCount: Number.isFinite(aheadCount) ? aheadCount : undefined,
-      hasUpdates: true,
+      aheadCount,
+      hasUpdates: aheadCount === undefined || aheadCount > 0,
       remoteRef: remote.ref,
       splitHash,
       remoteHash: remote.hash,
@@ -3382,29 +3558,32 @@ export class GitService {
         ? rawFullMessage.slice(branchMatch[0].length).trim()
         : rawFullMessage || message;
 
-      // Get files for this stash entry
-      const files: Array<{ path: string; status: string }> = [];
-      try {
-        const fileRaw = await this.rawPathSafe(['stash', 'show', '--name-status', '-z', ref]);
-        for (const file of parseNameStatusZOutput(fileRaw)) {
-          files.push({ path: file.path, status: file.status });
-        }
-      } catch { /* stash might have no files */ }
-
-      // Also include untracked files saved in stash^3 (created by `git stash -u`)
-      try {
-        const untrackedRaw = await this.rawPathSafe(['ls-tree', '-r', '--name-only', '-z', `${ref}^3`]);
-        const trackedPaths = new Set(files.map(f => f.path));
-        for (const filePath of untrackedRaw.split('\0')) {
-          if (filePath && !trackedPaths.has(filePath)) {
-            files.push({ path: filePath, status: 'untracked' });
-          }
-        }
-      } catch { /* stash^3 may not exist for tracked-only stashes */ }
-
-      entries.push({ ref, index, message, fullMessage, date, branch, files });
+      entries.push({ ref, index, message, fullMessage, date, branch, files: [] });
     }
     return entries;
+  }
+
+  async getStashFiles(stashRef: string): Promise<Array<{ path: string; status: string }>> {
+    const files: Array<{ path: string; status: string }> = [];
+    try {
+      const fileRaw = await this.rawPathSafe(['stash', 'show', '--name-status', '-z', stashRef]);
+      for (const file of parseNameStatusZOutput(fileRaw)) {
+        files.push({ path: file.path, status: file.status });
+      }
+    } catch { /* stash might have no files */ }
+
+    // Also include untracked files saved in stash^3 (created by `git stash -u`)
+    try {
+      const untrackedRaw = await this.rawPathSafe(['ls-tree', '-r', '--name-only', '-z', `${stashRef}^3`]);
+      const trackedPaths = new Set(files.map(f => f.path));
+      for (const filePath of untrackedRaw.split('\0')) {
+        if (filePath && !trackedPaths.has(filePath)) {
+          files.push({ path: filePath, status: 'untracked' });
+        }
+      }
+    } catch { /* stash^3 may not exist for tracked-only stashes */ }
+
+    return files;
   }
 
   async stashShow(stashRef: string, filePath: string): Promise<string> {
@@ -3728,6 +3907,48 @@ export class GitService {
       } catch {
         return [];
       }
+    }
+  }
+
+  async getUnpushedAggregatedChanges(oldestHash?: string): Promise<PushCommitFile[]> {
+    try {
+      let diffArgs: string[] | null = null;
+      try {
+        await this.git.raw(['rev-parse', '--verify', '@{u}']);
+        diffArgs = ['@{u}..HEAD'];
+      } catch {
+        if (oldestHash) {
+          try {
+            const parent = (await this.git.raw(['rev-parse', '--verify', `${oldestHash}^`])).trim();
+            diffArgs = [`${parent}..HEAD`];
+          } catch {
+            diffArgs = [oldestHash];
+          }
+        }
+      }
+
+      if (!diffArgs) {
+        return [];
+      }
+
+      const [nameStatusRaw, numStatRaw] = await Promise.all([
+        this.rawPathSafe(['diff', '--name-status', '-z', '-M', ...diffArgs]).catch(() => ''),
+        this.rawPathSafe(['diff', '--numstat', '-z', '-M', ...diffArgs]).catch(() => ''),
+      ]);
+      const stats = parseNumStatZOutput(numStatRaw);
+      const files: PushCommitFile[] = [];
+      for (const file of parseNameStatusZOutput(nameStatusRaw)) {
+        const stat = stats.get(file.path);
+        files.push({
+          path: file.path,
+          status: file.code.replace(/\d+$/, ''),
+          added: stat?.added,
+          removed: stat?.removed,
+        });
+      }
+      return files;
+    } catch {
+      return [];
     }
   }
 

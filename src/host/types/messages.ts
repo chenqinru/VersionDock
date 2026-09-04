@@ -72,7 +72,7 @@ export interface StashEntry {
   fullMessage?: string; // complete description including the body
   date: string;     // ISO date
   branch: string;   // branch name
-  files: Array<{ path: string; status: string }>;
+  files?: Array<{ path: string; status: string }>;
 }
 
 // ─── Push (unpushed commits) ─────────────────────────────────────────────────
@@ -153,10 +153,12 @@ export type HostToCommitMsg =
   | { type: 'SHELVE_OP_RESULT'; requestId: string; repoId: string; op: 'push' | 'apply' | 'drop'; ok: boolean; error?: string; hasConflicts?: boolean; conflictFiles?: string[] }
   | { type: 'STASH_COUNT_RESULT'; requestId: string; repoId: string; count: number; error?: string }
   | { type: 'STASH_LIST_RESULT'; requestId: string; repoId: string; stashes: StashEntry[]; error?: string }
+  | { type: 'STASH_FILES_RESULT'; requestId: string; repoId: string; stashRef: string; files: Array<{ path: string; status: string }>; error?: string }
   | { type: 'STASH_SHOW_RESULT'; requestId: string; diff: string; error?: string }
   | { type: 'STASH_OP_RESULT'; requestId: string; repoId: string; op: 'apply' | 'pop' | 'drop' | 'push'; ok: boolean; error?: string }
-  | { type: 'PUSH_UNPUSHED_RESULT'; requestId: string; repoId: string; commits: UnpushedCommit[]; error?: string }
+  | { type: 'PUSH_UNPUSHED_RESULT'; requestId?: string; repoId?: string; commits?: UnpushedCommit[]; repos?: Array<{ repoId: string; commits: UnpushedCommit[]; error?: string }>; error?: string }
   | { type: 'PUSH_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
+  | { type: 'PUSH_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
   | { type: 'PUSH_SQUASH_RESULT'; requestId: string; ok: boolean; error?: string }
   | { type: 'PUSH_DROP_RESULT'; requestId: string; ok: boolean; error?: string }
   | { type: 'PUSH_REVERT_RESULT'; requestId: string; ok: boolean; error?: string }
@@ -236,6 +238,7 @@ export type CommitToHostMsg =
   | { type: 'SHELVE_OPEN_FILE_DIFF'; repoId: string; shelveId: string; filePath: string }
   | { type: 'STASH_COUNT'; requestId: string; repoId: string }
   | { type: 'STASH_LIST'; requestId: string; repoId: string }
+  | { type: 'STASH_GET_FILES'; requestId: string; repoId: string; stashRef: string }
   | { type: 'STASH_PUSH'; requestId: string; repoId: string; message: string; paths?: string[] }
   | { type: 'STASH_SHOW'; requestId: string; repoId: string; stashRef: string; filePath: string }
   | { type: 'STASH_APPLY'; requestId: string; repoId: string; stashRef: string }
@@ -244,6 +247,7 @@ export type CommitToHostMsg =
   | { type: 'STASH_OPEN_FILE_DIFF'; repoId: string; stashRef: string; filePath: string }
   | { type: 'PUSH_GET_UNPUSHED'; requestId: string; repoId: string }
   | { type: 'PUSH_GET_COMMIT_FILES'; requestId: string; repoId: string; hash: string }
+  | { type: 'PUSH_GET_AGGREGATED_DIFF'; requestId: string; repoId: string; oldestHash?: string }
   | { type: 'PUSH_OPEN_COMMIT_FILE_DIFF'; repoId: string; hash: string; filePath: string; fileStatus?: string }
   | { type: 'PUSH_SQUASH_COMMITS'; requestId: string; repoId: string; hashes: string[]; oldestHash: string; message: string; commits: { hash: string; shortHash: string; message: string }[] }
   | { type: 'PUSH_DROP_COMMITS'; requestId: string; repoId: string; hashes: string[]; oldestHash: string }
@@ -282,7 +286,7 @@ export type CommitToHostMsg =
   | { type: 'WORKTREE_OPEN_IN_NEW_WINDOW'; worktreePath: string }
   | { type: 'WORKTREE_OPEN_IN_OS'; worktreePath: string }
   | { type: 'WORKTREE_ADD_TO_WORKSPACE'; worktreePath: string }
-  | { type: 'SUBTREE_REQUEST_LIST' }
+  | { type: 'SUBTREE_REQUEST_LIST'; checkStatuses?: boolean; force?: boolean }
   | { type: 'SUBTREE_ADD_PROMPT'; repoId?: string }
   | { type: 'SUBTREE_REGISTER_PROMPT'; repoId?: string }
   | { type: 'SUBTREE_EDIT_PROMPT'; entryId: string }

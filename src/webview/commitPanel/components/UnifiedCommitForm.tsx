@@ -39,6 +39,7 @@ interface Props {
   generatingMessage: boolean;
   noVerify?: boolean;
   onNoVerifyChange?: (v: boolean) => void;
+  onRequestMessageHistory?: () => void;
 }
 
 interface DropdownButtonItem { icon: string; label: string; onSelect: () => void; }
@@ -224,6 +225,7 @@ export function UnifiedCommitForm({
   message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags, unpushedMap,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
   onAutopilot, onStopAutopilot, onOpenComposer, onOpenCodeReview, generatingMessage, noVerify = false, onNoVerifyChange,
+  onRequestMessageHistory,
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
 
@@ -541,7 +543,10 @@ export function UnifiedCommitForm({
             disabled={loading || generatingMessage}
             aria-label={t('Commit message history')}
             title={t('View commit message history')}
-            onClick={() => setMessageHistoryOpen(true)}
+            onClick={() => {
+              onRequestMessageHistory?.();
+              setMessageHistoryOpen(true);
+            }}
           >
             <Codicon name="history" style={{ fontSize: 15 }} />
           </button>

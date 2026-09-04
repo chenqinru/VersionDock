@@ -26,6 +26,8 @@ interface Props {
   onDrop: (repoId: string, stashRef: string) => void;
   onOpenFileDiff: (repoId: string, stashRef: string, filePath: string) => void;
   expansionCommand: ExpansionCommand;
+  stashFilesMap?: Record<string, { loading: boolean; files?: StashEntry['files']; error?: string }>;
+  onRequestStashFiles?: (repoId: string, stashRef: string) => void;
 }
 
 export interface ExpansionCommand {
@@ -72,7 +74,7 @@ function formatDate(iso: string): string {
 
 // ── Tree data structure ───────────────────────────────────────────────────────
 
-type StashFile = StashEntry['files'][number];
+type StashFile = NonNullable<StashEntry['files']>[number];
 interface TreeDir  { kind: 'dir';  name: string; path: string; children: TreeNode[] }
 interface TreeFile { kind: 'file'; name: string; file: StashFile }
 type TreeNode = TreeDir | TreeFile;
@@ -218,7 +220,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
 
 // ── Single stash entry row ────────────────────────────────────────────────────
 
-function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileDiff, expansionCommand }: {
+function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileDiff, expansionCommand, stashFilesMap, onRequestStashFiles }: {
   entry: StashEntry;
   repoId: string;
   viewMode: ViewMode;
@@ -227,6 +229,8 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   onDrop: Props['onDrop'];
   onOpenFileDiff: Props['onOpenFileDiff'];
   expansionCommand: ExpansionCommand;
+  stashFilesMap?: Props['stashFilesMap'];
+  onRequestStashFiles?: Props['onRequestStashFiles'];
 }) {
   const [hovered, setHovered] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -236,9 +240,13 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   const fullMessage = entry.fullMessage || entry.message || entry.ref;
   const messageTitle = getCommitMessageTitle(fullMessage, entry.ref);
 
+  const fileState = stashFilesMap?.[entry.ref];
+  const files = React.useMemo(() => fileState?.files ?? entry.files ?? [], [entry.files, fileState?.files]);
+  const filesLoading = Boolean(fileState?.loading);
+
   const treeNodes = React.useMemo(
-    () => viewMode === 'tree' ? buildTree(entry.files) : null,
-    [entry.files, viewMode],
+    () => viewMode === 'tree' ? buildTree(files) : null,
+    [files, viewMode],
   );
   const allDirPaths = React.useMemo(
     () => treeNodes ? collectDirPaths(treeNodes) : [],
@@ -249,7 +257,10 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   React.useEffect(() => {
     setExpanded(expansionCommand.expanded);
     setOpenDirs(expansionCommand.expanded ? new Set(allDirPaths) : new Set());
-  }, [allDirPaths, expansionCommand.expanded, expansionCommand.sequence]);
+    if (expansionCommand.expanded && !fileState?.files && files.length === 0) {
+      onRequestStashFiles?.(repoId, entry.ref);
+    }
+  }, [allDirPaths, entry.ref, expansionCommand.expanded, expansionCommand.sequence, fileState?.files, files.length, onRequestStashFiles, repoId]);
 
   const toggleDir = (path: string) => {
     setOpenDirs(prev => {
@@ -257,6 +268,15 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
       if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
+  };
+
+  const handleToggleExpand = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const nextExpanded = !expanded;
+    setExpanded(nextExpanded);
+    if (nextExpanded && !fileState?.files && files.length === 0) {
+      onRequestStashFiles?.(repoId, entry.ref);
+    }
   };
 
   return (
@@ -270,7 +290,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
         onDoubleClick={() => onPop(repoId, entry.ref)}
         title={t('{0} — double-click to pop', entry.ref)}
       >
-        <button data-action-btn="" style={row.chevronBtn} onClick={e => { e.stopPropagation(); setExpanded(v => !v); }}>
+        <button data-action-btn="" style={row.chevronBtn} onClick={handleToggleExpand}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px' }} />
         </button>
         <Codicon name="save" style={{ fontSize: '13px', flexShrink: 0 }} />
@@ -287,9 +307,11 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
             )}
           </span>
           <span style={row.meta}>
-            <span style={row.fileCount}>
-              {entry.files.length === 1 ? t('{0} file', entry.files.length) : t('{0} files', entry.files.length)}
-            </span>
+            {files.length > 0 && (
+              <span style={row.fileCount}>
+                {files.length === 1 ? t('{0} file', files.length) : t('{0} files', files.length)}
+              </span>
+            )}
             <span style={row.date}>{formatDate(entry.date)}</span>
           </span>
         </div>
@@ -311,7 +333,12 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
       {/* Expanded body */}
       {expanded && (
         <div style={row.fileList}>
-          {entry.files.length === 0 ? (
+          {filesLoading ? (
+            <div style={{ ...row.emptyFiles, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Codicon name="loading~spin" style={{ fontSize: '12px' }} />
+              {t('Loading files…')}
+            </div>
+          ) : files.length === 0 ? (
             <div style={row.emptyFiles}>{t('No files')}</div>
           ) : viewMode === 'tree' && treeNodes ? (
             treeNodes.map(node =>
@@ -320,7 +347,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
                 : <FileRow key={node.file.path} file={node.file} repoId={repoId} entry={entry} depth={0} onOpenFileDiff={onOpenFileDiff} />
             )
           ) : (
-            entry.files.map(f => (
+            files.map(f => (
               <FileRow key={f.path} file={f} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} />
             ))
           )}
@@ -352,6 +379,8 @@ export function StashTab({
   stashes, loading, error, viewMode,
   onApply, onPop, onDrop, onOpenFileDiff,
   expansionCommand,
+  stashFilesMap,
+  onRequestStashFiles,
 }: Props) {
   const projectColor = readableAccentColor(repoColor);
   return (
@@ -374,7 +403,7 @@ export function StashTab({
           {error}
         </div>
       )}
-      {loading ? (
+      {loading && stashes.length === 0 ? (
         <div style={css.empty}>{t('Loading…')}</div>
       ) : stashes.length === 0 ? (
         <div style={css.empty}>{t('No stashes')}</div>
@@ -390,6 +419,8 @@ export function StashTab({
             onDrop={onDrop}
             onOpenFileDiff={onOpenFileDiff}
             expansionCommand={expansionCommand}
+            stashFilesMap={stashFilesMap}
+            onRequestStashFiles={onRequestStashFiles}
           />
         ))
       )}

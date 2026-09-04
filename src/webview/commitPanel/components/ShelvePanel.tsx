@@ -402,7 +402,7 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBr
         </div>
       )}
 
-      {loading ? (
+      {loading && shelves.length === 0 ? (
         <div style={css.empty}>{t('Loading…')}</div>
       ) : shelves.length === 0 ? (
         <div style={css.empty}>{t('No shelved changes')}</div>

@@ -281,7 +281,7 @@ export function WorktreePanel({
   onDelete, onLock, onUnlock, onPrune,
   onOpenInExplorer, onOpenInNewWindow, onOpenInOS, onAddToWorkspace, onRequestCreate,
 }: Props) {
-  if (loading) return <div style={css.empty}>{t('Loading…')}</div>;
+  if (loading && repos.length === 0) return <div style={css.empty}>{t('Loading…')}</div>;
   if (error) return (
     <div style={css.errorRow}>
       <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
