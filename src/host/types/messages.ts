@@ -85,6 +85,7 @@ export interface UnpushedCommit {
   shortHash: string;
   message: string;
   body?: string;
+  fullMessage?: string;
   author: string;
   date: string;
   filesChanged?: number;
@@ -98,6 +99,22 @@ export interface PushCommitFile {
   added?: number;
   removed?: number;
 }
+
+export interface IncomingCommit {
+  hash: string;
+  shortHash: string;
+  message: string;
+  body?: string;
+  fullMessage?: string;
+  author: string;
+  date: string;
+  filesChanged?: number;
+  additions?: number;
+  deletions?: number;
+  potentialConflictPaths?: string[];
+}
+
+export type SyncPullStrategy = 'default' | 'rebase' | 'merge' | 'ff-only';
 
 export interface CommitGenerateMessageTarget {
   repoId: string;
@@ -134,7 +151,7 @@ export interface SubtreePushStatus {
 }
 
 export type SubtreeOp = 'add' | 'pull' | 'push' | 'split' | 'merge' | 'remove' | 'register' | 'edit' | 'delete';
-export type CommitPanelTab = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree' | 'subtree' | 'submodule';
+export type CommitPanelTab = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree' | 'subtree' | 'submodule' | 'sync';
 
 // ─── Commit Panel: Host → WebView ────────────────────────────────────────────
 
@@ -166,6 +183,11 @@ export type HostToCommitMsg =
   | { type: 'PUSH_DROP_RESULT'; requestId: string; ok: boolean; error?: string }
   | { type: 'PUSH_REVERT_RESULT'; requestId: string; ok: boolean; error?: string }
   | { type: 'PUSH_EDIT_MSG_RESULT'; requestId: string; ok: boolean; error?: string }
+  | { type: 'SYNC_INCOMING_RESULT'; requestId?: string; repoId?: string; commits?: IncomingCommit[]; repos?: Array<{ repoId: string; commits: IncomingCommit[]; error?: string }>; error?: string }
+  | { type: 'SYNC_INCOMING_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
+  | { type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
+  | { type: 'SYNC_FETCH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
+  | { type: 'SYNC_PULL_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'COMMIT_SET_MESSAGE'; message: string; requestId?: string }
   | { type: 'COMMIT_SET_ACTIVE_TAB'; tab: CommitPanelTab }
   | { type: 'COMMIT_TRIGGER_ACTION'; andPush: boolean }
@@ -212,7 +234,9 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_PULL_ALL' }
   | { type: 'COMMIT_PULL_REPO'; requestId: string; repoId: string }
   | { type: 'COMMIT_GET_REMOTES'; requestId: string; repoId: string }
-  | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote?: string }
+  | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote?: string; force?: boolean }
+  | { type: 'SYNC_PUSH_TAGS'; requestId: string; repoId: string; remote?: string }
+  | { type: 'SYNC_PUSH_TAGS_MULTI'; requestId: string; repoIds: string[] }
   | { type: 'COMMIT_DISCARD_FILE'; requestId: string; repoId: string; path: string }
   | { type: 'COMMIT_DISCARD_FILES'; requestId: string; files: Array<{ repoId: string; path: string }> }
   | { type: 'COMMIT_OPEN_DIFF'; repoId: string; filePath: string; staged: boolean }
@@ -258,6 +282,19 @@ export type CommitToHostMsg =
   | { type: 'PUSH_DROP_COMMITS'; requestId: string; repoId: string; hashes: string[]; oldestHash: string }
   | { type: 'PUSH_REVERT_COMMITS'; requestId: string; repoId: string; hashes: string[] }
   | { type: 'PUSH_EDIT_COMMIT_MSG'; requestId: string; repoId: string; hash: string; currentMessage: string }
+  | { type: 'SYNC_GET_INCOMING'; requestId: string; repoId: string }
+  | { type: 'SYNC_GET_INCOMING_COMMIT_FILES'; requestId: string; repoId: string; hash: string }
+  | { type: 'SYNC_GET_INCOMING_AGGREGATED_DIFF'; requestId: string; repoId: string; oldestHash?: string }
+  | { type: 'SYNC_OPEN_INCOMING_COMMIT_FILE_DIFF'; repoId: string; hash: string; filePath: string; fileStatus?: string }
+  | { type: 'SYNC_OPEN_INCOMING_AGGREGATED_FILE_DIFF'; repoId: string; oldestHash?: string; filePath: string; fileStatus?: string }
+  | { type: 'SYNC_FETCH_REPO'; requestId: string; repoId: string }
+  | { type: 'SYNC_FETCH_ALL'; requestId: string }
+  | { type: 'SYNC_DO_PULL'; requestId: string; repoId: string; strategy?: SyncPullStrategy }
+  | { type: 'SYNC_DO_PULL_MULTI'; requestId: string; repoIds: string[]; strategy?: SyncPullStrategy }
+  | { type: 'SYNC_DO_SYNC'; requestId: string; repoId: string; strategy?: SyncPullStrategy; remote?: string }
+  | { type: 'SYNC_DO_SYNC_MULTI'; requestId: string; repoIds: string[]; strategy?: SyncPullStrategy }
+  | { type: 'SYNC_CHERRY_PICK'; requestId: string; repoId: string; hashes: string[] }
+  | { type: 'SYNC_CREATE_BRANCH_FROM_COMMIT'; requestId: string; repoId: string; hash: string }
   | { type: 'COMMIT_OPEN_ALL_CHANGES'; repoId: string; section?: 'staged' | 'unstaged' }
   | { type: 'COMMIT_OPEN_LOG'; hash: string; repoId: string }
   | { type: 'COMMIT_UNDO_COMMIT'; requestId: string; repoId: string }

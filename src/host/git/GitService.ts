@@ -18,7 +18,7 @@ import type {
   SubmoduleEntry,
   ConflictFileStatus,
 } from '../types/git';
-import type { StashEntry, UnpushedCommit, SubtreePushStatus, PushCommitFile } from '../types/messages';
+import type { StashEntry, UnpushedCommit, SubtreePushStatus, PushCommitFile, IncomingCommit, SyncPullStrategy } from '../types/messages';
 import { parseDiff, detectLanguage } from './DiffParser';
 import { getVscodeRepository } from './VscodeGitApi';
 import { ForcePushMode, Status, RefType } from './git.d';
@@ -287,7 +287,7 @@ type BranchTrackingInfo = Pick<BranchInfo, 'upstream' | 'aheadBehind'> & {
   isGone?: boolean;
 };
 
-type PullStrategy = 'merge' | 'rebase';
+type PullStrategy = 'merge' | 'rebase' | 'ff-only' | 'default';
 
 interface PullAutoStash {
   hash: string;
@@ -2911,12 +2911,25 @@ export class GitService {
     });
   }
 
+  async pushTags(remote?: string): Promise<void> {
+    await this.assertBranchOperationAllowed();
+    return this.withWriteLock(async () => {
+      const configuredRemotes = await this.getRemotes().catch(() => [] as string[]);
+      const targetRemote = remote ?? configuredRemotes[0] ?? 'origin';
+      await this.git.raw(['push', targetRemote, '--tags']);
+    });
+  }
+
   async pull(): Promise<string> {
     return this.withWriteLock(() => this.pullWithStrategy('merge'));
   }
 
   async pullRebase(): Promise<string> {
     return this.withWriteLock(() => this.pullWithStrategy('rebase'));
+  }
+
+  async pullWithCustomStrategy(strategy: SyncPullStrategy = 'default'): Promise<string> {
+    return this.withWriteLock(() => this.pullWithStrategy(strategy));
   }
 
   private async pullWithStrategy(strategy: PullStrategy, remote?: string, branch?: string): Promise<string> {
@@ -2932,12 +2945,22 @@ export class GitService {
     }
 
     const autoStash = await this.createPullAutoStash();
-    const strategyOptions = strategy === 'rebase'
-      ? ['--rebase']
-      // `--ff` keeps the normal fast-forward-when-possible merge behavior while
-      // overriding a configured `pull.ff=only` for the explicitly selected
-      // merge strategy.
-      : ['--no-rebase', '--ff'];
+    let strategyOptions: string[];
+    switch (strategy) {
+      case 'rebase':
+        strategyOptions = ['--rebase'];
+        break;
+      case 'ff-only':
+        strategyOptions = ['--ff-only'];
+        break;
+      case 'default':
+        strategyOptions = [];
+        break;
+      case 'merge':
+      default:
+        strategyOptions = ['--no-rebase', '--ff'];
+        break;
+    }
     let result: Awaited<ReturnType<SimpleGit['pull']>>;
     try {
       result = remote && branch
@@ -4318,35 +4341,42 @@ export class GitService {
   }
 
   async getUnpushedCommits(): Promise<UnpushedCommit[]> {
-    // Two-pass approach: first get structured fields (with %s for subject),
-    // then get full messages separately per hash.
-    // GS before each record; fields separated by NUL.
-    const GS = '\x1D';
-    const FORMAT = `%x1D%H%x00%h%x00%s%x00%an%x00%ci`;
+    const RS = '\x1E';
+    const FS = '\x1F';
+    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F`;
 
     const parseRecords = (raw: string): UnpushedCommit[] => {
       const commits: UnpushedCommit[] = [];
-      for (const record of raw.split(GS)) {
-        const trimmed = record.trim();
-        if (!trimmed) continue;
-        const lines = trimmed.split('\n');
-        const parts = lines[0].split('\x00');
-        if (parts.length < 5) continue;
+      for (const record of raw.split(RS)) {
+        if (!record.trim()) continue;
+        const parts = record.split(FS);
+        if (parts.length < 6) continue;
+        const hash = parts[0].trim();
+        const shortHash = parts[1].trim();
+        const message = parts[2].trim();
+        const author = parts[3].trim();
+        const date = parts[4].trim();
+        const fullMessage = parts[5].trim();
+        const body = parts[6]?.trim() || undefined;
+        const statText = parts.slice(7).join(FS);
+
         const commit: UnpushedCommit = {
-          hash: parts[0].trim(),
-          shortHash: parts[1].trim(),
-          message: parts[2].trim(),
-          author: parts[3].trim(),
-          date: parts.slice(4).join('\x00').trim(),
+          hash,
+          shortHash,
+          message,
+          fullMessage: fullMessage || message,
+          body: body || undefined,
+          author,
+          date,
         };
-        const statLine = lines.find(l => l.includes('changed'));
+        const statLine = statText.split('\n').find(l => l.includes('changed'));
         if (statLine) {
           const files = statLine.match(/(\d+) files? changed/);
           const ins = statLine.match(/(\d+) insertion/);
           const del = statLine.match(/(\d+) deletion/);
-          commit.filesChanged = files ? parseInt(files[1]) : 0;
-          commit.additions = ins ? parseInt(ins[1]) : 0;
-          commit.deletions = del ? parseInt(del[1]) : 0;
+          commit.filesChanged = files ? parseInt(files[1], 10) : 0;
+          commit.additions = ins ? parseInt(ins[1], 10) : 0;
+          commit.deletions = del ? parseInt(del[1], 10) : 0;
         }
         commits.push(commit);
       }
@@ -4379,17 +4409,33 @@ export class GitService {
     }
   }
 
-  async getUnpushedAggregateBase(oldestHash?: string): Promise<string | undefined> {
+  async getMergeBase(ref1: string, ref2: string): Promise<string | undefined> {
     try {
-      return (await this.git.raw(['rev-parse', '--verify', '@{u}'])).trim() || undefined;
+      const base = (await this.git.raw(['merge-base', ref1, ref2])).trim();
+      return base || undefined;
     } catch {
-      if (!oldestHash) return undefined;
+      return undefined;
+    }
+  }
+
+  async getUnpushedAggregateBase(oldestHash?: string): Promise<string | undefined> {
+    if (oldestHash) {
       try {
         return (await this.git.raw(['rev-parse', '--verify', `${oldestHash}^`])).trim() || undefined;
       } catch {
         return EMPTY_TREE_HASH;
       }
     }
+    try {
+      const tracking = (await this.git.raw(['rev-parse', '--verify', '@{u}'])).trim();
+      if (tracking) {
+        const mergeBase = (await this.git.raw(['merge-base', 'HEAD', '@{u}'])).trim();
+        if (mergeBase) return mergeBase;
+      }
+    } catch {
+      // no upstream or merge-base failed
+    }
+    return undefined;
   }
 
   async getUnpushedAggregatedChanges(oldestHash?: string): Promise<PushCommitFile[]> {
@@ -4412,6 +4458,130 @@ export class GitService {
       });
     }
     return files;
+  }
+
+  async fetchSingleRepo(remote?: string): Promise<void> {
+    return this.withWriteLock(async () => {
+      const args = remote ? [remote] : ['--prune'];
+      await this.git.fetch(args).catch(() => {});
+    });
+  }
+
+  async getIncomingCommits(): Promise<IncomingCommit[]> {
+    const RS = '\x1E';
+    const FS = '\x1F';
+    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F`;
+
+    const logArgs = (range: string[]): string[] =>
+      ['log', ...range, `--format=${FORMAT}`, '--shortstat'];
+
+    try {
+      const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
+      if (!tracking.trim()) return [];
+
+      const raw = await this.git.raw(logArgs(['HEAD..@{u}']));
+      const commits: IncomingCommit[] = [];
+
+      for (const record of raw.split(RS)) {
+        if (!record.trim()) continue;
+        const parts = record.split(FS);
+        if (parts.length < 6) continue;
+        const hash = parts[0].trim();
+        const shortHash = parts[1].trim();
+        const message = parts[2].trim();
+        const author = parts[3].trim();
+        const date = parts[4].trim();
+        const fullMessage = parts[5].trim();
+        const body = parts[6]?.trim() || undefined;
+        const statText = parts.slice(7).join(FS);
+
+        const commit: IncomingCommit = {
+          hash,
+          shortHash,
+          message,
+          fullMessage: fullMessage || message,
+          body: body || undefined,
+          author,
+          date,
+        };
+        const statLine = statText.split('\n').find(l => l.includes('changed'));
+        if (statLine) {
+          const files = statLine.match(/(\d+) files? changed/);
+          const ins = statLine.match(/(\d+) insertion/);
+          const del = statLine.match(/(\d+) deletion/);
+          commit.filesChanged = files ? parseInt(files[1], 10) : 0;
+          commit.additions = ins ? parseInt(ins[1], 10) : 0;
+          commit.deletions = del ? parseInt(del[1], 10) : 0;
+        }
+        commits.push(commit);
+      }
+
+      if (commits.length === 0) return [];
+
+      try {
+        const status = await this.getStatus().catch(() => null);
+        const localModifiedPaths = new Set<string>();
+        if (status) {
+          for (const f of [...status.stagedFiles, ...status.unstagedFiles]) {
+            if (f.path) localModifiedPaths.add(f.path);
+          }
+        }
+
+        if (localModifiedPaths.size > 0) {
+          await Promise.all(
+            commits.map(async commit => {
+              try {
+                const commitFiles = await this.getCommitFiles(commit.hash);
+                const conflicts = commitFiles
+                  .map(f => f.path)
+                  .filter(p => localModifiedPaths.has(p));
+                if (conflicts.length > 0) {
+                  commit.potentialConflictPaths = conflicts;
+                }
+              } catch {
+                // Ignore failure for individual commit files
+              }
+            })
+          );
+        }
+      } catch {
+        // Fallback gracefully
+      }
+
+      return commits;
+    } catch {
+      return [];
+    }
+  }
+
+  async getIncomingAggregatedChanges(): Promise<PushCommitFile[]> {
+    try {
+      const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
+      if (!tracking.trim()) return [];
+
+      const [nameStatusRaw, numStatRaw] = await Promise.all([
+        this.rawPathSafe(['diff', '--name-status', '-z', '-M', 'HEAD...@{u}']).catch(() =>
+          this.rawPathSafe(['diff', '--name-status', '-z', '-M', 'HEAD', '@{u}'])
+        ),
+        this.rawPathSafe(['diff', '--numstat', '-z', '-M', 'HEAD...@{u}']).catch(() =>
+          this.rawPathSafe(['diff', '--numstat', '-z', '-M', 'HEAD', '@{u}'])
+        ),
+      ]);
+      const stats = parseNumStatZOutput(numStatRaw);
+      const files: PushCommitFile[] = [];
+      for (const file of parseNameStatusZOutput(nameStatusRaw)) {
+        const stat = stats.get(file.path);
+        files.push({
+          path: file.path,
+          status: file.code.replace(/\d+$/, ''),
+          added: stat?.added,
+          removed: stat?.removed,
+        });
+      }
+      return files;
+    } catch {
+      return [];
+    }
   }
 
   // ─── Worktree operations ──────────────────────────────────────────────────

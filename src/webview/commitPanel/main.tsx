@@ -16,7 +16,7 @@ import { SubmodulePanel } from './components/SubmodulePanel';
 import { ConflictBanner, type ConflictBannerAction } from './components/ConflictBanner';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { Codicon } from '../shared/Codicon';
-import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus, RepoSubmodules, SubmoduleItem } from '../shared/msgTypes';
+import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, IncomingCommit, SyncPullStrategy, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus, RepoSubmodules, SubmoduleItem } from '../shared/msgTypes';
 import type { FileStatus } from '../shared/types';
 import { t } from '../shared/i18n';
 import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../shared/types';
@@ -243,7 +243,7 @@ const CHANGELIST_HEADER_ITEMS_CUSTOM: ContextMenuEntry[] = [
   { id: 'refresh',     label: t('Refresh'),           icon: 'refresh' },
 ];
 
-type TabId = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree' | 'subtree' | 'submodule';
+type TabId = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree' | 'subtree' | 'submodule' | 'sync';
 const ALL_TABS: TabId[] = ['changes', 'shelf', 'stash', 'submodule', 'worktree', 'subtree', 'push'];
 const SVN_ONLY_TABS: TabId[] = ['changes'];
 const SUBTREE_LIST_REQUEST_THROTTLE_MS = 60_000;
@@ -356,6 +356,7 @@ export function CommitApp() {
   const [stashLoading, setStashLoading] = useState<Record<string, boolean>>({});
   const [stashError, setStashError]   = useState<Record<string, string | null>>({});
   const [stashExpansionCommand, setStashExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: false });
+  const [pushExpansionCommand, setPushExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: true });
   const [stashFilesMap, setStashFilesMap] = useState<Record<string, Record<string, { loading: boolean; files?: StashEntry['files']; error?: string }>>>({});
 
   // ── Worktree state ────────────────────────────────────────────────────────
@@ -436,8 +437,9 @@ export function CommitApp() {
     });
   };
 
-  // ── Push / unpushed state ─────────────────────────────────────────────────
+  // ── Push / unpushed & incoming state ───────────────────────────────────────
   const [unpushedMap, setUnpushedMap] = useState<Record<string, { loading: boolean; commits: UnpushedCommit[]; error?: string }>>({});
+  const [incomingMap, setIncomingMap] = useState<Record<string, { loading: boolean; commits: IncomingCommit[]; error?: string }>>({});
 
   // ── Shelve name prompt (triggered by context menu or commit bar button) ────
   const [shelvePrompt, setShelvePrompt] = useState<{
@@ -491,6 +493,16 @@ export function CommitApp() {
       [data-danger-action-btn]:not(:disabled):hover {
         background: color-mix(in srgb, var(--vscode-errorForeground) 86%, white) !important;
         opacity: 1 !important;
+      }
+      [data-split-main-btn]:not(:disabled):hover,
+      [data-split-chevron-btn]:not(:disabled):hover {
+        background: var(--split-btn-hover-bg) !important;
+        opacity: 1 !important;
+      }
+      [data-split-main-btn]:not(:disabled):active,
+      [data-split-chevron-btn]:not(:disabled):active {
+        filter: brightness(0.9) !important;
+        transform: translateY(1px) scale(0.995);
       }
       [data-branch-switch-badge] {
         transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
@@ -587,8 +599,11 @@ export function CommitApp() {
     if (activeTab === 'stash') {
       return stashExpansionCommand.expanded ? 'expand' : 'collapse';
     }
+    if (activeTab === 'push') {
+      return pushExpansionCommand.expanded ? 'expand' : 'collapse';
+    }
     return 'expand';
-  }, [activeTab, store.collapsedKeys, store.shelveCollapsedKeys, stashExpansionCommand.expanded]);
+  }, [activeTab, store.collapsedKeys, store.shelveCollapsedKeys, stashExpansionCommand.expanded, pushExpansionCommand.expanded]);
 
   useEffect(() => {
     send({
@@ -644,6 +659,16 @@ export function CommitApp() {
         : { loading: true, commits: [] },
     }));
     send({ type: 'PUSH_GET_UNPUSHED', requestId: generateId(), repoId });
+  }, [send]);
+
+  const requestIncomingCommits = useCallback((repoId: string, silent = false) => {
+    setIncomingMap(prev => ({
+      ...prev,
+      [repoId]: prev[repoId]
+        ? { ...prev[repoId], loading: !silent }
+        : { loading: true, commits: [] },
+    }));
+    send({ type: 'SYNC_GET_INCOMING', requestId: generateId(), repoId });
   }, [send]);
 
   const requestSubtreeList = useCallback((force = false, checkStatuses = false) => {
@@ -721,7 +746,10 @@ export function CommitApp() {
         requestStashList(r.repoId, true);
       });
     } else if (tab === 'push') {
-      gitRepoList.forEach(r => requestUnpushedCommits(r.repoId, true));
+      gitRepoList.forEach(r => {
+        requestUnpushedCommits(r.repoId, true);
+        requestIncomingCommits(r.repoId, true);
+      });
     } else if (tab === 'worktree') {
       requestWorktreeList(true);
     } else if (tab === 'subtree') {
@@ -729,11 +757,12 @@ export function CommitApp() {
     } else if (tab === 'submodule') {
       requestSubmoduleList(true);
     }
-  }, [requestShelveList, requestStashCount, requestStashList, requestUnpushedCommits, requestWorktreeList, requestSubtreeList, requestSubmoduleList]);
+  }, [requestShelveList, requestStashCount, requestStashList, requestUnpushedCommits, requestIncomingCommits, requestWorktreeList, requestSubtreeList, requestSubmoduleList]);
 
   syncTabDataRef.current = syncTabData;
 
-  const switchTab = useCallback((tab: TabId) => {
+  const switchTab = useCallback((rawTab: TabId) => {
+    const tab: TabId = rawTab === 'sync' ? 'push' : rawTab;
     setActiveTab(tab);
     const isFirstVisit = !visitedTabsRef.current.has(tab);
     if (isFirstVisit) {
@@ -788,7 +817,7 @@ export function CommitApp() {
           const gitRepoList = freshRepos.filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
           if (currentTab === 'shelf') gitRepoList.forEach(r => requestShelveList(r.repoId, true));
           if (currentTab === 'stash') gitRepoList.forEach(r => { requestStashCount(r.repoId); requestStashList(r.repoId, true); });
-          if (currentTab === 'push') gitRepoList.forEach(r => requestUnpushedCommits(r.repoId, true));
+          if (currentTab === 'push') gitRepoList.forEach(r => { requestUnpushedCommits(r.repoId, true); requestIncomingCommits(r.repoId, true); });
           if (currentTab === 'worktree') requestWorktreeList(true);
           if (currentTab === 'submodule') requestSubmoduleList(true);
           // The host refresh path owns subtree refreshes so expensive split/remote
@@ -926,6 +955,8 @@ export function CommitApp() {
             store.shelveExpandAll(keys);
           } else if (currentTab === 'stash') {
             setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: true }));
+          } else if (currentTab === 'push') {
+            setPushExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: true }));
           }
           break;
         }
@@ -937,6 +968,8 @@ export function CommitApp() {
             store.shelveCollapseAll();
           } else if (currentTab === 'stash') {
             setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: false }));
+          } else if (currentTab === 'push') {
+            setPushExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: false }));
           }
           break;
         }
@@ -949,6 +982,8 @@ export function CommitApp() {
             store.setShelveViewMode(msg.mode);
           } else if (currentTab === 'stash') {
             store.setStashViewMode(msg.mode);
+          } else if (currentTab === 'push') {
+            store.setViewMode(msg.mode);
           }
           break;
         }
@@ -1068,6 +1103,51 @@ export function CommitApp() {
         case 'PUSH_EDIT_MSG_RESULT':
           if (msg.ok) notifyInfo(t('Commit message updated.'));
           else if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          break;
+
+        case 'SYNC_INCOMING_RESULT':
+          if (msg.repos) {
+            setIncomingMap(prev => {
+              const next = { ...prev };
+              for (const item of msg.repos!) {
+                next[item.repoId] = { loading: false, commits: item.commits ?? [], error: item.error };
+              }
+              return next;
+            });
+            dirtyTabsRef.current.delete('push');
+          } else if (msg.repoId) {
+            setIncomingMap(prev => ({
+              ...prev,
+              [msg.repoId!]: { loading: false, commits: msg.commits ?? [], error: msg.error },
+            }));
+            dirtyTabsRef.current.delete('push');
+          }
+          break;
+
+        case 'SYNC_FETCH_RESULT':
+          if (msg.ok) {
+            notifyInfo(t('Fetch completed.'));
+            const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
+            currentGitRepos.forEach(r => {
+              requestIncomingCommits(r.repoId, true);
+              requestUnpushedCommits(r.repoId, true);
+            });
+          } else if (msg.error) {
+            notifyError(msg.error);
+          }
+          break;
+
+        case 'SYNC_PULL_RESULT':
+          if (msg.ok) {
+            notifyInfo(t('Pull completed.'));
+            const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
+            currentGitRepos.forEach(r => {
+              requestIncomingCommits(r.repoId, true);
+              requestUnpushedCommits(r.repoId, true);
+            });
+          } else if (msg.error) {
+            notifyError(msg.error);
+          }
           break;
 
         case 'SUBMODULE_OP_RESULT': {
@@ -1483,6 +1563,51 @@ export function CommitApp() {
     });
   }, [send]);
 
+  const requestAggregatedIncomingDiff = useCallback((repoId: string): Promise<PushCommitFile[]> => {
+    const requestId = generateId();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (pendingRef.current.has(requestId)) {
+          pendingRef.current.delete(requestId);
+          reject(new Error(t('Timed out loading aggregated incoming changes.')));
+        }
+      }, 15_000);
+      pendingRef.current.set(requestId, msg => {
+        clearTimeout(timeout);
+        if (msg.type !== 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT') {
+          reject(new Error(t('Unexpected aggregated changes response.')));
+          return;
+        }
+        if (msg.error) {
+          if (msg.error !== 'Cancelled') notifyError(msg.error);
+          reject(new Error(msg.error));
+          return;
+        }
+        resolve(msg.files ?? []);
+      });
+      send({ type: 'SYNC_GET_INCOMING_AGGREGATED_DIFF', requestId, repoId });
+    });
+  }, [notifyError, send]);
+
+  const openIncomingCommitFileDiff = useCallback((repoId: string, hash: string, file: PushCommitFile) => {
+    send({
+      type: 'SYNC_OPEN_INCOMING_COMMIT_FILE_DIFF',
+      repoId,
+      hash,
+      filePath: file.path,
+      fileStatus: file.status,
+    });
+  }, [send]);
+
+  const openAggregatedIncomingFileDiff = useCallback((repoId: string, file: PushCommitFile) => {
+    send({
+      type: 'SYNC_OPEN_INCOMING_AGGREGATED_FILE_DIFF',
+      repoId,
+      filePath: file.path,
+      fileStatus: file.status,
+    });
+  }, [send]);
+
   const selectWorktreeDiffFile = useCallback((file: FileStatus) => {
     store.selectWorktreeDiffFile(file);
     send({
@@ -1529,6 +1654,15 @@ export function CommitApp() {
   }, [repos, send]);
   const isSvnRepo = (repoId: string) => metaMap.get(repoId)?.kind === 'svn';
   const gitRepos = repos.filter(repo => !isSvnRepo(repo.repoId));
+  const totalToPush = gitRepos.reduce((sum, r) => {
+    if (r.branch.upstream) return sum + (r.branch.aheadBehind?.ahead ?? 0);
+    return sum + (unpushedMap[r.repoId]?.commits?.length ?? 0);
+  }, 0);
+  const totalToPull = gitRepos.reduce((sum, r) => {
+    const behind = r.branch.aheadBehind?.behind ?? 0;
+    if (behind > 0) return sum + behind;
+    return sum + (incomingMap[r.repoId]?.commits?.length ?? 0);
+  }, 0);
   const showVcsBadges = gitRepos.length > 0 && gitRepos.length < repos.length;
   const gitRepoMetas = store.repoMetas.filter(meta => meta.kind !== 'svn');
   const visibleTabs = (repos.length > 0 && gitRepos.length === 0) ? SVN_ONLY_TABS : ALL_TABS;
@@ -1851,6 +1985,37 @@ export function CommitApp() {
     send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote });
   };
 
+  const doForcePush = (repoId: string) => {
+    const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
+    send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote, force: true });
+  };
+
+  const doForcePushMulti = (repoIds: string[]) => {
+    for (const repoId of repoIds) {
+      if (isSvnRepo(repoId)) continue;
+      const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
+      send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote, force: true });
+    }
+  };
+
+  const doPushTags = (repoId: string) => {
+    const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
+    send({ type: 'SYNC_PUSH_TAGS', requestId: generateId(), repoId, remote });
+  };
+
+  const doPushTagsMulti = (repoIds: string[]) => {
+    send({ type: 'SYNC_PUSH_TAGS_MULTI', requestId: generateId(), repoIds });
+  };
+
+  const doSync = (repoId: string, strategy?: SyncPullStrategy) => {
+    const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
+    send({ type: 'SYNC_DO_SYNC', requestId: generateId(), repoId, strategy, remote });
+  };
+
+  const doSyncMulti = (repoIds: string[], strategy?: SyncPullStrategy) => {
+    send({ type: 'SYNC_DO_SYNC_MULTI', requestId: generateId(), repoIds, strategy });
+  };
+
   const doSquash = (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => {
     send({ type: 'PUSH_SQUASH_COMMITS', requestId: generateId(), repoId, hashes, oldestHash, message: combinedMessage, commits } satisfies CommitToHostMsg);
   };
@@ -2141,10 +2306,6 @@ export function CommitApp() {
         const totalSubtrees = subtreeEntries.reduce((sum, entry) => (
           visibleRepoIds.has(entry.repoId) ? sum + 1 : sum
         ), 0);
-        const totalToPush = gitRepos.reduce((sum, r) => {
-          if (r.branch.upstream) return sum + (r.branch.aheadBehind?.ahead ?? 0);
-          return sum + (unpushedMap[r.repoId]?.commits?.length ?? 0);
-        }, 0);
         const tabCounts: Record<TabId, number> = {
           changes: totalChanges,
           shelf: totalShelves,
@@ -2152,14 +2313,15 @@ export function CommitApp() {
           submodule: totalSubmodules,
           worktree: totalWorktrees,
           subtree: totalSubtrees,
-          push: totalToPush,
+          push: totalToPush + totalToPull,
+          sync: totalToPush + totalToPull,
         };
         return (
           <div style={css.tabBar}>
             {visibleTabs.map(tab => {
               const changesLabel = (store.changesViewMode === 'changelists' || store.changesViewMode === 'vscode') ? t('Commit') : t('Changes');
-              const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'submodule' ? t('Submodules') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Push');
-              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'submodule' ? 'repo-clone' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'cloud-upload';
+              const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'submodule' ? t('Submodules') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Sync');
+              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'submodule' ? 'repo-clone' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'sync';
               const count = tabCounts[tab];
               const isActive = activeTab === tab;
               return (
@@ -2167,9 +2329,11 @@ export function CommitApp() {
                   data-action-btn=""
                   key={tab}
                   style={css.tab(isActive)}
-                  title={tab === 'submodule' && totalSubmoduleIssues > 0
-                    ? `${label} (${count}, ${t('{0} issues', totalSubmoduleIssues)})`
-                    : `${label} (${count})`}
+                  title={tab === 'push'
+                    ? `${label} (${t('{0} incoming, {1} outgoing', totalToPull, totalToPush)})`
+                    : tab === 'submodule' && totalSubmoduleIssues > 0
+                      ? `${label} (${count}, ${t('{0} issues', totalSubmoduleIssues)})`
+                      : `${label} (${count})`}
                   onClick={() => switchTab(tab)}
                 >
                   <Codicon
@@ -2539,25 +2703,46 @@ export function CommitApp() {
         )}
 
         {visitedTabs.has('push') && (
-          /* Push tab — manages its own scroll, footer anchored at bottom */
+          /* Sync tab — manages its own scroll, footer anchored at bottom */
           <div style={{ display: activeTab === 'push' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
             <PushTab
               repos={gitRepos}
               repoMetas={gitRepoMetas}
               iconTheme={store.iconTheme}
               unpushedMap={unpushedMap}
+              incomingMap={incomingMap}
               onPush={doPush}
               onPushAll={doPushAll}
+              onForcePush={doForcePush}
+              onForcePushMulti={doForcePushMulti}
+              onPushTags={doPushTags}
+              onPushTagsMulti={doPushTagsMulti}
+              onSync={doSync}
+              onSyncMulti={doSyncMulti}
+              onPull={(repoId, strategy) => send({ type: 'SYNC_DO_PULL', requestId: generateId(), repoId, strategy })}
+              onPullMulti={(repoIds, strategy) => send({ type: 'SYNC_DO_PULL_MULTI', requestId: generateId(), repoIds, strategy })}
+              onFetch={repoId => send({ type: 'SYNC_FETCH_REPO', requestId: generateId(), repoId })}
+              onFetchAll={() => send({ type: 'SYNC_FETCH_ALL', requestId: generateId() })}
               onOpenInLog={doOpenInLog}
               onUndoCommit={doUndoCommit}
               onRequestCommitFiles={requestPushCommitFiles}
               onRequestAggregatedDiff={requestAggregatedPushDiff}
               onOpenAggregatedFile={openAggregatedPushFileDiff}
               onOpenCommitFile={openPushCommitFileDiff}
+              onRequestIncomingCommitFiles={requestPushCommitFiles}
+              onRequestIncomingAggregatedDiff={requestAggregatedIncomingDiff}
+              onOpenIncomingAggregatedFile={openAggregatedIncomingFileDiff}
+              onOpenIncomingCommitFile={openIncomingCommitFileDiff}
               onSquash={doSquash}
               onDropCommits={doDropCommits}
               onRevertCommits={doRevertCommits}
               onEditCommitMsg={doEditCommitMsg}
+              onCherryPick={(repoId, hashes) => send({ type: 'SYNC_CHERRY_PICK', requestId: generateId(), repoId, hashes })}
+              onCreateBranchFromCommit={(repoId, hash) => send({ type: 'SYNC_CREATE_BRANCH_FROM_COMMIT', requestId: generateId(), repoId, hash })}
+              onBranchClick={rid => send({ type: 'COMMIT_SHOW_BRANCH_MENU', repoId: rid })}
+              expansionCommand={pushExpansionCommand}
+              viewMode={store.viewMode}
+              onExpansionChange={expanded => setPushExpansionCommand(prev => ({ ...prev, expanded }))}
             />
           </div>
         )}

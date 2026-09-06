@@ -10,6 +10,7 @@ export interface PushProtectionTargetRepo {
   rootPath?: string;
   kind?: 'git' | 'svn';
   push(force?: boolean, remote?: string): Promise<void>;
+  pushTags?(remote?: string): Promise<void>;
   pull?(): Promise<string>;
   pullRebase?(): Promise<string>;
   getRemotes(): Promise<string[]>;

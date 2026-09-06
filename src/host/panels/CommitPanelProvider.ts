@@ -36,6 +36,7 @@ import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup 
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { runPushWithProtection } from '../utils/pushProtection';
+import { withGitPushProgress } from '../utils/pushProgress';
 import type { UpdateSummaryService } from '../update/UpdateSummaryService';
 import { checkCommitSafety, isSensitivePath } from '../utils/commitSafetyCheck';
 import { sanitizeBranchName, validateBranchNameInput, getBranchCleanCharacter } from '../utils/branchNameSanitizer';
@@ -637,6 +638,41 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       : fileStatus?.startsWith('D')
         ? t('{0} (deleted in unpushed changes)', fileName)
         : t('{0} (all unpushed changes)', fileName);
+
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      toGitUri(absolutePath, leftRef),
+      toGitUri(absolutePath, rightRef),
+      title,
+      { preview: true },
+    );
+  }
+
+  private async openIncomingAggregatedCommitDiffEditor(
+    repo: import('../git/GitService').GitService,
+    filePath: string,
+    fileStatus?: string,
+  ): Promise<void> {
+    const resolvedPath = repo.resolveRepoPath(filePath);
+    const relativePath = resolvedPath.relativePath;
+    const absolutePath = resolvedPath.absolutePath;
+    const fileName = path.basename(relativePath);
+
+    let baseRef = 'HEAD';
+    try {
+      const mb = await repo.getMergeBase('HEAD', '@{u}');
+      if (mb) baseRef = mb;
+    } catch {
+      // fallback
+    }
+
+    const leftRef = await repo.hasFileAtRef(baseRef, relativePath) ? baseRef : EMPTY_TREE;
+    const rightRef = await repo.hasFileAtRef('@{u}', relativePath) ? '@{u}' : EMPTY_TREE;
+    const title = fileStatus?.startsWith('A')
+      ? t('{0} (added in incoming changes)', fileName)
+      : fileStatus?.startsWith('D')
+        ? t('{0} (deleted in incoming changes)', fileName)
+        : t('{0} (all incoming changes)', fileName);
 
     await vscode.commands.executeCommand(
       'vscode.diff',
@@ -3036,10 +3072,32 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           repoId: msg.repoId,
           requestId: msg.requestId,
           remote: msg.remote,
+          force: msg.force,
         });
+
+        if (msg.force) {
+          const currentBranch = await repo.getCurrentBranch?.();
+          const branchName = currentBranch?.name || 'HEAD';
+          const forceBtn = t('Force Push');
+          const choice = await vscode.window.showWarningMessage(
+            t(
+              'VersionDock [{0}]: Are you sure you want to Force Push to branch "{1}"? Remote commits not present locally will be overwritten.',
+              repoName,
+              branchName,
+            ),
+            { modal: true },
+            forceBtn,
+          );
+          if (choice !== forceBtn) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false });
+            return;
+          }
+        }
+
         const pushResult = await runPushWithProtection(repo, {
           repoName,
           remote: msg.remote,
+          force: msg.force,
           logger: this.logger,
           beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
         });
@@ -4023,6 +4081,389 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await this.openAggregatedCommitDiffEditor(repo as GitService, msg.oldestHash, msg.filePath, msg.fileStatus);
         } catch (e: unknown) {
           vscode.window.showErrorMessage(t('VersionDock: Cannot open aggregated diff: {0}', String(e)));
+        }
+        break;
+      }
+
+      case 'SYNC_GET_INCOMING': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') {
+          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: [], error: t('Repo not found') });
+          return;
+        }
+        try {
+          const commits = await (repo as GitService).getIncomingCommits();
+          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: [], error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_GET_INCOMING_COMMIT_FILES': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') {
+          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], error: t('Repo not found') });
+          return;
+        }
+        try {
+          const files = await (repo as GitService).getCommitFiles(msg.hash);
+          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_GET_INCOMING_AGGREGATED_DIFF': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') {
+          this.post({ type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT', requestId: msg.requestId, repoId: msg.repoId, files: [], error: t('Repo not found') });
+          return;
+        }
+        try {
+          const files = await (repo as GitService).getIncomingAggregatedChanges();
+          this.post({ type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT', requestId: msg.requestId, repoId: msg.repoId, files });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT', requestId: msg.requestId, repoId: msg.repoId, files: [], error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_OPEN_INCOMING_COMMIT_FILE_DIFF': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') return;
+        try {
+          await this.openCommitDiffEditor(repo as GitService, msg.hash, msg.filePath, msg.fileStatus);
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+        }
+        break;
+      }
+
+      case 'SYNC_OPEN_INCOMING_AGGREGATED_FILE_DIFF': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') return;
+        try {
+          await this.openIncomingAggregatedCommitDiffEditor(repo as GitService, msg.filePath, msg.fileStatus);
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock: Cannot open aggregated diff: {0}', String(e)));
+        }
+        break;
+      }
+
+      case 'SYNC_FETCH_REPO': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') {
+          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') });
+          return;
+        }
+        try {
+          await (repo as GitService).fetchSingleRepo();
+          await this.manager.refreshStatusNow();
+          const commits = await (repo as GitService).getIncomingCommits();
+          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_FETCH_ALL': {
+        try {
+          const gitRepos = this.manager.getRepoMetas().filter(m => m.kind !== 'svn');
+          await Promise.all(gitRepos.map(async m => {
+            const repo = this.manager.getRepo(m.id);
+            if (repo && repo.kind !== 'svn') {
+              await (repo as GitService).fetchAll().catch(() => {});
+            }
+          }));
+          await this.manager.refreshStatusNow();
+          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: true });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_DO_PULL': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo) {
+          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') });
+          return;
+        }
+        try {
+          if (repo.kind === 'svn') {
+            await repo.pull();
+          } else {
+            await (repo as GitService).pullWithCustomStrategy(msg.strategy ?? 'default');
+          }
+          await this.manager.refreshStatusNow();
+          this.manager.notifyBranchesChanged();
+          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_DO_PULL_MULTI': {
+        try {
+          let hasError = false;
+          let firstError = '';
+          for (const repoId of msg.repoIds) {
+            const repo = this.manager.getRepo(repoId);
+            if (!repo) continue;
+            try {
+              if (repo.kind === 'svn') {
+                await repo.pull();
+              } else {
+                await (repo as GitService).pullWithCustomStrategy(msg.strategy ?? 'default');
+              }
+            } catch (err) {
+              hasError = true;
+              firstError = String(err);
+            }
+          }
+          await this.manager.refreshStatusNow();
+          this.manager.notifyBranchesChanged();
+          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_DO_SYNC': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo) {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') });
+          return;
+        }
+        try {
+          if (repo.kind === 'svn') {
+            await repo.pull();
+          } else {
+            const gitRepo = repo as GitService;
+            const currentBranch = await gitRepo.getCurrentBranch?.().catch(() => undefined);
+            if (currentBranch?.upstream) {
+              await gitRepo.pullWithCustomStrategy(msg.strategy ?? 'default');
+            }
+          }
+          await this.manager.refreshStatusNow();
+          this.manager.notifyBranchesChanged();
+
+          const status = await repo.getStatus?.();
+          if (status && status.conflictCount && status.conflictCount > 0) {
+            vscode.window.showWarningMessage(t('Sync stopped due to merge conflicts. Please resolve conflicts before pushing.'));
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Sync stopped due to merge conflicts. Please resolve conflicts before pushing.') });
+            return;
+          }
+
+          const repoMeta = this.manager.getRepoMeta(msg.repoId);
+          const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
+          const pushResult = await runPushWithProtection(repo, {
+            repoName,
+            remote: msg.remote,
+            logger: this.logger,
+            beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
+          });
+
+          if (pushResult.success) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+            this.logProvider?.refresh();
+          } else {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false });
+          }
+        } catch (e: unknown) {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_DO_SYNC_MULTI': {
+        try {
+          let hasError = false;
+          let firstError = '';
+          const pulledRepoIds: string[] = [];
+          for (const repoId of msg.repoIds) {
+            const repo = this.manager.getRepo(repoId);
+            if (!repo) continue;
+            try {
+              if (repo.kind === 'svn') {
+                await repo.pull();
+              } else {
+                const gitRepo = repo as GitService;
+                const currentBranch = await gitRepo.getCurrentBranch?.().catch(() => undefined);
+                if (currentBranch?.upstream) {
+                  await gitRepo.pullWithCustomStrategy(msg.strategy ?? 'default');
+                }
+              }
+              pulledRepoIds.push(repoId);
+            } catch (err) {
+              hasError = true;
+              firstError = String(err);
+            }
+          }
+          await this.manager.refreshStatusNow();
+          this.manager.notifyBranchesChanged();
+
+          for (const repoId of pulledRepoIds) {
+            const repo = this.manager.getRepo(repoId);
+            if (!repo) continue;
+            const status = await repo.getStatus?.();
+            if (status && status.conflictCount && status.conflictCount > 0) {
+              continue;
+            }
+            const repoMeta = this.manager.getRepoMeta(repoId);
+            const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
+            await runPushWithProtection(repo, {
+              repoName,
+              logger: this.logger,
+              beforePush: () => this.checkUnpushedSubmodules(repoId),
+            });
+          }
+          this.logProvider?.refresh();
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
+        } catch (e: unknown) {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+        }
+        break;
+      }
+
+      case 'SYNC_PUSH_TAGS': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') });
+          return;
+        }
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
+        try {
+          await withGitPushProgress(
+            repo,
+            msg.remote
+              ? t('VersionDock: Pushing tags to {0}…', msg.remote)
+              : t('VersionDock: Pushing tags…'),
+            () => (repo as GitService).pushTags(msg.remote),
+          );
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: tags pushed successfully.', repoName));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+        } catch (err: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', repoName, String(err)));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(err) });
+        }
+        break;
+      }
+
+      case 'SYNC_PUSH_TAGS_MULTI': {
+        let hasError = false;
+        let firstError = '';
+        for (const repoId of msg.repoIds) {
+          const repo = this.manager.getRepo(repoId);
+          if (!repo || repo.kind === 'svn') continue;
+          const repoMeta = this.manager.getRepoMeta(repoId);
+          const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
+          try {
+            await (repo as GitService).pushTags();
+          } catch (err: unknown) {
+            hasError = true;
+            firstError = String(err);
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', repoName, String(err)));
+          }
+        }
+        if (!hasError) {
+          vscode.window.showInformationMessage(t('VersionDock: tags pushed successfully for all selected repositories.'));
+        }
+        this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
+        break;
+      }
+
+      case 'SYNC_CHERRY_PICK': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo || repo.kind === 'svn') {
+          vscode.window.showErrorMessage(t('Repo not found'));
+          return;
+        }
+        const gitRepo = repo as GitService;
+        const count = msg.hashes.length;
+        if (count === 0) return;
+
+        try {
+          if (count === 1) {
+            const shortHash = msg.hashes[0].slice(0, 7);
+            await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Cherry-picking commit {0}…', shortHash), cancellable: false },
+              () => gitRepo.cherryPick(msg.hashes[0])
+            );
+          } else {
+            await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Cherry-picking {0} commits…', count), cancellable: false },
+              () => gitRepo.cherryPickMulti(msg.hashes)
+            );
+          }
+          await this.manager.refreshStatusNow();
+          this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+          this.manager.notifyDataInvalidated({
+            scopes: ['workingTree', 'unpushed', 'subtree'],
+            repoIds: [msg.repoId],
+          });
+        } catch (e: unknown) {
+          const errMsg = String(e);
+          if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
+            const choice = await vscode.window.showWarningMessage(
+              t('Cherry-pick has conflicts. Resolve them in the editor, then choose an action.'),
+              t('Continue'), t('Skip'), t('Abort')
+            );
+            if (choice === t('Continue')) {
+              await gitRepo.cherryPickContinue();
+              await this.manager.refreshStatusNow();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
+            } else if (choice === t('Skip')) {
+              await gitRepo.cherryPickSkip();
+              await this.manager.refreshStatusNow();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+              this.manager.notifyDataInvalidated({
+                scopes: ['workingTree', 'unpushed', 'subtree'],
+                repoIds: [msg.repoId],
+              });
+            } else if (choice === t('Abort')) {
+              await gitRepo.cherryPickAbort();
+              await this.manager.refreshStatusNow();
+              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+            }
+          } else {
+            vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg));
+          }
+        }
+        break;
+      }
+
+      case 'SYNC_CREATE_BRANCH_FROM_COMMIT': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (!repo) {
+          vscode.window.showErrorMessage(t('Repo not found'));
+          return;
+        }
+        const shortRef = msg.hash.slice(0, 7);
+        const branchName = await vscode.window.showInputBox({
+          prompt: repo.kind === 'svn' ? t('Create SVN branch from revision {0}', shortRef) : t('Create new branch from {0}', shortRef),
+          placeHolder: t('my-feature-branch'),
+          validateInput: v => validateBranchNameInput(v),
+        });
+        if (!branchName) return;
+
+        try {
+          await repo.createBranchFromCommit(sanitizeBranchName(branchName.trim()), msg.hash);
+          await this.manager.refreshStatusNow();
+          this.manager.notifyBranchesChanged();
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(t('VersionDock: Create branch failed: {0}', String(e)));
         }
         break;
       }

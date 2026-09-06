@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { PushCommitFile, UnpushedCommit } from '../../shared/msgTypes';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { IncomingCommit, PushCommitFile, SyncPullStrategy, UnpushedCommit } from '../../shared/msgTypes';
 import type { RepoStatus, RepoMeta } from '../../shared/types';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
@@ -8,28 +8,62 @@ import { branchInfoColor, readableAccentColor } from '../../shared/branchColors'
 import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { getCommitMessageTitle } from '../../shared/commitMessage';
+import type { ExpansionCommand } from './StashTab';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
+const WARNING_COLOR = 'var(--vscode-inputValidation-warningForeground, #cca700)';
 
-interface Props {
+export interface IncomingRepoData {
+  loading: boolean;
+  commits: IncomingCommit[];
+  error?: string;
+}
+
+export interface PushTabProps {
   repos: RepoStatus[];
   repoMetas: RepoMeta[];
   iconTheme?: IconThemeData | null;
   unpushedMap: Record<string, { loading: boolean; commits: UnpushedCommit[]; error?: string }>;
+  incomingMap?: Record<string, IncomingRepoData>;
   onPush: (repoId: string) => void;
   onPushAll: () => void;
+  onForcePush?: (repoId: string) => void;
+  onForcePushMulti?: (repoIds: string[]) => void;
+  onPushTags?: (repoId: string) => void;
+  onPushTagsMulti?: (repoIds: string[]) => void;
+  onPull?: (repoId: string, strategy?: SyncPullStrategy) => void;
+  onPullMulti?: (repoIds: string[], strategy?: SyncPullStrategy) => void;
+  onSync?: (repoId: string, strategy?: SyncPullStrategy) => void;
+  onSyncMulti?: (repoIds: string[], strategy?: SyncPullStrategy) => void;
+  onFetch?: (repoId: string) => void;
+  onFetchAll?: () => void;
   onOpenInLog: (hash: string, repoId: string) => void;
   onUndoCommit: (repoId: string) => void;
   onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
   onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
   onOpenAggregatedFile: (repoId: string, oldestHash: string | undefined, file: PushCommitFile) => void;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
+  onRequestIncomingCommitFiles?: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestIncomingAggregatedDiff?: (repoId: string) => Promise<PushCommitFile[]>;
+  onOpenIncomingAggregatedFile?: (repoId: string, file: PushCommitFile) => void;
+  onOpenIncomingCommitFile?: (repoId: string, hash: string, file: PushCommitFile) => void;
   onSquash: (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => void;
   onDropCommits: (repoId: string, hashes: string[], oldestHash: string) => void;
   onRevertCommits: (repoId: string, hashes: string[]) => void;
   onEditCommitMsg: (repoId: string, hash: string, currentMessage: string) => void;
+  onCherryPick?: (repoId: string, hashes: string[]) => void;
+  onCreateBranchFromCommit?: (repoId: string, hash: string) => void;
+  onBranchClick?: (repoId: string) => void;
+  expansionCommand?: ExpansionCommand;
+  viewMode?: PushFileViewMode;
+  onExpansionChange?: (expanded: boolean) => void;
 }
+
+type Props = PushTabProps;
+
+export type DirectionFilter = 'all' | 'outgoing' | 'incoming' | 'none';
 
 type PushViewMode = 'commits' | 'changes';
 type PushFileViewMode = 'tree' | 'flat';
@@ -60,6 +94,14 @@ interface CommitCtxMenuState {
   singleHash: string | null;
 }
 
+interface IncomingCommitCtxMenuState {
+  x: number;
+  y: number;
+  repoId: string;
+  selectedHashes: string[];
+  singleHash: string | null;
+}
+
 const TREE_BASE_PAD = 16;
 const TREE_LEVEL_PAD = 18;
 const ICON_SIZE = 16;
@@ -81,34 +123,6 @@ function formatDate(iso: string): string {
 
 function formatFileCount(count: number): string {
   return count === 1 ? t('{0} file', count) : t('{0} files', count);
-}
-
-function splitCommitBody(body?: string): { bodyText: string; footerText: string } {
-  const text = body?.trim() ?? '';
-  if (!text) return { bodyText: '', footerText: '' };
-
-  const lines = text.split(/\r?\n/);
-  let splitIndex = lines.length;
-  const footerPattern = /^(?:[A-Za-z][A-Za-z0-9-]*(?:-[A-Za-z0-9]+)*|BREAKING CHANGE):\s.+$/;
-
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i].trim();
-    if (!line) {
-      if (splitIndex < lines.length) break;
-      continue;
-    }
-    if (footerPattern.test(line)) {
-      splitIndex = i;
-      continue;
-    }
-    break;
-  }
-
-  if (splitIndex === lines.length) return { bodyText: text, footerText: '' };
-  return {
-    bodyText: lines.slice(0, splitIndex).join('\n').trim(),
-    footerText: lines.slice(splitIndex).join('\n').trim(),
-  };
 }
 
 function normalizeStatus(status: string): string {
@@ -207,19 +221,6 @@ function buildFileTree(files: PushCommitFile[]): FileTreeNode[] {
   sortNodes(root.children);
   computeFileCount(root);
   return collapseSingleChildDirs(root.children);
-}
-
-function collectDirectoryKeys(files: PushCommitFile[]): string[] {
-  const keys: string[] = [];
-  const walk = (nodes: FileTreeNode[]) => {
-    for (const node of nodes) {
-      if (node.kind !== 'dir') continue;
-      keys.push(node.path);
-      walk(node.children);
-    }
-  };
-  walk(buildFileTree(files));
-  return keys;
 }
 
 function mergeUniqueFiles(fileGroups: PushCommitFile[][]): PushCommitFile[] {
@@ -327,8 +328,72 @@ function CommitContextMenu({ state, onSquash, onDropCommits, onRevertCommits, on
   );
 }
 
-function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingFiles, fileViewMode, iconTheme, onToggle, onSelect, onContextMenu, onFileViewModeChange, onOpenFile, onOpenInLog, onUndoCommit }: {
-  commit: UnpushedCommit;
+function IncomingCommitContextMenu({ state, onCherryPick, onCreateBranch, onViewInLog, onClose }: {
+  state: IncomingCommitCtxMenuState;
+  onCherryPick: (hashes: string[]) => void;
+  onCreateBranch: (hash: string) => void;
+  onViewInLog: (hash: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const n = state.selectedHashes.length;
+
+  useEffect(() => {
+    const outsideHandler = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+    };
+    const blurHandler = () => onClose();
+    const visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') onClose();
+    };
+    document.addEventListener('mousedown', outsideHandler, true);
+    document.addEventListener('visibilitychange', visibilityHandler);
+    window.addEventListener('blur', blurHandler);
+    window.addEventListener('pagehide', blurHandler);
+    return () => {
+      document.removeEventListener('mousedown', outsideHandler, true);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.removeEventListener('blur', blurHandler);
+      window.removeEventListener('pagehide', blurHandler);
+    };
+  }, [onClose]);
+
+  const [pos, setPos] = useState({ x: state.x, y: state.y });
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    setPos({
+      x: state.x + rect.width > vw ? Math.max(0, vw - rect.width - 4) : state.x,
+      y: state.y + rect.height > vh ? Math.max(0, vh - rect.height - 4) : state.y,
+    });
+  }, [state.x, state.y]);
+
+  const wrap = (fn: () => void) => () => {
+    fn();
+    onClose();
+  };
+
+  return (
+    <div ref={ref} style={{ ...ctxStyles.menu, left: pos.x, top: pos.y }} onContextMenu={event => event.preventDefault()}>
+      {n === 1 && state.singleHash && (
+        <>
+          <MenuItem icon="go-to-file" label={t('View in Git Log')} onClick={wrap(() => onViewInLog(state.singleHash!))} />
+          <MenuItem icon="pinned" label={t('Cherry-pick Commit')} onClick={wrap(() => onCherryPick([state.singleHash!]))} />
+          <MenuItem icon="git-branch" label={t('New Branch from Here…')} onClick={wrap(() => onCreateBranch(state.singleHash!))} />
+        </>
+      )}
+      {n >= 2 && (
+        <MenuItem icon="pinned" label={t('Cherry-pick {0} commits', n)} onClick={wrap(() => onCherryPick(state.selectedHashes))} />
+      )}
+    </div>
+  );
+}
+
+function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingFiles, fileViewMode, iconTheme, onToggle, onSelect, onContextMenu, onFileViewModeChange: _onFileViewModeChange, onOpenFile, onOpenInLog, onUndoCommit, isIncoming, showDirectionBadge = true, potentialConflicts }: {
+  commit: UnpushedCommit | IncomingCommit;
   repoId: string;
   isHead: boolean;
   expanded: boolean;
@@ -340,14 +405,17 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   onToggle: () => void;
   onSelect: (event: React.MouseEvent) => void;
   onContextMenu: (event: React.MouseEvent) => void;
-  onFileViewModeChange: (mode: PushFileViewMode) => void;
+  onFileViewModeChange?: (mode: PushFileViewMode) => void;
   onOpenFile: (file: PushCommitFile) => void;
   onOpenInLog: (hash: string, repoId: string) => void;
   onUndoCommit: (repoId: string) => void;
+  isIncoming?: boolean;
+  showDirectionBadge?: boolean;
+  potentialConflicts?: Set<string>;
 }) {
   const [hovered, setHovered] = useState(false);
-  const { bodyText, footerText } = splitCommitBody(commit.body);
-  const hasBody = bodyText.length > 0 || footerText.length > 0;
+  const fullMessage = commit.fullMessage || (commit.body ? `${commit.message}\n\n${commit.body}` : commit.message);
+  const messageTitle = getCommitMessageTitle(fullMessage, commit.message);
   let background = 'transparent';
   if (selected) background = 'var(--vscode-list-inactiveSelectionBackground)';
   else if (hovered) background = 'var(--vscode-list-hoverBackground)';
@@ -378,56 +446,62 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <span style={styles.commitHash}>{commit.shortHash}</span>
-        <span style={styles.commitMessage} title={hasBody ? `${commit.message}\n\n${commit.body}` : commit.message}>{commit.message}</span>
-        <span style={styles.commitMeta}>
-          {commit.author} · {formatDate(commit.date)}
-          {commit.filesChanged != null && (
-            <span style={styles.commitStats}>
-              &nbsp;·&nbsp;{formatFileCount(commit.filesChanged)}
-              {commit.additions != null && commit.additions > 0 && <span style={styles.statAdd}>&nbsp;+{commit.additions}</span>}
-              {commit.deletions != null && commit.deletions > 0 && <span style={styles.statDel}>&nbsp;-{commit.deletions}</span>}
+        <div style={styles.commitLeft}>
+          <span style={styles.commitHash}>{commit.shortHash}</span>
+          {showDirectionBadge && (
+            <span style={styles.commitDirectionBadge(!!isIncoming)}>
+              <Codicon name={isIncoming ? 'arrow-down' : 'arrow-up'} style={{ fontSize: '8px', marginRight: '2px' }} />
+              {isIncoming ? t('Incoming (Pull)') : t('Outgoing (Push)')}
             </span>
           )}
-        </span>
-        <div style={styles.commitActions(hovered || expanded || selected)}>
-          {isHead && (
+        </div>
+        <div style={styles.commitInfo}>
+          <span style={styles.commitMessage} title={fullMessage}>{messageTitle}</span>
+          <span style={styles.commitMeta}>
+            <span style={styles.commitMetaText}>
+              {commit.author} · {formatDate(commit.date)}
+            </span>
+            {commit.filesChanged != null && (
+              <span style={styles.commitStats}>
+                &nbsp;·&nbsp;{formatFileCount(commit.filesChanged)}
+                {commit.additions != null && commit.additions > 0 && <span style={styles.statAdd}>&nbsp;+{commit.additions}</span>}
+                {commit.deletions != null && commit.deletions > 0 && <span style={styles.statDel}>&nbsp;-{commit.deletions}</span>}
+              </span>
+            )}
+          </span>
+        </div>
+        {hovered && (
+          <div style={styles.commitActions}>
+            {!isIncoming && isHead && (
+              <button
+                data-action-btn=""
+                style={styles.actionBtn}
+                title={t('Undo this commit (keeps changes as unstaged)')}
+                onClick={event => { event.stopPropagation(); onUndoCommit(repoId); }}
+              >
+                <Codicon name="arrow-left" style={{ fontSize: '13px' }} />
+              </button>
+            )}
             <button
               data-action-btn=""
               style={styles.actionBtn}
-              title={t('Undo this commit (keeps changes as unstaged)')}
-              onClick={event => { event.stopPropagation(); onUndoCommit(repoId); }}
+              title={t('Open in Log')}
+              onClick={event => { event.stopPropagation(); onOpenInLog(commit.hash, repoId); }}
             >
-              <Codicon name="arrow-left" style={{ fontSize: '16px' }} />
+              <Codicon name="go-to-file" style={{ fontSize: '13px' }} />
             </button>
-          )}
-          <button
-            data-action-btn=""
-            style={styles.actionBtn}
-            title={t('Open in Log')}
-            onClick={event => { event.stopPropagation(); onOpenInLog(commit.hash, repoId); }}
-          >
-            <Codicon name="go-to-file" style={{ fontSize: '16px' }} />
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {expanded && (
         <div style={styles.commitDetails}>
-          {hasBody && (
-            <div style={styles.messagePanel}>
-              <div style={styles.bodyBlock}>
-                {bodyText && <div style={styles.bodyText}>{bodyText}</div>}
-                {footerText && <pre style={styles.footerText(bodyText.length > 0)}>{footerText}</pre>}
-              </div>
-            </div>
-          )}
           <PushFileList
             files={files}
             loading={loadingFiles}
             viewMode={fileViewMode}
             iconTheme={iconTheme}
-            onViewModeChange={onFileViewModeChange}
+            potentialConflicts={potentialConflicts}
             onOpenFile={onOpenFile}
           />
         </div>
@@ -436,81 +510,22 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   );
 }
 
-function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, onOpenFile, description }: {
+function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potentialConflicts }: {
   files: PushCommitFile[];
   loading: boolean;
   viewMode: PushFileViewMode;
   iconTheme?: IconThemeData | null;
-  onViewModeChange: (mode: PushFileViewMode) => void;
   onOpenFile: (file: PushCommitFile) => void;
-  description?: string;
+  potentialConflicts?: Set<string>;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const directoryKeys = useMemo(() => collectDirectoryKeys(files), [files]);
-  const canToggleFolders = viewMode === 'tree' && directoryKeys.length > 0;
 
   useEffect(() => {
     setCollapsed({});
   }, [files]);
 
-  const collapseAllFolders = () => {
-    if (!canToggleFolders) return;
-    setCollapsed(Object.fromEntries(directoryKeys.map(key => [key, true])));
-  };
-
   return (
     <div style={styles.fileListRoot}>
-      {description && <div style={styles.fileListDescription}>{description}</div>}
-      <div style={styles.filesHeader}>
-        <span style={styles.filesTitle}>{loading ? '' : formatFileCount(files.length)}</span>
-        <div style={styles.filesHeaderActions}>
-          <div style={styles.expandBtns}>
-            <button
-              data-action-btn=""
-              type="button"
-              style={styles.toolbarButton(false, !canToggleFolders)}
-              title={t('Expand all')}
-              disabled={!canToggleFolders}
-              onClick={() => {
-                if (!canToggleFolders) return;
-                setCollapsed({});
-              }}
-            >
-              <Codicon name="expand-all" style={{ fontSize: '13px' }} />
-            </button>
-            <button
-              data-action-btn=""
-              type="button"
-              style={styles.toolbarButton(false, !canToggleFolders)}
-              title={t('Collapse all')}
-              disabled={!canToggleFolders}
-              onClick={collapseAllFolders}
-            >
-              <Codicon name="collapse-all" style={{ fontSize: '13px' }} />
-            </button>
-          </div>
-          <div style={styles.viewToggle}>
-            <button
-              data-action-btn=""
-              type="button"
-              style={styles.toolbarButton(viewMode === 'tree', false)}
-              title={t('Tree view')}
-              onClick={() => onViewModeChange('tree')}
-            >
-              <Codicon name="list-tree" style={{ fontSize: '13px' }} />
-            </button>
-            <button
-              data-action-btn=""
-              type="button"
-              style={styles.toolbarButton(viewMode === 'flat', false)}
-              title={t('Flat list')}
-              onClick={() => onViewModeChange('flat')}
-            >
-              <Codicon name="list-flat" style={{ fontSize: '13px' }} />
-            </button>
-          </div>
-        </div>
-      </div>
       {loading ? (
         <div style={styles.loadingRow}>{t('Loading files...')}</div>
       ) : files.length === 0 ? (
@@ -524,6 +539,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
               depth={0}
               collapsed={collapsed}
               iconTheme={iconTheme}
+              potentialConflicts={potentialConflicts}
               onToggle={key => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))}
               onOpenFile={onOpenFile}
             />
@@ -532,7 +548,14 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
       ) : (
         <div style={styles.treeRoot}>
           {files.map(file => (
-            <PushFileRow key={file.path} file={file} depth={0} iconTheme={iconTheme} onOpenFile={onOpenFile} />
+            <PushFileRow
+              key={file.path}
+              file={file}
+              depth={0}
+              iconTheme={iconTheme}
+              isPotentialConflict={potentialConflicts?.has(file.path)}
+              onOpenFile={onOpenFile}
+            />
           ))}
         </div>
       )}
@@ -540,16 +563,25 @@ function PushFileList({ files, loading, viewMode, iconTheme, onViewModeChange, o
   );
 }
 
-function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenFile }: {
+function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenFile, potentialConflicts }: {
   node: FileTreeNode;
   depth: number;
   collapsed: Record<string, boolean>;
   iconTheme?: IconThemeData | null;
   onToggle: (key: string) => void;
   onOpenFile: (file: PushCommitFile) => void;
+  potentialConflicts?: Set<string>;
 }) {
   if (node.kind === 'file') {
-    return <PushFileRow file={node.file} depth={depth} iconTheme={iconTheme} onOpenFile={onOpenFile} />;
+    return (
+      <PushFileRow
+        file={node.file}
+        depth={depth}
+        iconTheme={iconTheme}
+        isPotentialConflict={potentialConflicts?.has(node.file.path)}
+        onOpenFile={onOpenFile}
+      />
+    );
   }
 
   const open = !collapsed[node.path];
@@ -568,6 +600,7 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
           depth={depth + 1}
           collapsed={collapsed}
           iconTheme={iconTheme}
+          potentialConflicts={potentialConflicts}
           onToggle={onToggle}
           onOpenFile={onOpenFile}
         />
@@ -576,11 +609,12 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
   );
 }
 
-function PushFileRow({ file, depth, iconTheme, onOpenFile }: {
+function PushFileRow({ file, depth, iconTheme, onOpenFile, isPotentialConflict }: {
   file: PushCommitFile;
   depth: number;
   iconTheme?: IconThemeData | null;
   onOpenFile: (file: PushCommitFile) => void;
+  isPotentialConflict?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const fileName = fileNameOf(file.path);
@@ -590,7 +624,7 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile }: {
   return (
     <div
       style={styles.fileRow(depth, hovered)}
-      title={file.path}
+      title={isPotentialConflict ? `${file.path} (${t('Potential conflict: this file has local uncommitted modifications')})` : file.path}
       onClick={() => onOpenFile(file)}
       onDoubleClick={() => onOpenFile(file)}
       onMouseEnter={() => setHovered(true)}
@@ -599,6 +633,14 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile }: {
       <FileIcon name={fileName} theme={iconTheme} size={ICON_SIZE} />
       <div style={styles.fileNameGroup}>
         <span style={styles.fileName(color)}>{fileName}</span>
+        {isPotentialConflict && (
+          <span
+            title={t('Potential conflict: this file has local uncommitted modifications')}
+            style={{ display: 'inline-flex', alignItems: 'center', color: WARNING_COLOR, fontSize: '11px', flexShrink: 0 }}
+          >
+            <Codicon name="warning" style={{ fontSize: '11px' }} />
+          </span>
+        )}
         {depth === 0 && dir && <span style={styles.dirPath}>{dir}</span>}
       </div>
       <div style={styles.fileStats}>
@@ -614,31 +656,74 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile }: {
   );
 }
 
-function AggregatedChangesView({ files, loading, fileViewMode, iconTheme, onFileViewModeChange, onOpenFile }: {
+function AggregatedChangesView({
+  files,
+  loading,
+  fileViewMode,
+  iconTheme,
+  onOpenFile,
+  potentialConflicts,
+}: {
   files: PushCommitFile[];
   loading: boolean;
   fileViewMode: PushFileViewMode;
   iconTheme?: IconThemeData | null;
-  onFileViewModeChange: (mode: PushFileViewMode) => void;
   onOpenFile: (file: PushCommitFile) => void;
+  potentialConflicts?: Set<string>;
 }) {
   return (
-    <PushFileList
-      files={files}
-      loading={loading}
-      viewMode={fileViewMode}
-      iconTheme={iconTheme}
-      description={t('Aggregated changes from all commits to push')}
-      onViewModeChange={onFileViewModeChange}
-      onOpenFile={onOpenFile}
-    />
+    <div style={{ borderTop: '1px solid var(--vscode-panel-border)', paddingBottom: '6px' }}>
+      <PushFileList
+        files={files}
+        loading={loading}
+        viewMode={fileViewMode}
+        iconTheme={iconTheme}
+        potentialConflicts={potentialConflicts}
+        onOpenFile={onOpenFile}
+      />
+    </div>
   );
 }
 
-function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onToggle, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenAggregatedFile, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg, iconTheme, singleRepo }: {
+function RepoSection({
+  repoStatus,
+  repoMeta,
+  unpushed,
+  incoming,
+  checked,
+  canCheck,
+  onToggle,
+  onOpenInLog,
+  onUndoCommit,
+  onRequestCommitFiles,
+  onRequestAggregatedDiff,
+  onOpenAggregatedFile,
+  onOpenCommitFile,
+  onRequestIncomingCommitFiles,
+  onRequestIncomingAggregatedDiff,
+  onOpenIncomingAggregatedFile,
+  onOpenIncomingCommitFile,
+  onFetch: _onFetch,
+  onSquash,
+  onDropCommits,
+  onRevertCommits,
+  onEditCommitMsg,
+  onCherryPick,
+  onCreateBranchFromCommit,
+  onBranchClick,
+  iconTheme,
+  singleRepo,
+  directionFilter = 'all',
+  onToggleDirectionFilter,
+  isExpanded,
+  onToggleExpanded,
+  expansionCommand,
+  externalFileViewMode,
+}: {
   repoStatus: RepoStatus;
   repoMeta: RepoMeta | undefined;
   unpushed: Props['unpushedMap'][string] | undefined;
+  incoming?: IncomingRepoData;
   checked: boolean;
   canCheck: boolean;
   onToggle: (repoId: string) => void;
@@ -648,27 +733,67 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
   onOpenAggregatedFile: (repoId: string, oldestHash: string | undefined, file: PushCommitFile) => void;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
+  onRequestIncomingCommitFiles?: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestIncomingAggregatedDiff?: (repoId: string) => Promise<PushCommitFile[]>;
+  onOpenIncomingAggregatedFile?: (repoId: string, file: PushCommitFile) => void;
+  onOpenIncomingCommitFile?: (repoId: string, hash: string, file: PushCommitFile) => void;
+  onFetch?: (repoId: string) => void;
   onSquash: (repoId: string, hashes: string[], oldestHash: string, combinedMessage: string, commits: { hash: string; shortHash: string; message: string }[]) => void;
   onDropCommits: (repoId: string, hashes: string[], oldestHash: string) => void;
   onRevertCommits: (repoId: string, hashes: string[]) => void;
   onEditCommitMsg: (repoId: string, hash: string, currentMessage: string) => void;
+  onCherryPick?: (repoId: string, hashes: string[]) => void;
+  onCreateBranchFromCommit?: (repoId: string, hash: string) => void;
+  onBranchClick?: (repoId: string) => void;
   iconTheme?: IconThemeData | null;
   singleRepo?: boolean;
+  directionFilter?: DirectionFilter;
+  onToggleDirectionFilter?: (target: 'outgoing' | 'incoming') => void;
+  isExpanded?: boolean;
+  onToggleExpanded?: () => void;
+  expansionCommand?: ExpansionCommand;
+  externalFileViewMode?: PushFileViewMode;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [internalExpanded, setInternalExpanded] = useState(true);
+  const expanded = isExpanded !== undefined ? isExpanded : internalExpanded;
+  const handleToggleExpanded = onToggleExpanded ?? (() => setInternalExpanded(v => !v));
+
   const [pushViewMode, setPushViewMode] = useState<PushViewMode>('commits');
-  const [fileViewMode, setFileViewMode] = useState<PushFileViewMode>('tree');
+  const [fileViewMode, setFileViewMode] = useState<PushFileViewMode>(externalFileViewMode ?? 'tree');
+
+  useEffect(() => {
+    if (externalFileViewMode) {
+      setFileViewMode(externalFileViewMode);
+    }
+  }, [externalFileViewMode]);
   const [expandedCommitHash, setExpandedCommitHash] = useState<string | null>(null);
   const [autoExpandedCommitsKey, setAutoExpandedCommitsKey] = useState('');
   const [filesByHash, setFilesByHash] = useState<Record<string, PushCommitFile[]>>({});
   const filesByHashRef = useRef(filesByHash);
   filesByHashRef.current = filesByHash;
+
+  useEffect(() => {
+    if (!expansionCommand || expansionCommand.sequence === 0) return;
+    if (!expansionCommand.expanded) {
+      setExpandedCommitHash(null);
+      setExpandedIncomingHash(null);
+    }
+  }, [expansionCommand]);
   const [loadingCommitHash, setLoadingCommitHash] = useState<string | null>(null);
   const [aggregatedFiles, setAggregatedFiles] = useState<PushCommitFile[]>([]);
   const [loadingAggregatedFiles, setLoadingAggregatedFiles] = useState(false);
   const [multiSelectHashes, setMultiSelectHashes] = useState<Set<string>>(new Set());
   const [ctxMenu, setCtxMenu] = useState<CommitCtxMenuState | null>(null);
   const [hovered, setHovered] = useState(false);
+
+  // Incoming state
+  const [expandedIncomingHash, setExpandedIncomingHash] = useState<string | null>(null);
+  const [incomingFilesByHash, setIncomingFilesByHash] = useState<Record<string, PushCommitFile[]>>({});
+  const [loadingIncomingHash, setLoadingIncomingHash] = useState<string | null>(null);
+  const [aggregatedIncomingFiles, setAggregatedIncomingFiles] = useState<PushCommitFile[]>([]);
+  const [loadingAggregatedIncomingFiles, setLoadingAggregatedIncomingFiles] = useState(false);
+  const [multiSelectIncomingHashes, setMultiSelectIncomingHashes] = useState<Set<string>>(new Set());
+  const [incomingCtxMenu, setIncomingCtxMenu] = useState<IncomingCommitCtxMenuState | null>(null);
 
   const rawName = repoMeta?.name ?? baseNameFromPath(repoStatus.repoId) ?? repoStatus.repoId;
   const isWorktree = repoMeta?.isWorktree;
@@ -688,7 +813,70 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
   const commitCount = hasUpstream ? ahead : commits.length;
   const selectedCommitFiles = expandedCommitHash ? (filesByHash[expandedCommitHash] ?? []) : [];
   const loadingSelectedCommitFiles = loadingCommitHash === expandedCommitHash;
-  const canTogglePushView = commits.length > 0 && !unpushed?.loading && !unpushed?.error;
+
+  const incomingCommits = useMemo(() => incoming?.commits ?? [], [incoming?.commits]);
+  const incomingCount = behind > 0 ? behind : incomingCommits.length;
+
+  type MixedCommitItem =
+    | { kind: 'outgoing'; commit: UnpushedCommit; isHead: boolean }
+    | { kind: 'incoming'; commit: IncomingCommit; isHead: boolean };
+
+  const allMixedCommits = useMemo<MixedCommitItem[]>(() => {
+    const items: MixedCommitItem[] = [
+      ...commits.map((c, idx) => ({ kind: 'outgoing' as const, commit: c, isHead: idx === 0 })),
+      ...incomingCommits.map(c => ({ kind: 'incoming' as const, commit: c, isHead: false })),
+    ];
+    return items.sort((a, b) => {
+      const timeA = new Date(a.commit.date).getTime() || 0;
+      const timeB = new Date(b.commit.date).getTime() || 0;
+      return timeB - timeA;
+    });
+  }, [commits, incomingCommits]);
+
+  const potentialConflicts = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of incomingCommits) {
+      if (c.potentialConflictPaths) {
+        for (const p of c.potentialConflictPaths) set.add(p);
+      }
+    }
+    return set;
+  }, [incomingCommits]);
+
+
+  const isOutgoingActive = directionFilter === 'all' || directionFilter === 'outgoing';
+  const isIncomingActive = directionFilter === 'all' || directionFilter === 'incoming';
+
+  const getOutgoingTitle = () => {
+    return isOutgoingActive
+      ? t('Outgoing selected. Click to deselect')
+      : t('Outgoing not selected. Click to select');
+  };
+
+  const getIncomingTitle = () => {
+    return isIncomingActive
+      ? t('Incoming selected. Click to deselect')
+      : t('Incoming not selected. Click to select');
+  };
+
+  const hasAnyCommits = directionFilter === 'all'
+    ? (commits.length > 0 || incomingCommits.length > 0)
+    : directionFilter === 'incoming'
+      ? incomingCommits.length > 0
+      : directionFilter === 'outgoing'
+        ? commits.length > 0
+        : false;
+  const hasLoading = directionFilter === 'all'
+    ? ((incoming?.loading && incomingCommits.length === 0) || (unpushed?.loading && commits.length === 0))
+    : directionFilter === 'incoming'
+      ? (incoming?.loading && incomingCommits.length === 0)
+      : (unpushed?.loading && commits.length === 0);
+  const hasError = directionFilter === 'all'
+    ? (incoming?.error && incomingCommits.length === 0) || (unpushed?.error && commits.length === 0)
+    : directionFilter === 'incoming'
+      ? (incoming?.error && incomingCommits.length === 0)
+      : (unpushed?.error && commits.length === 0);
+  const canTogglePushView = hasAnyCommits && !hasLoading && !hasError;
   const branchTitle = repoStatus.branch.detachedTag
     ? t('Tag: {0} (detached HEAD)', repoStatus.branch.detachedTag)
     : repoStatus.branch.detachedHash
@@ -729,7 +917,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
 
   useEffect(() => {
     let active = true;
-    if (pushViewMode !== 'changes') {
+    if (pushViewMode !== 'changes' || directionFilter === 'incoming') {
       return () => { active = false; };
     }
     if (commits.length === 0) {
@@ -771,7 +959,78 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
     })();
 
     return () => { active = false; };
-  }, [commitHashesKey, commits, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
+  }, [commitHashesKey, commits, directionFilter, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
+
+  // Incoming commit selection & files (do not auto-expand first commit)
+  useEffect(() => {
+    if (expandedIncomingHash && !incomingCommits.some(c => c.hash === expandedIncomingHash)) {
+      setExpandedIncomingHash(null);
+    }
+  }, [expandedIncomingHash, incomingCommits]);
+
+  useEffect(() => {
+    let active = true;
+    if (directionFilter === 'outgoing' || !expandedIncomingHash || incomingFilesByHash[expandedIncomingHash]) {
+      return () => { active = false; };
+    }
+    const req = onRequestIncomingCommitFiles ?? onRequestCommitFiles;
+    setLoadingIncomingHash(expandedIncomingHash);
+    void req(repoStatus.repoId, expandedIncomingHash)
+      .then(files => {
+        if (!active) return;
+        setIncomingFilesByHash(prev => ({ ...prev, [expandedIncomingHash]: files }));
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoadingIncomingHash(curr => curr === expandedIncomingHash ? null : curr);
+      });
+    return () => { active = false; };
+  }, [directionFilter, expandedIncomingHash, incomingFilesByHash, onRequestCommitFiles, onRequestIncomingCommitFiles, repoStatus.repoId]);
+
+  // Incoming aggregated diff
+  useEffect(() => {
+    let active = true;
+    if (directionFilter === 'outgoing' || pushViewMode !== 'changes') {
+      return () => { active = false; };
+    }
+    if (incomingCommits.length === 0) {
+      setAggregatedIncomingFiles([]);
+      return () => { active = false; };
+    }
+    setLoadingAggregatedIncomingFiles(true);
+
+    const loadIncomingFallback = async (): Promise<PushCommitFile[]> => {
+      const req = onRequestIncomingCommitFiles ?? onRequestCommitFiles;
+      const groups = await Promise.all(
+        incomingCommits.map(c => req(repoStatus.repoId, c.hash).catch(() => []))
+      );
+      return mergeUniqueFiles(groups);
+    };
+
+    void (async () => {
+      try {
+        let files: PushCommitFile[] = [];
+        if (onRequestIncomingAggregatedDiff) {
+          files = await onRequestIncomingAggregatedDiff(repoStatus.repoId);
+        }
+        if (!files || files.length === 0) {
+          files = await loadIncomingFallback();
+        }
+        if (active) setAggregatedIncomingFiles(files);
+      } catch {
+        try {
+          const fallback = await loadIncomingFallback();
+          if (active) setAggregatedIncomingFiles(fallback);
+        } catch {
+          if (active) setAggregatedIncomingFiles([]);
+        }
+      } finally {
+        if (active) setLoadingAggregatedIncomingFiles(false);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [directionFilter, incomingCommits, onRequestCommitFiles, onRequestIncomingAggregatedDiff, onRequestIncomingCommitFiles, pushViewMode, repoStatus.repoId]);
 
   const toggleCommitSelection = (hash: string) => {
     setMultiSelectHashes(prev => {
@@ -815,7 +1074,7 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
     if (!ctxMenu?.singleHash) return;
     const commit = commits.find(item => item.hash === ctxMenu.singleHash);
     if (!commit) return;
-    onEditCommitMsg(repoStatus.repoId, ctxMenu.singleHash, commit.message);
+    onEditCommitMsg(repoStatus.repoId, ctxMenu.singleHash, commit.fullMessage || commit.message);
   };
 
   const handleDropSingle = () => {
@@ -859,9 +1118,39 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
     setMultiSelectHashes(new Set());
   };
 
+  const toggleIncomingCommitSelection = (hash: string) => {
+    setMultiSelectIncomingHashes(prev => {
+      const next = new Set(prev);
+      if (next.has(hash)) next.delete(hash);
+      else next.add(hash);
+      return next;
+    });
+  };
+
+  const handleIncomingContextMenu = (event: React.MouseEvent, commit: IncomingCommit) => {
+    event.preventDefault();
+    event.stopPropagation();
+    let selectedHashes: Set<string>;
+    if (multiSelectIncomingHashes.has(commit.hash) && multiSelectIncomingHashes.size > 1) {
+      selectedHashes = multiSelectIncomingHashes;
+    } else {
+      selectedHashes = new Set([commit.hash]);
+      setMultiSelectIncomingHashes(selectedHashes);
+    }
+    const isSingle = selectedHashes.size === 1;
+    setIncomingCtxMenu({
+      x: event.clientX,
+      y: event.clientY,
+      repoId: repoStatus.repoId,
+      selectedHashes: Array.from(selectedHashes),
+      singleHash: isSingle ? commit.hash : null,
+    });
+  };
+
   const handleBodyClick = (event: React.MouseEvent) => {
     if (!(event.target as HTMLElement).closest('[data-commit-row]')) {
       setMultiSelectHashes(new Set());
+      setMultiSelectIncomingHashes(new Set());
     }
   };
 
@@ -883,40 +1172,116 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
             title={!canCheck ? t('Nothing to push') : checked ? t('Exclude from push') : t('Include in push')}
           />
         )}
-        <div style={styles.headerMain} onClick={() => setExpanded(value => !value)}>
+        <div style={styles.headerMain} onClick={handleToggleExpanded}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px', flexShrink: 0 }} />
           <span style={styles.dot(repoColor)} />
           <span style={styles.repoName}>{repoName}</span>
-          <span style={styles.branchBadge(branchClr)} title={branchTitle}>
+          <span
+            data-branch-switch-badge=""
+            style={styles.branchBadge(branchClr)}
+            onClick={e => { e.stopPropagation(); onBranchClick?.(repoStatus.repoId); }}
+            title={branchTitle}
+          >
             <Codicon name={worktreeBranch ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
             <span style={styles.branchName}>{branchLabel}</span>
           </span>
-          {(commitCount > 0 || canTogglePushView || behind > 0 || !hasUpstream) && (
+          {(commitCount > 0 || canTogglePushView || incomingCount > 0 || !hasUpstream) && (
             <div style={styles.repoRightGroup}>
               <button
                 type="button"
                 data-action-btn=""
-                style={styles.repoModeButton(!canTogglePushView, hovered)}
+                style={styles.repoModeButton(!canTogglePushView, hovered || pushViewMode === 'changes', pushViewMode === 'changes')}
                 disabled={!canTogglePushView}
                 title={pushViewMode === 'commits' ? t('Show aggregated changes') : t('Show commit list')}
                 onClick={event => {
                   event.stopPropagation();
                   if (!canTogglePushView) return;
                   setPushViewMode(value => value === 'commits' ? 'changes' : 'commits');
-                  setExpanded(true);
+                  if (!expanded) handleToggleExpanded();
                 }}
               >
                 <Codicon name={pushViewMode === 'commits' ? 'diff-multiple' : 'list-unordered'} />
               </button>
-              {commitCount > 0 ? (
-                <span style={styles.directionBadge(PUSH_COLOR)}>
+              {commitCount > 0 && incomingCount > 0 ? (
+                <>
+                  <span
+                    style={{
+                      ...styles.directionBadge(PUSH_COLOR),
+                      cursor: 'pointer',
+                      opacity: isOutgoingActive ? 1 : 0.45,
+                      border: isOutgoingActive ? `1px solid ${PUSH_COLOR}` : '1px solid transparent',
+                      background: isOutgoingActive
+                        ? 'color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #81c784) 22%, transparent)'
+                        : 'transparent',
+                    }}
+                    title={getOutgoingTitle()}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onToggleDirectionFilter?.('outgoing');
+                    }}
+                  >
+                    <Codicon name="arrow-up" style={{ fontSize: '10px', marginRight: '2px' }} />
+                    {commitCount}
+                  </span>
+                  <span
+                    style={{
+                      ...styles.directionBadge(PULL_COLOR),
+                      cursor: 'pointer',
+                      opacity: isIncomingActive ? 1 : 0.45,
+                      border: isIncomingActive ? `1px solid ${PULL_COLOR}` : '1px solid transparent',
+                      background: isIncomingActive
+                        ? 'color-mix(in srgb, var(--vscode-charts-blue, #64b5f6) 22%, transparent)'
+                        : 'transparent',
+                    }}
+                    title={getIncomingTitle()}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onToggleDirectionFilter?.('incoming');
+                    }}
+                  >
+                    <Codicon name="arrow-down" style={{ fontSize: '10px', marginRight: '2px' }} />
+                    {incomingCount}
+                  </span>
+                </>
+              ) : commitCount > 0 ? (
+                <span
+                  style={{
+                    ...styles.directionBadge(PUSH_COLOR),
+                    cursor: 'pointer',
+                    opacity: isOutgoingActive ? 1 : 0.45,
+                    border: isOutgoingActive ? `1px solid ${PUSH_COLOR}` : '1px solid transparent',
+                    background: isOutgoingActive
+                      ? 'color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #81c784) 22%, transparent)'
+                      : 'transparent',
+                  }}
+                  title={getOutgoingTitle()}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onToggleDirectionFilter?.('outgoing');
+                  }}
+                >
                   <Codicon name="arrow-up" style={{ fontSize: '10px', marginRight: '2px' }} />
                   {commitCount}
                 </span>
-              ) : behind > 0 ? (
-                <span style={styles.directionBadge(PULL_COLOR)}>
+              ) : incomingCount > 0 ? (
+                <span
+                  style={{
+                    ...styles.directionBadge(PULL_COLOR),
+                    cursor: 'pointer',
+                    opacity: isIncomingActive ? 1 : 0.45,
+                    border: isIncomingActive ? `1px solid ${PULL_COLOR}` : '1px solid transparent',
+                    background: isIncomingActive
+                      ? 'color-mix(in srgb, var(--vscode-charts-blue, #64b5f6) 22%, transparent)'
+                      : 'transparent',
+                  }}
+                  title={getIncomingTitle()}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onToggleDirectionFilter?.('incoming');
+                  }}
+                >
                   <Codicon name="arrow-down" style={{ fontSize: '10px', marginRight: '2px' }} />
-                  {behind}
+                  {incomingCount}
                 </span>
               ) : !hasUpstream ? (
                 <span style={styles.publishBadge}>
@@ -931,68 +1296,259 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
 
       {expanded && (
         <div style={styles.repoBody} onClick={handleBodyClick}>
-          {hasUpstream && ahead === 0 && behind === 0 ? (
+          {hasUpstream && ahead === 0 && behind === 0 && commits.length === 0 && incomingCommits.length === 0 ? (
             <div style={styles.upToDate}>
               <Codicon name="check" style={{ marginRight: '6px' }} />
               {t('Up to date')}
             </div>
-          ) : hasUpstream && ahead === 0 && behind > 0 ? (
-            <div style={styles.behindRow}>
-              <Codicon name="arrow-down" style={{ marginRight: '6px', flexShrink: 0 }} />
-              <span>{behind === 1 ? t('{0} commit to pull from {1}', behind, repoStatus.branch.upstream ?? '') : t('{0} commits to pull from {1}', behind, repoStatus.branch.upstream ?? '')}</span>
+          ) : directionFilter === 'none' ? (
+            <div style={styles.loadingRow}>
+              {t('No commit type selected')}
             </div>
-          ) : unpushed?.loading && commits.length === 0 ? (
-            <div style={styles.loadingRow}>{t('Loading commits…')}</div>
-          ) : unpushed?.error ? (
-            <div style={styles.errorRow}>
-              <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
-              {unpushed.error}
-            </div>
-          ) : commits.length > 0 ? (
-            pushViewMode === 'changes' ? (
+          ) : pushViewMode === 'changes' ? (
+            /* ── Changes View (Aggregated) ── */
+            directionFilter === 'incoming' ? (
+              <AggregatedChangesView
+                files={aggregatedIncomingFiles}
+                loading={loadingAggregatedIncomingFiles}
+                fileViewMode={fileViewMode}
+                iconTheme={iconTheme}
+                potentialConflicts={potentialConflicts}
+                onOpenFile={file => onOpenIncomingAggregatedFile?.(repoStatus.repoId, file)}
+              />
+            ) : directionFilter === 'outgoing' ? (
               <AggregatedChangesView
                 files={aggregatedFiles}
                 loading={loadingAggregatedFiles}
                 fileViewMode={fileViewMode}
                 iconTheme={iconTheme}
-                onFileViewModeChange={setFileViewMode}
                 onOpenFile={file => onOpenAggregatedFile(repoStatus.repoId, commits[commits.length - 1]?.hash, file)}
               />
             ) : (
-              <div style={styles.commitList}>
-                {commits.map((commit, index) => (
-                  <CommitRow
-                    key={commit.hash}
-                    commit={commit}
-                    repoId={repoStatus.repoId}
-                    isHead={index === 0}
-                    expanded={commit.hash === expandedCommitHash}
-                    selected={multiSelectHashes.has(commit.hash)}
-                    files={commit.hash === expandedCommitHash ? selectedCommitFiles : []}
-                    loadingFiles={commit.hash === expandedCommitHash ? loadingSelectedCommitFiles : false}
-                    fileViewMode={fileViewMode}
-                    iconTheme={iconTheme}
-                    onToggle={() => {
-                      setMultiSelectHashes(new Set());
-                      setExpandedCommitHash(current => current === commit.hash ? null : commit.hash);
-                    }}
-                    onSelect={() => toggleCommitSelection(commit.hash)}
-                    onContextMenu={event => handleCommitContextMenu(event, commit, index === 0)}
-                    onFileViewModeChange={setFileViewMode}
-                    onOpenFile={file => onOpenCommitFile(repoStatus.repoId, commit.hash, file)}
-                    onOpenInLog={onOpenInLog}
-                    onUndoCommit={onUndoCommit}
-                  />
-                ))}
+              /* directionFilter === 'all' */
+              <div>
+                {incomingCommits.length > 0 && (
+                  <div>
+                    <div style={styles.aggSectionHeader}>
+                      <Codicon name="arrow-down" style={{ color: PULL_COLOR, marginRight: '5px' }} />
+                      <span>{t('Incoming Changes ({0})', aggregatedIncomingFiles.length)}</span>
+                    </div>
+                    <AggregatedChangesView
+                      files={aggregatedIncomingFiles}
+                      loading={loadingAggregatedIncomingFiles}
+                      fileViewMode={fileViewMode}
+                      iconTheme={iconTheme}
+                      potentialConflicts={potentialConflicts}
+                      onOpenFile={file => onOpenIncomingAggregatedFile?.(repoStatus.repoId, file)}
+                    />
+                  </div>
+                )}
+                {commits.length > 0 && (
+                  <div>
+                    <div style={styles.aggSectionHeader}>
+                      <Codicon name="arrow-up" style={{ color: PUSH_COLOR, marginRight: '5px' }} />
+                      <span>{t('Outgoing Changes ({0})', aggregatedFiles.length)}</span>
+                    </div>
+                    <AggregatedChangesView
+                      files={aggregatedFiles}
+                      loading={loadingAggregatedFiles}
+                      fileViewMode={fileViewMode}
+                      iconTheme={iconTheme}
+                      onOpenFile={file => onOpenAggregatedFile(repoStatus.repoId, commits[commits.length - 1]?.hash, file)}
+                    />
+                  </div>
+                )}
               </div>
             )
-          ) : !hasUpstream ? (
-            <div style={styles.unpublishedRow}>
-              <Codicon name="cloud-upload" style={{ marginRight: '6px', flexShrink: 0 }} />
-              <span>{t('Local branch — not published to any remote yet')}</span>
-            </div>
           ) : (
-            <div style={styles.loadingRow}>{t('No commits found')}</div>
+            /* ── Commits View ── */
+            directionFilter === 'incoming' ? (
+              incoming?.loading && incomingCommits.length === 0 ? (
+                <div style={styles.loadingRow}>{t('Loading commits…')}</div>
+              ) : incoming?.error ? (
+                <div style={styles.errorRow}>
+                  <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
+                  {incoming.error}
+                </div>
+              ) : incomingCommits.length > 0 ? (
+                <div style={styles.commitList}>
+                  {incomingCommits.map(commit => (
+                    <CommitRow
+                      key={commit.hash}
+                      commit={commit}
+                      repoId={repoStatus.repoId}
+                      isHead={false}
+                      expanded={commit.hash === expandedIncomingHash}
+                      selected={multiSelectIncomingHashes.has(commit.hash)}
+                      files={commit.hash === expandedIncomingHash ? (incomingFilesByHash[commit.hash] ?? []) : []}
+                      loadingFiles={commit.hash === expandedIncomingHash ? loadingIncomingHash === commit.hash : false}
+                      fileViewMode={fileViewMode}
+                      iconTheme={iconTheme}
+                      isIncoming
+                      showDirectionBadge={true}
+                      potentialConflicts={commit.potentialConflictPaths ? new Set(commit.potentialConflictPaths) : undefined}
+                      onToggle={() => {
+                        setMultiSelectIncomingHashes(new Set());
+                        setExpandedIncomingHash(current => current === commit.hash ? null : commit.hash);
+                      }}
+                      onSelect={() => toggleIncomingCommitSelection(commit.hash)}
+                      onContextMenu={event => handleIncomingContextMenu(event, commit)}
+                      onFileViewModeChange={setFileViewMode}
+                      onOpenFile={file => onOpenIncomingCommitFile?.(repoStatus.repoId, commit.hash, file)}
+                      onOpenInLog={onOpenInLog}
+                      onUndoCommit={() => {}}
+                    />
+                  ))}
+                </div>
+              ) : incomingCount > 0 ? (
+                <div style={styles.behindRow}>
+                  <Codicon name="arrow-down" style={{ marginRight: '6px', flexShrink: 0 }} />
+                  <span>{incomingCount === 1 ? t('{0} commit to pull from {1}', incomingCount, repoStatus.branch.upstream ?? '') : t('{0} commits to pull from {1}', incomingCount, repoStatus.branch.upstream ?? '')}</span>
+                </div>
+              ) : (
+                <div style={styles.upToDate}>
+                  <Codicon name="check" style={{ marginRight: '6px' }} />
+                  {t('Up to date')}
+                </div>
+              )
+            ) : directionFilter === 'outgoing' ? (
+              hasUpstream && ahead === 0 && behind === 0 ? (
+                <div style={styles.upToDate}>
+                  <Codicon name="check" style={{ marginRight: '6px' }} />
+                  {t('Up to date')}
+                </div>
+              ) : unpushed?.loading && commits.length === 0 ? (
+                <div style={styles.loadingRow}>{t('Loading commits…')}</div>
+              ) : unpushed?.error ? (
+                <div style={styles.errorRow}>
+                  <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
+                  {unpushed.error}
+                </div>
+              ) : commits.length > 0 ? (
+                <div style={styles.commitList}>
+                  {commits.map((commit, index) => (
+                    <CommitRow
+                      key={commit.hash}
+                      commit={commit}
+                      repoId={repoStatus.repoId}
+                      isHead={index === 0}
+                      expanded={commit.hash === expandedCommitHash}
+                      selected={multiSelectHashes.has(commit.hash)}
+                      files={commit.hash === expandedCommitHash ? selectedCommitFiles : []}
+                      loadingFiles={commit.hash === expandedCommitHash ? loadingSelectedCommitFiles : false}
+                      fileViewMode={fileViewMode}
+                      iconTheme={iconTheme}
+                      showDirectionBadge={true}
+                      onToggle={() => {
+                        setMultiSelectHashes(new Set());
+                        setExpandedCommitHash(current => current === commit.hash ? null : commit.hash);
+                      }}
+                      onSelect={() => toggleCommitSelection(commit.hash)}
+                      onContextMenu={event => handleCommitContextMenu(event, commit, index === 0)}
+                      onFileViewModeChange={setFileViewMode}
+                      onOpenFile={file => onOpenCommitFile(repoStatus.repoId, commit.hash, file)}
+                      onOpenInLog={onOpenInLog}
+                      onUndoCommit={onUndoCommit}
+                    />
+                  ))}
+                </div>
+              ) : !hasUpstream ? (
+                <div style={styles.unpublishedRow}>
+                  <Codicon name="cloud-upload" style={{ marginRight: '6px', flexShrink: 0 }} />
+                  <span>{t('Local branch — not published to any remote yet')}</span>
+                </div>
+              ) : (
+                <div style={styles.upToDate}>
+                  <Codicon name="check" style={{ marginRight: '6px' }} />
+                  {t('Up to date')}
+                </div>
+              )
+            ) : (
+              /* ── directionFilter === 'all' (Mixed Timeline) ── */
+              allMixedCommits.length > 0 ? (
+                <div style={styles.commitList}>
+                  {allMixedCommits.map(item => {
+                    if (item.kind === 'incoming') {
+                      return (
+                        <CommitRow
+                          key={`in-${item.commit.hash}`}
+                          commit={item.commit}
+                          repoId={repoStatus.repoId}
+                          isHead={false}
+                          expanded={item.commit.hash === expandedIncomingHash}
+                          selected={multiSelectIncomingHashes.has(item.commit.hash)}
+                          files={item.commit.hash === expandedIncomingHash ? (incomingFilesByHash[item.commit.hash] ?? []) : []}
+                          loadingFiles={item.commit.hash === expandedIncomingHash ? loadingIncomingHash === item.commit.hash : false}
+                          fileViewMode={fileViewMode}
+                          iconTheme={iconTheme}
+                          isIncoming
+                          showDirectionBadge={true}
+                          potentialConflicts={item.commit.potentialConflictPaths ? new Set(item.commit.potentialConflictPaths) : undefined}
+                          onToggle={() => {
+                            setMultiSelectIncomingHashes(new Set());
+                            setExpandedIncomingHash(current => current === item.commit.hash ? null : item.commit.hash);
+                          }}
+                          onSelect={() => toggleIncomingCommitSelection(item.commit.hash)}
+                          onContextMenu={event => handleIncomingContextMenu(event, item.commit)}
+                          onFileViewModeChange={setFileViewMode}
+                          onOpenFile={file => onOpenIncomingCommitFile?.(repoStatus.repoId, item.commit.hash, file)}
+                          onOpenInLog={onOpenInLog}
+                          onUndoCommit={() => {}}
+                        />
+                      );
+                    } else {
+                      return (
+                        <CommitRow
+                          key={`out-${item.commit.hash}`}
+                          commit={item.commit}
+                          repoId={repoStatus.repoId}
+                          isHead={item.isHead}
+                          expanded={item.commit.hash === expandedCommitHash}
+                          selected={multiSelectHashes.has(item.commit.hash)}
+                          files={item.commit.hash === expandedCommitHash ? selectedCommitFiles : []}
+                          loadingFiles={item.commit.hash === expandedCommitHash ? loadingSelectedCommitFiles : false}
+                          fileViewMode={fileViewMode}
+                          iconTheme={iconTheme}
+                          showDirectionBadge={true}
+                          onToggle={() => {
+                            setMultiSelectHashes(new Set());
+                            setExpandedCommitHash(current => current === item.commit.hash ? null : item.commit.hash);
+                          }}
+                          onSelect={() => toggleCommitSelection(item.commit.hash)}
+                          onContextMenu={event => handleCommitContextMenu(event, item.commit, item.isHead)}
+                          onFileViewModeChange={setFileViewMode}
+                          onOpenFile={file => onOpenCommitFile(repoStatus.repoId, item.commit.hash, file)}
+                          onOpenInLog={onOpenInLog}
+                          onUndoCommit={onUndoCommit}
+                        />
+                      );
+                    }
+                  })}
+                </div>
+              ) : hasUpstream && ahead === 0 && behind === 0 ? (
+                <div style={styles.upToDate}>
+                  <Codicon name="check" style={{ marginRight: '6px' }} />
+                  {t('Up to date')}
+                </div>
+              ) : (unpushed?.loading || incoming?.loading) ? (
+                <div style={styles.loadingRow}>{t('Loading commits…')}</div>
+              ) : (unpushed?.error || incoming?.error) ? (
+                <div style={styles.errorRow}>
+                  <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
+                  {unpushed?.error || incoming?.error}
+                </div>
+              ) : !hasUpstream ? (
+                <div style={styles.unpublishedRow}>
+                  <Codicon name="cloud-upload" style={{ marginRight: '6px', flexShrink: 0 }} />
+                  <span>{t('Local branch — not published to any remote yet')}</span>
+                </div>
+              ) : (
+                <div style={styles.upToDate}>
+                  <Codicon name="check" style={{ marginRight: '6px' }} />
+                  {t('Up to date')}
+                </div>
+              )
+            )
           )}
         </div>
       )}
@@ -1011,48 +1567,402 @@ function RepoSection({ repoStatus, repoMeta, unpushed, checked, canCheck, onTogg
           onClose={() => { setCtxMenu(null); setMultiSelectHashes(new Set()); }}
         />
       )}
+
+      {incomingCtxMenu && (
+        <IncomingCommitContextMenu
+          state={incomingCtxMenu}
+          onCherryPick={hashes => onCherryPick?.(repoStatus.repoId, hashes)}
+          onCreateBranch={hash => onCreateBranchFromCommit?.(repoStatus.repoId, hash)}
+          onViewInLog={hash => onOpenInLog(hash, repoStatus.repoId)}
+          onClose={() => { setIncomingCtxMenu(null); setMultiSelectIncomingHashes(new Set()); }}
+        />
+      )}
+    </div>
+  );
+}
+
+interface SplitDropdownButtonItem {
+  icon: string;
+  label: string;
+  danger?: boolean;
+  onSelect: () => void;
+}
+
+interface SplitDropdownButtonProps {
+  enabled: boolean;
+  chevronEnabled?: boolean;
+  icon: string;
+  label: string;
+  title?: string;
+  disabledTitle?: string;
+  fullWidth?: boolean;
+  dropdownAlign?: 'left' | 'right';
+  items: SplitDropdownButtonItem[];
+  onMainClick: () => void;
+  colorVariant?: 'default' | 'pull' | 'push';
+}
+
+function SplitDropdownButton({
+  enabled,
+  chevronEnabled,
+  icon,
+  label,
+  title,
+  disabledTitle,
+  fullWidth,
+  dropdownAlign = 'left',
+  items,
+  onMainClick,
+  colorVariant = 'default',
+}: SplitDropdownButtonProps) {
+  const [open, setOpen] = useState(false);
+  const [hoverMain, setHoverMain] = useState(false);
+  const [pressedMain, setPressedMain] = useState(false);
+  const [hoverChevron, setHoverChevron] = useState(false);
+  const [pressedChevron, setPressedChevron] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const hasItems = items.length > 0;
+  const isChevronActive = (chevronEnabled ?? enabled) && hasItems;
+
+  useEffect(() => {
+    if (!open) return;
+    const outsideHandler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const blurHandler = () => setOpen(false);
+    const visibilityHandler = () => {
+      if (document.visibilityState !== 'visible') setOpen(false);
+    };
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', outsideHandler, true);
+    document.addEventListener('visibilitychange', visibilityHandler);
+    window.addEventListener('blur', blurHandler);
+    window.addEventListener('pagehide', blurHandler);
+    window.addEventListener('keydown', keyHandler);
+    return () => {
+      document.removeEventListener('mousedown', outsideHandler, true);
+      document.removeEventListener('visibilitychange', visibilityHandler);
+      window.removeEventListener('blur', blurHandler);
+      window.removeEventListener('pagehide', blurHandler);
+      window.removeEventListener('keydown', keyHandler);
+    };
+  }, [open]);
+
+  let bg = 'var(--vscode-button-background)';
+  let bgHover = 'var(--vscode-button-hoverBackground, var(--vscode-button-background))';
+  let fg = 'var(--vscode-button-foreground)';
+
+  if (colorVariant === 'pull') {
+    bg = 'color-mix(in srgb, var(--vscode-charts-blue, #1f6feb) 85%, #0d419d 15%)';
+    bgHover = 'color-mix(in srgb, var(--vscode-charts-blue, #1f6feb) 80%, white 20%)';
+    fg = '#ffffff';
+  } else if (colorVariant === 'push') {
+    bg = 'color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #238636) 75%, #196c2e 25%)';
+    bgHover = 'color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #238636) 80%, white 20%)';
+    fg = '#ffffff';
+  }
+
+  const childStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: bg,
+    color: fg,
+    border: 'none',
+    fontSize: '12px',
+    fontFamily: 'var(--vscode-font-family)',
+    userSelect: 'none',
+    whiteSpace: 'nowrap',
+    outline: 'none',
+  };
+
+  const dropItemStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '6px 12px',
+    fontSize: '12px',
+    cursor: 'pointer',
+    color: 'var(--vscode-menu-foreground)',
+    userSelect: 'none',
+    whiteSpace: 'nowrap',
+  };
+
+  const isWholeButtonDisabled = !enabled && !isChevronActive;
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'relative',
+        display: 'flex',
+        flex: fullWidth ? 1 : undefined,
+        width: fullWidth ? '100%' : undefined,
+        opacity: isWholeButtonDisabled ? 0.45 : 1,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flex: 1,
+          width: '100%',
+          border: '1px solid var(--vscode-button-border, transparent)',
+          borderRadius: '3px',
+          overflow: 'hidden',
+          backgroundColor: bg,
+          ['--split-btn-bg' as string]: bg,
+          ['--split-btn-hover-bg' as string]: bgHover,
+          ['--split-btn-fg' as string]: fg,
+        }}
+      >
+        <button
+          data-split-main-btn=""
+          style={{
+            ...childStyle,
+            flex: 1,
+            gap: '6px',
+            padding: '6px 12px',
+            cursor: enabled ? 'pointer' : 'default',
+            opacity: enabled ? 1 : 0.5,
+            backgroundColor: hoverMain && enabled ? bgHover : bg,
+            transform: enabled && pressedMain ? 'translateY(1px) scale(0.995)' : 'none',
+            filter: enabled && pressedMain ? 'brightness(0.92)' : 'none',
+            transition: 'background-color 80ms ease, transform 60ms ease, filter 60ms ease',
+          }}
+          disabled={!enabled}
+          title={enabled ? (title ?? label) : (disabledTitle ?? '')}
+          onClick={() => { if (enabled) onMainClick(); }}
+          onMouseEnter={() => setHoverMain(true)}
+          onMouseLeave={() => {
+            setHoverMain(false);
+            setPressedMain(false);
+          }}
+          onMouseDown={() => { if (enabled) setPressedMain(true); }}
+          onMouseUp={() => setPressedMain(false)}
+        >
+          <Codicon name={icon} style={{ fontSize: '13px', flexShrink: 0 }} />
+          <span>{label}</span>
+        </button>
+        {hasItems && (
+          <>
+            <div
+              style={{
+                width: '1px',
+                alignSelf: 'stretch',
+                padding: '4px 0',
+                flexShrink: 0,
+                display: 'flex',
+                backgroundColor: 'inherit',
+              }}
+            >
+              <div
+                style={{
+                  flex: 1,
+                  backgroundColor: fg,
+                  opacity: 0.3,
+                }}
+              />
+            </div>
+            <button
+              data-split-chevron-btn=""
+              style={{
+                ...childStyle,
+                padding: '6px 8px',
+                cursor: isChevronActive ? 'pointer' : 'default',
+                opacity: isChevronActive ? 1 : 0.5,
+                backgroundColor: hoverChevron && isChevronActive ? bgHover : bg,
+                transform: isChevronActive && pressedChevron ? 'translateY(1px) scale(0.995)' : 'none',
+                filter: isChevronActive && pressedChevron ? 'brightness(0.92)' : 'none',
+                transition: 'background-color 80ms ease, transform 60ms ease, filter 60ms ease',
+              }}
+              disabled={!isChevronActive}
+              title={t('More Actions...')}
+              onClick={() => { if (isChevronActive) setOpen(o => !o); }}
+              onMouseEnter={() => setHoverChevron(true)}
+              onMouseLeave={() => {
+                setHoverChevron(false);
+                setPressedChevron(false);
+              }}
+              onMouseDown={() => { if (isChevronActive) setPressedChevron(true); }}
+              onMouseUp={() => setPressedChevron(false)}
+            >
+              <Codicon name="chevron-down" style={{ fontSize: '11px' }} />
+            </button>
+          </>
+        )}
+      </div>
+      {open && hasItems && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 4px)',
+            ...(dropdownAlign === 'right' ? { right: 0 } : { left: 0 }),
+            background: 'var(--vscode-menu-background, var(--vscode-sideBar-background))',
+            border: '1px solid var(--vscode-menu-border, var(--vscode-panel-border))',
+            borderRadius: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+            zIndex: 9999,
+            minWidth: '170px',
+            padding: '3px 0',
+          }}
+        >
+          {items.map(item => (
+            <SplitDropItem
+              key={item.label}
+              icon={item.icon}
+              label={item.label}
+              danger={item.danger}
+              itemStyle={dropItemStyle}
+              onSelect={() => {
+                item.onSelect();
+                setOpen(false);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SplitDropItem({
+  icon,
+  label,
+  danger,
+  itemStyle,
+  onSelect,
+}: {
+  icon: string;
+  label: string;
+  danger?: boolean;
+  itemStyle: React.CSSProperties;
+  onSelect: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      style={{
+        ...itemStyle,
+        background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent',
+        color: danger ? 'var(--vscode-errorForeground, #f48771)' : 'var(--vscode-menu-foreground)',
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={onSelect}
+    >
+      <Codicon name={icon} style={{ fontSize: '13px', flexShrink: 0 }} />
+      <span>{label}</span>
     </div>
   );
 }
 
 export function PushTab(props: Props) {
-  const { repos, repoMetas, iconTheme, unpushedMap, onPush, onOpenInLog, onUndoCommit, onRequestCommitFiles, onRequestAggregatedDiff, onOpenAggregatedFile, onOpenCommitFile, onSquash, onDropCommits, onRevertCommits, onEditCommitMsg } = props;
+  const {
+    repos,
+    repoMetas,
+    iconTheme,
+    unpushedMap,
+    incomingMap,
+    onPush,
+    onForcePush,
+    onForcePushMulti,
+    onPushTags,
+    onPushTagsMulti,
+    onPull,
+    onPullMulti,
+    onSync,
+    onSyncMulti,
+    onFetch,
+    onOpenInLog,
+    onUndoCommit,
+    onRequestCommitFiles,
+    onRequestAggregatedDiff,
+    onOpenAggregatedFile,
+    onOpenCommitFile,
+    onRequestIncomingCommitFiles,
+    onRequestIncomingAggregatedDiff,
+    onOpenIncomingAggregatedFile,
+    onOpenIncomingCommitFile,
+    onSquash,
+    onDropCommits,
+    onRevertCommits,
+    onEditCommitMsg,
+    onCherryPick,
+    onCreateBranchFromCommit,
+    onBranchClick,
+    expansionCommand,
+    viewMode,
+    onExpansionChange,
+  } = props;
   const metaMap = new Map(repoMetas.map(meta => [meta.id, meta]));
   const isSingleRepo = repos.length === 1;
   const [checked, setChecked] = useState<Set<string>>(() => new Set<string>());
-  const [pushButtonHovered, setPushButtonHovered] = useState(false);
-  const [pushButtonPressed, setPushButtonPressed] = useState(false);
 
-  const pushButtonFeedback = {
-    onPointerEnter: () => setPushButtonHovered(true),
-    onPointerLeave: () => {
-      setPushButtonHovered(false);
-      setPushButtonPressed(false);
-    },
-    onPointerDown: () => setPushButtonPressed(true),
-    onPointerUp: () => setPushButtonPressed(false),
-    onPointerCancel: () => setPushButtonPressed(false),
-    onBlur: () => {
-      setPushButtonHovered(false);
-      setPushButtonPressed(false);
-    },
-  };
+  const [collapsedRepoIds, setCollapsedRepoIds] = useState<Set<string>>(() => new Set<string>());
 
-  const canPushRepo = (repo: RepoStatus) => {
+  useEffect(() => {
+    if (!expansionCommand || expansionCommand.sequence === 0) return;
+    if (expansionCommand.expanded) {
+      setCollapsedRepoIds(new Set());
+    } else {
+      setCollapsedRepoIds(new Set(repos.map(r => r.repoId)));
+    }
+  }, [expansionCommand, repos]);
+
+  const toggleRepoExpanded = useCallback((repoId: string) => {
+    setCollapsedRepoIds(prev => {
+      const next = new Set(prev);
+      if (next.has(repoId)) {
+        next.delete(repoId);
+      } else {
+        next.add(repoId);
+      }
+      const allCollapsed = next.size === repos.length;
+      onExpansionChange?.(!allCollapsed);
+      return next;
+    });
+  }, [repos.length, onExpansionChange]);
+
+  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('all');
+
+  const toggleDirectionFilter = useCallback((target: 'outgoing' | 'incoming') => {
+    setDirectionFilter(curr => {
+      const outgoingActive = curr === 'all' || curr === 'outgoing';
+      const incomingActive = curr === 'all' || curr === 'incoming';
+
+      const nextOutgoing = target === 'outgoing' ? !outgoingActive : outgoingActive;
+      const nextIncoming = target === 'incoming' ? !incomingActive : incomingActive;
+
+      if (nextOutgoing && nextIncoming) return 'all';
+      if (nextOutgoing) return 'outgoing';
+      if (nextIncoming) return 'incoming';
+      return 'none';
+    });
+  }, []);
+
+  const canPushRepo = useCallback((repo: RepoStatus) => {
     const ahead = repo.branch.aheadBehind?.ahead ?? 0;
     const hasUpstream = !!repo.branch.upstream;
     return (hasUpstream && ahead > 0) || !hasUpstream;
-  };
+  }, []);
+
+  const canPullRepo = useCallback((repo: RepoStatus) => {
+    const behind = repo.branch.aheadBehind?.behind ?? 0;
+    const incomingCount = incomingMap?.[repo.repoId]?.commits?.length ?? 0;
+    return behind > 0 || incomingCount > 0;
+  }, [incomingMap]);
 
   useEffect(() => {
     setChecked(prev => {
-      const toRemove = repos.filter(repo => prev.has(repo.repoId) && !canPushRepo(repo));
+      const toRemove = repos.filter(repo => prev.has(repo.repoId) && !canPushRepo(repo) && !canPullRepo(repo));
       if (toRemove.length === 0) return prev;
       const next = new Set(prev);
       toRemove.forEach(repo => next.delete(repo.repoId));
       return next;
     });
-  }, [repos, unpushedMap]);
+  }, [canPullRepo, canPushRepo, repos]);
 
   const toggleRepo = (repoId: string) => {
     setChecked(prev => {
@@ -1067,14 +1977,134 @@ export function PushTab(props: Props) {
     const hasPublish = targets.some(repo => !repo.branch.upstream);
     const hasPush = targets.some(repo => !!repo.branch.upstream);
     const publishCount = targets.filter(repo => !repo.branch.upstream).length;
-    if (hasPublish && hasPush) return publishCount === 1 ? t('Push & Publish Branch') : t('Push & Publish Branches');
-    if (hasPublish) return targets.length === 1 ? t('Publish Branch') : t('Publish Branches');
-    return t('Push');
+    let label = t('Push');
+    if (hasPublish && hasPush) {
+      label = publishCount === 1 ? t('Push & Publish Branch') : t('Push & Publish Branches');
+    } else if (hasPublish) {
+      label = targets.length === 1 ? t('Publish Branch') : t('Publish Branches');
+    }
+    return targets.length > 1 ? `${label} (${targets.length})` : label;
+  };
+
+  const formatSyncLabel = (behind: number, ahead: number) => {
+    if (behind > 0 && ahead > 0) return `${t('Sync')} ↓${behind} ↑${ahead}`;
+    if (behind > 0) return `${t('Sync')} ↓${behind}`;
+    if (ahead > 0) return `${t('Sync')} ↑${ahead}`;
+    return t('Sync');
   };
 
   if (isSingleRepo) {
     const solo = repos[0];
     const canPush = canPushRepo(solo);
+    const canPull = canPullRepo(solo);
+    const ahead = solo.branch.aheadBehind?.ahead ?? 0;
+    const behind = solo.branch.aheadBehind?.behind ?? 0;
+    const canSync = canPull || canPush;
+    const syncLabel = formatSyncLabel(behind, ahead);
+
+    const soloPullItems: SplitDropdownButtonItem[] = [
+      {
+        icon: 'git-merge',
+        label: t('Pull Strategy: Rebase'),
+        onSelect: () => onPull?.(solo.repoId, 'rebase'),
+      },
+      {
+        icon: 'git-merge',
+        label: t('Pull Strategy: Merge'),
+        onSelect: () => onPull?.(solo.repoId, 'merge'),
+      },
+      {
+        icon: 'arrow-right',
+        label: t('Pull Strategy: Fast-Forward Only'),
+        onSelect: () => onPull?.(solo.repoId, 'ff-only'),
+      },
+    ];
+
+    const soloPushItems: SplitDropdownButtonItem[] = [
+      {
+        icon: 'warning',
+        label: t('Safe Force Push...'),
+        danger: true,
+        onSelect: () => onForcePush?.(solo.repoId),
+      },
+      {
+        icon: 'tag',
+        label: t('Push All Tags'),
+        onSelect: () => onPushTags?.(solo.repoId),
+      },
+    ];
+
+    const renderSoloButtons = () => {
+      if (directionFilter === 'incoming') {
+        return (
+          <SplitDropdownButton
+            fullWidth
+            colorVariant="pull"
+            enabled={canPull}
+            icon="cloud-download"
+            label={t('Pull')}
+            items={soloPullItems}
+            dropdownAlign="right"
+            onMainClick={() => onPull?.(solo.repoId)}
+          />
+        );
+      }
+      if (directionFilter === 'outgoing') {
+        const isPurePush = !!solo.branch.upstream;
+        return (
+          <SplitDropdownButton
+            fullWidth
+            colorVariant={isPurePush ? 'push' : 'default'}
+            enabled={canPush}
+            chevronEnabled={isPurePush}
+            icon="cloud-upload"
+            label={pushButtonLabel([solo])}
+            items={isPurePush ? soloPushItems : []}
+            dropdownAlign="right"
+            onMainClick={() => onPush(solo.repoId)}
+          />
+        );
+      }
+      if (directionFilter === 'none') {
+        return (
+          <SplitDropdownButton
+            fullWidth
+            enabled={false}
+            chevronEnabled={false}
+            icon="sync"
+            label={t('Sync')}
+            items={[]}
+            dropdownAlign="right"
+            onMainClick={() => {}}
+          />
+        );
+      }
+      // directionFilter === 'all' (默认显示同步按钮，未发布分支显示发布分支)
+      if (!solo.branch.upstream) {
+        return (
+          <SplitDropdownButton
+            fullWidth
+            enabled={canPush}
+            icon="cloud-upload"
+            label={pushButtonLabel([solo])}
+            items={[]}
+            dropdownAlign="right"
+            onMainClick={() => onPush(solo.repoId)}
+          />
+        );
+      }
+      return (
+        <SplitDropdownButton
+          fullWidth
+          enabled={canSync}
+          icon="sync"
+          label={syncLabel}
+          items={[]}
+          onMainClick={() => onSync?.(solo.repoId)}
+        />
+      );
+    };
+
     return (
       <div style={css.root}>
         <div style={css.list}>
@@ -1083,6 +2113,7 @@ export function PushTab(props: Props) {
             repoStatus={solo}
             repoMeta={metaMap.get(solo.repoId)}
             unpushed={unpushedMap[solo.repoId]}
+            incoming={incomingMap?.[solo.repoId]}
             checked={false}
             canCheck={false}
             onToggle={() => {}}
@@ -1092,25 +2123,30 @@ export function PushTab(props: Props) {
             onRequestAggregatedDiff={onRequestAggregatedDiff}
             onOpenAggregatedFile={onOpenAggregatedFile}
             onOpenCommitFile={onOpenCommitFile}
+            onRequestIncomingCommitFiles={onRequestIncomingCommitFiles}
+            onRequestIncomingAggregatedDiff={onRequestIncomingAggregatedDiff}
+            onOpenIncomingAggregatedFile={onOpenIncomingAggregatedFile}
+            onOpenIncomingCommitFile={onOpenIncomingCommitFile}
+            onFetch={onFetch}
             onSquash={onSquash}
             onDropCommits={onDropCommits}
             onRevertCommits={onRevertCommits}
             onEditCommitMsg={onEditCommitMsg}
+            onCherryPick={onCherryPick}
+            onCreateBranchFromCommit={onCreateBranchFromCommit}
+            onBranchClick={onBranchClick}
             iconTheme={iconTheme}
             singleRepo
+            directionFilter={directionFilter}
+            onToggleDirectionFilter={toggleDirectionFilter}
+            isExpanded={!collapsedRepoIds.has(solo.repoId)}
+            onToggleExpanded={() => toggleRepoExpanded(solo.repoId)}
+            expansionCommand={expansionCommand}
+            externalFileViewMode={viewMode}
           />
         </div>
         <div style={css.footer}>
-          <button
-            data-primary-action-btn=""
-            style={css.pushBtn(canPush, pushButtonHovered, pushButtonPressed)}
-            disabled={!canPush}
-            onClick={() => onPush(solo.repoId)}
-            {...pushButtonFeedback}
-          >
-            <Codicon name="cloud-upload" style={{ marginRight: '6px' }} />
-            {pushButtonLabel([solo])}
-          </button>
+          {renderSoloButtons()}
         </div>
       </div>
     );
@@ -1118,15 +2154,220 @@ export function PushTab(props: Props) {
 
   const checkedRepos = repos.filter(repo => checked.has(repo.repoId));
   const pushableChecked = checkedRepos.filter(canPushRepo);
-  const canPush = pushableChecked.length > 0;
+  const pullableChecked = checkedRepos.filter(canPullRepo);
+
+  const totalBehind = pullableChecked.reduce((acc, r) => acc + (r.branch.aheadBehind?.behind ?? 0), 0);
+  const totalAhead = pushableChecked.reduce((acc, r) => acc + (r.branch.aheadBehind?.ahead ?? 0), 0);
 
   const handlePush = () => {
-    if (!canPush) return;
+    if (pushableChecked.length === 0) return;
     if (pushableChecked.length === 1) {
       onPush(pushableChecked[0].repoId);
     } else {
       pushableChecked.forEach(repo => onPush(repo.repoId));
     }
+  };
+
+  const handlePull = () => {
+    if (pullableChecked.length === 0) return;
+    if (pullableChecked.length === 1) {
+      onPull?.(pullableChecked[0].repoId);
+    } else if (onPullMulti) {
+      onPullMulti(pullableChecked.map(r => r.repoId));
+    } else {
+      pullableChecked.forEach(repo => onPull?.(repo.repoId));
+    }
+  };
+
+  const handleSync = (strategy?: SyncPullStrategy) => {
+    const syncTargets = Array.from(new Set([...pullableChecked.map(r => r.repoId), ...pushableChecked.map(r => r.repoId)]));
+    if (syncTargets.length === 0) return;
+
+    const unpublishedTargets = syncTargets.filter(id => {
+      const repo = repos.find(r => r.repoId === id);
+      return repo && !repo.branch.upstream;
+    });
+    const publishedTargets = syncTargets.filter(id => {
+      const repo = repos.find(r => r.repoId === id);
+      return repo && !!repo.branch.upstream;
+    });
+
+    // 未发布分支直接调用 onPush 执行发布，跳过 pull 流程
+    unpublishedTargets.forEach(id => onPush(id));
+
+    // 已发布分支走正常同步流程
+    if (publishedTargets.length === 1) {
+      onSync?.(publishedTargets[0], strategy);
+    } else if (publishedTargets.length > 1) {
+      if (onSyncMulti) {
+        onSyncMulti(publishedTargets, strategy);
+      } else {
+        publishedTargets.forEach(id => onSync?.(id, strategy));
+      }
+    }
+  };
+
+  const multiPullItems: SplitDropdownButtonItem[] = [
+    {
+      icon: 'git-merge',
+      label: t('Pull Strategy: Rebase'),
+      onSelect: () => {
+        if (pullableChecked.length === 0) return;
+        if (pullableChecked.length === 1) onPull?.(pullableChecked[0].repoId, 'rebase');
+        else if (onPullMulti) onPullMulti(pullableChecked.map(r => r.repoId), 'rebase');
+        else pullableChecked.forEach(r => onPull?.(r.repoId, 'rebase'));
+      },
+    },
+    {
+      icon: 'git-merge',
+      label: t('Pull Strategy: Merge'),
+      onSelect: () => {
+        if (pullableChecked.length === 0) return;
+        if (pullableChecked.length === 1) onPull?.(pullableChecked[0].repoId, 'merge');
+        else if (onPullMulti) onPullMulti(pullableChecked.map(r => r.repoId), 'merge');
+        else pullableChecked.forEach(r => onPull?.(r.repoId, 'merge'));
+      },
+    },
+    {
+      icon: 'arrow-right',
+      label: t('Pull Strategy: Fast-Forward Only'),
+      onSelect: () => {
+        if (pullableChecked.length === 0) return;
+        if (pullableChecked.length === 1) onPull?.(pullableChecked[0].repoId, 'ff-only');
+        else if (onPullMulti) onPullMulti(pullableChecked.map(r => r.repoId), 'ff-only');
+        else pullableChecked.forEach(r => onPull?.(r.repoId, 'ff-only'));
+      },
+    },
+  ];
+
+  const multiPushItems: SplitDropdownButtonItem[] = [
+    {
+      icon: 'warning',
+      label: t('Safe Force Push...'),
+      danger: true,
+      onSelect: () => {
+        if (pushableChecked.length === 0) return;
+        if (pushableChecked.length === 1) {
+          onForcePush?.(pushableChecked[0].repoId);
+        } else if (onForcePushMulti) {
+          onForcePushMulti(pushableChecked.map(r => r.repoId));
+        } else {
+          pushableChecked.forEach(r => onForcePush?.(r.repoId));
+        }
+      },
+    },
+    {
+      icon: 'tag',
+      label: t('Push All Tags'),
+      onSelect: () => {
+        if (checkedRepos.length === 0) return;
+        if (checkedRepos.length === 1) {
+          onPushTags?.(checkedRepos[0].repoId);
+        } else if (onPushTagsMulti) {
+          onPushTagsMulti(checkedRepos.map(r => r.repoId));
+        } else {
+          checkedRepos.forEach(r => onPushTags?.(r.repoId));
+        }
+      },
+    },
+  ];
+
+  const renderMultiButtons = () => {
+    if (directionFilter === 'incoming') {
+      const isEnabled = pullableChecked.length > 0;
+      return (
+        <SplitDropdownButton
+          fullWidth
+          colorVariant="pull"
+          enabled={isEnabled}
+          chevronEnabled={isEnabled}
+          icon="cloud-download"
+          label={pullableChecked.length > 1 ? `${t('Pull')} (${pullableChecked.length})` : t('Pull')}
+          items={multiPullItems}
+          dropdownAlign="right"
+          onMainClick={handlePull}
+        />
+      );
+    }
+    if (directionFilter === 'outgoing') {
+      const isEnabled = pushableChecked.length > 0;
+      const isPurePush = pushableChecked.length > 0 && pushableChecked.every(r => !!r.branch.upstream);
+      return (
+        <SplitDropdownButton
+          fullWidth
+          colorVariant={isPurePush ? 'push' : 'default'}
+          enabled={isEnabled}
+          chevronEnabled={isPurePush}
+          icon="cloud-upload"
+          label={pushButtonLabel(pushableChecked)}
+          items={isPurePush ? multiPushItems : []}
+          dropdownAlign="right"
+          onMainClick={handlePush}
+        />
+      );
+    }
+    if (directionFilter === 'none') {
+      return (
+        <SplitDropdownButton
+          fullWidth
+          enabled={false}
+          chevronEnabled={false}
+          icon="sync"
+          label={t('Sync')}
+          items={[]}
+          dropdownAlign="right"
+          onMainClick={() => {}}
+        />
+      );
+    }
+    // directionFilter === 'all' (默认显示同步按钮，全未发布显示发布，混合显示同步并发布)
+    const hasChecked = checkedRepos.length > 0;
+    const canSync = hasChecked && (pullableChecked.length > 0 || pushableChecked.length > 0);
+
+    const unpublishedChecked = checkedRepos.filter(repo => !repo.branch.upstream);
+    const publishedChecked = checkedRepos.filter(repo => !!repo.branch.upstream);
+
+    if (hasChecked && unpublishedChecked.length === checkedRepos.length) {
+      const isEnabled = pushableChecked.length > 0;
+      return (
+        <SplitDropdownButton
+          fullWidth
+          enabled={isEnabled}
+          icon="cloud-upload"
+          label={pushButtonLabel(pushableChecked)}
+          items={[]}
+          dropdownAlign="right"
+          onMainClick={handlePush}
+        />
+      );
+    }
+
+    let syncLabel: string;
+    if (hasChecked && unpublishedChecked.length > 0 && publishedChecked.length > 0) {
+      const base = unpublishedChecked.length === 1 ? t('Sync & Publish Branch') : t('Sync & Publish Branches');
+      if (totalBehind > 0 && totalAhead > 0) {
+        syncLabel = `${base} ↓${totalBehind} ↑${totalAhead}`;
+      } else if (totalBehind > 0) {
+        syncLabel = `${base} ↓${totalBehind}`;
+      } else if (totalAhead > 0) {
+        syncLabel = `${base} ↑${totalAhead}`;
+      } else {
+        syncLabel = base;
+      }
+    } else {
+      syncLabel = hasChecked ? formatSyncLabel(totalBehind, totalAhead) : t('Sync');
+    }
+
+    return (
+      <SplitDropdownButton
+        fullWidth
+        enabled={canSync}
+        icon="sync"
+        label={syncLabel}
+        items={[]}
+        onMainClick={() => handleSync()}
+      />
+    );
   };
 
   return (
@@ -1138,8 +2379,9 @@ export function PushTab(props: Props) {
             repoStatus={repoStatus}
             repoMeta={metaMap.get(repoStatus.repoId)}
             unpushed={unpushedMap[repoStatus.repoId]}
+            incoming={incomingMap?.[repoStatus.repoId]}
             checked={checked.has(repoStatus.repoId)}
-            canCheck={canPushRepo(repoStatus)}
+            canCheck={canPushRepo(repoStatus) || canPullRepo(repoStatus)}
             onToggle={toggleRepo}
             onOpenInLog={onOpenInLog}
             onUndoCommit={onUndoCommit}
@@ -1147,11 +2389,25 @@ export function PushTab(props: Props) {
             onRequestAggregatedDiff={onRequestAggregatedDiff}
             onOpenAggregatedFile={onOpenAggregatedFile}
             onOpenCommitFile={onOpenCommitFile}
+            onRequestIncomingCommitFiles={onRequestIncomingCommitFiles}
+            onRequestIncomingAggregatedDiff={onRequestIncomingAggregatedDiff}
+            onOpenIncomingAggregatedFile={onOpenIncomingAggregatedFile}
+            onOpenIncomingCommitFile={onOpenIncomingCommitFile}
+            onFetch={onFetch}
             onSquash={onSquash}
             onDropCommits={onDropCommits}
             onRevertCommits={onRevertCommits}
             onEditCommitMsg={onEditCommitMsg}
+            onCherryPick={onCherryPick}
+            onCreateBranchFromCommit={onCreateBranchFromCommit}
+            onBranchClick={onBranchClick}
             iconTheme={iconTheme}
+            directionFilter={directionFilter}
+            onToggleDirectionFilter={toggleDirectionFilter}
+            isExpanded={!collapsedRepoIds.has(repoStatus.repoId)}
+            onToggleExpanded={() => toggleRepoExpanded(repoStatus.repoId)}
+            expansionCommand={expansionCommand}
+            externalFileViewMode={viewMode}
           />
         ))}
       </div>
@@ -1170,16 +2426,23 @@ export function PushTab(props: Props) {
                 ? `${baseNameFromPath(meta?.mainWorktreePath) ?? rawName} (${wtBranch})`
                 : rawName;
               const ahead = repo.branch.aheadBehind?.ahead ?? 0;
+              const behind = repo.branch.aheadBehind?.behind ?? 0;
               return (
                 <span key={repo.repoId} style={css.pill(color)}>
                   <button data-action-btn="" style={css.pillRemove(color)} title={t('Remove {0}', displayName)} onClick={() => toggleRepo(repo.repoId)}>
                     <Codicon name="close" style={{ fontSize: '10px' }} />
                   </button>
                   {displayName}
-                  {ahead > 0 && (
+                  {(directionFilter === 'all' || directionFilter === 'outgoing') && ahead > 0 && (
                     <span style={css.pillCount}>
                       <Codicon name="arrow-up" style={{ fontSize: '8px', marginRight: '1px' }} />
                       {ahead}
+                    </span>
+                  )}
+                  {(directionFilter === 'all' || directionFilter === 'incoming') && behind > 0 && (
+                    <span style={{ ...css.pillCount, color: PULL_COLOR }}>
+                      <Codicon name="arrow-down" style={{ fontSize: '8px', marginRight: '1px' }} />
+                      {behind}
                     </span>
                   )}
                 </span>
@@ -1187,20 +2450,13 @@ export function PushTab(props: Props) {
             })}
           </div>
         )}
-        <button
-          data-primary-action-btn=""
-          style={css.pushBtn(canPush, pushButtonHovered, pushButtonPressed)}
-          disabled={!canPush}
-          onClick={handlePush}
-          {...pushButtonFeedback}
-        >
-          <Codicon name="cloud-upload" style={{ marginRight: '6px' }} />
-          {pushButtonLabel(pushableChecked)}
-        </button>
+        {renderMultiButtons()}
       </div>
     </div>
   );
 }
+
+export const SyncTab = PushTab;
 
 const ctxStyles = {
   menu: {
@@ -1263,20 +2519,6 @@ const css = {
     padding: '0 3px', fontSize: '10px', minWidth: '14px', height: '14px',
     justifyContent: 'center', boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  pushBtn: (enabled: boolean, hovered: boolean, pressed: boolean): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: enabled && hovered
-      ? 'var(--vscode-button-hoverBackground, var(--vscode-button-background))'
-      : 'var(--vscode-button-background)',
-    color: 'var(--vscode-button-foreground)',
-    border: 'none', borderRadius: '3px', padding: '6px 12px',
-    cursor: enabled ? 'pointer' : 'default',
-    fontSize: '12px', fontFamily: 'var(--vscode-font-family)',
-    opacity: enabled ? 1 : 0.45, width: '100%',
-    transform: enabled && pressed ? 'translateY(1px) scale(0.995)' : 'none',
-    filter: enabled && pressed ? 'brightness(0.92)' : 'none',
-    transition: 'background-color 80ms ease, transform 60ms ease, filter 60ms ease',
-  }),
 };
 
 const styles = {
@@ -1304,11 +2546,24 @@ const styles = {
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, flexShrink: 1,
   },
   branchBadge: (color: string): React.CSSProperties => ({
-    display: 'inline-flex', alignItems: 'center', gap: '3px',
-    fontSize: '10px', fontWeight: 600,
-    background: `${color}33`, color, border: `1px solid ${color}88`,
-    borderRadius: '3px', padding: '1px 5px',
-    flexShrink: 1, minWidth: 0, maxWidth: '160px', marginLeft: '4px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px',
+    fontSize: '10px',
+    fontWeight: 600,
+    textTransform: 'none' as const,
+    letterSpacing: 0,
+    background: `${color}33`,
+    color,
+    border: `1px solid ${color}88`,
+    borderRadius: '3px',
+    padding: '1px 5px',
+    flexShrink: 1,
+    minWidth: 0,
+    maxWidth: '160px',
+    marginLeft: '4px',
+    cursor: 'pointer',
+    userSelect: 'none' as const,
     overflow: 'hidden',
   }),
   branchName: {
@@ -1336,17 +2591,29 @@ const styles = {
     marginLeft: 'auto',
     flexShrink: 0,
   } as React.CSSProperties,
-  repoModeButton: (disabled: boolean, visible: boolean): React.CSSProperties => ({
+  repoModeButton: (disabled: boolean, visible: boolean, active = false): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 22, height: 22, padding: 0, border: 'none', borderRadius: '3px',
-    background: 'transparent', color: 'var(--vscode-icon-foreground)',
+    background: active ? 'var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.24))' : 'transparent',
+    color: active ? 'var(--vscode-foreground)' : 'var(--vscode-icon-foreground)',
     cursor: disabled ? 'default' : 'pointer',
     opacity: visible ? (disabled ? 0.35 : 1) : 0,
     pointerEvents: visible && !disabled ? 'auto' : 'none',
-    transition: 'opacity 0.1s',
+    transition: 'opacity 0.1s, background-color 0.1s',
     flexShrink: 0,
   }),
   repoBody: { background: 'var(--vscode-sideBar-background)' } as React.CSSProperties,
+  aggSectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '6px 12px 4px',
+    fontSize: '11px',
+    fontWeight: 600,
+    color: 'var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground))',
+    opacity: 0.85,
+    borderTop: '1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.15))',
+    background: 'var(--vscode-sideBarSectionHeader-background, transparent)',
+  } as React.CSSProperties,
   upToDate: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)',
   } as React.CSSProperties,
@@ -1375,129 +2642,96 @@ const styles = {
     background: selected ? 'var(--vscode-list-inactiveSelectionBackground)' : 'transparent',
   }),
   commitRow: {
-    display: 'grid',
-    gridTemplateColumns: '48px 1fr auto',
-    gridTemplateRows: 'auto auto',
-    gap: '0 8px',
-    padding: '7px 12px',
+    display: 'flex',
     alignItems: 'center',
+    gap: '8px',
+    padding: '7px 12px',
     cursor: 'pointer',
     boxSizing: 'border-box',
     userSelect: 'none' as const,
+    minWidth: 0,
+    overflow: 'hidden',
+  } as React.CSSProperties,
+  commitLeft: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'flex-start',
+    gap: '2px',
+    flexShrink: 0,
   } as React.CSSProperties,
   commitHash: {
     fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: '10px',
-    color: 'var(--vscode-descriptionForeground)', gridRow: '1', gridColumn: '1',
-    display: 'flex', alignItems: 'center',
+    color: 'var(--vscode-descriptionForeground)',
+    display: 'flex', alignItems: 'center', minWidth: '46px',
+    lineHeight: '14px',
+  } as React.CSSProperties,
+  commitDirectionBadge: (isIncoming: boolean): React.CSSProperties => ({
+    ...styles.directionBadge(isIncoming ? PULL_COLOR : PUSH_COLOR),
+    whiteSpace: 'nowrap',
+    fontSize: '9px',
+    lineHeight: '13px',
+    padding: '1px 4px',
+    borderRadius: '3px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    flexShrink: 0,
+  }),
+  commitInfo: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    flex: 1,
+    minWidth: 0,
+    gap: '2px',
   } as React.CSSProperties,
   commitMessage: {
-    fontSize: '12px', fontWeight: 500, gridRow: '1', gridColumn: '2',
+    fontSize: '12px', fontWeight: 500,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+    minWidth: 0,
+    lineHeight: '16px',
+    display: 'block',
   } as React.CSSProperties,
   commitMeta: {
-    fontSize: '10px', color: 'var(--vscode-descriptionForeground)', gridRow: '2', gridColumn: '2',
+    fontSize: '10px', color: 'var(--vscode-descriptionForeground)',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-    display: 'flex', alignItems: 'center',
+    display: 'flex', alignItems: 'center', minWidth: 0,
+    lineHeight: '14px',
+  } as React.CSSProperties,
+  commitMetaText: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    minWidth: 0,
+    flexShrink: 1,
   } as React.CSSProperties,
   commitStats: {
     display: 'inline-flex',
     alignItems: 'center',
     flexShrink: 0,
+    whiteSpace: 'nowrap' as const,
   } as React.CSSProperties,
   statAdd: { color: 'var(--vscode-gitDecoration-addedResourceForeground)' } as React.CSSProperties,
   statDel: { color: 'var(--vscode-gitDecoration-deletedResourceForeground)' } as React.CSSProperties,
-  commitActions: (visible: boolean): React.CSSProperties => ({
-    gridRow: '1 / 3', gridColumn: '3',
-    display: 'flex', alignItems: 'center', gap: '4px', alignSelf: 'center',
-    opacity: visible ? 1 : 0, transition: 'opacity 0.1s',
-  }),
+  commitActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    flexShrink: 0,
+    marginLeft: 'auto',
+  } as React.CSSProperties,
   actionBtn: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     background: 'transparent', border: 'none',
     color: 'var(--vscode-foreground)',
-    cursor: 'pointer', padding: '2px', borderRadius: '3px',
+    cursor: 'pointer', padding: '2px 4px', borderRadius: '3px',
+    fontSize: '13px',
   } as React.CSSProperties,
   commitDetails: {
+    borderTop: '1px solid var(--vscode-panel-border)',
     paddingBottom: '6px',
   } as React.CSSProperties,
-  messagePanel: {
-    padding: '8px 26px',
-    borderBottom: '1px dashed var(--vscode-panel-border)',
-  } as React.CSSProperties,
-  bodyBlock: {
-    marginBottom: 0,
-    color: 'var(--vscode-foreground)',
-    fontFamily: 'var(--vscode-editor-font-family)',
-  } as React.CSSProperties,
-  bodyText: {
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    fontSize: '11px',
-    lineHeight: 1.45,
-  } as React.CSSProperties,
-  footerText: (withTopBorder: boolean): React.CSSProperties => ({
-    margin: withTopBorder ? '8px 0 0' : 0,
-    paddingTop: withTopBorder ? 8 : 0,
-    borderTop: withTopBorder ? '1px dashed var(--vscode-panel-border)' : 'none',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    fontFamily: 'var(--vscode-editor-font-family)',
-    fontSize: '11px',
-    lineHeight: 1.45,
-  }),
   fileListRoot: {
     background: 'var(--vscode-sideBar-background)',
   } as React.CSSProperties,
-  fileListDescription: {
-    padding: '8px 12px 6px',
-    color: 'var(--vscode-descriptionForeground)',
-    fontSize: '11px',
-  } as React.CSSProperties,
-  filesHeader: {
-    borderBottom: '1px solid var(--vscode-panel-border)',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '5px 10px 5px 16px',
-    minHeight: 30,
-    boxSizing: 'border-box',
-  } as React.CSSProperties,
-  filesTitle: {
-    color: 'var(--vscode-descriptionForeground)',
-    fontSize: '11px',
-    fontWeight: 500,
-    minWidth: 54,
-  } as React.CSSProperties,
-  filesHeaderActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '2px',
-  } as React.CSSProperties,
-  expandBtns: {
-    display: 'flex',
-    gap: '2px',
-  } as React.CSSProperties,
-  viewToggle: {
-    display: 'flex',
-    gap: '2px',
-    marginLeft: '4px',
-    paddingLeft: '4px',
-    borderLeft: '1px solid var(--vscode-panel-border)',
-  } as React.CSSProperties,
-  toolbarButton: (active: boolean, disabled: boolean): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '2px 4px',
-    border: 'none',
-    borderRadius: '3px',
-    background: active ? 'var(--vscode-toolbar-activeBackground)' : 'transparent',
-    color: disabled
-      ? 'var(--vscode-disabledForeground, var(--vscode-descriptionForeground))'
-      : active ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
-    cursor: disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.3 : 1,
-  }),
   treeRoot: {
     padding: '2px 0',
   } as React.CSSProperties,
