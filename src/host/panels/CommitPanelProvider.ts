@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
-import { WorkspaceGitManager, type DataInvalidationEvent } from '../git/WorkspaceGitManager';
+import { WorkspaceGitManager, buildRepoId, type DataInvalidationEvent } from '../git/WorkspaceGitManager';
 import type { GitService } from '../git/GitService';
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
@@ -2587,13 +2587,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled by user safety check' });
           return;
         }
-        if (repo.kind !== 'svn') {
-          const safeToPush = await this.checkUnpushedSubmodules(msg.repoId);
-          if (!safeToPush) {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
-            return;
-          }
-        }
         try {
           const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
           await vscode.window.withProgress(
@@ -2688,14 +2681,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             );
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'No remote configured' });
             return;
-          }
-
-          for (const r of msg.repos) {
-            const safeToPush = await this.checkUnpushedSubmodules(r.repoId);
-            if (!safeToPush) {
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
-              return;
-            }
           }
         }
         const runMultiCommit = async (): Promise<void> => {
@@ -3044,12 +3029,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const startedAt = Date.now();
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-
-        const safeToPush = await this.checkUnpushedSubmodules(msg.repoId);
-        if (!safeToPush) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
-          return;
-        }
 
         const repoMeta = this.manager.getRepoMeta(msg.repoId);
         const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
@@ -4695,10 +4674,24 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating all submodules…'), cancellable: false },
           async () => {
             try {
-              const parentRepos = this.manager.getRepoMetas()
-                .filter(m => (m.kind ?? 'git') === 'git' && !m.isSubmodule && !m.isWorktree && (!msg.parentRepoId || m.id === msg.parentRepoId))
-                .map(m => this.manager.getRepo(m.id))
-                .filter((r): r is GitService => !!r && r.kind === 'git');
+              let parentRepos: GitService[] = [];
+              if (msg.parentRepoId) {
+                const targetRepo = this.manager.getRepo(msg.parentRepoId);
+                if (targetRepo && targetRepo.kind === 'git') {
+                  parentRepos = [targetRepo as GitService];
+                } else {
+                  throw new Error(t('Repository not found: {0}', msg.parentRepoId));
+                }
+              } else {
+                parentRepos = this.manager.getRepoMetas()
+                  .filter(m => {
+                    if ((m.kind ?? 'git') !== 'git' || m.isWorktree) return false;
+                    const hasGitmodules = fs.existsSync(path.join(m.rootPath, '.gitmodules'));
+                    return hasGitmodules || (!m.isSubmodule && !m.parentRepoId);
+                  })
+                  .map(m => this.manager.getRepo(m.id))
+                  .filter((r): r is GitService => !!r && r.kind === 'git');
+              }
               for (const repo of parentRepos) {
                 await repo.updateAllSubmodules(msg.recursive ?? true, msg.init ?? true);
               }
@@ -4821,7 +4814,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         // 探测子模块是否有未提交修改或未推送提交风险
         let riskWarning = '';
         try {
-          const allSubs = await this.manager.getAllSubmodules();
+          const allSubs = await this.manager.getAllSubmodules(true);
           const pGroup = allSubs.find(g => g.repoId === msg.parentRepoId);
           const targetSub = pGroup?.submodules.find(s => s.path === msg.submodulePath);
           if (targetSub) {
@@ -5262,7 +5255,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (visited.has(curId)) continue;
         visited.add(curId);
 
-        const parentGroup = allSubs.find(g => g.repoId === curId);
+        const targetGitId = curId.endsWith('::git') ? curId : buildRepoId(curId, 'git');
+        const parentGroup = allSubs.find(g => g.repoId === curId || g.repoId === targetGitId);
         if (!parentGroup) continue;
 
         for (const sub of parentGroup.submodules) {

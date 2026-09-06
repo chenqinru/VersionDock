@@ -152,7 +152,7 @@ function normalizePathForId(fsPath: string): string {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
-function buildRepoId(rootPath: string, kind: RepoKind): string {
+export function buildRepoId(rootPath: string, kind: RepoKind): string {
   return `${normalizePathForId(rootPath)}::${kind}`;
 }
 
@@ -1607,7 +1607,12 @@ export class WorkspaceGitManager implements vscode.Disposable {
                     headCommit = vsRepo.state.HEAD.commit.slice(0, 8);
                   }
                   unpushedCount = vsRepo.state.HEAD.ahead ?? 0;
-                  isDirty = (vsRepo.state.workingTreeChanges.length + vsRepo.state.indexChanges.length) > 0;
+                  isDirty = (
+                    vsRepo.state.workingTreeChanges.length +
+                    vsRepo.state.indexChanges.length +
+                    (vsRepo.state.untrackedChanges?.length ?? 0) +
+                    (vsRepo.state.mergeChanges?.length ?? 0)
+                  ) > 0;
                 } else {
                   // 2. 其次从 VersionDock 自身已发布的最近一次状态缓存获取（0ms）
                   const cachedStatus = this.lastPublishedStatus?.repos.find(
@@ -1691,6 +1696,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
               return {
                 ...entry,
+                repoId: subRepoId,
                 absPath,
                 headCommit,
                 parentRepoId: repoId,

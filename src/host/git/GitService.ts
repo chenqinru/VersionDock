@@ -4067,13 +4067,52 @@ export class GitService {
     });
   }
 
+  private collectSubmodulePathsRecursive(basePath: string): string[] {
+    const gitmodulesPath = path.join(basePath, '.gitmodules');
+    if (!fs.existsSync(gitmodulesPath)) return [];
+    const results: string[] = [];
+    try {
+      const content = fs.readFileSync(gitmodulesPath, 'utf8');
+      const lines = content.split('\n');
+      for (const line of lines) {
+        const m = line.match(/^\s*path\s*=\s*(.+)$/);
+        if (m) {
+          const subRelPath = m[1].trim();
+          const subAbsPath = path.resolve(basePath, subRelPath);
+          results.push(subAbsPath);
+          results.push(...this.collectSubmodulePathsRecursive(subAbsPath));
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return results;
+  }
+
   async resolveSubmoduleConflict(submodulePath: string, side: 'ours' | 'theirs'): Promise<void> {
     const normPath = this.normalizeRepoPath(submodulePath);
     const subAbsPath = path.join(this.rootPath, normPath);
     return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
-      const pathspec = this.literalPathspec(submodulePath);
-      await this.git.raw(['checkout', `--${side}`, '--', pathspec]);
-      await this.git.raw(['add', '--', pathspec]);
+      // 1. 从 git ls-files -u 读取 stage 2 (ours) 或 stage 3 (theirs) 的精确 SHA
+      const targetStage = side === 'ours' ? '2' : '3';
+      const rawLs = await this.git.raw(['ls-files', '-u', '--', this.literalPathspec(submodulePath)]).catch(() => '');
+      let targetSha: string | undefined;
+      for (const line of rawLs.split(/\r?\n/)) {
+        // 格式: <mode> <sha> <stage>\t<path>
+        const tabIdx = line.indexOf('\t');
+        if (tabIdx === -1) continue;
+        const meta = line.slice(0, tabIdx).trim();
+        const parts = meta.split(/\s+/);
+        if (parts.length >= 3 && parts[2] === targetStage) {
+          targetSha = parts[1];
+          break;
+        }
+      }
+      if (!targetSha) {
+        throw new Error(`Cannot find ${side} version (stage ${targetStage}) for submodule conflict at "${submodulePath}"`);
+      }
+      // 2. 用 git update-index --cacheinfo 写入选定指针，彻底解决 conflict
+      await this.git.raw(['update-index', '--cacheinfo', '160000', targetSha, normPath]);
     });
   }
 
@@ -4114,7 +4153,11 @@ export class GitService {
   }
 
   async updateAllSubmodules(recursive = true, init = true): Promise<void> {
-    return withGitWriteLock(this.rootPath, async () => {
+    const targetSubmodulePaths = recursive
+      ? this.collectSubmodulePathsRecursive(this.rootPath)
+      : (await this.getSubmoduleList().catch(() => [])).map(e => path.join(this.rootPath, this.normalizeRepoPath(e.path)));
+
+    return withGitWriteLocks([this.rootPath, ...targetSubmodulePaths], async () => {
       // 对齐所有子模块至父仓库 HEAD 记录时，若有子模块指针已被暂存，先将暂存区指针恢复至 HEAD
       const entries = await this.getSubmoduleList().catch(() => []);
       for (const entry of entries) {
