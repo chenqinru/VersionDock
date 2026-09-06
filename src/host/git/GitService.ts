@@ -96,6 +96,18 @@ export interface CommitMessageHistoryEntry {
   timestamp: number;
 }
 
+export interface DetailedUpdateCommit {
+  hash: string;
+  shortHash: string;
+  message: string;
+  fullMessage: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  committerDate: string;
+  parents: string[];
+}
+
 export interface MergeCommitResult {
   sourceBranch?: string;
   targetBranch: string;
@@ -1289,7 +1301,7 @@ export class GitService {
     } satisfies GitUpdateSnapshot;
   }
 
-  async getUpdateCommitHashes(snapshot: VcsUpdateSnapshot): Promise<string[]> {
+  async getUpdateCommitsDetailed(snapshot: VcsUpdateSnapshot): Promise<DetailedUpdateCommit[]> {
     if (snapshot.kind !== 'git' || snapshot.repoId !== this.repoId) return [];
     if (!snapshot.upstreamRef || !snapshot.beforeHeadHash) return [];
 
@@ -1303,12 +1315,46 @@ export class GitService {
     ]).catch(() => '')).trim();
     if (!afterUpstreamHash) return [];
 
+    const GS = '\x1D';
+    const RS = '\x1E';
     const raw = await this.git.raw([
       'log',
-      '--format=%H',
+      `--format=%x1E%H%x1D%h%x1D%s%x1D%B%x1D%aN%x1D%aE%x1D%aI%x1D%cI%x1D%P`,
       `${this.safeRevisionArg(snapshot.beforeHeadHash)}..${this.safeRevisionArg(afterUpstreamHash)}`,
     ]);
-    return raw.trim().split('\n').map(hash => hash.trim()).filter(Boolean);
+
+    const commits: DetailedUpdateCommit[] = [];
+    const entries = raw.split(RS).filter(Boolean);
+    for (const entry of entries) {
+      const parts = entry.split(GS);
+      const hash = parts[0]?.trim();
+      if (!hash) continue;
+      const shortHash = parts[1]?.trim() || hash.slice(0, 7);
+      const message = parts[2]?.trim() ?? '';
+      const fullMessage = parts[3]?.trim() ?? message;
+      const authorName = parts[4]?.trim() ?? '';
+      const authorEmail = parts[5]?.trim() ?? '';
+      const authorDate = parts[6]?.trim() ?? '';
+      const committerDate = parts[7]?.trim() ?? '';
+      const parents = parts[8] ? parts[8].trim().split(' ').filter(Boolean) : [];
+      commits.push({
+        hash,
+        shortHash,
+        message,
+        fullMessage,
+        authorName,
+        authorEmail,
+        authorDate,
+        committerDate,
+        parents,
+      });
+    }
+    return commits;
+  }
+
+  async getUpdateCommitHashes(snapshot: VcsUpdateSnapshot): Promise<string[]> {
+    const detailed = await this.getUpdateCommitsDetailed(snapshot);
+    return detailed.map(c => c.hash);
   }
 
   async pullBranch(branchName: string): Promise<string> {

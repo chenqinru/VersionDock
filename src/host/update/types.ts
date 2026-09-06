@@ -20,4 +20,11 @@ export type VcsUpdateSnapshot = GitUpdateSnapshot | SvnUpdateSnapshot;
 export type UpdateCommitSelection = {
   repoId: string;
   hash: string;
+  message?: string;
+  authorName?: string;
+  authorEmail?: string;
+  authorDate?: string;
+  committerDate?: string;
+  parents?: string[];
+  files?: Array<{ path: string; status: string; added?: number; removed?: number }>;
 };

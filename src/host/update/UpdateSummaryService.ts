@@ -207,14 +207,41 @@ export class UpdateSummaryService {
       }
 
       try {
-        const hashes = await repo.getUpdateCommitHashes(snapshot);
-        const commits = hashes.map(hash => ({ repoId: target.repoId, hash }));
+        let detailedCommits: Array<{
+          hash: string;
+          message?: string;
+          fullMessage?: string;
+          authorName?: string;
+          authorEmail?: string;
+          authorDate?: string;
+          committerDate?: string;
+          parents?: string[];
+        }> = [];
+
+        if (repo.kind === 'git') {
+          detailedCommits = await repo.getUpdateCommitsDetailed(snapshot);
+        } else {
+          const hashes = await repo.getUpdateCommitHashes(snapshot);
+          detailedCommits = hashes.map(hash => ({ hash }));
+        }
+
         const filesByCommit = await mapWithConcurrency(
-          hashes,
+          detailedCommits.map(c => c.hash),
           UPDATE_DETAILS_CONCURRENCY,
           hash => repo.getCommitFilesForLogDetail(hash),
         );
         const files = Array.from(new Set(filesByCommit.flatMap(entries => entries.map(entry => entry.path))));
+        const commits: UpdateCommitSelection[] = detailedCommits.map((c, i) => ({
+          repoId: target.repoId,
+          hash: c.hash,
+          message: c.fullMessage ?? c.message,
+          authorName: c.authorName,
+          authorEmail: c.authorEmail,
+          authorDate: c.authorDate,
+          committerDate: c.committerDate,
+          parents: c.parents,
+          files: filesByCommit[i],
+        }));
         return { repoId: target.repoId, tracked: true, ok: true, output, commits, files };
       } catch (error: unknown) {
         const summaryError = errorText(error);
