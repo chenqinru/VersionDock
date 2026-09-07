@@ -101,17 +101,20 @@ async function runStartupRefresh(
 
     const status = await manager.getAllStatusesFresh();
     badge.update(status);
-    await maybeNotifyConflicts(status);
-    await incomingCommitsNotifier.checkAndNotify();
-    await unpushedCommitsNotifier.checkAndNotify();
     logger.info('Startup', 'Repository refresh completed', {
       repositoryCount: status.repos.length,
       durationMs: Date.now() - startedAt,
     });
+
+    // Run notifications asynchronously in background so startup lifecycle and UI spinners finish immediately
+    void maybeNotifyConflicts(status).catch(err => logger.error('Startup', 'Failed to notify conflicts', err));
+    void incomingCommitsNotifier.checkAndNotify().catch(err => logger.error('Startup', 'Failed to check incoming commits', err));
+    void unpushedCommitsNotifier.checkAndNotify().catch(err => logger.error('Startup', 'Failed to check unpushed commits', err));
   } catch (error) {
     logger.error('Startup', 'Repository refresh failed', error, {
       durationMs: Date.now() - startedAt,
     });
+    badge.stopLoading();
   }
 }
 

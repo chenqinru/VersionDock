@@ -383,7 +383,7 @@ export class GitService {
     public readonly repoId: string,
     public readonly rootPath: string,
     private readonly suppressStatusUpdates?: SuppressStatusUpdates,
-    private readonly refreshStatus?: RefreshStatus,
+    protected readonly refreshStatus?: RefreshStatus,
     private readonly publishMissingRemote?: PublishMissingRemote,
     protected readonly logger?: VersionDockLogger,
   ) {

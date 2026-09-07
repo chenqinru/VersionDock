@@ -31,6 +31,9 @@ const SVN_COMMIT_FILES_CACHE_LIMIT = 200;
 const SVN_BLAME_CACHE_LIMIT = 20;
 const SVN_AUTH_REPROMPT_DELAY_MS = 30_000;
 const SVN_INCOMING_STATE_CACHE_TTL_MS = 60_000;
+const SVN_INCOMING_STATE_FAILURE_RETRY_MS = 60_000;
+const SVN_REMOTE_BRANCHES_CACHE_TTL_MS = 300_000;
+const SVN_GRAPH_LOG_SAFE_LIMIT = 100;
 const SVN_MAX_INLINE_DIFF_FILE_BYTES = 8 * 1024 * 1024;
 const SVN_AUTH_CACHE_ARGS = [
   '--config-option', 'servers:global:store-passwords=yes',
@@ -360,6 +363,8 @@ export class SvnService extends GitService {
   private localRevisionMetadataMtimeMs?: number;
   private pendingRevert?: PendingSvnRevert;
   private pendingMerge?: PendingSvnMerge;
+  private lastIncomingStateFailureTime = 0;
+  private remoteBranchesCache?: { branches: string[]; hasTrunk: boolean; timestamp: number };
 
   constructor(
     repoId: string,
@@ -966,6 +971,16 @@ export class SvnService extends GitService {
     ) {
       return cached;
     }
+    if (!options.force && Date.now() - this.lastIncomingStateFailureTime < SVN_INCOMING_STATE_FAILURE_RETRY_MS) {
+      return cached ?? {
+        url: info.url,
+        localRevision,
+        remoteRevision: undefined,
+        behind: 0,
+        incomingRevisions: new Set<string>(),
+        checkedAt: Date.now(),
+      };
+    }
     if (this.incomingStateTask && this.incomingStateTaskUrl === info.url) return this.incomingStateTask;
     if (this.incomingStateTask) {
       this.incomingStateGeneration++;
@@ -975,7 +990,7 @@ export class SvnService extends GitService {
 
     const generation = this.incomingStateGeneration;
     const task = (async (): Promise<SvnIncomingState> => {
-      const remoteStatusRaw = await this.svn(['status', '-u', '--xml'], { timeout: 30_000 });
+      const remoteStatusRaw = await this.svn(['status', '-u', '--xml'], { timeout: 20_000 });
       const remoteStatus = this.parseRemoteStatus(remoteStatusRaw);
       const remoteRevision = remoteStatus.remoteRevision ?? await this.getRemoteHeadRevision();
       const incomingRevisions = new Set<string>();
@@ -993,7 +1008,7 @@ export class SvnService extends GitService {
             ...(!needsFallbackBase || rootRevision === undefined ? [] : [rootRevision]),
           );
           if (Number.isFinite(fallbackBase)) {
-            const raw = await this.svn(['log', '--xml', '-v', '-r', `${fallbackBase + 1}:HEAD`], { timeout: 30_000 });
+            const raw = await this.svn(['log', '--xml', '-v', '-r', `${fallbackBase + 1}:HEAD`], { timeout: 20_000 });
             for (const [revisionText, changedPaths] of this.parseChangedPathsByRevision(raw, info)) {
               const revision = parseRevisionNumber(revisionText);
               if (revision === undefined) continue;
@@ -1020,7 +1035,10 @@ export class SvnService extends GitService {
         incomingRevisions,
         checkedAt: Date.now(),
       };
-      if (this.incomingStateGeneration === generation) this.incomingStateCache = state;
+      if (this.incomingStateGeneration === generation) {
+        this.incomingStateCache = state;
+        this.lastIncomingStateFailureTime = 0;
+      }
       return state;
     })();
 
@@ -1028,6 +1046,9 @@ export class SvnService extends GitService {
     this.incomingStateTaskUrl = info.url;
     try {
       return await task;
+    } catch (error) {
+      this.lastIncomingStateFailureTime = Date.now();
+      throw error;
     } finally {
       if (this.incomingStateTask === task) {
         this.incomingStateTask = undefined;
@@ -1476,12 +1497,29 @@ export class SvnService extends GitService {
     return true;
   }
 
-  async getCurrentBranch(): Promise<BranchInfo> {
+  async getCurrentBranch(options?: { probeIncoming?: boolean }): Promise<BranchInfo> {
     const info = await this.getInfo();
     const ref = this.displayRef(info);
-    const incoming = await this.getIncomingState(info).catch(() => undefined);
-    const behind = incoming?.behind ?? 0;
+    let incoming = this.incomingStateCache;
     const localRevision = incoming?.localRevision ?? this.getEffectiveLocalRevision(info);
+
+    if (options?.probeIncoming) {
+      incoming = await this.getIncomingState(info).catch(() => incoming);
+    } else if (
+      !incoming
+      || incoming.url !== info.url
+      || incoming.localRevision !== localRevision
+      || Date.now() - incoming.checkedAt >= SVN_INCOMING_STATE_CACHE_TTL_MS
+    ) {
+      void this.getIncomingState(info).then(freshIncoming => {
+        if (freshIncoming.behind !== (incoming?.behind ?? 0)) {
+          void this.refreshStatus?.();
+        }
+      }).catch(() => {});
+    }
+
+    const behind = incoming?.behind ?? 0;
+    const effectiveRevision = incoming?.localRevision ?? localRevision;
     return {
       repoId: this.repoId,
       name: ref.name,
@@ -1491,7 +1529,7 @@ export class SvnService extends GitService {
       upstream: info.rootUrl,
       aheadBehind: behind > 0 ? { ahead: 0, behind } : undefined,
       detachedTag: ref.detachedTag,
-      lastCommitHash: localRevision !== undefined ? `r${localRevision}` : undefined,
+      lastCommitHash: effectiveRevision !== undefined ? `r${effectiveRevision}` : undefined,
     };
   }
 
@@ -1558,12 +1596,42 @@ export class SvnService extends GitService {
         isRemote: false,
       });
     };
-    const trunk = await this.svn(['ls', '--xml', '^/trunk']).then(() => true).catch(() => false);
-    if (trunk) addBranch('trunk');
-    const rawBranches = await this.svn(['ls', '--xml', '^/branches']).catch(() => '');
-    this.parseListEntries(rawBranches)
-      .filter(entry => entry.kind === 'dir')
-      .forEach(entry => addBranch(entry.name));
+    if (
+      this.remoteBranchesCache
+      && Date.now() - this.remoteBranchesCache.timestamp < SVN_REMOTE_BRANCHES_CACHE_TTL_MS
+    ) {
+      if (this.remoteBranchesCache.hasTrunk) addBranch('trunk');
+      this.remoteBranchesCache.branches.forEach(name => addBranch(name));
+      return branches;
+    }
+
+    let hasTrunk = false;
+    const discoveredBranches: string[] = [];
+    try {
+      const trunk = await this.svn(['ls', '--xml', '^/trunk']).then(() => true).catch(() => false);
+      if (trunk) {
+        hasTrunk = true;
+        addBranch('trunk');
+      }
+      const rawBranches = await this.svn(['ls', '--xml', '^/branches']).catch(() => '');
+      this.parseListEntries(rawBranches)
+        .filter(entry => entry.kind === 'dir')
+        .forEach(entry => {
+          discoveredBranches.push(entry.name);
+          addBranch(entry.name);
+        });
+      this.remoteBranchesCache = {
+        hasTrunk,
+        branches: discoveredBranches,
+        timestamp: Date.now(),
+      };
+    } catch {
+      this.remoteBranchesCache = {
+        hasTrunk: false,
+        branches: [],
+        timestamp: Date.now(),
+      };
+    }
     return branches;
   }
 
@@ -1604,12 +1672,13 @@ export class SvnService extends GitService {
     if (limit !== undefined && limit <= 0) return [];
     const info = await this.getInfo();
     const localRevision = await this.resolveEffectiveLocalRevision(info);
+    const safeLimit = limit === undefined ? SVN_GRAPH_LOG_SAFE_LIMIT : Math.min(limit, SVN_GRAPH_LOG_SAFE_LIMIT);
     const args = [
       'log',
       '--xml',
       '-r',
       'HEAD:1',
-      ...(limit === undefined ? [] : ['--limit', String(limit)]),
+      ...(safeLimit === undefined ? [] : ['--limit', String(safeLimit)]),
     ];
     const raw = await this.svn(args);
     const entries = this.parseLogEntries(raw);
@@ -1631,7 +1700,10 @@ export class SvnService extends GitService {
     if (!this.matchesRefFilter(info, opts?.filterBranch)) return [];
     const filterText = opts?.filterText?.trim() ?? '';
     const revisionSearch = filterText ? parseRevisionNumber(filterText) : undefined;
-    const incoming = await this.getIncomingState(info).catch(() => undefined);
+    const incoming = this.incomingStateCache;
+    if (!incoming) {
+      void this.getIncomingState(info).catch(() => {});
+    }
     const localRevision = incoming?.localRevision ?? this.getEffectiveLocalRevision(info);
     const selectionRevisions = opts?.filterPath && opts.lineRange
       ? await this.getSelectionHistoryRevisions(opts.filterPath, opts.lineRange)

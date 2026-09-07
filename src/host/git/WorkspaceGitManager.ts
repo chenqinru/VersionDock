@@ -2046,7 +2046,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
     for (const r of currentBranches) {
       if (r.status !== 'fulfilled') continue;
       const cur = r.value;
-      if (!cur.detachedTag && !cur.detachedHash) continue; // normal branch — already handled by getBranches()
+      const hasAnyBranchForRepo = branches.some(b => b.repoId === cur.repoId);
+      if (!cur.detachedTag && !cur.detachedHash && hasAnyBranchForRepo) continue; // normal branch — already handled by getBranches()
       // Remove any existing entry for this repoId that might have isHead:true (safety)
       const idx = branches.findIndex(b => b.repoId === cur.repoId && b.isHead);
       if (idx >= 0) branches.splice(idx, 1);
@@ -2125,8 +2126,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
         const kind = this.repoMetas.get(repo.repoId)?.kind ?? 'git';
         // Respect the user-configured maxCommits while ensuring a sensible minimum (2,000)
         // for stable lane geometry, preventing excessive memory and IPC overhead.
+        // For linear SVN repositories over remote XML, keep a safe upper bound (100)
+        // to prevent 30s+ timeouts on massive histories.
         const gitCap = Math.max(maxCommits, 2000);
-        return repo.getGraphLog(kind === 'svn' ? maxCommits : gitCap);
+        return repo.getGraphLog(kind === 'svn' ? Math.min(maxCommits, 100) : gitCap);
       }),
     );
     const graphLogs = results
