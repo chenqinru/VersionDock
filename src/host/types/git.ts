@@ -27,10 +27,17 @@ export interface SubmoduleEntry {
   indexCommit?: string;
   branch?: string;
   syncStatus?: SubmoduleSyncStatus;
+  conflictStages?: {
+    base?: string;
+    ours?: string;
+    theirs?: string;
+  };
   isDetached?: boolean;
   currentBranch?: string;
   isDirty: boolean;
   unpushedCount?: number;
+  isTypeChange?: boolean;
+  companionPath?: string;
 }
 
 export interface SubmoduleItem extends SubmoduleEntry {

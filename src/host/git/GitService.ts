@@ -1,5 +1,5 @@
 import { type SimpleGit, type TaskOptions } from 'simple-git';
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -330,6 +330,107 @@ function gitErrorDetail(error: unknown): string {
 export type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
 export type SuppressStatusUpdates = <T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string) => Promise<T>;
 export type RefreshStatus = () => Promise<void>;
+
+export interface GitmoduleEntry {
+  name: string;
+  path: string;
+  url?: string;
+  branch?: string;
+}
+
+export function parseGitConfigEntries(rawConfigZ: string): GitmoduleEntry[] {
+  const entries = rawConfigZ.split('\0').filter(Boolean);
+  const map = new Map<string, GitmoduleEntry>();
+  for (const entry of entries) {
+    const nl = entry.indexOf('\n');
+    if (nl === -1) continue;
+    const key = entry.slice(0, nl);
+    const val = entry.slice(nl + 1);
+    if (!key.startsWith('submodule.')) continue;
+    const lastDot = key.lastIndexOf('.');
+    if (lastDot <= 'submodule.'.length - 1) continue;
+    const name = key.slice('submodule.'.length, lastDot);
+    const prop = key.slice(lastDot + 1);
+    let item = map.get(name);
+    if (!item) {
+      item = { name, path: '' };
+      map.set(name, item);
+    }
+    if (prop === 'path') item.path = val;
+    else if (prop === 'url') item.url = val;
+    else if (prop === 'branch') item.branch = val;
+  }
+  return Array.from(map.values()).filter(e => !!e.path);
+}
+
+export function unquoteGitConfigValue(val: string): string {
+  const trimmed = val.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+export function parseGitmodulesFileFallback(gitmodulesPath: string): GitmoduleEntry[] {
+  if (!fs.existsSync(gitmodulesPath)) return [];
+  try {
+    const raw = fs.readFileSync(gitmodulesPath, 'utf8');
+    const map = new Map<string, GitmoduleEntry>();
+    let currentName = '';
+    for (const line of raw.split('\n')) {
+      const sectionMatch = line.match(/^\[submodule\s+"(.+)"\]/);
+      if (sectionMatch) {
+        currentName = sectionMatch[1];
+        continue;
+      }
+      if (!currentName) continue;
+      const kvMatch = line.match(/^\s*(\w+)\s*=\s*(.+)$/);
+      if (!kvMatch) continue;
+      const [, key, rawVal] = kvMatch;
+      const unquotedVal = unquoteGitConfigValue(rawVal);
+      let item = map.get(currentName);
+      if (!item) {
+        item = { name: currentName, path: '' };
+        map.set(currentName, item);
+      }
+      if (key === 'path') item.path = unquotedVal;
+      else if (key === 'url') item.url = unquotedVal;
+      else if (key === 'branch') item.branch = unquotedVal;
+    }
+    return Array.from(map.values()).filter(e => !!e.path);
+  } catch {
+    return [];
+  }
+}
+
+export function parseGitmodulesFileSync(gitmodulesPath: string): GitmoduleEntry[] {
+  if (!fs.existsSync(gitmodulesPath)) return [];
+  try {
+    const raw = execFileSync('git', ['config', '-z', '--file', gitmodulesPath, '-l'], {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return parseGitConfigEntries(raw);
+  } catch {
+    return parseGitmodulesFileFallback(gitmodulesPath);
+  }
+}
+
+export async function parseGitmodulesFile(git: SimpleGit, gitmodulesPath: string): Promise<GitmoduleEntry[]> {
+  if (!fs.existsSync(gitmodulesPath)) return [];
+  try {
+    const raw = await git.raw(['config', '-z', '--file', gitmodulesPath, '-l']).catch(() => '');
+    if (!raw) return parseGitmodulesFileFallback(gitmodulesPath);
+    return parseGitConfigEntries(raw);
+  } catch {
+    return parseGitmodulesFileFallback(gitmodulesPath);
+  }
+}
 
 export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
@@ -3912,71 +4013,116 @@ export class GitService {
   /** Returns the set of relative paths that are gitlink entries (submodule pointers) in this repo. */
   private async getSubmoduleRelativePaths(): Promise<Set<string>> {
     const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
-    if (!fs.existsSync(gitmodulesPath)) return new Set();
-    try {
-      const raw = fs.readFileSync(gitmodulesPath, 'utf8');
-      const paths = new Set<string>();
-      for (const line of raw.split('\n')) {
-        const m = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
-        if (m) paths.add(m[1].trim());
-      }
-      return paths;
-    } catch {
-      return new Set();
-    }
+    const entries = await parseGitmodulesFile(this.git, gitmodulesPath);
+    return new Set(entries.map(e => e.path));
   }
 
   async getSubmoduleList(): Promise<SubmoduleEntry[]> {
     const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
-    if (!fs.existsSync(gitmodulesPath)) return [];
+    const hasGitmodules = fs.existsSync(gitmodulesPath);
 
-    // Parse .gitmodules to get names/paths/urls/branches
-    const raw = fs.readFileSync(gitmodulesPath, 'utf8');
-    const moduleMap = new Map<string, { name: string; path: string; url: string; branch?: string }>();
-    let currentName = '';
-    for (const line of raw.split('\n')) {
-      const sectionMatch = line.match(/^\[submodule "(.+)"\]/);
-      if (sectionMatch) { currentName = sectionMatch[1]; continue; }
-      if (!currentName) continue;
-      const kvMatch = line.match(/^\s+(\w+)\s*=\s*(.+)/);
-      if (!kvMatch) continue;
-      const [, key, value] = kvMatch;
-      if (!moduleMap.has(currentName)) moduleMap.set(currentName, { name: currentName, path: '', url: '' });
-      const entry = moduleMap.get(currentName)!;
-      if (key === 'path') entry.path = value.trim();
-      if (key === 'url') entry.url = value.trim();
-      if (key === 'branch') entry.branch = value.trim();
+    // 性能优化快速路径：若无 .gitmodules，先只检查是否有未合并的 160000 冲突项
+    // 避免在无 submodule 的大型 Monorepo 每次全量遍历 HEAD tree 和 stage
+    if (!hasGitmodules) {
+      const hasConflict = await this.hasUnmergedGitlinks();
+      if (!hasConflict) {
+        return [];
+      }
     }
 
-    // Run `git ls-tree -r HEAD`, `git ls-files --stage` and `git submodule status` in parallel
+    const parsedEntries = hasGitmodules ? await parseGitmodulesFile(this.git, gitmodulesPath) : [];
+    const moduleMap = new Map<string, { name: string; path: string; url: string; branch?: string }>();
+    for (const item of parsedEntries) {
+      moduleMap.set(item.name, {
+        name: item.name,
+        path: item.path,
+        url: item.url || '',
+        branch: item.branch,
+      });
+    }
+
+    // 收集所有已知的 submodule 相对路径
+    const knownPaths = parsedEntries.map(e => this.normalizeRepoPath(e.path));
+
+    // 始终合并暂存区未合并条目，提取 160000 gitlink 路径，并全局保留所有未合并条目用于伴生路径与类型变更检测
+    const unmergedLs = await this.git.raw(['ls-files', '-u', '-z']).catch(() => '');
+    const allUnmergedEntries: { mode: string; stage: string; path: string }[] = [];
+    for (const line of unmergedLs.split('\0')) {
+      if (!line) continue;
+      const tab = line.indexOf('\t');
+      if (tab === -1) continue;
+      const meta = line.slice(0, tab).trim();
+      const filePath = line.slice(tab + 1);
+      const parts = meta.split(/\s+/);
+      if (parts.length >= 3 && filePath) {
+        allUnmergedEntries.push({ mode: parts[0], stage: parts[2], path: filePath });
+        if (parts[0] === '160000') {
+          knownPaths.push(this.normalizeRepoPath(filePath));
+        }
+      }
+    }
+
+    const uniqueKnownPaths = Array.from(new Set(knownPaths));
+    if (uniqueKnownPaths.length === 0) {
+      return [];
+    }
+
+    // 针对已知子模块路径使用精准 pathspec 查询，免去全库全量遍历 HEAD tree 和 index
+    const pathspecs = uniqueKnownPaths.map(p => this.literalPathspec(p));
+
     const [lsTreeRaw, lsStageRaw, statusRaw] = await Promise.all([
-      this.git.raw(['ls-tree', '-r', 'HEAD']).catch(() => ''),
-      this.git.raw(['ls-files', '--stage']).catch(() => ''),
-      this.git.raw(['submodule', 'status']).catch(() => ''),
+      this.git.raw(['ls-tree', '-r', '-z', 'HEAD', '--', ...pathspecs]).catch(() => ''),
+      this.git.raw(['ls-files', '-z', '--stage', '--', ...pathspecs]).catch(() => ''),
+      this.git.raw(['submodule', 'status', '--', ...pathspecs]).catch(() => ''),
     ]);
 
     const parentHeadCommitMap = new Map<string, string>();
-    for (const line of lsTreeRaw.split('\n')) {
-      if (!line.startsWith('160000 commit ')) continue;
-      const tabIdx = line.indexOf('\t');
+    for (const entry of lsTreeRaw.split('\0')) {
+      if (!entry.startsWith('160000 commit ')) continue;
+      const tabIdx = entry.indexOf('\t');
       if (tabIdx === -1) continue;
-      const metaPart = line.slice(0, tabIdx).trim();
-      const subPath = line.slice(tabIdx + 1).trim();
+      const metaPart = entry.slice(0, tabIdx).trim();
+      const subPath = entry.slice(tabIdx + 1);
       const parts = metaPart.split(/\s+/);
-      if (parts.length >= 3) {
+      if (parts.length >= 3 && subPath) {
         parentHeadCommitMap.set(subPath, parts[2].slice(0, 8));
       }
     }
 
+    // Format: <mode> <hash> <stage>\t<path>\0
+    // Stage: 0 = normal, 1 = base, 2 = ours, 3 = theirs
     const recordedCommitMap = new Map<string, string>();
-    for (const line of lsStageRaw.split('\n')) {
-      // Format: 160000 <hash> 0 <path>
-      if (!line.startsWith('160000 ')) continue;
-      const parts = line.split(/\s+/);
-      if (parts.length >= 4) {
-        recordedCommitMap.set(parts.slice(3).join(' ').trim(), parts[1].slice(0, 8));
+    const conflictStagesMap = new Map<string, { base?: string; ours?: string; theirs?: string }>();
+
+    for (const entry of lsStageRaw.split('\0')) {
+      if (!entry) continue;
+      const tabIdx = entry.indexOf('\t');
+      if (tabIdx === -1) continue;
+      const metaPart = entry.slice(0, tabIdx).trim();
+      const finalPath = entry.slice(tabIdx + 1);
+      const parts = metaPart.split(/\s+/);
+      if (parts.length >= 3 && finalPath) {
+        const mode = parts[0];
+        const hash = parts[1].slice(0, 8);
+        const stage = parts[2];
+
+        if (mode === '160000') {
+          if (stage === '0') {
+            recordedCommitMap.set(finalPath, hash);
+          } else {
+            let conf = conflictStagesMap.get(finalPath);
+            if (!conf) {
+              conf = {};
+              conflictStagesMap.set(finalPath, conf);
+            }
+            if (stage === '1') conf.base = hash;
+            else if (stage === '2') conf.ours = hash;
+            else if (stage === '3') conf.theirs = hash;
+          }
+        }
       }
     }
+
     // Leading char: ' ' = initialized clean, '-' = not initialized, '+' = different commit, 'U' = conflict
     const statusMap = new Map<string, { flag: string; initialized: boolean; headCommit: string; isDirty: boolean }>();
     for (const line of statusRaw.split(/\r?\n/)) {
@@ -3992,9 +4138,13 @@ export class GitService {
       });
     }
 
+    const handledPaths = new Set<string>();
     const entries: SubmoduleEntry[] = [];
     for (const mod of moduleMap.values()) {
       if (!mod.path) continue;
+      const normModPath = this.normalizeRepoPath(mod.path);
+      handledPaths.add(normModPath);
+
       const subFullPath = path.join(this.rootPath, mod.path);
       const st = statusMap.get(mod.path);
       const indexRecorded = recordedCommitMap.get(mod.path);
@@ -4003,12 +4153,31 @@ export class GitService {
       const hasGit = fs.existsSync(path.join(subFullPath, '.git'));
       const initialized = st ? st.initialized : hasGit;
       const headCommit = st?.headCommit;
+      const conflictStages = conflictStagesMap.get(mod.path);
+
+      // 检查是否存在伴生路径冲突（如 dep~theirs）或同名类型变更冲突（普通文件/软链接）
+      let isTypeChange = false;
+      let companionPath: string | undefined;
+      const prefix = normModPath + '~';
+      for (const ue of allUnmergedEntries) {
+        const normUe = this.normalizeRepoPath(ue.path);
+        if (normUe === normModPath && ue.mode !== '160000') {
+          isTypeChange = true;
+          companionPath = ue.path;
+          break;
+        }
+        if (normUe.startsWith(prefix)) {
+          isTypeChange = true;
+          companionPath = ue.path;
+          break;
+        }
+      }
 
       let syncStatus: import('../types/git').SubmoduleSyncStatus = 'synced';
-      if (!initialized) {
-        syncStatus = 'uninitialized';
-      } else if (st?.flag === 'U') {
+      if (conflictStages || st?.flag === 'U' || isTypeChange) {
         syncStatus = 'conflict';
+      } else if (!initialized) {
+        syncStatus = 'uninitialized';
       } else if (st?.flag === '+' || (recorded && headCommit && !headCommit.startsWith(recorded) && !recorded.startsWith(headCommit))) {
         syncStatus = 'out-of-sync';
       }
@@ -4024,9 +4193,58 @@ export class GitService {
         recordedCommit: recorded,
         indexCommit: indexRecorded,
         syncStatus,
+        conflictStages,
         isDirty: st?.isDirty ?? false,
+        isTypeChange,
+        companionPath,
       });
     }
+
+    // 补充在 .gitmodules 中已不存在但暂存区存在未解决冲突的 gitlink 条目 (例如一方删除了 submodule)
+    for (const [conflictPath, conf] of conflictStagesMap.entries()) {
+      const normConflictPath = this.normalizeRepoPath(conflictPath);
+      if (handledPaths.has(normConflictPath)) continue;
+      handledPaths.add(normConflictPath);
+
+      const subFullPath = path.join(this.rootPath, conflictPath);
+      const st = statusMap.get(conflictPath);
+      const parentHeadRecorded = parentHeadCommitMap.get(conflictPath);
+      const hasGit = fs.existsSync(path.join(subFullPath, '.git'));
+      const headCommit = st?.headCommit;
+
+      let isTypeChange = false;
+      let companionPath: string | undefined;
+      const prefix = normConflictPath + '~';
+      for (const ue of allUnmergedEntries) {
+        const normUe = this.normalizeRepoPath(ue.path);
+        if (normUe === normConflictPath && ue.mode !== '160000') {
+          isTypeChange = true;
+          companionPath = ue.path;
+          break;
+        }
+        if (normUe.startsWith(prefix)) {
+          isTypeChange = true;
+          companionPath = ue.path;
+          break;
+        }
+      }
+
+      entries.push({
+        name: path.basename(conflictPath),
+        path: conflictPath,
+        url: '',
+        repoId: subFullPath,
+        initialized: st ? st.initialized : hasGit,
+        headCommit,
+        recordedCommit: parentHeadRecorded ?? conf.ours ?? conf.theirs ?? conf.base,
+        syncStatus: 'conflict',
+        conflictStages: conf,
+        isDirty: st?.isDirty ?? false,
+        isTypeChange,
+        companionPath,
+      });
+    }
+
     return entries;
   }
 
@@ -4038,9 +4256,12 @@ export class GitService {
     return this.submoduleGit;
   }
 
-  async addSubmodule(url: string, submodulePath: string, branch?: string): Promise<void> {
+  async addSubmodule(url: string, submodulePath: string, branch?: string, allowFileProtocol = false): Promise<void> {
     return withGitWriteLock(this.rootPath, async () => {
-      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'add'];
+      const args = ['submodule', 'add'];
+      if (allowFileProtocol) {
+        args.unshift('-c', 'protocol.file.allow=always');
+      }
       if (branch && branch.trim()) {
         args.push('-b', branch.trim());
       }
@@ -4051,12 +4272,41 @@ export class GitService {
 
   async syncSubmodule(submodulePath?: string): Promise<void> {
     return withGitWriteLock(this.rootPath, async () => {
-      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'sync'];
+      const args = ['submodule', 'sync'];
       if (submodulePath) {
         args.push('--', this.literalPathspec(submodulePath));
       }
       await this.getSubmoduleGit().raw(args);
     });
+  }
+
+  private async getModulesBase(): Promise<string> {
+    try {
+      const raw = await this.git.raw(['rev-parse', '--git-path', 'modules']).catch(() => '');
+      const trimmed = raw.trim();
+      if (trimmed) {
+        return path.isAbsolute(trimmed) ? trimmed : path.resolve(this.rootPath, trimmed);
+      }
+    } catch {
+      // fallback below
+    }
+    const dotGit = path.join(this.rootPath, '.git');
+    if (fs.existsSync(dotGit)) {
+      try {
+        const stat = fs.statSync(dotGit);
+        if (stat.isFile()) {
+          const content = fs.readFileSync(dotGit, 'utf8').trim();
+          const match = content.match(/^gitdir:\s*(.+)$/i);
+          if (match) {
+            const actualGitDir = path.resolve(this.rootPath, match[1].trim());
+            return path.join(actualGitDir, 'modules');
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return path.resolve(this.rootPath, '.git', 'modules');
   }
 
   async removeSubmodule(submodulePath: string): Promise<void> {
@@ -4086,21 +4336,17 @@ export class GitService {
     const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
     if (fs.existsSync(gitmodulesPath)) {
       try {
-        const raw = fs.readFileSync(gitmodulesPath, 'utf8');
-        let curName = '';
-        for (const line of raw.split('\n')) {
-          const sec = line.match(/^\s*\[submodule\s+"(.+?)"\]/);
-          if (sec) { curName = sec[1]; continue; }
-          const kv = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
-          if (kv && this.normalizeRepoPath(kv[1].trim()) === normPath && curName) {
-            submoduleName = curName;
-            break;
-          }
+        const entries = await parseGitmodulesFile(this.git, gitmodulesPath);
+        const match = entries.find(e => this.normalizeRepoPath(e.path) === normPath);
+        if (match?.name) {
+          submoduleName = match.name;
         }
       } catch {
         // ignore .gitmodules parse error
       }
     }
+
+    const modulesBase = await this.getModulesBase();
 
     return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
       // 1. git submodule deinit -f -- <path>
@@ -4108,7 +4354,6 @@ export class GitService {
       // 2. git rm -f -- <path>
       await this.git.raw(['rm', '-f', '--', this.literalPathspec(submodulePath)]);
       // 3. remove .git/modules/<name or path> safely
-      const modulesBase = path.resolve(this.rootPath, '.git', 'modules');
       const candidatesToClean = new Set<string>();
       const isSubmoduleMetaDir = (dir: string) => isSameOrChildPath(modulesBase, dir) && path.relative(modulesBase, dir) !== '';
 
@@ -4136,21 +4381,70 @@ export class GitService {
     });
   }
 
-  private collectSubmodulePathsRecursive(basePath: string): string[] {
+  async getDefaultRemoteUrl(): Promise<string | undefined> {
+    const remotes = await this.getRemotesWithUrls().catch(() => []);
+    const origin = remotes.find(r => r.name === 'origin') ?? remotes[0];
+    return origin?.fetchUrl || undefined;
+  }
+
+  collectSubmodulePathsRecursive(
+    basePath: string,
+    visited = new Set<string>(),
+    depth = 0
+  ): string[] {
+    const MAX_SUBMODULE_DEPTH = 10;
+    if (depth >= MAX_SUBMODULE_DEPTH) return [];
+
+    let realRoot = this.rootPath;
+    try {
+      realRoot = fs.realpathSync(this.rootPath);
+    } catch {
+      // ignore
+    }
+
+    if (depth === 0) {
+      try {
+        visited.add(fs.realpathSync(basePath));
+      } catch {
+        visited.add(basePath);
+      }
+    }
+
     const gitmodulesPath = path.join(basePath, '.gitmodules');
     if (!fs.existsSync(gitmodulesPath)) return [];
     const results: string[] = [];
     try {
-      const content = fs.readFileSync(gitmodulesPath, 'utf8');
-      const lines = content.split('\n');
-      for (const line of lines) {
-        const m = line.match(/^\s*path\s*=\s*(.+)$/);
-        if (m) {
-          const subRelPath = m[1].trim();
-          const subAbsPath = path.resolve(basePath, subRelPath);
-          results.push(subAbsPath);
-          results.push(...this.collectSubmodulePathsRecursive(subAbsPath));
+      const entries = parseGitmodulesFileSync(gitmodulesPath);
+      for (const entry of entries) {
+        const subRelPath = entry.path?.trim();
+        if (!subRelPath || subRelPath === '.') continue;
+
+        const subAbsPath = path.resolve(basePath, subRelPath);
+        const relToBase = path.relative(basePath, subAbsPath);
+        // 仅当相对路径真正跳出 basePath 时才跳过（避免误杀 ..vendor 等以 .. 开头的合法命名）
+        if (relToBase === '' || relToBase === '.' || relToBase.startsWith('..' + path.sep) || relToBase === '..') {
+          continue;
         }
+
+        if (subAbsPath === basePath || subAbsPath === this.rootPath) continue;
+        if (!isSameOrChildPath(this.rootPath, subAbsPath)) continue;
+
+        let realTarget: string;
+        try {
+          if (!fs.existsSync(subAbsPath) || !fs.statSync(subAbsPath).isDirectory()) continue;
+          realTarget = fs.realpathSync(subAbsPath);
+        } catch {
+          continue;
+        }
+
+        // 核心防御：realTarget 必须同样限制在 realRoot 之内，严防指向根外的符号链接逃逸！
+        if (!isSameOrChildPath(realRoot, realTarget)) continue;
+
+        if (visited.has(realTarget)) continue;
+        visited.add(realTarget);
+
+        results.push(subAbsPath);
+        results.push(...this.collectSubmodulePathsRecursive(subAbsPath, visited, depth + 1));
       }
     } catch {
       // ignore
@@ -4158,39 +4452,434 @@ export class GitService {
     return results;
   }
 
-  async resolveSubmoduleConflict(submodulePath: string, side: 'ours' | 'theirs'): Promise<void> {
+  async getSubmoduleConfigUrl(submodulePath: string): Promise<string | undefined> {
+    const normPath = this.normalizeRepoPath(submodulePath);
+    // 1. 优先读取 .git/config 中可能已配置或覆盖的 URL
+    try {
+      const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
+      let subName = normPath;
+      if (fs.existsSync(gitmodulesPath)) {
+        const entries = await parseGitmodulesFile(this.git, gitmodulesPath);
+        const match = entries.find(e => this.normalizeRepoPath(e.path) === normPath);
+        if (match?.name) subName = match.name;
+      }
+      const directConfigUrl = await this.git.raw(['config', '-z', '--get', `submodule.${subName}.url`]).catch(() => '');
+      const trimmedDirect = directConfigUrl.split('\0')[0]?.trim();
+      if (trimmedDirect) return trimmedDirect;
+    } catch {
+      // ignore config lookup error
+    }
+
+    // 2. 回退到 .gitmodules 中读取
+    const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
+    if (!fs.existsSync(gitmodulesPath)) return undefined;
+    try {
+      const entries = await parseGitmodulesFile(this.git, gitmodulesPath);
+      const match = entries.find(e => this.normalizeRepoPath(e.path) === normPath);
+      return match?.url;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async hasUnmergedGitlinks(): Promise<boolean> {
+    try {
+      const raw = await this.git.raw(['ls-files', '-u', '-z']).catch(() => '');
+      return raw.split('\0').some(entry => entry.startsWith('160000 '));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 检查子模块路径是否存在伴生冲突路径（如 dep~theirs, dep~HEAD）或同名路径自身模式非 160000 的 type-change 冲突。
+   * 若存在，返回伴生路径或冲突路径；若不存在返回 null。
+   */
+  async checkSubmoduleTypeChangeOrCompanionConflict(submodulePath: string): Promise<string | null> {
+    const normPath = this.normalizeRepoPath(submodulePath);
+    const prefix = normPath + '~';
+    const rawLs = await this.git.raw(['ls-files', '-u', '-z']).catch(() => '');
+    for (const entry of rawLs.split('\0')) {
+      if (!entry) continue;
+      const tabIdx = entry.indexOf('\t');
+      if (tabIdx === -1) continue;
+      const meta = entry.slice(0, tabIdx).trim();
+      const filePath = this.normalizeRepoPath(entry.slice(tabIdx + 1));
+      const parts = meta.split(/\s+/);
+      const mode = parts[0];
+
+      // 1. 同名路径存在非 160000 模式（例如已被替换为普通文件 100644 或软链接 120000）
+      if (filePath === normPath && mode !== '160000') {
+        return filePath;
+      }
+      // 2. 存在伴生冲突路径（如 Git 自动将冲突文件放置在 dep~theirs 等伴生路径）
+      if (filePath.startsWith(prefix)) {
+        return filePath;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 检查子模块工作区或元数据仓库是否存在未提交的修改、未跟踪文件或未推送到任何远程的提交。
+   * 覆盖当前 HEAD、所有本地分支、tag、stash 以及无工作区仅留存 .git/modules 时的元数据安全性。
+   */
+  async isSubmoduleDirty(submodulePath: string): Promise<boolean> {
     const normPath = this.normalizeRepoPath(submodulePath);
     const subAbsPath = path.join(this.rootPath, normPath);
-    return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
-      // 1. 从 git ls-files -u 读取 stage 2 (ours) 或 stage 3 (theirs) 的精确 SHA
-      const targetStage = side === 'ours' ? '2' : '3';
-      const rawLs = await this.git.raw(['ls-files', '-u', '--', this.literalPathspec(submodulePath)]).catch(() => '');
-      let targetSha: string | undefined;
-      for (const line of rawLs.split(/\r?\n/)) {
-        // 格式: <mode> <sha> <stage>\t<path>
-        const tabIdx = line.indexOf('\t');
-        if (tabIdx === -1) continue;
-        const meta = line.slice(0, tabIdx).trim();
-        const parts = meta.split(/\s+/);
-        if (parts.length >= 3 && parts[2] === targetStage) {
-          targetSha = parts[1];
+
+    // 1. 尝试解析子模块的真实 gitdir (元数据目录) 与工作区目录
+    let actualGitDir: string | undefined;
+    const workTreeExists = fs.existsSync(subAbsPath);
+    const dotGit = path.join(subAbsPath, '.git');
+
+    if (workTreeExists && fs.existsSync(dotGit)) {
+      try {
+        const stat = fs.statSync(dotGit);
+        if (stat.isFile()) {
+          const content = fs.readFileSync(dotGit, 'utf8').trim();
+          const match = content.match(/^gitdir:\s*(.+)$/i);
+          if (match) {
+            actualGitDir = path.resolve(subAbsPath, match[1].trim());
+          }
+        } else if (stat.isDirectory()) {
+          actualGitDir = dotGit;
+        }
+      } catch {
+        // ignore read error
+      }
+    }
+
+    // 若工作区缺失或无 .git，尝试从 .gitmodules 与父仓库 .git/config 探查 .git/modules 中的元数据仓库
+    if (!actualGitDir) {
+      let submoduleName = normPath;
+      const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
+      if (fs.existsSync(gitmodulesPath)) {
+        try {
+          const entries = await parseGitmodulesFile(this.git, gitmodulesPath);
+          const match = entries.find(e => this.normalizeRepoPath(e.path) === normPath);
+          if (match?.name) submoduleName = match.name;
+        } catch {
+          // ignore
+        }
+      }
+      if (submoduleName === normPath) {
+        const configPathMappings = await this.git.raw(['config', '-z', '--get-regexp', '^submodule\\..*\\.path$']).catch(() => '');
+        for (const entry of configPathMappings.split('\0')) {
+          if (!entry) continue;
+          const newlineIdx = entry.indexOf('\n');
+          if (newlineIdx === -1) continue;
+          const key = entry.slice(0, newlineIdx);
+          const val = entry.slice(newlineIdx + 1);
+          if (this.normalizeRepoPath(val) === normPath) {
+            const nameMatch = key.match(/^submodule\.(.+)\.path$/);
+            if (nameMatch) {
+              submoduleName = nameMatch[1];
+              break;
+            }
+          }
+        }
+      }
+
+      const modulesBase = await this.getModulesBase();
+      const candidateMetaDirs = [
+        path.join(modulesBase, submoduleName),
+        path.join(modulesBase, normPath),
+      ];
+      for (const dir of candidateMetaDirs) {
+        if (fs.existsSync(dir) && isSameOrChildPath(modulesBase, dir)) {
+          actualGitDir = dir;
           break;
         }
       }
-      if (!targetSha) {
-        throw new Error(`Cannot find ${side} version (stage ${targetStage}) for submodule conflict at "${submodulePath}"`);
+    }
+
+    // 2. 如果工作区存在但不是有效 git 仓库（且没有找到 gitdir），检查工作区是否有任何普通文件
+    if (workTreeExists && !actualGitDir) {
+      try {
+        const files = fs.readdirSync(subAbsPath).filter(f => f !== '.DS_Store');
+        return files.length > 0;
+      } catch {
+        return false;
       }
-      // 2. 用 git update-index --cacheinfo 写入选定指针，彻底解决 conflict
-      await this.git.raw(['update-index', '--cacheinfo', '160000', targetSha, normPath]);
+    }
+
+    // 如果工作区不存在且没有任何元数据目录，安全返回 false
+    if (!workTreeExists && !actualGitDir) {
+      return false;
+    }
+
+    // 3. 执行深度 Git 脏污与未推送提交检查
+    try {
+      // 3.1 若工作区存在且包含有效 git 客户端，检查 working tree 与 index 状态
+      if (workTreeExists && fs.existsSync(dotGit)) {
+        const subGit = createGitClient(subAbsPath);
+        const status = await subGit.status();
+        if (status.files.length > 0) {
+          return true;
+        }
+        if ((status.ahead ?? 0) > 0) {
+          return true;
+        }
+      } else if (workTreeExists) {
+        // 工作区存在但没有 .git（可能被 deinit），检查是否有遗留未跟踪文件
+        try {
+          const files = fs.readdirSync(subAbsPath).filter(f => f !== '.DS_Store');
+          if (files.length > 0) return true;
+        } catch {
+          // 忽略目录无法访问的异常
+        }
+      }
+
+      // 3.2 检查真实 gitdir 中的 refs、branches、tags、stash
+      if (actualGitDir && fs.existsSync(actualGitDir)) {
+        const effectiveWorkTree = (workTreeExists && fs.existsSync(dotGit)) ? subAbsPath : actualGitDir;
+        const metaArgs = ['--git-dir=' + actualGitDir, '--work-tree=' + effectiveWorkTree];
+
+        // A. 检查 stash
+        const hasStash = await this.git.raw([...metaArgs, 'rev-parse', '--verify', 'refs/stash']).then(() => true).catch(() => false);
+        if (hasStash) {
+          return true;
+        }
+
+        // B. 检查是否存在远程仓库
+        const remotesRaw = await this.git.raw([...metaArgs, 'remote']).catch(() => '');
+        const hasRemotes = remotesRaw.trim().length > 0;
+        if (hasRemotes) {
+          // 全面检查：当前 HEAD、所有本地分支、所有本地 tag 是否包含未推送到远程的提交
+          const unpushed = await this.git.raw([...metaArgs, 'log', 'HEAD', '--branches', '--tags', '--not', '--remotes', '-n', '1', '--']).catch(() => '');
+          if (unpushed.trim().length > 0) {
+            return true;
+          }
+        } else {
+          // 无远程仓库时，检查 HEAD 是否偏离父仓库记录的指针
+          const parentSha = await this.git.raw(['rev-parse', `:${normPath}`]).then(s => s.trim()).catch(() => '');
+          const headSha = await this.git.raw([...metaArgs, 'rev-parse', 'HEAD']).then(s => s.trim()).catch(() => '');
+          if (parentSha && headSha && parentSha !== headSha) {
+            return true;
+          }
+          // 检查是否有除当前分支以外的其他本地分支
+          const branches = await this.git.raw([...metaArgs, 'for-each-ref', '--format=%(refname:short)', 'refs/heads']).then(s => s.trim().split(/\r?\n/).filter(Boolean)).catch(() => []);
+          if (branches.length > 1) {
+            return true;
+          }
+        }
+      }
+
+      return false;
+    } catch {
+      // 发生异常时保守返回 true，避免强行删除无法确认状态的目录或元数据
+      return true;
+    }
+  }
+
+  async isSubmoduleConflictDeleteSide(submodulePath: string, side: 'ours' | 'theirs'): Promise<boolean> {
+    // 若存在伴生路径或类型变更冲突，绝不能当成常规删除侧！
+    const companion = await this.checkSubmoduleTypeChangeOrCompanionConflict(submodulePath);
+    if (companion) {
+      return false;
+    }
+
+    const targetStage = side === 'ours' ? '2' : '3';
+    const rawLs = await this.git.raw(['ls-files', '-u', '-z', '--', this.literalPathspec(submodulePath)]).catch(() => '');
+    let hasTargetStage = false;
+    let hasAnyStage = false;
+    for (const entry of rawLs.split('\0')) {
+      if (!entry) continue;
+      const tabIdx = entry.indexOf('\t');
+      if (tabIdx === -1) continue;
+      const meta = entry.slice(0, tabIdx).trim();
+      const parts = meta.split(/\s+/);
+      if (parts.length >= 3) {
+        hasAnyStage = true;
+        if (parts[2] === targetStage) {
+          hasTargetStage = true;
+          break;
+        }
+      }
+    }
+    return hasAnyStage && !hasTargetStage;
+  }
+
+  async resolveSubmoduleConflict(
+    submodulePath: string,
+    side: 'ours' | 'theirs',
+    options?: { removeDirectory?: boolean; force?: boolean }
+  ): Promise<{ conflictResolved: boolean; cleanupWarning?: string }> {
+    const normPath = this.normalizeRepoPath(submodulePath);
+    const subAbsPath = path.join(this.rootPath, normPath);
+    return withGitWriteLocks([this.rootPath, subAbsPath], async () => {
+      // 1. 前置伴生路径与类型变更冲突检查：若存在 companion 路径（如 dep~theirs），明确拦截为复杂冲突
+      const companion = await this.checkSubmoduleTypeChangeOrCompanionConflict(submodulePath);
+      if (companion) {
+        throw new Error(
+          t('This is a directory-file or type-change conflict with companion path "{0}". Please resolve it via the Merge Conflicts editor.', companion)
+        );
+      }
+
+      // 2. 从 git ls-files -u -z 读取该路径下所有 unmerged stages
+      const targetStage = side === 'ours' ? '2' : '3';
+      const rawLs = await this.git.raw(['ls-files', '-u', '-z', '--', this.literalPathspec(submodulePath)]);
+      const stages: Record<string, { mode: string; sha: string }> = {};
+      for (const entry of rawLs.split('\0')) {
+        if (!entry) continue;
+        // 格式: <mode> <sha> <stage>\t<path>
+        const tabIdx = entry.indexOf('\t');
+        if (tabIdx === -1) continue;
+        const meta = entry.slice(0, tabIdx).trim();
+        const parts = meta.split(/\s+/);
+        if (parts.length >= 3) {
+          stages[parts[2]] = { mode: parts[0], sha: parts[1] };
+        }
+      }
+
+      // 如果当前没有任何未合并 stage，说明该冲突已经在外部被解决或撤销，严禁 force-remove 误删正常指针
+      if (Object.keys(stages).length === 0) {
+        throw new Error(t('Submodule "{0}" is no longer in a conflicted state. Please refresh the panel.', submodulePath));
+      }
+
+      // 再次校验同路径非 160000 模式
+      const isTypeChange = Object.values(stages).some(s => s.mode !== '160000');
+      if (isTypeChange) {
+        throw new Error(
+          t('This is a type-change conflict (submodule replaced by a regular file or link). Please resolve it via the Merge Conflicts editor.')
+        );
+      }
+
+      const targetEntry = stages[targetStage];
+      if (targetEntry) {
+        // 写入选定指针，彻底解决 conflict
+        await this.git.raw(['update-index', '--cacheinfo', '160000', targetEntry.sha, normPath]);
+        return { conflictResolved: true };
+      } else {
+        // 确实处于未合并冲突状态中，但选定侧不存在对应 stage（说明该侧删除了子模块），表示用户选择删除该 gitlink
+
+        // 关键安全修复：在执行任何物理删除之前，提前预解析并保存真实 actualGitDir、submoduleName 和待清理候选列表
+        let actualGitDir: string | undefined;
+        let submoduleName = normPath;
+        const candidatesToClean = new Set<string>();
+
+        if (options?.removeDirectory) {
+          // 1. 从当前存在的工作区 .git 解析真实 actualGitDir
+          const dotGitFile = path.join(subAbsPath, '.git');
+          if (fs.existsSync(dotGitFile)) {
+            try {
+              const stat = fs.statSync(dotGitFile);
+              if (stat.isFile()) {
+                const content = fs.readFileSync(dotGitFile, 'utf8').trim();
+                const match = content.match(/^gitdir:\s*(.+)$/i);
+                if (match) {
+                  actualGitDir = path.resolve(subAbsPath, match[1].trim());
+                }
+              } else if (stat.isDirectory()) {
+                actualGitDir = dotGitFile;
+              }
+            } catch {
+              // ignore read error
+            }
+          }
+
+          // 2. 从 .gitmodules 或本地 git config 解析精确 submoduleName
+          const gitmodulesPath = path.join(this.rootPath, '.gitmodules');
+          if (fs.existsSync(gitmodulesPath)) {
+            try {
+              const entries = await parseGitmodulesFile(this.git, gitmodulesPath);
+              const match = entries.find(e => this.normalizeRepoPath(e.path) === normPath);
+              if (match?.name) {
+                submoduleName = match.name;
+              }
+            } catch {
+              // ignore .gitmodules parse error
+            }
+          }
+          if (submoduleName === normPath) {
+            const configPathMappings = await this.git.raw(['config', '-z', '--get-regexp', '^submodule\\..*\\.path$']).catch(() => '');
+            for (const entry of configPathMappings.split('\0')) {
+              if (!entry) continue;
+              const newlineIdx = entry.indexOf('\n');
+              if (newlineIdx === -1) continue;
+              const key = entry.slice(0, newlineIdx);
+              const val = entry.slice(newlineIdx + 1);
+              if (this.normalizeRepoPath(val) === normPath) {
+                const nameMatch = key.match(/^submodule\.(.+)\.path$/);
+                if (nameMatch) {
+                  submoduleName = nameMatch[1];
+                  break;
+                }
+              }
+            }
+          }
+
+          const modulesBase = await this.getModulesBase();
+          const isSubmoduleMetaDir = (dir: string) => isSameOrChildPath(modulesBase, dir) && path.relative(modulesBase, dir) !== '';
+
+          if (actualGitDir && isSubmoduleMetaDir(actualGitDir)) {
+            candidatesToClean.add(actualGitDir);
+          }
+          const namedDir = path.join(modulesBase, submoduleName);
+          if (isSubmoduleMetaDir(namedDir)) {
+            candidatesToClean.add(namedDir);
+          }
+          const pathDir = path.join(modulesBase, normPath);
+          if (isSubmoduleMetaDir(pathDir)) {
+            candidatesToClean.add(pathDir);
+          }
+
+          // 3. 安全前置校验：检查子模块是否存在未提交工作或未推送提交
+          const isDirty = await this.isSubmoduleDirty(submodulePath).catch(() => false);
+          if (isDirty && !options.force) {
+            throw new Error(
+              t('Submodule "{0}" has uncommitted local changes or unpushed commits. Aborting directory deletion to prevent data loss.', path.basename(submodulePath) || submodulePath)
+            );
+          }
+        }
+
+        // 先执行 Git index 的解决
+        await this.git.raw(['update-index', '--force-remove', '--', normPath]);
+
+        // 执行磁盘物理清理与元数据清理
+        let cleanupWarning: string | undefined;
+        if (options?.removeDirectory) {
+          if (fs.existsSync(subAbsPath)) {
+            try {
+              fs.rmSync(subAbsPath, { recursive: true, force: true });
+            } catch (e: unknown) {
+              cleanupWarning = t('Failed to delete submodule directory "{0}": {1}', subAbsPath, String(e));
+              this.logger?.warn('Git', `Failed to delete submodule directory: ${subAbsPath}`, { error: String(e) });
+            }
+          }
+
+          for (const dir of candidatesToClean) {
+            if (fs.existsSync(dir)) {
+              try {
+                fs.rmSync(dir, { recursive: true, force: true });
+              } catch (e: unknown) {
+                this.logger?.warn('Git', `Failed to delete submodule metadata directory: ${dir}`, { error: String(e) });
+              }
+            }
+          }
+        }
+
+        return { conflictResolved: true, cleanupWarning };
+      }
     });
   }
 
-  async initSubmodule(submodulePath: string): Promise<void> {
+  async initSubmodule(submodulePath: string, allowFileProtocol = false): Promise<void> {
     const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
-    return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
+    const nestedSubmodules = this.collectSubmodulePathsRecursive(submoduleRoot);
+    return withGitWriteLocks([this.rootPath, submoduleRoot, ...nestedSubmodules], async () => {
       const pathspec = this.literalPathspec(submodulePath);
-      await this.getSubmoduleGit().raw(['-c', 'protocol.file.allow=always', 'submodule', 'init', '--', pathspec]);
-      await this.getSubmoduleGit().raw(['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive', '--', pathspec]);
+      const initArgs = ['submodule', 'init'];
+      const updateArgs = ['submodule', 'update', '--init', '--recursive'];
+      if (allowFileProtocol) {
+        initArgs.unshift('-c', 'protocol.file.allow=always');
+        updateArgs.unshift('-c', 'protocol.file.allow=always');
+      }
+      initArgs.push('--', pathspec);
+      updateArgs.push('--', pathspec);
+      await this.getSubmoduleGit().raw(initArgs);
+      await this.getSubmoduleGit().raw(updateArgs);
     });
   }
 
@@ -4204,15 +4893,19 @@ export class GitService {
     });
   }
 
-  async updateSubmodule(submodulePath: string, init = true, recursive = false, remote = false): Promise<void> {
+  async updateSubmodule(submodulePath: string, init = true, recursive = false, remote = false, allowFileProtocol = false): Promise<void> {
     const submoduleRoot = path.join(this.rootPath, this.normalizeRepoPath(submodulePath));
-    return withGitWriteLocks([this.rootPath, submoduleRoot], async () => {
+    const nestedSubmodules = recursive ? this.collectSubmodulePathsRecursive(submoduleRoot) : [];
+    return withGitWriteLocks([this.rootPath, submoduleRoot, ...nestedSubmodules], async () => {
       // 当对齐到父仓库记录指针时（非 remote 更新），若父仓库暂存区中存在该子模块指针改动，
       // 先将暂存区指针恢复至 HEAD，否则 git submodule update 只会对齐至 index，导致如果 index 已被暂存则无任何反应
       if (!remote) {
         await this.git.raw(['checkout', 'HEAD', '--', this.literalPathspec(submodulePath)]).catch(() => {});
       }
-      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'update'];
+      const args = ['submodule', 'update'];
+      if (allowFileProtocol) {
+        args.unshift('-c', 'protocol.file.allow=always');
+      }
       if (init) args.push('--init');
       if (recursive) args.push('--recursive');
       if (remote) args.push('--remote');
@@ -4221,7 +4914,7 @@ export class GitService {
     });
   }
 
-  async updateAllSubmodules(recursive = true, init = true): Promise<void> {
+  async updateAllSubmodules(recursive = true, init = true, allowFileProtocol = false): Promise<void> {
     const targetSubmodulePaths = recursive
       ? this.collectSubmodulePathsRecursive(this.rootPath)
       : (await this.getSubmoduleList().catch(() => [])).map(e => path.join(this.rootPath, this.normalizeRepoPath(e.path)));
@@ -4234,7 +4927,10 @@ export class GitService {
           await this.git.raw(['checkout', 'HEAD', '--', this.literalPathspec(entry.path)]).catch(() => {});
         }
       }
-      const args = ['-c', 'protocol.file.allow=always', 'submodule', 'update'];
+      const args = ['submodule', 'update'];
+      if (allowFileProtocol) {
+        args.unshift('-c', 'protocol.file.allow=always');
+      }
       if (init) args.push('--init');
       if (recursive) args.push('--recursive');
       await this.getSubmoduleGit().raw(args);
@@ -4463,7 +5159,7 @@ export class GitService {
   async fetchSingleRepo(remote?: string): Promise<void> {
     return this.withWriteLock(async () => {
       const args = remote ? [remote] : ['--prune'];
-      await this.git.fetch(args).catch(() => {});
+      await this.git.fetch(args);
     });
   }
 

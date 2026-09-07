@@ -186,7 +186,7 @@ export type HostToCommitMsg =
   | { type: 'SYNC_INCOMING_RESULT'; requestId?: string; repoId?: string; commits?: IncomingCommit[]; repos?: Array<{ repoId: string; commits: IncomingCommit[]; error?: string }>; error?: string }
   | { type: 'SYNC_INCOMING_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
   | { type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
-  | { type: 'SYNC_FETCH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
+  | { type: 'SYNC_FETCH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string; partial?: boolean }
   | { type: 'SYNC_PULL_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'COMMIT_SET_MESSAGE'; message: string; requestId?: string }
   | { type: 'COMMIT_SET_ACTIVE_TAB'; tab: CommitPanelTab }
@@ -320,6 +320,7 @@ export type CommitToHostMsg =
   | { type: 'SUBMODULE_GET_DIFF_SUMMARY'; requestId: string; parentRepoId: string; submodulePath: string }
   | { type: 'SUBMODULE_PUSH'; requestId: string; repoId: string }
   | { type: 'SUBMODULE_PULL'; requestId: string; repoId: string; rebase?: boolean }
+  | { type: 'SUBMODULE_OPEN_CONFLICT'; parentRepoId: string; submodulePath: string; companionPath?: string }
   | { type: 'NOTIFY_ERROR'; message: string }
   | { type: 'NOTIFY_INFO'; message: string }
   | { type: 'COMMIT_REVEAL_IN_EXPLORER'; repoId: string; filePath: string }

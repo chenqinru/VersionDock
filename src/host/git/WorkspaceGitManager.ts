@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GitService, type MergeCommitResult } from './GitService';
+import { GitService, type MergeCommitResult, parseGitmodulesFileSync } from './GitService';
 import { SvnService } from '../svn/SvnService';
 import type { WorktreeEntry } from './GitService';
 import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
@@ -944,15 +944,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const gitmodulesPath = path.join(parentPath, '.gitmodules');
     if (!fs.existsSync(gitmodulesPath)) return;
 
-    let raw: string;
-    try { raw = fs.readFileSync(gitmodulesPath, 'utf8'); } catch { return; }
-
-    // Parse submodule paths from .gitmodules
-    const subPaths: string[] = [];
-    for (const line of raw.split('\n')) {
-      const kvMatch = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
-      if (kvMatch) subPaths.push(kvMatch[1].trim());
-    }
+    const entries = parseGitmodulesFileSync(gitmodulesPath);
+    const subPaths = entries.map(e => e.path).filter(Boolean);
 
     for (const subRelPath of subPaths) {
       const subAbsPath = path.join(parentPath, subRelPath);
@@ -1566,13 +1559,28 @@ export class WorkspaceGitManager implements vscode.Disposable {
       return this.cachedSubmodules.data;
     }
 
-    const parentRepos = Array.from(this.repos.entries()).filter(([repoId]) => {
+    const parentRepos: [string, GitService][] = [];
+    for (const [repoId, repo] of this.repos.entries()) {
       const meta = this.repoMetas.get(repoId);
-      if (!meta || (meta.kind ?? 'git') !== 'git') return false;
+      if (!meta || (meta.kind ?? 'git') !== 'git') continue;
       const hasGitmodules = fs.existsSync(path.join(meta.rootPath, '.gitmodules'));
       // 包含 .gitmodules 的仓库或未嵌套的顶级仓库均作为父仓库处理子模块
-      return hasGitmodules || (!meta.isSubmodule && !meta.parentRepoId && !meta.isWorktree);
-    });
+      if (hasGitmodules || (!meta.isSubmodule && !meta.parentRepoId && !meta.isWorktree)) {
+        parentRepos.push([repoId, repo as GitService]);
+        continue;
+      }
+      // 对于嵌套且缺失 .gitmodules 的仓库：若处于进行中操作（merge/rebase等）或暂存区有未合并 gitlink，依然作为候选父仓库
+      const gitService = repo as GitService;
+      const opState = await gitService.getOperationState().catch(() => null);
+      if (opState) {
+        parentRepos.push([repoId, gitService]);
+        continue;
+      }
+      const hasUnmerged = await gitService.hasUnmergedGitlinks().catch(() => false);
+      if (hasUnmerged) {
+        parentRepos.push([repoId, gitService]);
+      }
+    }
 
     const results: RepoSubmodules[] = await Promise.all(
       parentRepos.map(async ([repoId, repo]) => {

@@ -22,6 +22,7 @@ export interface SubmodulePanelProps {
   onAdd: (parentRepoId?: string) => void;
   onRefresh: () => void;
   onResolveConflict?: (parentRepoId: string, submodulePath: string, side: 'ours' | 'theirs') => void;
+  onOpenConflict?: (parentRepoId: string, submodulePath: string, companionPath?: string) => void;
   onOpenInNewWindow: (absPath: string) => void;
   onOpenInOS: (absPath: string) => void;
   onRevealInExplorer: (parentRepoId: string, relPath: string) => void;
@@ -34,11 +35,36 @@ const REVEAL_OS_LABEL = IS_MAC ? t('Reveal in Finder') : IS_WIN ? t('Show in Exp
 function submoduleCtxItems(sub: SubmoduleItem): ContextMenuEntry[] {
   const items: ContextMenuEntry[] = [];
   if (sub.syncStatus === 'conflict') {
-    items.push(
-      { id: 'resolve-ours', label: t('Resolve Conflict: Use Current (Ours)'), icon: 'check' },
-      { id: 'resolve-theirs', label: t('Resolve Conflict: Use Incoming (Theirs)'), icon: 'fold-down' },
-      { separator: true },
-    );
+    if (sub.isTypeChange) {
+      items.push(
+        {
+          id: 'resolve-merge-editor',
+          label: t('Resolve in Merge Editor'),
+          icon: 'git-merge',
+        },
+        { separator: true },
+      );
+    } else {
+      const hasOurs = !sub.conflictStages || !!sub.conflictStages.ours;
+      const hasTheirs = !sub.conflictStages || !!sub.conflictStages.theirs;
+      items.push(
+        {
+          id: 'resolve-ours',
+          label: hasOurs
+            ? t('Resolve Conflict: Use Current (Ours)')
+            : t('Resolve Conflict: Accept Deletion (Ours)'),
+          icon: hasOurs ? 'check' : 'trash',
+        },
+        {
+          id: 'resolve-theirs',
+          label: hasTheirs
+            ? t('Resolve Conflict: Use Incoming (Theirs)')
+            : t('Resolve Conflict: Accept Deletion (Theirs)'),
+          icon: hasTheirs ? 'fold-down' : 'trash',
+        },
+        { separator: true },
+      );
+    }
   }
   if (!sub.initialized) {
     items.push({ id: 'init', label: t('Initialize Submodule'), icon: 'cloud-download' });
@@ -81,6 +107,7 @@ function SubmoduleRow({
   onOpenInOS,
   onRevealInExplorer,
   onResolveConflict,
+  onOpenConflict,
 }: {
   sub: SubmoduleItem;
   parentRepoId: string;
@@ -92,6 +119,7 @@ function SubmoduleRow({
   onDeinit: SubmodulePanelProps['onDeinit'];
   onRemove: SubmodulePanelProps['onRemove'];
   onResolveConflict?: SubmodulePanelProps['onResolveConflict'];
+  onOpenConflict?: SubmodulePanelProps['onOpenConflict'];
   onOpenInNewWindow: SubmodulePanelProps['onOpenInNewWindow'];
   onOpenInOS: SubmodulePanelProps['onOpenInOS'];
   onRevealInExplorer: SubmodulePanelProps['onRevealInExplorer'];
@@ -140,7 +168,9 @@ function SubmoduleRow({
               <span style={row.statusBadge('amber')}>{t('Uninitialized')}</span>
             )}
             {sub.syncStatus === 'conflict' && (
-              <span style={row.statusBadge('red')}>{t('Conflict')}</span>
+              <span style={row.statusBadge('red')}>
+                {sub.isTypeChange ? t('Type-Change Conflict') : t('Conflict')}
+              </span>
             )}
             {sub.isDirty && (
               <span style={row.statusBadge('amber')}>{t('Dirty')}</span>
@@ -195,7 +225,7 @@ function SubmoduleRow({
                 <button
                   data-primary-action-btn=""
                   style={row.primaryBtn}
-                  title={t('Initialize and clone submodule')}
+                  title={t('Initialize this submodule (git submodule init && update)')}
                   onClick={e => { e.stopPropagation(); onInit(parentRepoId, sub.path); }}
                 >
                   <Codicon name="cloud-download" style={{ marginRight: '4px', fontSize: '13px' }} />
@@ -203,17 +233,33 @@ function SubmoduleRow({
                 </button>
               ) : (
                 <>
-                  {sub.syncStatus === 'conflict' && (
-                    <button
-                      data-primary-action-btn=""
-                      style={{ ...row.primaryBtn, backgroundColor: 'var(--vscode-editorWarning-foreground, #cca700)', color: '#000' }}
-                      title={t('Resolve Conflict: Use Current Pointer (Ours)')}
-                      onClick={e => { e.stopPropagation(); onResolveConflict?.(parentRepoId, sub.path, 'ours'); }}
-                    >
-                      <Codicon name="check" style={{ marginRight: '4px', fontSize: '13px' }} />
-                      {t('Use Ours')}
-                    </button>
-                  )}
+                  {sub.syncStatus === 'conflict' && (() => {
+                    if (sub.isTypeChange) {
+                      return (
+                        <button
+                          data-primary-action-btn=""
+                          style={{ ...row.primaryBtn, backgroundColor: 'var(--vscode-editorWarning-foreground, #cca700)', color: '#000' }}
+                          title={t('Resolve in Merge Editor')}
+                          onClick={e => { e.stopPropagation(); onOpenConflict?.(parentRepoId, sub.path, sub.companionPath); }}
+                        >
+                          <Codicon name="git-merge" style={{ marginRight: '4px', fontSize: '13px' }} />
+                          {t('Resolve in Merge Editor')}
+                        </button>
+                      );
+                    }
+                    const hasOurs = !sub.conflictStages || !!sub.conflictStages.ours;
+                    return (
+                      <button
+                        data-primary-action-btn=""
+                        style={{ ...row.primaryBtn, backgroundColor: 'var(--vscode-editorWarning-foreground, #cca700)', color: '#000' }}
+                        title={hasOurs ? t('Resolve Conflict: Use Current Pointer (Ours)') : t('Resolve Conflict: Accept Deletion (Ours)')}
+                        onClick={e => { e.stopPropagation(); onResolveConflict?.(parentRepoId, sub.path, 'ours'); }}
+                      >
+                        <Codicon name={hasOurs ? 'check' : 'trash'} style={{ marginRight: '4px', fontSize: '13px' }} />
+                        {hasOurs ? t('Use Ours') : t('Delete (Ours)')}
+                      </button>
+                    );
+                  })()}
                   {sub.syncStatus === 'out-of-sync' && (
                     <button
                       data-primary-action-btn=""
@@ -270,6 +316,7 @@ function SubmoduleRow({
             if (id === 'init') onInit(parentRepoId, sub.path);
             else if (id === 'update') onUpdate(parentRepoId, sub.path, false, false);
             else if (id === 'update-remote') onUpdate(parentRepoId, sub.path, true, true);
+            else if (id === 'resolve-merge-editor') onOpenConflict?.(parentRepoId, sub.path, sub.companionPath);
             else if (id === 'resolve-ours') onResolveConflict?.(parentRepoId, sub.path, 'ours');
             else if (id === 'resolve-theirs') onResolveConflict?.(parentRepoId, sub.path, 'theirs');
             else if (id === 'sync') onSync(parentRepoId, sub.path);
@@ -299,6 +346,7 @@ function SubmoduleRepoGroup({
   onRemove,
   onAdd,
   onResolveConflict,
+  onOpenConflict,
   onOpenInNewWindow,
   onOpenInOS,
   onRevealInExplorer,
@@ -315,6 +363,7 @@ function SubmoduleRepoGroup({
   onRemove: SubmodulePanelProps['onRemove'];
   onAdd: SubmodulePanelProps['onAdd'];
   onResolveConflict?: SubmodulePanelProps['onResolveConflict'];
+  onOpenConflict?: SubmodulePanelProps['onOpenConflict'];
   onOpenInNewWindow: SubmodulePanelProps['onOpenInNewWindow'];
   onOpenInOS: SubmodulePanelProps['onOpenInOS'];
   onRevealInExplorer: SubmodulePanelProps['onRevealInExplorer'];
@@ -409,6 +458,7 @@ function SubmoduleRepoGroup({
                   onDeinit={onDeinit}
                   onRemove={onRemove}
                   onResolveConflict={onResolveConflict}
+                  onOpenConflict={onOpenConflict}
                   onOpenInNewWindow={onOpenInNewWindow}
                   onOpenInOS={onOpenInOS}
                   onRevealInExplorer={onRevealInExplorer}
@@ -439,31 +489,41 @@ export function SubmodulePanel({
   onAdd,
   onRefresh: _onRefresh,
   onResolveConflict,
+  onOpenConflict,
   onOpenInNewWindow,
   onOpenInOS,
   onRevealInExplorer,
 }: SubmodulePanelProps) {
   const isInitialLoading = !initialLoaded && repos.length === 0;
-  const showFullLoading = isInitialLoading || (loading && repos.length === 0);
 
   return (
     <div style={css.container}>
-      {/* ── Content ── */}
-      {showFullLoading ? (
-        <div style={css.empty}>{t('Loading…')}</div>
-      ) : error ? (
-        <div style={css.errorState}>
-          <Codicon name="error" style={{ color: 'var(--vscode-errorForeground)', marginRight: '6px' }} />
-          <span>{error}</span>
+      {error && (
+        <div style={css.errorBanner}>
+          <Codicon name="error" style={{ marginRight: '6px' }} />
+          {error}
+        </div>
+      )}
+
+      {loading && (
+        <div style={css.progressBar}>
+          <div style={css.progressIndicator} />
+        </div>
+      )}
+
+      {isInitialLoading ? (
+        <div style={css.empty}>
+          <Codicon name="loading" style={{ animation: 'spin 1s linear infinite', marginRight: '6px' }} />
+          {t('Loading submodules…')}
         </div>
       ) : repos.length === 0 ? (
-        <div style={css.empty}>{t('No Git repositories found in this workspace.')}</div>
+        <div style={css.empty}>{t('No repositories with submodules')}</div>
       ) : (
         <div style={css.repoList}>
-          {repos.map(r => (
+          {repos.map((repo: RepoSubmodules) => (
             <SubmoduleRepoGroup
-              key={r.repoId}
-              repo={r}
+              key={repo.repoId}
+              repo={repo}
               multiRepo={multiRepo}
               activeOps={activeOps}
               highlightSubmodulePath={highlightSubmodulePath}
@@ -475,6 +535,7 @@ export function SubmodulePanel({
               onRemove={onRemove}
               onAdd={onAdd}
               onResolveConflict={onResolveConflict}
+              onOpenConflict={onOpenConflict}
               onOpenInNewWindow={onOpenInNewWindow}
               onOpenInOS={onOpenInOS}
               onRevealInExplorer={onRevealInExplorer}

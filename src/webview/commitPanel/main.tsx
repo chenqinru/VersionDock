@@ -1125,15 +1125,19 @@ export function CommitApp() {
           break;
 
         case 'SYNC_FETCH_RESULT':
-          if (msg.ok) {
+          if (msg.partial) {
+            // 部分成功已由 Host 侧弹出警告，Webview 不重复弹出 Fetch completed
+          } else if (msg.ok) {
             notifyInfo(t('Fetch completed.'));
+          } else if (msg.error) {
+            notifyError(msg.error);
+          }
+          if (msg.ok || msg.partial) {
             const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
             currentGitRepos.forEach(r => {
               requestIncomingCommits(r.repoId, true);
               requestUnpushedCommits(r.repoId, true);
             });
-          } else if (msg.error) {
-            notifyError(msg.error);
           }
           break;
 
@@ -1441,6 +1445,10 @@ export function CommitApp() {
     const opKey = parentRepoId ? `${parentRepoId}:__all__` : '__all__';
     setSubmoduleOps(prev => ({ ...prev, [opKey]: 'update-all' }));
     send({ type: 'SUBMODULE_UPDATE_ALL', parentRepoId, recursive, init });
+  }, [send]);
+
+  const handleSubmoduleOpenConflict = useCallback((parentRepoId: string, submodulePath: string, companionPath?: string) => {
+    send({ type: 'SUBMODULE_OPEN_CONFLICT', parentRepoId, submodulePath, companionPath });
   }, [send]);
 
   const handleSubmoduleResolveConflict = useCallback((parentRepoId: string, submodulePath: string, side: 'ours' | 'theirs') => {
@@ -2768,6 +2776,7 @@ export function CommitApp() {
                 onAdd={handleSubmoduleAdd}
                 onRefresh={handleSubmoduleRefresh}
                 onResolveConflict={handleSubmoduleResolveConflict}
+                onOpenConflict={handleSubmoduleOpenConflict}
                 onOpenInNewWindow={handleSubmoduleOpenInNewWindow}
                 onOpenInOS={handleSubmoduleOpenInOS}
                 onRevealInExplorer={handleSubmoduleRevealInExplorer}

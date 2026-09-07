@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager, buildRepoId, type DataInvalidationEvent } from '../git/WorkspaceGitManager';
-import type { GitService } from '../git/GitService';
+import { type GitService, parseGitmodulesFileSync, parseGitConfigEntries } from '../git/GitService';
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent, extractBaseAndTargetFromPatch } from '../utils/ShelveDocumentProvider';
@@ -4173,14 +4173,27 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'SYNC_FETCH_ALL': {
         try {
           const gitRepos = this.manager.getRepoMetas().filter(m => m.kind !== 'svn');
+          const errors: string[] = [];
           await Promise.all(gitRepos.map(async m => {
             const repo = this.manager.getRepo(m.id);
             if (repo && repo.kind !== 'svn') {
-              await (repo as GitService).fetchAll().catch(() => {});
+              try {
+                await (repo as GitService).fetchAll();
+              } catch (err) {
+                errors.push(`${m.name || m.id}: ${String(err)}`);
+              }
             }
           }));
           await this.manager.refreshStatusNow();
-          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: true });
+          if (errors.length === gitRepos.length && gitRepos.length > 0) {
+            this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+            vscode.window.showErrorMessage(t('Fetch failed for all repositories:\n{0}', errors.join('\n')));
+          } else if (errors.length > 0) {
+            this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, partial: true, error: errors.join('\n') });
+            vscode.window.showWarningMessage(t('Fetch partially succeeded. Some repositories failed:\n{0}', errors.join('\n')));
+          } else {
+            this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: true });
+          }
         } catch (e: unknown) {
           this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
@@ -4285,7 +4298,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'SYNC_DO_SYNC_MULTI': {
         try {
           let hasError = false;
-          let firstError = '';
+          const errors: string[] = [];
           const pulledRepoIds: string[] = [];
           for (const repoId of msg.repoIds) {
             const repo = this.manager.getRepo(repoId);
@@ -4303,7 +4316,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               pulledRepoIds.push(repoId);
             } catch (err) {
               hasError = true;
-              firstError = String(err);
+              const repoMeta = this.manager.getRepoMeta(repoId);
+              const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
+              errors.push(`${repoName} (Pull): ${String(err)}`);
             }
           }
           await this.manager.refreshStatusNow();
@@ -4318,14 +4333,27 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }
             const repoMeta = this.manager.getRepoMeta(repoId);
             const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
-            await runPushWithProtection(repo, {
+            const pushResult = await runPushWithProtection(repo, {
               repoName,
               logger: this.logger,
               beforePush: () => this.checkUnpushedSubmodules(repoId),
             });
+            if (!pushResult.success) {
+              hasError = true;
+              if (pushResult.cancelled) {
+                errors.push(`${repoName} (Push): ${t('Push cancelled')}`);
+              } else {
+                errors.push(`${repoName} (Push): ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
+              }
+            }
           }
           this.logProvider?.refresh();
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
+          this.post({
+            type: 'COMMIT_OP_RESULT',
+            requestId: msg.requestId,
+            ok: !hasError,
+            error: hasError ? errors.join('\n') : undefined,
+          });
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
@@ -4991,10 +5019,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'SUBMODULE_INIT': {
         const parentRepo = this.manager.getRepo(msg.parentRepoId);
-        if (!parentRepo) {
+        if (!parentRepo || parentRepo.kind !== 'git') {
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: false, error: t('Repo not found') });
           return;
         }
+        const gitRepo = parentRepo as GitService;
+        const configUrl = await gitRepo.getSubmoduleConfigUrl(msg.submodulePath);
+        const parentRemoteUrl = await gitRepo.getDefaultRemoteUrl().catch(() => undefined);
+        let allowFileProtocol = false;
+        if (this.isLocalSubmoduleUrl(configUrl, parentRemoteUrl)) {
+          const allowed = await this.confirmLocalSubmoduleProtocol(msg.submodulePath, configUrl);
+          if (!allowed) {
+            this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: false, error: 'Cancelled' });
+            return;
+          }
+          allowFileProtocol = true;
+        }
+
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
@@ -5003,7 +5044,28 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           },
           async () => {
             try {
-              await parentRepo.initSubmodule(msg.submodulePath);
+              try {
+                await gitRepo.initSubmodule(msg.submodulePath, allowFileProtocol);
+              } catch (initErr: unknown) {
+                const initErrMsg = initErr instanceof Error ? initErr.message : String(initErr);
+                if (!allowFileProtocol && (initErrMsg.includes("transport 'file' not allowed") || initErrMsg.includes('protocol.file.allow'))) {
+                  const retryConfirm = await vscode.window.showWarningMessage(
+                    t(
+                      'A nested submodule in "{0}" references a local path or file protocol. Do you want to allow local submodule operations and retry?',
+                      path.basename(msg.submodulePath) || msg.submodulePath
+                    ),
+                    { modal: true },
+                    t('Allow Local Submodule & Retry')
+                  );
+                  if (retryConfirm === t('Allow Local Submodule & Retry')) {
+                    await gitRepo.initSubmodule(msg.submodulePath, true);
+                  } else {
+                    throw initErr;
+                  }
+                } else {
+                  throw initErr;
+                }
+              }
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: true });
               this.manager.notifyDataInvalidated({
                 scopes: ['workspace', 'workingTree', 'unpushed'],
@@ -5013,7 +5075,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const repos = await this.manager.getAllSubmodules();
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
-              const errStr = String(e);
+              const errStr = e instanceof Error ? e.message : String(e);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: false, error: errStr });
               void vscode.window.showErrorMessage(t('Failed to initialize submodule "{0}": {1}', msg.submodulePath, errStr));
             }
@@ -5083,15 +5145,49 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'SUBMODULE_UPDATE': {
         const parentRepoU = this.manager.getRepo(msg.parentRepoId);
-        if (!parentRepoU) {
+        if (!parentRepoU || parentRepoU.kind !== 'git') {
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: false, error: t('Repo not found') });
           return;
         }
+        const gitRepoU = parentRepoU as GitService;
+        const configUrlU = await gitRepoU.getSubmoduleConfigUrl(msg.submodulePath);
+        const parentRemoteUrlU = await gitRepoU.getDefaultRemoteUrl().catch(() => undefined);
+        let allowFileProtocolU = false;
+        if (this.isLocalSubmoduleUrl(configUrlU, parentRemoteUrlU)) {
+          const allowed = await this.confirmLocalSubmoduleProtocol(msg.submodulePath, configUrlU);
+          if (!allowed) {
+            this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: false, error: 'Cancelled' });
+            return;
+          }
+          allowFileProtocolU = true;
+        }
+
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating submodule {0}', msg.submodulePath), cancellable: false },
           async () => {
             try {
-              await parentRepoU.updateSubmodule(msg.submodulePath, true, msg.recursive, msg.remote);
+              try {
+                await gitRepoU.updateSubmodule(msg.submodulePath, true, msg.recursive, msg.remote, allowFileProtocolU);
+              } catch (updateErr: unknown) {
+                const updateErrMsg = updateErr instanceof Error ? updateErr.message : String(updateErr);
+                if (!allowFileProtocolU && (updateErrMsg.includes("transport 'file' not allowed") || updateErrMsg.includes('protocol.file.allow'))) {
+                  const retryConfirm = await vscode.window.showWarningMessage(
+                    t(
+                      'A nested submodule in "{0}" references a local path or file protocol. Do you want to allow local submodule operations and retry?',
+                      path.basename(msg.submodulePath) || msg.submodulePath
+                    ),
+                    { modal: true },
+                    t('Allow Local Submodule & Retry')
+                  );
+                  if (retryConfirm === t('Allow Local Submodule & Retry')) {
+                    await gitRepoU.updateSubmodule(msg.submodulePath, true, msg.recursive, msg.remote, true);
+                  } else {
+                    throw updateErr;
+                  }
+                } else {
+                  throw updateErr;
+                }
+              }
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: true });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed'],
@@ -5133,9 +5229,88 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   .map(m => this.manager.getRepo(m.id))
                   .filter((r): r is GitService => !!r && r.kind === 'git');
               }
+
+              let anyLocalSubmodule = false;
               for (const repo of parentRepos) {
-                await repo.updateAllSubmodules(msg.recursive ?? true, msg.init ?? true);
+                const parentRemote = await repo.getDefaultRemoteUrl().catch(() => undefined);
+                const subs = await repo.getSubmoduleList().catch(() => []);
+                for (const sub of subs) {
+                  const url = (await repo.getSubmoduleConfigUrl(sub.path)) || sub.url;
+                  if (this.isLocalSubmoduleUrl(url, parentRemote)) {
+                    anyLocalSubmodule = true;
+                    break;
+                  }
+                }
+                if (anyLocalSubmodule) break;
+
+                // 若包含递归更新，同时扫描当前已初始化的所有下级子模块的 .gitmodules 与本地 config
+                if (msg.recursive ?? true) {
+                  const nestedPaths = repo.collectSubmodulePathsRecursive(repo.rootPath);
+                  for (const nPath of nestedPaths) {
+                    const nGitmodules = path.join(nPath, '.gitmodules');
+                    if (fs.existsSync(nGitmodules)) {
+                      const nestedEntries = parseGitmodulesFileSync(nGitmodules);
+                      for (const ne of nestedEntries) {
+                        let neUrl = ne.url;
+                        const nGitConfig = path.join(nPath, '.git', 'config');
+                        if (fs.existsSync(nGitConfig)) {
+                          try {
+                            const confEntries = parseGitConfigEntries(fs.readFileSync(nGitConfig, 'utf8'));
+                            const overrideUrl = confEntries.find(e => e.name === ne.name)?.url;
+                            if (overrideUrl) neUrl = overrideUrl;
+                          } catch {
+                            // 忽略无法读取配置的异常
+                          }
+                        }
+                        if (this.isLocalSubmoduleUrl(neUrl, parentRemote)) {
+                          anyLocalSubmodule = true;
+                          break;
+                        }
+                      }
+                    }
+                    if (anyLocalSubmodule) break;
+                  }
+                }
+                if (anyLocalSubmodule) break;
               }
+
+              let allowFileProtocolAll = false;
+              if (anyLocalSubmodule) {
+                const allowed = await this.confirmLocalSubmoduleProtocol(t('One or more submodules'), t('local path or file protocol'));
+                if (!allowed) {
+                  this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: false, error: 'Cancelled' });
+                  return;
+                }
+                allowFileProtocolAll = true;
+              }
+
+              const runUpdates = async (allowFile: boolean) => {
+                for (const repo of parentRepos) {
+                  await repo.updateAllSubmodules(msg.recursive ?? true, msg.init ?? true, allowFile);
+                }
+              };
+
+              try {
+                await runUpdates(allowFileProtocolAll);
+              } catch (updateErr: unknown) {
+                const updateErrMsg = updateErr instanceof Error ? updateErr.message : String(updateErr);
+                if (!allowFileProtocolAll && (updateErrMsg.includes("transport 'file' not allowed") || updateErrMsg.includes('protocol.file.allow'))) {
+                  const retryConfirm = await vscode.window.showWarningMessage(
+                    t('A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?'),
+                    { modal: true },
+                    t('Allow Local Submodule & Retry')
+                  );
+                  if (retryConfirm === t('Allow Local Submodule & Retry')) {
+                    allowFileProtocolAll = true;
+                    await runUpdates(true);
+                  } else {
+                    throw updateErr;
+                  }
+                } else {
+                  throw updateErr;
+                }
+              }
+
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: true });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed'],
@@ -5145,8 +5320,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
               const errMsg = e instanceof Error ? e.message : String(e);
-              void vscode.window.showErrorMessage(t('Failed to update all submodules: {0}', errMsg));
-              this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: false, error: errMsg });
+              let userFriendlyMsg = t('Failed to update all submodules: {0}', errMsg);
+              if (errMsg.includes("transport 'file' not allowed") || errMsg.includes('protocol.file.allow')) {
+                userFriendlyMsg = t(
+                  'A nested submodule references a local path or file protocol which requires authorization. Please run submodule update with local protocol permission allowed.'
+                );
+              }
+              void vscode.window.showErrorMessage(userFriendlyMsg);
+              this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: false, error: userFriendlyMsg });
             }
           }
         );
@@ -5205,12 +5386,21 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         });
         if (branch === undefined) return;
 
+        let allowFileProtocol = false;
+        const trimmedUrl = url.trim();
+        const parentRemoteUrl = await (parentRepoA as GitService).getDefaultRemoteUrl().catch(() => undefined);
+        if (this.isLocalSubmoduleUrl(trimmedUrl, parentRemoteUrl)) {
+          const allowed = await this.confirmLocalSubmoduleProtocol(subPath.trim() || trimmedUrl, trimmedUrl);
+          if (!allowed) return;
+          allowFileProtocol = true;
+        }
+
         const reqId = Math.random().toString(36).slice(2);
         await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Adding submodule {0}', subPath), cancellable: false },
           async () => {
             try {
-              await (parentRepoA as GitService).addSubmodule(url.trim(), subPath.trim(), branch?.trim() || undefined);
+              await (parentRepoA as GitService).addSubmodule(url.trim(), subPath.trim(), branch?.trim() || undefined, allowFileProtocol);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId, submodulePath: subPath.trim(), op: 'add', ok: true });
               this.manager.notifyDataInvalidated({
                 scopes: ['workspace', 'workingTree', 'unpushed', 'subtree'],
@@ -5299,8 +5489,57 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: t('Repo not found') });
           return;
         }
+        const gitRepo = parentRepo as GitService;
         try {
-          await (parentRepo as GitService).resolveSubmoduleConflict(msg.submodulePath, msg.side);
+          const isDeleteSide = await gitRepo.isSubmoduleConflictDeleteSide(msg.submodulePath, msg.side);
+          let removeDirectory = false;
+          let force = false;
+          if (isDeleteSide) {
+            const isDirty = await gitRepo.isSubmoduleDirty(msg.submodulePath).catch(() => false);
+            if (isDirty) {
+              const dirtyChoice = await vscode.window.showWarningMessage(
+                t(
+                  'WARNING: Submodule "{0}" has uncommitted local changes or unpushed commits. Deleting the directory will permanently discard these changes! Do you want to proceed?',
+                  path.basename(msg.submodulePath) || msg.submodulePath
+                ),
+                { modal: true },
+                t('Force Delete Directory'),
+                t('Keep Local Directory')
+              );
+              if (!dirtyChoice) {
+                this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: 'Cancelled' });
+                return;
+              }
+              if (dirtyChoice === t('Force Delete Directory')) {
+                removeDirectory = true;
+                force = true;
+              } else {
+                removeDirectory = false;
+              }
+            } else {
+              const choice = await vscode.window.showWarningMessage(
+                t(
+                  'Submodule "{0}" was removed on the selected side. Do you also want to remove its local directory and Git metadata from disk?',
+                  path.basename(msg.submodulePath) || msg.submodulePath
+                ),
+                { modal: true },
+                t('Remove Directory & Metadata'),
+                t('Keep Local Directory')
+              );
+              if (!choice) {
+                this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: 'Cancelled' });
+                return;
+              }
+              removeDirectory = choice === t('Remove Directory & Metadata');
+            }
+          }
+
+          const resolveRes = await gitRepo.resolveSubmoduleConflict(msg.submodulePath, msg.side, { removeDirectory, force });
+          if (resolveRes?.cleanupWarning) {
+            void vscode.window.showWarningMessage(
+              t('Submodule conflict resolved in Git, but failed to clean up directory on disk: {0}', resolveRes.cleanupWarning)
+            );
+          }
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: true });
           this.manager.notifyDataInvalidated({
             scopes: ['workingTree', 'workspace'],
@@ -5309,7 +5548,29 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const repos = await this.manager.getAllSubmodules();
           this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
         } catch (e: unknown) {
-          this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: String(e) });
+          const errMsg = e instanceof Error ? e.message : String(e);
+          void vscode.window.showErrorMessage(errMsg);
+          this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: errMsg });
+        }
+        break;
+      }
+
+      case 'SUBMODULE_OPEN_CONFLICT': {
+        const parentRepo = this.manager.getRepo(msg.parentRepoId);
+        if (!parentRepo || parentRepo.kind !== 'git') {
+          return;
+        }
+        const gitRepo = parentRepo as GitService;
+        const targetPath = msg.companionPath || msg.submodulePath;
+        try {
+          const resolved = gitRepo.resolveRepoPath(targetPath);
+          if (this.mergeEditorProvider) {
+            this.mergeEditorProvider.openForFile(resolved.absolutePath, msg.parentRepoId, resolved.relativePath);
+          } else {
+            void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(resolved.absolutePath));
+          }
+        } catch (err) {
+          void vscode.window.showErrorMessage(t('Failed to open conflict in editor: {0}', String(err)));
         }
         break;
       }
@@ -5685,7 +5946,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private async checkUnpushedSubmodules(repoId: string): Promise<boolean> {
     try {
-      const allSubs = await this.manager.getAllSubmodules();
+      const allSubs = await this.manager.getAllSubmodules(true);
       // 收集当前仓库直接与间接下属的所有包含未推送提交的子模块
       const unpushedSubs: import('../types/git').SubmoduleItem[] = [];
       const queue = [repoId];
@@ -5723,6 +5984,44 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       // ignore submodule detection error
     }
     return true;
+  }
+
+  private isLocalSubmoduleUrl(url?: string, parentRemoteUrl?: string): boolean {
+    const trimmedUrl = url?.trim();
+    if (!trimmedUrl) return false;
+
+    if (trimmedUrl.startsWith('file://') || path.isAbsolute(trimmedUrl)) {
+      return true;
+    }
+
+    if (trimmedUrl.startsWith('./') || trimmedUrl.startsWith('../')) {
+      // 若父仓库配置了远程网络 URL（如 https://, http://, ssh://, git:// 或 scp 格式 git@...），
+      // Git 在解析相对 submodule url 时会相对于该网络 remote 解析为远程网络地址，而非本地 file 协议。
+      if (parentRemoteUrl) {
+        const trimmedParent = parentRemoteUrl.trim();
+        const isNetworkRemote = /^(https?|ssh|git):\/\//i.test(trimmedParent) || /^[\w.-]+@[\w.-]+:/i.test(trimmedParent);
+        if (isNetworkRemote) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  private async confirmLocalSubmoduleProtocol(submoduleNameOrPath: string, url?: string): Promise<boolean> {
+    const trimmedUrl = url?.trim() || '';
+    const confirm = await vscode.window.showWarningMessage(
+      t(
+        'The submodule "{0}" references a local path or file protocol ("{1}"). Git restricts local submodule operations by default to prevent unauthorized repository access. Do you want to allow this local submodule operation?',
+        submoduleNameOrPath,
+        trimmedUrl
+      ),
+      { modal: true },
+      t('Allow Local Submodule')
+    );
+    return confirm === t('Allow Local Submodule');
   }
 
   async handleSubtreeCommand(op: 'add' | 'pull' | 'push' | 'split' | 'merge' | 'remove' | 'manage'): Promise<void> {
