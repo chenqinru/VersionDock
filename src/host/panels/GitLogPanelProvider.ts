@@ -691,6 +691,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return all.filter(b => ids.has(b.repoId));
   }
 
+  private getCachedFilteredBranches(repos = this.getVisibleRepos()): BranchInfo[] {
+    const ids = new Set(repos.map(r => r.id));
+    const all = this.manager.getCachedBranches();
+    return all.filter(b => ids.has(b.repoId));
+  }
+
   private async refreshTags(
     repoId: string,
     repo = this.manager.getRepo(repoId),
@@ -752,6 +758,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         // later commit pages. Avoid repeating branch/tag CLI calls and theme
         // parsing on every scroll batch.
         if (msg.skip === 0) {
+          // Immediately post available repos and known cached branches so the
+          // Webview initializes instantly (store.initialized = true) without
+          // waiting for remote SVN branch ls CLI round-trips.
+          const initialBranches = this.getCachedFilteredBranches(repos);
+          this.post({ type: 'LOG_INIT_DATA', repos, branches: initialBranches });
+
           void (async () => {
             try {
               const [branches, iconTheme] = await Promise.all([

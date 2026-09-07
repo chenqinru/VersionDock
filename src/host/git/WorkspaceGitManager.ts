@@ -378,6 +378,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private refreshPending = false;
   private statusUpdateSuppressionDepth = 0;
   private lastPublishedStatus: WorkspaceStatus | null = null;
+  private cachedAllBranches: BranchInfo[] = [];
   private mergeCompletionTasks = new Map<string, Promise<MergeCommitResult | undefined>>();
   /** Set after a branch/HEAD change so intermediate checkout states are never published. */
   private statusStabilizationSignature: string | null | undefined;
@@ -595,6 +596,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.prevUntracked.clear();
     this.gitignoreRulesCache.clear();
     this.cachedSubmodules = null;
+    this.cachedAllBranches = [];
     this.initialStatusDone = false;
 
     const folders = vscode.workspace.workspaceFolders ?? [];
@@ -2071,7 +2073,21 @@ export class WorkspaceGitManager implements vscode.Disposable {
       }
     }
 
+    this.cachedAllBranches = branches;
     return branches;
+  }
+
+  getCachedBranches(): BranchInfo[] {
+    if (this.cachedAllBranches.length > 0) {
+      return this.cachedAllBranches;
+    }
+    const fromStatus: BranchInfo[] = [];
+    if (this.lastPublishedStatus) {
+      for (const repoStatus of this.lastPublishedStatus.repos) {
+        if (repoStatus.branch) fromStatus.push(repoStatus.branch);
+      }
+    }
+    return fromStatus;
   }
 
   async getInterleavedLog(repoIds: string[], limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }): Promise<CommitNode[]> {
