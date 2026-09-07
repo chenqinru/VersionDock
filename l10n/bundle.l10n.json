@@ -1967,6 +1967,7 @@
   "{0} incoming, {1} outgoing": "{0} incoming, {1} outgoing",
   "Cherry-pick Commit": "Cherry-pick Commit",
   "Cherry-pick {0} commits": "Cherry-pick {0} commits",
+  "Merge commits cannot be cherry-picked directly": "Merge commits cannot be cherry-picked directly",
   "New Branch from Here…": "New Branch from Here…",
   "Cherry-pick has conflicts. Resolve them in the editor, then choose an action.": "Cherry-pick has conflicts. Resolve them in the editor, then choose an action.",
   "Pull (Fast-Forward Only)": "Pull (Fast-Forward Only)",

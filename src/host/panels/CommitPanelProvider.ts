@@ -4286,8 +4286,21 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           if (pushResult.success) {
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
             this.logProvider?.refresh({ repoIds: [msg.repoId] });
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            void this.broadcastUnpushedCommits();
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
+            await this.manager.refreshStatusNow();
+            if (repo.kind !== 'svn') {
+              const gitRepo = repo as GitService;
+              const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
+              this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
+            }
+          } else if (pushResult.cancelled) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
           } else {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: pushResult.error ? String(pushResult.error) : t('Push failed') });
           }
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -4348,6 +4361,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }
           }
           this.logProvider?.refresh({ repoIds: msg.repoIds });
+          this.invalidateSubtreeStatus(undefined, { remote: false });
+          void this.broadcastUnpushedCommits();
+          if (this.isSubtreeTabActive()) {
+            void this.refreshSubtreeList({ force: false });
+          }
+          await this.manager.refreshStatusNow();
           this.post({
             type: 'COMMIT_OP_RESULT',
             requestId: msg.requestId,
@@ -4394,7 +4413,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const repoMeta = this.manager.getRepoMeta(repoId);
           const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
           try {
-            await (repo as GitService).pushTags();
+            const gitRepo = repo as GitService;
+            await gitRepo.pushTags();
           } catch (err: unknown) {
             hasError = true;
             firstError = String(err);
@@ -4440,31 +4460,44 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         } catch (e: unknown) {
           const errMsg = String(e);
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
-            const choice = await vscode.window.showWarningMessage(
+            let activeChoice = await vscode.window.showWarningMessage(
               t('Cherry-pick has conflicts. Resolve them in the editor, then choose an action.'),
               t('Continue'), t('Skip'), t('Abort')
             );
-            if (choice === t('Continue')) {
-              await gitRepo.cherryPickContinue();
-              await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
-              this.manager.notifyDataInvalidated({
-                scopes: ['workingTree', 'unpushed', 'subtree'],
-                repoIds: [msg.repoId],
-              });
-            } else if (choice === t('Skip')) {
-              await gitRepo.cherryPickSkip();
-              await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
-              this.manager.notifyDataInvalidated({
-                scopes: ['workingTree', 'unpushed', 'subtree'],
-                repoIds: [msg.repoId],
-              });
-            } else if (choice === t('Abort')) {
-              await gitRepo.cherryPickAbort();
-              await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+            while (activeChoice === t('Continue') || activeChoice === t('Skip')) {
+              try {
+                if (activeChoice === t('Continue')) {
+                  await gitRepo.cherryPickContinue();
+                } else {
+                  await gitRepo.cherryPickSkip();
+                }
+                break;
+              } catch (stepErr: unknown) {
+                const stepErrMsg = String(stepErr);
+                if (stepErrMsg.includes('CONFLICT') || stepErrMsg.includes('could not apply')) {
+                  activeChoice = await vscode.window.showWarningMessage(
+                    t('Cherry-pick has conflicts. Resolve them in the editor, then choose an action.'),
+                    t('Continue'), t('Skip'), t('Abort')
+                  );
+                  if (activeChoice === t('Abort')) {
+                    await gitRepo.cherryPickAbort();
+                    break;
+                  }
+                } else {
+                  vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', stepErrMsg));
+                  break;
+                }
+              }
             }
+            if (activeChoice === t('Abort')) {
+              await gitRepo.cherryPickAbort().catch(() => undefined);
+            }
+            await this.manager.refreshStatusNow();
+            this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
+            this.manager.notifyDataInvalidated({
+              scopes: ['workingTree', 'unpushed', 'subtree'],
+              repoIds: [msg.repoId],
+            });
           } else {
             vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg));
           }

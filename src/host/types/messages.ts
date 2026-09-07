@@ -112,6 +112,7 @@ export interface IncomingCommit {
   additions?: number;
   deletions?: number;
   potentialConflictPaths?: string[];
+  parents?: string[];
 }
 
 export type SyncPullStrategy = 'default' | 'rebase' | 'merge' | 'ff-only';

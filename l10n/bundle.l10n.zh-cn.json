@@ -1967,6 +1967,7 @@
   "{0} incoming, {1} outgoing": "{0} 待拉取，{1} 待推送",
   "Cherry-pick Commit": "拣选此提交",
   "Cherry-pick {0} commits": "拣选 {0} 个提交",
+  "Merge commits cannot be cherry-picked directly": "合并提交无法直接拣选",
   "New Branch from Here…": "从此提交创建新分支…",
   "Cherry-pick has conflicts. Resolve them in the editor, then choose an action.": "拣选出现冲突。请先在编辑器中解决，然后选择后续操作。",
   "Pull (Fast-Forward Only)": "拉取 (仅快进 Fast-Forward Only)",

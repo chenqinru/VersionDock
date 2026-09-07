@@ -67,6 +67,7 @@ export interface BranchInfo {
   detachedTag?: string;   // set when HEAD is detached on a tag
   detachedHash?: string;  // short commit hash when HEAD is detached without a tag
   isProtected?: boolean;  // true if branch matches protected branch patterns
+  isGone?: boolean;       // true if upstream tracking branch was deleted on remote
 }
 
 export interface LineRange {

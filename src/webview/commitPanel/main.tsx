@@ -1663,7 +1663,7 @@ export function CommitApp() {
   const isSvnRepo = (repoId: string) => metaMap.get(repoId)?.kind === 'svn';
   const gitRepos = repos.filter(repo => !isSvnRepo(repo.repoId));
   const totalToPush = gitRepos.reduce((sum, r) => {
-    if (r.branch.upstream) return sum + (r.branch.aheadBehind?.ahead ?? 0);
+    if (r.branch.upstream && !r.branch.isGone) return sum + (r.branch.aheadBehind?.ahead ?? 0);
     return sum + (unpushedMap[r.repoId]?.commits?.length ?? 0);
   }, 0);
   const totalToPull = gitRepos.reduce((sum, r) => {
@@ -1737,7 +1737,7 @@ export function CommitApp() {
   // Keep unpushed-commit counts fresh for repos without upstream so the Sync tab badge
   // shows the correct number even before the tab is opened. Upstream repos are live via aheadBehind.ahead.
   // Full refresh on every status update is intentionally avoided to prevent visual noise.
-  const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream).map(r => r.repoId).join('\0');
+  const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream || r.branch.isGone).map(r => r.repoId).join('\0');
   useEffect(() => {
     if (!noUpstreamKey) return;
     noUpstreamKey.split('\0').forEach(id => requestUnpushedCommits(id, true));

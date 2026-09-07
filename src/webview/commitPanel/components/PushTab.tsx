@@ -100,6 +100,7 @@ interface IncomingCommitCtxMenuState {
   repoId: string;
   selectedHashes: string[];
   singleHash: string | null;
+  hasMergeCommit?: boolean;
 }
 
 const TREE_BASE_PAD = 16;
@@ -233,13 +234,36 @@ function mergeUniqueFiles(fileGroups: PushCommitFile[][]): PushCommitFile[] {
   return [...merged.values()];
 }
 
-function MenuItem({ icon, label, danger, onClick }: { icon: string; label: string; danger?: boolean; onClick: () => void }) {
+function MenuItem({
+  icon,
+  label,
+  danger,
+  disabled,
+  title,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  danger?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+}) {
   return (
     <div
-      style={{ ...ctxStyles.item, ...(danger ? { color: 'var(--vscode-errorForeground)' } : {}) }}
-      onMouseEnter={event => (event.currentTarget.style.background = 'var(--vscode-list-hoverBackground)')}
-      onMouseLeave={event => (event.currentTarget.style.background = 'transparent')}
-      onClick={onClick}
+      title={title}
+      style={{
+        ...ctxStyles.item,
+        ...(danger ? { color: 'var(--vscode-errorForeground)' } : {}),
+        ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}),
+      }}
+      onMouseEnter={event => {
+        if (!disabled) event.currentTarget.style.background = 'var(--vscode-list-hoverBackground)';
+      }}
+      onMouseLeave={event => {
+        if (!disabled) event.currentTarget.style.background = 'transparent';
+      }}
+      onClick={disabled ? undefined : onClick}
     >
       <Codicon name={icon} style={{ fontSize: '13px' }} />
       {label}
@@ -337,6 +361,10 @@ function IncomingCommitContextMenu({ state, onCherryPick, onCreateBranch, onView
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const n = state.selectedHashes.length;
+  const cherryPickDisabled = Boolean(state.hasMergeCommit);
+  const cherryPickTitle = cherryPickDisabled
+    ? t('Merge commits cannot be cherry-picked directly')
+    : undefined;
 
   useEffect(() => {
     const outsideHandler = (event: MouseEvent) => {
@@ -381,12 +409,24 @@ function IncomingCommitContextMenu({ state, onCherryPick, onCreateBranch, onView
       {n === 1 && state.singleHash && (
         <>
           <MenuItem icon="go-to-file" label={t('View in Git Log')} onClick={wrap(() => onViewInLog(state.singleHash!))} />
-          <MenuItem icon="pinned" label={t('Cherry-pick Commit')} onClick={wrap(() => onCherryPick([state.singleHash!]))} />
+          <MenuItem
+            icon="pinned"
+            label={t('Cherry-pick Commit')}
+            disabled={cherryPickDisabled}
+            title={cherryPickTitle}
+            onClick={wrap(() => onCherryPick([state.singleHash!]))}
+          />
           <MenuItem icon="git-branch" label={t('New Branch from Here…')} onClick={wrap(() => onCreateBranch(state.singleHash!))} />
         </>
       )}
       {n >= 2 && (
-        <MenuItem icon="pinned" label={t('Cherry-pick {0} commits', n)} onClick={wrap(() => onCherryPick(state.selectedHashes))} />
+        <MenuItem
+          icon="pinned"
+          label={t('Cherry-pick {0} commits', n)}
+          disabled={cherryPickDisabled}
+          title={cherryPickTitle}
+          onClick={wrap(() => onCherryPick(state.selectedHashes))}
+        />
       )}
     </div>
   );
@@ -807,7 +847,8 @@ function RepoSection({
   const repoColor = readableAccentColor(repoMeta?.color ?? '#4ec9b0');
   const ahead = repoStatus.branch.aheadBehind?.ahead ?? 0;
   const behind = repoStatus.branch.aheadBehind?.behind ?? 0;
-  const hasUpstream = !!repoStatus.branch.upstream;
+  const isGone = !!repoStatus.branch.isGone;
+  const hasUpstream = !!repoStatus.branch.upstream && !isGone;
   const commits = useMemo(() => unpushed?.commits ?? [], [unpushed?.commits]);
   const commitHashesKey = commits.map(commit => commit.hash).join(',');
   const commitCount = hasUpstream ? ahead : commits.length;
@@ -1138,12 +1179,33 @@ function RepoSection({
       setMultiSelectIncomingHashes(selectedHashes);
     }
     const isSingle = selectedHashes.size === 1;
+    let orderedHashes: string[];
+    const incomingCommits = incoming?.commits ?? [];
+    if (isSingle) {
+      orderedHashes = [commit.hash];
+    } else {
+      // incomingCommits 是按时间降序（新到旧，index 0 为最新）。
+      // Cherry-pick 必须按拓扑与时间由旧到新应用，因此对匹配到的提交做逆序排列。
+      const sorted = incomingCommits
+        .filter(c => selectedHashes.has(c.hash))
+        .map(c => c.hash)
+        .reverse();
+      const remaining = Array.from(selectedHashes).filter(h => !sorted.includes(h));
+      orderedHashes = [...sorted, ...remaining];
+    }
+    const incomingCommit = commit as IncomingCommit;
+    const hasMergeCommit = isSingle
+      ? Boolean(incomingCommit.parents && incomingCommit.parents.length > 1)
+      : incomingCommits
+          .filter(c => selectedHashes.has(c.hash))
+          .some(c => Boolean(c.parents && c.parents.length > 1));
     setIncomingCtxMenu({
       x: event.clientX,
       y: event.clientY,
       repoId: repoStatus.repoId,
-      selectedHashes: Array.from(selectedHashes),
+      selectedHashes: orderedHashes,
       singleHash: isSingle ? commit.hash : null,
+      hasMergeCommit,
     });
   };
 
@@ -1656,11 +1718,11 @@ function SplitDropdownButton({
 
   if (colorVariant === 'pull') {
     bg = 'color-mix(in srgb, var(--vscode-charts-blue, #1f6feb) 85%, #0d419d 15%)';
-    bgHover = 'color-mix(in srgb, var(--vscode-charts-blue, #1f6feb) 80%, white 20%)';
+    bgHover = bg;
     fg = '#ffffff';
   } else if (colorVariant === 'push') {
     bg = 'color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #238636) 75%, #196c2e 25%)';
-    bgHover = 'color-mix(in srgb, var(--vscode-gitDecoration-addedResourceForeground, #238636) 80%, white 20%)';
+    bgHover = bg;
     fg = '#ffffff';
   }
 
@@ -1942,11 +2004,13 @@ export function PushTab(props: Props) {
     });
   }, []);
 
+  const repoHasUpstream = useCallback((repo: RepoStatus) => !!repo.branch.upstream && !repo.branch.isGone, []);
+
   const canPushRepo = useCallback((repo: RepoStatus) => {
     const ahead = repo.branch.aheadBehind?.ahead ?? 0;
-    const hasUpstream = !!repo.branch.upstream;
+    const hasUpstream = repoHasUpstream(repo);
     return (hasUpstream && ahead > 0) || !hasUpstream;
-  }, []);
+  }, [repoHasUpstream]);
 
   const canPullRepo = useCallback((repo: RepoStatus) => {
     const behind = repo.branch.aheadBehind?.behind ?? 0;
@@ -1974,9 +2038,9 @@ export function PushTab(props: Props) {
   };
 
   const pushButtonLabel = (targets: RepoStatus[]) => {
-    const hasPublish = targets.some(repo => !repo.branch.upstream);
-    const hasPush = targets.some(repo => !!repo.branch.upstream);
-    const publishCount = targets.filter(repo => !repo.branch.upstream).length;
+    const hasPublish = targets.some(repo => !repoHasUpstream(repo));
+    const hasPush = targets.some(repo => repoHasUpstream(repo));
+    const publishCount = targets.filter(repo => !repoHasUpstream(repo)).length;
     let label = t('Push');
     if (hasPublish && hasPush) {
       label = publishCount === 1 ? t('Push & Publish Branch') : t('Push & Publish Branches');
@@ -2049,7 +2113,7 @@ export function PushTab(props: Props) {
         );
       }
       if (directionFilter === 'outgoing') {
-        const isPurePush = !!solo.branch.upstream;
+        const isPurePush = repoHasUpstream(solo);
         return (
           <SplitDropdownButton
             fullWidth
@@ -2079,7 +2143,7 @@ export function PushTab(props: Props) {
         );
       }
       // directionFilter === 'all' (根据当前的单向/双向差异显示精确操作)
-      if (!solo.branch.upstream) {
+      if (!repoHasUpstream(solo)) {
         return (
           <SplitDropdownButton
             fullWidth
@@ -2214,7 +2278,7 @@ export function PushTab(props: Props) {
     for (const repo of checkedRepos) {
       const canPull = canPullRepo(repo);
       const canPush = canPushRepo(repo);
-      if (canPull && canPush && repo.branch.upstream) {
+      if (canPull && canPush && repoHasUpstream(repo)) {
         syncTargets.push(repo.repoId);
       } else if (canPull) {
         pullOnlyTargets.push(repo.repoId);
@@ -2331,7 +2395,7 @@ export function PushTab(props: Props) {
     }
     if (directionFilter === 'outgoing') {
       const isEnabled = pushableChecked.length > 0;
-      const isPurePush = pushableChecked.length > 0 && pushableChecked.every(r => !!r.branch.upstream);
+      const isPurePush = pushableChecked.length > 0 && pushableChecked.every(r => repoHasUpstream(r));
       return (
         <SplitDropdownButton
           fullWidth
@@ -2365,11 +2429,11 @@ export function PushTab(props: Props) {
     const hasPullTargets = pullableChecked.length > 0;
     const hasPushTargets = pushableChecked.length > 0;
 
-    const unpublishedChecked = checkedRepos.filter(repo => !repo.branch.upstream);
-    const publishedChecked = checkedRepos.filter(repo => !!repo.branch.upstream);
+    const unpublishedChecked = checkedRepos.filter(repo => !repoHasUpstream(repo));
+    const publishedChecked = checkedRepos.filter(repo => repoHasUpstream(repo));
 
     if (hasChecked && hasPushTargets && !hasPullTargets) {
-      const isPurePush = pushableChecked.every(repo => !!repo.branch.upstream);
+      const isPurePush = pushableChecked.every(repo => repoHasUpstream(repo));
       return (
         <SplitDropdownButton
           fullWidth

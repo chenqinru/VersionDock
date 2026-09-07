@@ -45,6 +45,7 @@ export interface BranchInfo {
   lastCommitDate?: string;
   detachedTag?: string;
   detachedHash?: string;
+  isGone?: boolean;
 }
 
 export interface LineRange {

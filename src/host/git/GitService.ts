@@ -922,6 +922,7 @@ export class GitService {
         ? { ahead: head.ahead, behind: head.behind }
         : undefined;
 
+      let isGone: boolean | undefined;
       if (!isDetached) {
         try {
           const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
@@ -929,6 +930,9 @@ export class GitService {
             upstream = tracking.upstream ?? upstream;
             if (tracking.aheadBehind !== undefined) {
               aheadBehind = tracking.aheadBehind;
+            }
+            if (tracking.isGone !== undefined) {
+              isGone = tracking.isGone;
             }
           }
         } catch { /* ignore fallback */ }
@@ -944,6 +948,7 @@ export class GitService {
         aheadBehind,
         detachedTag,
         detachedHash,
+        isGone,
       };
 
       const [submoduleStatuses, operationState] = await Promise.all([
@@ -1137,6 +1142,7 @@ export class GitService {
         ? { ahead: head.ahead, behind: head.behind }
         : undefined;
 
+      let isGone: boolean | undefined;
       if (isNamedBranch) {
         try {
           const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
@@ -1144,6 +1150,9 @@ export class GitService {
             upstream = tracking.upstream ?? upstream;
             if (tracking.aheadBehind !== undefined) {
               aheadBehind = tracking.aheadBehind;
+            }
+            if (tracking.isGone !== undefined) {
+              isGone = tracking.isGone;
             }
           }
         } catch { /* ignore fallback */ }
@@ -1160,6 +1169,7 @@ export class GitService {
         lastCommitHash: head?.commit,
         detachedTag,
         detachedHash,
+        isGone,
         isProtected: !isDetached && isBranchProtected(branchName),
       };
     }
@@ -1174,6 +1184,7 @@ export class GitService {
     const detachedHash = (isDetached && !detachedTag) ? (lastCommitHash ? lastCommitHash.slice(0, 8) : await this.getShortHash()) : undefined;
     let upstream = status.tracking ?? undefined;
     let aheadBehind = status.tracking ? { ahead: status.ahead, behind: status.behind } : undefined;
+    let isGone: boolean | undefined;
     if (!isDetached) {
       try {
         const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
@@ -1181,6 +1192,9 @@ export class GitService {
           upstream = tracking.upstream ?? upstream;
           if (tracking.aheadBehind !== undefined) {
             aheadBehind = tracking.aheadBehind;
+          }
+          if (tracking.isGone !== undefined) {
+            isGone = tracking.isGone;
           }
         }
       } catch { /* ignore fallback */ }
@@ -1196,6 +1210,7 @@ export class GitService {
       lastCommitHash,
       detachedTag,
       detachedHash,
+      isGone,
       isProtected: !isDetached && isBranchProtected(branchName),
     };
   }
@@ -1233,6 +1248,7 @@ export class GitService {
             ?? ((isHead && head?.ahead !== undefined && head?.behind !== undefined)
               ? { ahead: head.ahead, behind: head.behind }
               : undefined),
+          isGone: tracking?.isGone,
           isProtected: isBranchProtected(name),
         });
       }
@@ -1268,7 +1284,10 @@ export class GitService {
         if (hash && name) fullHashMap.set(name, hash);
       }
     } catch { /* ignore, fall back to short hashes */ }
-    const result = await this.git.branch(['-avv', '--sort=-committerdate']);
+    const [result, trackingInfo] = await Promise.all([
+      this.git.branch(['-avv', '--sort=-committerdate']),
+      this.getLocalBranchTrackingInfo().catch(() => new Map<string, BranchTrackingInfo>()),
+    ]);
     const branches: BranchInfo[] = [];
     const configuredRemoteNames = (await this.getRemotes().catch(() => [] as string[])).sort((a, b) => b.length - a.length);
     for (const [name, branch] of Object.entries(result.branches)) {
@@ -1287,6 +1306,7 @@ export class GitService {
       if (full) aheadBehind = { ahead: parseInt(full[1], 10), behind: parseInt(full[2], 10) };
       else if (aheadOnly) aheadBehind = { ahead: parseInt(aheadOnly[1], 10), behind: 0 };
       else if (behindOnly) aheadBehind = { ahead: 0, behind: parseInt(behindOnly[1], 10) };
+      const tracking = !isRemote ? trackingInfo.get(cleanName) : undefined;
       branches.push({
         repoId: this.repoId,
         name: cleanName,
@@ -1295,7 +1315,9 @@ export class GitService {
         isRemote,
         remoteName,
         lastCommitHash: fullHashMap.get(cleanName) ?? branch.commit,
-        aheadBehind,
+        upstream: tracking?.upstream,
+        aheadBehind: tracking?.aheadBehind ?? aheadBehind,
+        isGone: tracking?.isGone ?? (branch.label?.includes(': gone]') ?? false),
         isProtected: isBranchProtected(cleanName),
       });
     }
@@ -3021,10 +3043,38 @@ export class GitService {
         .getConfiguration('versiondock')
         .get<boolean>('git.useSafeForcePush', true);
 
+      const currentBranch = await this.getCurrentBranch().catch(() => undefined);
+      const isGone = Boolean(currentBranch?.isGone);
+      const branchName = currentBranch?.name
+        ?? vsRepo?.state.HEAD?.name
+        ?? (await this.git.revparse(['--abbrev-ref', 'HEAD']).catch(() => '')).trim();
+
+      // Resolve configured tracking remote if any (critical when remote tracking branch is deleted/gone)
+      let configuredTrackingRemote: string | undefined;
+      if (branchName) {
+        try {
+          const trackingInfo = (await this.getLocalBranchTrackingInfo()).get(branchName);
+          configuredTrackingRemote = trackingInfo?.upstreamRemote;
+        } catch { /* ignore */ }
+        if (!configuredTrackingRemote) {
+          try {
+            const rawConfigRemote = (await this.git.raw(['config', `branch.${branchName}.remote`])).trim();
+            if (rawConfigRemote) configuredTrackingRemote = rawConfigRemote;
+          } catch { /* ignore */ }
+        }
+      }
+
+      const validConfiguredRemote = configuredTrackingRemote && (configuredRemotes.length === 0 || configuredRemotes.includes(configuredTrackingRemote))
+        ? configuredTrackingRemote
+        : undefined;
+
       if (vsRepo && vsRepo.state.remotes.length > 0) {
-        const branchName = vsRepo.state.HEAD?.name;
-        const hasUpstream = !!vsRepo.state.HEAD?.upstream;
-        const targetRemote = remote ?? vsRepo.state.HEAD?.upstream?.remote ?? vsRepo.state.remotes[0]?.name ?? 'origin';
+        const hasUpstream = !isGone && Boolean(vsRepo.state.HEAD?.upstream);
+        const targetRemote = remote
+          ?? validConfiguredRemote
+          ?? vsRepo.state.HEAD?.upstream?.remote
+          ?? vsRepo.state.remotes[0]?.name
+          ?? 'origin';
         const forceMode = force
           ? (useSafeForcePush ? ForcePushMode.ForceWithLease : ForcePushMode.Force)
           : undefined;
@@ -3032,16 +3082,15 @@ export class GitService {
         return;
       }
       const tracking = await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '');
-      const hasUpstream = !!tracking.trim();
-      const branchName = (await this.git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+      const hasUpstream = !isGone && Boolean(tracking.trim());
       // Match the longest configured prefix because Git permits remote names with
       // slashes (for example, team/upstream/main).
       const remoteNames = configuredRemotes;
       const remoteNamesByLength = [...remoteNames].sort((a, b) => b.length - a.length);
-      const trackingName = tracking.trim();
+      const trackingName = tracking.trim() || currentBranch?.upstream || '';
       const trackingRemote = remoteNamesByLength.find(name => trackingName.startsWith(`${name}/`)) ?? '';
       const firstRemote = remoteNames[0] ?? 'origin';
-      const targetRemote = remote ?? (trackingRemote || firstRemote);
+      const targetRemote = remote ?? validConfiguredRemote ?? (trackingRemote || firstRemote);
       const args = ['push'];
       if (!hasUpstream) args.push('--set-upstream', targetRemote, branchName);
       else if (remote) args.push(remote, branchName);
@@ -3054,7 +3103,25 @@ export class GitService {
     await this.assertBranchOperationAllowed();
     return this.withWriteLock(async () => {
       const configuredRemotes = await this.getRemotes().catch(() => [] as string[]);
-      const targetRemote = remote ?? configuredRemotes[0] ?? 'origin';
+      let targetRemote = remote;
+      if (!targetRemote) {
+        const branch = await this.getCurrentBranch().catch(() => undefined);
+        if (branch) {
+          try {
+            const trackingInfo = (await this.getLocalBranchTrackingInfo()).get(branch.name);
+            if (trackingInfo?.upstreamRemote && (configuredRemotes.length === 0 || configuredRemotes.includes(trackingInfo.upstreamRemote))) {
+              targetRemote = trackingInfo.upstreamRemote;
+            }
+          } catch { /* ignore */ }
+        }
+        if (!targetRemote && branch?.upstream) {
+          const remoteNamesByLength = [...configuredRemotes].sort((a, b) => b.length - a.length);
+          targetRemote = remoteNamesByLength.find(name => branch.upstream!.startsWith(`${name}/`));
+        }
+      }
+      if (!targetRemote) {
+        targetRemote = configuredRemotes[0] ?? 'origin';
+      }
       await this.git.raw(['push', targetRemote, '--tags']);
     });
   }
@@ -3525,31 +3592,17 @@ export class GitService {
   }
 
   async cherryPickMulti(hashes: string[]): Promise<void> {
+    if (hashes.length === 0) return;
     const addSuffix = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.cherryPickAddSuffix', true);
     return this.runStatusSensitiveOperation(async () => {
-      for (let i = 0; i < hashes.length; i++) {
-        const hash = hashes[i];
-        const args = ['cherry-pick'];
-        if (addSuffix) args.push('-x');
-        args.push(hash);
-        try {
-          await this.git.raw(args);
-        } catch (error: unknown) {
-          const remaining = hashes.slice(i + 1);
-          const shortHash = hash.slice(0, 7);
-          const detail = gitErrorDetail(error);
-          if (remaining.length > 0) {
-            throw new Error(t(
-              'Cherry-pick stopped at commit {0} ({1}/{2}): {3}. There are {4} remaining commit(s) not applied. Please resolve conflicts or abort the current cherry-pick before continuing.',
-              shortHash,
-              i + 1,
-              hashes.length,
-              detail,
-              remaining.length,
-            ));
-          }
-          throw new Error(t('Cherry-pick failed at commit {0}: {1}', shortHash, detail));
-        }
+      const args = ['cherry-pick'];
+      if (addSuffix) args.push('-x');
+      args.push(...hashes);
+      try {
+        await this.git.raw(args);
+      } catch (error: unknown) {
+        const detail = gitErrorDetail(error);
+        throw new Error(t('Cherry-pick failed: {0}', detail));
       }
     }, 'cherry-pick');
   }
@@ -5204,118 +5257,113 @@ export class GitService {
   async getIncomingCommits(): Promise<IncomingCommit[]> {
     const RS = '\x1E';
     const FS = '\x1F';
-    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F`;
+    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F`;
 
     const logArgs = (range: string[]): string[] =>
       ['log', ...range, `--format=${FORMAT}`, '--shortstat'];
 
-    try {
-      const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
-      if (!tracking.trim()) return [];
+    const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
+    if (!tracking.trim()) return [];
 
-      const raw = await this.git.raw(logArgs(['HEAD..@{u}']));
-      const commits: IncomingCommit[] = [];
+    const raw = await this.git.raw(logArgs(['HEAD..@{u}']));
+    const commits: IncomingCommit[] = [];
 
-      for (const record of raw.split(RS)) {
-        if (!record.trim()) continue;
-        const parts = record.split(FS);
-        if (parts.length < 6) continue;
-        const hash = parts[0].trim();
-        const shortHash = parts[1].trim();
-        const message = parts[2].trim();
-        const author = parts[3].trim();
-        const date = parts[4].trim();
-        const fullMessage = parts[5].trim();
-        const body = parts[6]?.trim() || undefined;
-        const statText = parts.slice(7).join(FS);
+    for (const record of raw.split(RS)) {
+      if (!record.trim()) continue;
+      const parts = record.split(FS);
+      if (parts.length < 8) continue;
+      const hash = parts[0].trim();
+      const shortHash = parts[1].trim();
+      const message = parts[2].trim();
+      const author = parts[3].trim();
+      const date = parts[4].trim();
+      const fullMessage = parts[5].trim();
+      const body = parts[6]?.trim() || undefined;
+      const parentsRaw = parts[7]?.trim() || '';
+      const parents = parentsRaw ? parentsRaw.split(/\s+/) : [];
+      const statText = parts.slice(8).join(FS);
 
-        const commit: IncomingCommit = {
-          hash,
-          shortHash,
-          message,
-          fullMessage: fullMessage || message,
-          body: body || undefined,
-          author,
-          date,
-        };
-        const statLine = statText.split('\n').find(l => l.includes('changed'));
-        if (statLine) {
-          const files = statLine.match(/(\d+) files? changed/);
-          const ins = statLine.match(/(\d+) insertion/);
-          const del = statLine.match(/(\d+) deletion/);
-          commit.filesChanged = files ? parseInt(files[1], 10) : 0;
-          commit.additions = ins ? parseInt(ins[1], 10) : 0;
-          commit.deletions = del ? parseInt(del[1], 10) : 0;
-        }
-        commits.push(commit);
+      const commit: IncomingCommit = {
+        hash,
+        shortHash,
+        message,
+        fullMessage: fullMessage || message,
+        body: body || undefined,
+        author,
+        date,
+        parents,
+      };
+      const statLine = statText.split('\n').find(l => l.includes('changed'));
+      if (statLine) {
+        const files = statLine.match(/(\d+) files? changed/);
+        const ins = statLine.match(/(\d+) insertion/);
+        const del = statLine.match(/(\d+) deletion/);
+        commit.filesChanged = files ? parseInt(files[1], 10) : 0;
+        commit.additions = ins ? parseInt(ins[1], 10) : 0;
+        commit.deletions = del ? parseInt(del[1], 10) : 0;
       }
-
-      if (commits.length === 0) return [];
-
-      try {
-        const status = await this.getStatus().catch(() => null);
-        const localModifiedPaths = new Set<string>();
-        if (status) {
-          for (const f of [...status.stagedFiles, ...status.unstagedFiles]) {
-            if (f.path) localModifiedPaths.add(f.path);
-          }
-        }
-
-        if (localModifiedPaths.size > 0) {
-          await Promise.all(
-            commits.map(async commit => {
-              try {
-                const commitFiles = await this.getCommitFiles(commit.hash);
-                const conflicts = commitFiles
-                  .map(f => f.path)
-                  .filter(p => localModifiedPaths.has(p));
-                if (conflicts.length > 0) {
-                  commit.potentialConflictPaths = conflicts;
-                }
-              } catch {
-                // Ignore failure for individual commit files
-              }
-            })
-          );
-        }
-      } catch {
-        // Fallback gracefully
-      }
-
-      return commits;
-    } catch {
-      return [];
+      commits.push(commit);
     }
+
+    if (commits.length === 0) return [];
+
+    try {
+      const status = await this.getStatus().catch(() => null);
+      const localModifiedPaths = new Set<string>();
+      if (status) {
+        for (const f of [...status.stagedFiles, ...status.unstagedFiles]) {
+          if (f.path) localModifiedPaths.add(f.path);
+        }
+      }
+
+      if (localModifiedPaths.size > 0) {
+        await Promise.all(
+          commits.map(async commit => {
+            try {
+              const commitFiles = await this.getCommitFiles(commit.hash);
+              const conflicts = commitFiles
+                .map(f => f.path)
+                .filter(p => localModifiedPaths.has(p));
+              if (conflicts.length > 0) {
+                commit.potentialConflictPaths = conflicts;
+              }
+            } catch {
+              // Ignore failure for individual commit files
+            }
+          })
+        );
+      }
+    } catch {
+      // Fallback gracefully
+    }
+
+    return commits;
   }
 
   async getIncomingAggregatedChanges(): Promise<PushCommitFile[]> {
-    try {
-      const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
-      if (!tracking.trim()) return [];
+    const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
+    if (!tracking.trim()) return [];
 
-      const [nameStatusRaw, numStatRaw] = await Promise.all([
-        this.rawPathSafe(['diff', '--name-status', '-z', '-M', 'HEAD...@{u}']).catch(() =>
-          this.rawPathSafe(['diff', '--name-status', '-z', '-M', 'HEAD', '@{u}'])
-        ),
-        this.rawPathSafe(['diff', '--numstat', '-z', '-M', 'HEAD...@{u}']).catch(() =>
-          this.rawPathSafe(['diff', '--numstat', '-z', '-M', 'HEAD', '@{u}'])
-        ),
-      ]);
-      const stats = parseNumStatZOutput(numStatRaw);
-      const files: PushCommitFile[] = [];
-      for (const file of parseNameStatusZOutput(nameStatusRaw)) {
-        const stat = stats.get(file.path);
-        files.push({
-          path: file.path,
-          status: file.code.replace(/\d+$/, ''),
-          added: stat?.added,
-          removed: stat?.removed,
-        });
-      }
-      return files;
-    } catch {
-      return [];
+    const [nameStatusRaw, numStatRaw] = await Promise.all([
+      this.rawPathSafe(['diff', '--name-status', '-z', '-M', 'HEAD...@{u}']).catch(() =>
+        this.rawPathSafe(['diff', '--name-status', '-z', '-M', 'HEAD', '@{u}'])
+      ),
+      this.rawPathSafe(['diff', '--numstat', '-z', '-M', 'HEAD...@{u}']).catch(() =>
+        this.rawPathSafe(['diff', '--numstat', '-z', '-M', 'HEAD', '@{u}'])
+      ),
+    ]);
+    const stats = parseNumStatZOutput(numStatRaw);
+    const files: PushCommitFile[] = [];
+    for (const file of parseNameStatusZOutput(nameStatusRaw)) {
+      const stat = stats.get(file.path);
+      files.push({
+        path: file.path,
+        status: file.code.replace(/\d+$/, ''),
+        added: stat?.added,
+        removed: stat?.removed,
+      });
     }
+    return files;
   }
 
   // ─── Worktree operations ──────────────────────────────────────────────────
