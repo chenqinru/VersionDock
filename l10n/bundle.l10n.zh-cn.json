@@ -152,7 +152,7 @@
   "Push All": "全部推送",
   "View in Git Log": "在 Git 日志中查看",
   "Edit Commit Message…": "编辑提交信息…",
-  "Go to Push": "前往推送",
+  "Go to Sync": "前往同步",
   "Don't show again": "不再显示",
   "VersionDock: {0} unpushed commit ready to push.": "VersionDock：有 {0} 个未推送提交，已可推送。",
   "VersionDock: {0} unpushed commits ready to push.": "VersionDock：有 {0} 个未推送提交，已可推送。",

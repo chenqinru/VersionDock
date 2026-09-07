@@ -65,14 +65,12 @@ On first install, a QuickPick lets you choose your preferred view mode. You can 
 - Click the **×** on a pill to quickly deselect that repository from the commit.
 - In VS Code mode, a per-repository checkbox in the Staged Changes section controls which repositories are included.
 
-### 🚀 Push Tab
+### 🚀 Sync Tab
 
-- Lists unpushed commits for every repository, including branches without an upstream tracking branch.
-- Commit count badge on the tab label, auto-updated after each commit, undo, or push.
-- **Undo** the HEAD commit (with confirmation) directly from the push list.
-- Click any row to jump to that commit in the Git Log panel.
-- **Publish** button for branches that have never been pushed.
-- Silent refresh: existing commits stay visible while reloading (no flicker).
+- Shows incoming and outgoing commits for every repository, including branches without an upstream tracking branch.
+- Filters commits by incoming or outgoing direction and inspects per-commit or aggregated file changes.
+- Adapts the primary action to **Push**, **Pull**, or **Sync**; pull-then-push runs only when both directions have changes.
+- **Undo** an unpushed HEAD commit and jump from any commit row to its matching node in the Git Log panel.
 
 ### 🗄️ Shelve & Stash
 

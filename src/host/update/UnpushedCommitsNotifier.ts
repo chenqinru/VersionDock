@@ -98,10 +98,10 @@ export class UnpushedCommitsNotifier implements vscode.Disposable {
           ? t('VersionDock: {0} unpushed commit across {1} repository.', totalAhead, reposWithAhead)
           : t('VersionDock: {0} unpushed commits across {1} repositories.', totalAhead, reposWithAhead));
 
-      const goToPush = t('Go to Push');
-      const picked = await vscode.window.showInformationMessage(message, goToPush, t('Dismiss'));
+      const goToSync = t('Go to Sync');
+      const picked = await vscode.window.showInformationMessage(message, goToSync, t('Dismiss'));
 
-      if (picked === goToPush) {
+      if (picked === goToSync) {
         await vscode.commands.executeCommand('versiondock.commitPanel.focus');
         this.commitPanel.switchToTab('push');
       }

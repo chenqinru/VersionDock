@@ -152,7 +152,7 @@
   "Push All": "Push All",
   "View in Git Log": "View in Git Log",
   "Edit Commit Message…": "Edit Commit Message…",
-  "Go to Push": "Go to Push",
+  "Go to Sync": "Go to Sync",
   "Don't show again": "Don't show again",
   "VersionDock: {0} unpushed commit ready to push.": "VersionDock: {0} unpushed commit ready to push.",
   "VersionDock: {0} unpushed commits ready to push.": "VersionDock: {0} unpushed commits ready to push.",

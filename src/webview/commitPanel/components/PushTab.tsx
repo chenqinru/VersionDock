@@ -1999,7 +1999,6 @@ export function PushTab(props: Props) {
     const canPull = canPullRepo(solo);
     const ahead = solo.branch.aheadBehind?.ahead ?? 0;
     const behind = solo.branch.aheadBehind?.behind ?? 0;
-    const canSync = canPull || canPush;
     const syncLabel = formatSyncLabel(behind, ahead);
 
     const soloPullItems: SplitDropdownButtonItem[] = [
@@ -2079,7 +2078,7 @@ export function PushTab(props: Props) {
           />
         );
       }
-      // directionFilter === 'all' (默认显示同步按钮，未发布分支显示发布分支)
+      // directionFilter === 'all' (根据当前的单向/双向差异显示精确操作)
       if (!solo.branch.upstream) {
         return (
           <SplitDropdownButton
@@ -2093,10 +2092,38 @@ export function PushTab(props: Props) {
           />
         );
       }
+      if (canPull && !canPush) {
+        return (
+          <SplitDropdownButton
+            fullWidth
+            colorVariant="pull"
+            enabled
+            icon="cloud-download"
+            label={t('Pull')}
+            items={soloPullItems}
+            dropdownAlign="right"
+            onMainClick={() => onPull?.(solo.repoId)}
+          />
+        );
+      }
+      if (canPush && !canPull) {
+        return (
+          <SplitDropdownButton
+            fullWidth
+            colorVariant="push"
+            enabled
+            icon="cloud-upload"
+            label={pushButtonLabel([solo])}
+            items={soloPushItems}
+            dropdownAlign="right"
+            onMainClick={() => onPush(solo.repoId)}
+          />
+        );
+      }
       return (
         <SplitDropdownButton
           fullWidth
-          enabled={canSync}
+          enabled={canPull && canPush}
           icon="sync"
           label={syncLabel}
           items={[]}
@@ -2180,29 +2207,42 @@ export function PushTab(props: Props) {
   };
 
   const handleSync = (strategy?: SyncPullStrategy) => {
-    const syncTargets = Array.from(new Set([...pullableChecked.map(r => r.repoId), ...pushableChecked.map(r => r.repoId)]));
-    if (syncTargets.length === 0) return;
+    const pullOnlyTargets: string[] = [];
+    const pushOnlyTargets: string[] = [];
+    const syncTargets: string[] = [];
 
-    const unpublishedTargets = syncTargets.filter(id => {
-      const repo = repos.find(r => r.repoId === id);
-      return repo && !repo.branch.upstream;
-    });
-    const publishedTargets = syncTargets.filter(id => {
-      const repo = repos.find(r => r.repoId === id);
-      return repo && !!repo.branch.upstream;
-    });
+    for (const repo of checkedRepos) {
+      const canPull = canPullRepo(repo);
+      const canPush = canPushRepo(repo);
+      if (canPull && canPush && repo.branch.upstream) {
+        syncTargets.push(repo.repoId);
+      } else if (canPull) {
+        pullOnlyTargets.push(repo.repoId);
+      } else if (canPush) {
+        pushOnlyTargets.push(repo.repoId);
+      }
+    }
 
-    // 未发布分支直接调用 onPush 执行发布，跳过 pull 流程
-    unpublishedTargets.forEach(id => onPush(id));
+    // 每个仓库只执行它当前需要的操作，避免单向差异被扩大为先拉取再推送。
+    pushOnlyTargets.forEach(id => onPush(id));
 
-    // 已发布分支走正常同步流程
-    if (publishedTargets.length === 1) {
-      onSync?.(publishedTargets[0], strategy);
-    } else if (publishedTargets.length > 1) {
-      if (onSyncMulti) {
-        onSyncMulti(publishedTargets, strategy);
+    if (pullOnlyTargets.length === 1) {
+      onPull?.(pullOnlyTargets[0], strategy);
+    } else if (pullOnlyTargets.length > 1) {
+      if (onPullMulti) {
+        onPullMulti(pullOnlyTargets, strategy);
       } else {
-        publishedTargets.forEach(id => onSync?.(id, strategy));
+        pullOnlyTargets.forEach(id => onPull?.(id, strategy));
+      }
+    }
+
+    if (syncTargets.length === 1) {
+      onSync?.(syncTargets[0], strategy);
+    } else if (syncTargets.length > 1) {
+      if (onSyncMulti) {
+        onSyncMulti(syncTargets, strategy);
+      } else {
+        syncTargets.forEach(id => onSync?.(id, strategy));
       }
     }
   };
@@ -2320,24 +2360,41 @@ export function PushTab(props: Props) {
         />
       );
     }
-    // directionFilter === 'all' (默认显示同步按钮，全未发布显示发布，混合显示同步并发布)
+    // directionFilter === 'all' (根据已选仓库的单向/双向差异显示精确操作)
     const hasChecked = checkedRepos.length > 0;
-    const canSync = hasChecked && (pullableChecked.length > 0 || pushableChecked.length > 0);
+    const hasPullTargets = pullableChecked.length > 0;
+    const hasPushTargets = pushableChecked.length > 0;
 
     const unpublishedChecked = checkedRepos.filter(repo => !repo.branch.upstream);
     const publishedChecked = checkedRepos.filter(repo => !!repo.branch.upstream);
 
-    if (hasChecked && unpublishedChecked.length === checkedRepos.length) {
-      const isEnabled = pushableChecked.length > 0;
+    if (hasChecked && hasPushTargets && !hasPullTargets) {
+      const isPurePush = pushableChecked.every(repo => !!repo.branch.upstream);
       return (
         <SplitDropdownButton
           fullWidth
-          enabled={isEnabled}
+          colorVariant={isPurePush ? 'push' : 'default'}
+          enabled
+          chevronEnabled={isPurePush}
           icon="cloud-upload"
           label={pushButtonLabel(pushableChecked)}
-          items={[]}
+          items={isPurePush ? multiPushItems : []}
           dropdownAlign="right"
           onMainClick={handlePush}
+        />
+      );
+    }
+    if (hasChecked && hasPullTargets && !hasPushTargets) {
+      return (
+        <SplitDropdownButton
+          fullWidth
+          colorVariant="pull"
+          enabled
+          icon="cloud-download"
+          label={pullableChecked.length > 1 ? `${t('Pull')} (${pullableChecked.length})` : t('Pull')}
+          items={multiPullItems}
+          dropdownAlign="right"
+          onMainClick={handlePull}
         />
       );
     }
@@ -2361,7 +2418,7 @@ export function PushTab(props: Props) {
     return (
       <SplitDropdownButton
         fullWidth
-        enabled={canSync}
+        enabled={hasChecked && hasPullTargets && hasPushTargets}
         icon="sync"
         label={syncLabel}
         items={[]}

@@ -1726,7 +1726,7 @@ export function CommitApp() {
     if (!visibleTabs.includes(activeTab)) switchTab('changes');
   }, [activeTab, visibleTabs, switchTab]);
 
-  // Keep unpushed-commit counts fresh for repos without upstream so the Push tab badge
+  // Keep unpushed-commit counts fresh for repos without upstream so the Sync tab badge
   // shows the correct number even before the tab is opened. Upstream repos are live via aheadBehind.ahead.
   // Full refresh on every status update is intentionally avoided to prevent visual noise.
   const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream).map(r => r.repoId).join('\0');
