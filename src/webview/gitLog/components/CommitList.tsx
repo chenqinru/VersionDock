@@ -34,6 +34,7 @@ interface Props {
   backgroundLoading?: boolean;
   expandedRepoIds?: ReadonlySet<string>;
   onToggleRepoName?: (repoId: string) => void;
+  onRetry?: () => void;
   scrollToHash?: string | null;
   onScrolledToHash?: () => void;
 }
@@ -113,7 +114,8 @@ function CommitSkeleton() {
   );
 }
 
-export function CommitList({ commits, selectedHashes, primarySelectedHash, repos, currentBranchByRepo, headHashByRepo, remoteNamesByRepo = {}, onSelect, onLoadMore, hasMore, storeHasMore, loading, backgroundLoading, expandedRepoIds, onToggleRepoName, scrollToHash, onScrolledToHash }: Props) {
+export function CommitList({ commits, selectedHashes, primarySelectedHash, repos, currentBranchByRepo, headHashByRepo, remoteNamesByRepo = {}, onSelect, onLoadMore, onRetry, hasMore, storeHasMore, loading, backgroundLoading, expandedRepoIds, onToggleRepoName, scrollToHash, onScrolledToHash }: Props) {
+  const repoErrors = useLogStore(s => s.repoErrors);
   const parentRef = useRef<HTMLDivElement>(null);
   // Start as true — skeleton is always shown until commits arrive (handles first load correctly)
   const [showSkeleton, setShowSkeleton] = useState(true);
@@ -576,6 +578,62 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
           </div>
         </>
       )}
+
+      {repoErrors && repoErrors.length > 0 && !loading && (() => {
+        const errorDetailTooltip = repoErrors
+          .map(e => `${repoMeta[e.repoId]?.name || e.repoId}: ${e.error}`)
+          .join('\n');
+        const firstError = repoErrors[0];
+        const firstRepoName = repoMeta[firstError.repoId]?.name || firstError.repoId;
+        const firstCleanError = firstError.error.replace(/^error:\s*/i, '').trim().split('\n')[0] || '';
+        const summaryText = repoErrors.length === 1
+          ? t('Failed to load {0}: {1}', firstRepoName, firstCleanError)
+          : t('Failed to load logs for {0} repo(s) ({1}…): {2}', String(repoErrors.length), firstRepoName, firstCleanError);
+
+        return (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 8,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 22,
+              maxWidth: '90%',
+              padding: '4px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              border: '1px solid var(--vscode-inputValidation-errorBorder, #f14c4c)',
+              borderRadius: '4px',
+              background: 'var(--vscode-inputValidation-errorBackground, #5a1d1d)',
+              color: 'var(--vscode-inputValidation-errorForeground, #ffffff)',
+              fontSize: '11px',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.35)',
+            }}
+            title={errorDetailTooltip}
+          >
+            <Codicon name="error" style={{ color: 'var(--vscode-errorForeground, #f14c4c)', flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {summaryText}
+            </span>
+            <button
+              style={{
+                padding: '2px 8px',
+                background: 'var(--vscode-button-background)',
+                color: 'var(--vscode-button-foreground)',
+                border: 'none',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                flexShrink: 0,
+              }}
+              onClick={() => (onRetry ? onRetry() : onLoadMore())}
+            >
+              {t('Retry')}
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -610,7 +668,7 @@ function CommitPopover({ commit, repoKind, remoteNames, rowTop, listRect, mouseX
       }
     };
     window.addEventListener('message', handler);
-    getVsCodeApi().postMessage({ type: 'LOG_REQUEST_COMMIT_FILES', requestId: reqId, repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg);
+    getVsCodeApi().postMessage({ type: 'LOG_REQUEST_COMMIT_FILES', requestId: reqId, repoId: commit.repoId, hash: commit.hash, prefetchContent: false } satisfies LogToHostMsg);
     return () => window.removeEventListener('message', handler);
   }, [commit.hash, commit.repoId]);
 

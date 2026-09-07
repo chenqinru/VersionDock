@@ -7,6 +7,7 @@ import * as path from 'path';
 import type {
   BranchInfo,
   CommitNode,
+  CommitLogList,
   GraphCommitNode,
   FileStatus,
   FileDiff,
@@ -1532,6 +1533,18 @@ export class GitService {
     return fetchTask;
   }
 
+  private isNoCommitsError(err: unknown): boolean {
+    const text = (err instanceof Error ? err.message : String(err)).toLowerCase();
+    return (
+      text.includes('unknown revision or path not in the working tree') ||
+      text.includes('does not have any commits yet') ||
+      text.includes("bad default revision 'head'") ||
+      text.includes("ambiguous argument 'head'") ||
+      text.includes('needed a single revision') ||
+      text.includes('cannot be used with --all')
+    );
+  }
+
   // Log uses raw git format for graph rendering — VS Code API's log() lacks graph parents/refs.
   async getGraphLog(limit?: number): Promise<GraphCommitNode[]> {
     if (limit !== undefined && limit <= 0) return [];
@@ -1546,16 +1559,23 @@ export class GitService {
       '--exclude=refs/versiondock/ai-composer/*',
       '--all',
     ];
-    const [raw, metadata] = await Promise.all([
-      this.git.raw(args),
-      this.getLogMetadata([], false),
-    ]);
-    return parseGraphLogOutput(raw, this.repoId, metadata.refsByHash);
+    try {
+      const [raw, metadata] = await Promise.all([
+        this.git.raw(args),
+        this.getLogMetadata([], false),
+      ]);
+      return parseGraphLogOutput(raw, this.repoId, metadata.refsByHash);
+    } catch (err: unknown) {
+      if (this.isNoCommitsError(err)) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   // Full log data stays paginated because it also resolves author/message and
   // local/remote state. The lightweight graph log above is safe to prefetch.
-  async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange; worktreeServices?: GitService[] }): Promise<CommitNode[]> {
+  async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange; worktreeServices?: GitService[]; consumer?: string }): Promise<CommitNode[]> {
     const revisionSearch = await this.resolveRevisionSearch(opts?.filterText);
     if (revisionSearch !== undefined && (skip > 0 || !revisionSearch)) return [];
     if (revisionSearch !== undefined && opts?.filterBranch && !(await this.isAncestor(revisionSearch, opts.filterBranch))) {
@@ -1596,10 +1616,28 @@ export class GitService {
 
     const worktreeServices = opts?.worktreeServices ?? [];
     const forceFresh = skip === 0;
-    const [raw, metadata] = await Promise.all([
-      this.git.raw(args),
-      this.getLogMetadata(worktreeServices, forceFresh),
-    ]);
+    let raw = '';
+    let metadata: {
+      refsByHash: Map<string, string[]>;
+      unpushedHashes: Set<string> | 'all';
+      incomingHashes: Set<string>;
+      worktreeUnpushedHashes: Set<string>;
+    };
+    try {
+      const [rawResult, metaResult] = await Promise.all([
+        this.git.raw(args),
+        this.getLogMetadata(worktreeServices, forceFresh),
+      ]);
+      raw = rawResult;
+      metadata = metaResult;
+    } catch (err: unknown) {
+      if (this.isNoCommitsError(err)) {
+        const emptyList: CommitLogList = [];
+        emptyList.hasMore = false;
+        return emptyList;
+      }
+      throw err;
+    }
     const commits = parseLogOutput(raw, this.repoId, metadata.refsByHash);
 
     // Mark unpushed commits: hashes ahead of the remote tracking branch.

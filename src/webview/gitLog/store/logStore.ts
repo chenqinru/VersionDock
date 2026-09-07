@@ -79,6 +79,7 @@ interface LogState {
   branchFilter: string;
   commitFilters: CommitFilters;
   error: string | null;
+  repoErrors: Array<{ repoId: string; error: string }> | null;
   pendingScrollHash: string | null;
   replaceCommitsOnNextBatch: boolean;
   compareState: CompareState | null;
@@ -108,6 +109,7 @@ interface LogState {
   setCommitFilters: (filters: Partial<CommitFilters>) => void;
   updateBranches: (repoId: string, branches: BranchInfo[]) => void;
   setError: (err: string | null) => void;
+  setRepoErrors: (errors: Array<{ repoId: string; error: string }> | null | undefined) => void;
   setPendingScrollHash: (hash: string | null) => void;
   clearSelection: () => void;
 }
@@ -189,6 +191,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   branchFilter: '',
   commitFilters: { ...defaultCommitFilters },
   error: null,
+  repoErrors: null,
   pendingScrollHash: null,
   replaceCommitsOnNextBatch: false,
   compareState: null,
@@ -306,6 +309,7 @@ export const useLogStore = create<LogState>((set, get) => ({
     graphCommits: [],
     replaceCommitsOnNextBatch: true,
     compareState: null,
+    repoErrors: null,
   }),
   openCompare: (compare) => set({
     mode: 'compare',
@@ -457,6 +461,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       : {}
   )),
   setError: (err) => set({ error: err }),
+  setRepoErrors: (errors) => set({ repoErrors: errors ?? null }),
   setPendingScrollHash: (hash) => set({ pendingScrollHash: hash }),
   clearSelection: () => set({
     selectedCommitHashes: [],

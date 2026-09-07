@@ -1022,10 +1022,10 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       return;
     }
 
-    const filesByRepo = new Map<string, Set<string>>();
+    const filesByRepo = new Map<string, Map<string, { path: string; status: string }>>();
     for (const file of activeFiles) {
-      const repoFiles = filesByRepo.get(file.repoId) ?? new Set<string>();
-      repoFiles.add(file.path);
+      const repoFiles = filesByRepo.get(file.repoId) ?? new Map<string, { path: string; status: string }>();
+      repoFiles.set(file.path, { path: file.path, status: file.status });
       filesByRepo.set(file.repoId, repoFiles);
     }
 
@@ -1041,7 +1041,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
           ? previousSvnRevision(oldest.hash)
           : oldest.parents[0],
         toHash: newest.hash,
-        files: Array.from(repoFiles),
+        files: Array.from(repoFiles.values()),
       }];
     });
 

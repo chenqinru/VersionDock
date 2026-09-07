@@ -8,6 +8,7 @@ import type { BlameLine } from '../git/BlameService';
 import type {
   BranchInfo,
   CommitNode,
+  CommitLogList,
   ConflictFileStatus,
   ConflictPropertyValue,
   ConflictType,
@@ -26,6 +27,9 @@ import { scopedKey } from '../utils/scopedKey';
 import type { SvnUpdateSnapshot, VcsUpdateSnapshot } from '../update/types';
 
 const SVN_REVISION_CONTENT_CACHE_LIMIT = 200;
+const SVN_REVISION_CONTENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
+const SVN_MAX_CACHEABLE_FILE_BYTES = 1 * 1024 * 1024;
+const SVN_STATUS_CACHE_TTL_MS = 2500;
 const SVN_COMMIT_META_CACHE_LIMIT = 500;
 const SVN_COMMIT_FILES_CACHE_LIMIT = 200;
 const SVN_BLAME_CACHE_LIMIT = 20;
@@ -123,6 +127,7 @@ interface SvnRemoteStatus {
 
 interface SvnCommandOptions {
   timeout?: number;
+  signal?: AbortSignal;
 }
 
 export interface SvnIgnoreEntry {
@@ -352,6 +357,25 @@ export class SvnService extends GitService {
   private readonly commitMetaCache = new Map<string, Promise<{ meta: { hash: string; shortHash: string; message: string; authorName: string; authorEmail: string; authorDate: string; committerDate: string; parents: string[] }; fullMessage: string }>>();
   private readonly commitFilesCache = new Map<string, Promise<Array<{ path: string; status: string; added?: number; removed?: number }>>>();
   private readonly blameCache = new Map<string, Promise<BlameLine[]>>();
+  private readonly revisionContentSizes = new Map<string, number>();
+  private revisionContentTotalBytes = 0;
+  private statusGeneration = 0;
+  private lastStatusSnapshot?: { status: RepoStatus; timestamp: number };
+  private statusInFlight?: { generation: number; task: Promise<RepoStatus> };
+  private logHistoryEntries: SvnLogEntry[] = [];
+  private logHistoryHeadRevision?: string;
+  private logHistoryGeneration = 0;
+  private headLogInFlight: { limit: number; promise: Promise<SvnLogEntry[]> } | null = null;
+  private activeSearches = new Map<string, {
+    key: string;
+    matchedEntries: SvnLogEntry[];
+    nextCursorRev: number | undefined;
+    reachedEnd: boolean;
+    lastError?: string;
+    abortController: AbortController;
+    generation: number;
+  }>();
+  private prefetchAbortController?: AbortController;
   private infoCache?: { info: SvnInfo; metadataMtimeMs?: number };
   private incomingStateCache?: SvnIncomingState;
   private incomingStateTask?: Promise<SvnIncomingState>;
@@ -368,8 +392,10 @@ export class SvnService extends GitService {
   private lastIncomingStateFailureTime = 0;
   private remoteBranchesCache?: { branches: string[]; hasTrunk: boolean; timestamp: number };
   private remoteBranchesTask?: Promise<BranchInfo[]>;
+  private remoteBranchesGeneration = 0;
   private remoteTagsCache?: { tags: Array<{ name: string; hash: string; date: string }>; timestamp: number };
   private remoteTagsTask?: Promise<Array<{ name: string; hash: string; date: string }>>;
+  private remoteTagsGeneration = 0;
 
   constructor(
     repoId: string,
@@ -380,6 +406,20 @@ export class SvnService extends GitService {
     logger?: import('../utils/Logger').VersionDockLogger,
   ) {
     super(repoId, rootPath, suppressStatusUpdates, refreshStatus, publishMissingRemote, logger);
+  }
+
+  protected override runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: import('../git/GitService').StatusOperationKind, label?: string): Promise<T> {
+    this.invalidateStatusCache();
+    this.clearLogHistoryCache();
+    this.clearBranchesCache();
+    this.clearTagsCache();
+    return super.runStatusSensitiveOperation(async () => {
+      try {
+        return await operation();
+      } finally {
+        this.invalidateStatusCache();
+      }
+    }, kind, label);
   }
 
   private async svn(args: string[], options: SvnCommandOptions = {}): Promise<string> {
@@ -400,6 +440,7 @@ export class SvnService extends GitService {
       const result = await execCli('svn', this.withGlobalArgs(args, ['--non-interactive']), {
         cwd: this.rootPath,
         timeout: options.timeout,
+        signal: options.signal,
       });
       return result.stdout;
     } catch (error: unknown) {
@@ -445,6 +486,7 @@ export class SvnService extends GitService {
         cwd: this.rootPath,
         timeout: options.timeout,
         stdin: supportsPasswordFromStdin ? `${credentials.password}\n` : undefined,
+        signal: options.signal,
       });
       SvnService.authFailureTimes.delete(authKey);
       this.authenticationStatusCache = undefined;
@@ -867,6 +909,10 @@ export class SvnService extends GitService {
     this.incomingStateCache = undefined;
     this.incomingStateTask = undefined;
     this.incomingStateTaskUrl = undefined;
+    this.invalidateStatusCache();
+    this.clearLogHistoryCache();
+    this.clearBranchesCache();
+    this.clearTagsCache();
   }
 
   private async getRemoteHeadRevision(): Promise<number | undefined> {
@@ -1588,8 +1634,15 @@ export class SvnService extends GitService {
       .map(revision => `r${revision}`);
   }
 
-  async getBranches(): Promise<BranchInfo[]> {
+  async getBranches(options?: { force?: boolean }): Promise<BranchInfo[]> {
+    const staleBranchesCache = this.remoteBranchesCache;
+    if (options?.force) {
+      this.remoteBranchesGeneration++;
+      this.remoteBranchesCache = undefined;
+      this.remoteBranchesTask = undefined;
+    }
     if (this.remoteBranchesTask) return this.remoteBranchesTask;
+    const taskGen = this.remoteBranchesGeneration;
     const task = (async (): Promise<BranchInfo[]> => {
       const current = await this.getCurrentBranch();
       const branches: BranchInfo[] = [current];
@@ -1615,11 +1668,17 @@ export class SvnService extends GitService {
       let hasTrunk = false;
       const discoveredBranches: string[] = [];
       try {
-        const trunkPromise = this.svn(['ls', '--xml', '^/trunk'], { timeout: 3000 })
+        const trunkPromise = this.svn(['ls', '--xml', '^/trunk'], { timeout: 8000 })
           .then(() => true)
-          .catch(() => false);
-        const branchesPromise = this.svn(['ls', '--xml', '^/branches'], { timeout: 3000 })
-          .catch(() => '');
+          .catch(error => {
+            if (this.isPathNotFoundError(error)) return false;
+            throw error;
+          });
+        const branchesPromise = this.svn(['ls', '--xml', '^/branches'], { timeout: 8000 })
+          .catch(error => {
+            if (this.isPathNotFoundError(error)) return '';
+            throw error;
+          });
         const [trunk, rawBranches] = await Promise.all([trunkPromise, branchesPromise]);
         if (trunk) {
           hasTrunk = true;
@@ -1631,17 +1690,33 @@ export class SvnService extends GitService {
             discoveredBranches.push(entry.name);
             addBranch(entry.name);
           });
-        this.remoteBranchesCache = {
-          hasTrunk,
-          branches: discoveredBranches,
-          timestamp: Date.now(),
-        };
-      } catch {
-        this.remoteBranchesCache = {
-          hasTrunk: false,
-          branches: [],
-          timestamp: Date.now(),
-        };
+        if (this.remoteBranchesGeneration === taskGen) {
+          this.remoteBranchesCache = {
+            hasTrunk,
+            branches: discoveredBranches,
+            timestamp: Date.now(),
+          };
+        }
+      } catch (error) {
+        this.logger?.error('SvnService', 'Failed to query remote branches', error);
+        // Retain previous cache if available, but set 3-second cooldown so next query can retry promptly
+        if (this.remoteBranchesGeneration === taskGen) {
+          const fallbackCache = this.remoteBranchesCache || staleBranchesCache;
+          if (fallbackCache) {
+            this.remoteBranchesCache = {
+              ...fallbackCache,
+              timestamp: Date.now() - (SVN_REMOTE_BRANCHES_CACHE_TTL_MS - 3000),
+            };
+            if (fallbackCache.hasTrunk) addBranch('trunk');
+            fallbackCache.branches.forEach(name => addBranch(name));
+          } else {
+            this.remoteBranchesCache = {
+              hasTrunk: false,
+              branches: [],
+              timestamp: Date.now() - (SVN_REMOTE_BRANCHES_CACHE_TTL_MS - 3000),
+            };
+          }
+        }
       }
       return branches;
     })().finally(() => {
@@ -1654,7 +1729,13 @@ export class SvnService extends GitService {
     return await task;
   }
 
-  async getTags(): Promise<Array<{ name: string; hash: string; date: string }>> {
+  async getTags(options?: { force?: boolean }): Promise<Array<{ name: string; hash: string; date: string }>> {
+    const staleTagsCache = this.remoteTagsCache;
+    if (options?.force) {
+      this.remoteTagsGeneration++;
+      this.remoteTagsCache = undefined;
+      this.remoteTagsTask = undefined;
+    }
     if (
       this.remoteTagsCache
       && Date.now() - this.remoteTagsCache.timestamp < SVN_REMOTE_TAGS_CACHE_TTL_MS
@@ -1662,10 +1743,15 @@ export class SvnService extends GitService {
       return this.remoteTagsCache.tags;
     }
     if (this.remoteTagsTask) return this.remoteTagsTask;
+    const taskGen = this.remoteTagsGeneration;
 
     const task = (async (): Promise<Array<{ name: string; hash: string; date: string }>> => {
       try {
-        const rawTags = await this.svn(['ls', '--xml', '^/tags'], { timeout: 3000 }).catch(() => '');
+        const rawTags = await this.svn(['ls', '--xml', '^/tags'], { timeout: 8000 })
+          .catch(error => {
+            if (this.isPathNotFoundError(error)) return '';
+            throw error;
+          });
         const tags = this.parseListEntries(rawTags)
           .filter(entry => entry.kind === 'dir')
           .map(entry => ({
@@ -1673,11 +1759,24 @@ export class SvnService extends GitService {
             hash: entry.revision ? `r${entry.revision}` : entry.name,
             date: entry.date,
           }));
-        this.remoteTagsCache = { tags, timestamp: Date.now() };
+        if (this.remoteTagsGeneration === taskGen) {
+          this.remoteTagsCache = { tags, timestamp: Date.now() };
+        }
         return tags;
-      } catch {
-        this.remoteTagsCache = { tags: [], timestamp: Date.now() };
-        return [];
+      } catch (error) {
+        this.logger?.error('SvnService', 'Failed to query remote tags', error);
+        if (this.remoteTagsGeneration === taskGen) {
+          const fallbackCache = this.remoteTagsCache || staleTagsCache;
+          if (fallbackCache) {
+            this.remoteTagsCache = {
+              ...fallbackCache,
+              timestamp: Date.now() - (SVN_REMOTE_TAGS_CACHE_TTL_MS - 3000),
+            };
+          } else {
+            this.remoteTagsCache = { tags: [], timestamp: Date.now() - (SVN_REMOTE_TAGS_CACHE_TTL_MS - 3000) };
+          }
+        }
+        return this.remoteTagsCache?.tags ?? [];
       }
     })().finally(() => {
       if (this.remoteTagsTask === task) {
@@ -1689,26 +1788,131 @@ export class SvnService extends GitService {
     return await task;
   }
 
+  public invalidateStatusCache(): void {
+    this.statusGeneration++;
+    this.lastStatusSnapshot = undefined;
+    this.statusInFlight = undefined;
+  }
+
+  public clearLogHistoryCache(): void {
+    this.logHistoryGeneration++;
+    this.logHistoryEntries = [];
+    this.logHistoryHeadRevision = undefined;
+    this.headLogInFlight = null;
+    for (const session of this.activeSearches.values()) {
+      session.abortController.abort();
+    }
+    this.activeSearches.clear();
+  }
+
+  public clearBranchesCache(): void {
+    this.remoteBranchesGeneration++;
+    this.remoteBranchesCache = undefined;
+    this.remoteBranchesTask = undefined;
+  }
+
+  public clearTagsCache(): void {
+    this.remoteTagsGeneration++;
+    this.remoteTagsCache = undefined;
+    this.remoteTagsTask = undefined;
+  }
+
   async getStatusFresh(): Promise<RepoStatus> {
-    const [branch, files, operationState] = await Promise.all([
-      this.getCurrentBranch(),
-      this.parseSvnStatus(),
-      this.getMergeRebaseState(),
-    ]);
-    const conflictCount = files.filter(file => file.status === 'conflicted').length;
-    return {
-      repoId: this.repoId,
-      branch,
-      stagedFiles: [],
-      unstagedFiles: files,
-      isDetachedHead: !!branch.detachedTag,
-      conflictCount,
-      operationState,
-    };
+    if (this.statusInFlight && this.statusInFlight.generation === this.statusGeneration) {
+      return this.statusInFlight.task;
+    }
+
+    const generation = this.statusGeneration;
+    const task = (async (): Promise<RepoStatus> => {
+      const [branch, files, operationState] = await Promise.all([
+        this.getCurrentBranch(),
+        this.parseSvnStatus(),
+        this.getMergeRebaseState(),
+      ]);
+      const conflictCount = files.filter(file => file.status === 'conflicted').length;
+      const status: RepoStatus = {
+        repoId: this.repoId,
+        branch,
+        stagedFiles: [],
+        unstagedFiles: files,
+        isDetachedHead: !!branch.detachedTag,
+        conflictCount,
+        operationState,
+      };
+
+      if (this.statusGeneration !== generation) {
+        return this.getStatusFresh();
+      }
+
+      this.lastStatusSnapshot = { status, timestamp: Date.now() };
+      return status;
+    })().finally(() => {
+      if (this.statusInFlight?.task === task) {
+        this.statusInFlight = undefined;
+      }
+    });
+
+    this.statusInFlight = { generation, task };
+    return await task;
   }
 
   async getStatus(): Promise<RepoStatus> {
+    if (
+      this.lastStatusSnapshot
+      && Date.now() - this.lastStatusSnapshot.timestamp < SVN_STATUS_CACHE_TTL_MS
+    ) {
+      return this.lastStatusSnapshot.status;
+    }
+    if (this.statusInFlight && this.statusInFlight.generation === this.statusGeneration) {
+      return this.statusInFlight.task;
+    }
     return this.getStatusFresh();
+  }
+
+  private async ensureHeadLogEntries(limit: number, opts?: { force?: boolean }): Promise<SvnLogEntry[]> {
+    if (!opts?.force && this.logHistoryEntries.length >= limit) {
+      return this.logHistoryEntries.slice(0, limit);
+    }
+    if (!opts?.force && this.headLogInFlight && this.headLogInFlight.limit >= limit) {
+      const entries = await this.headLogInFlight.promise;
+      return entries.slice(0, limit);
+    }
+
+    const generation = this.logHistoryGeneration;
+    const fetchLimit = limit;
+    const task = (async (): Promise<SvnLogEntry[]> => {
+      const raw = await this.svn(['log', '--xml', '-r', 'HEAD:1', '--limit', String(fetchLimit)], { timeout: 15_000 });
+      const freshEntries = this.parseLogEntries(raw);
+      const info = await this.getInfo().catch((): SvnInfo => ({
+        url: '',
+        relativeUrl: '',
+        rootUrl: '',
+        revision: undefined,
+      }));
+      this.populateCommitMetaCacheFromLogEntries(freshEntries);
+      this.populateCommitFilesCacheFromLogEntries(freshEntries, info);
+
+      if (this.logHistoryGeneration !== generation) {
+        return freshEntries;
+      }
+
+      const remoteHead = freshEntries[0]?.revision;
+      if (remoteHead && this.logHistoryHeadRevision === remoteHead && this.logHistoryEntries.length >= fetchLimit && !opts?.force) {
+        return this.logHistoryEntries.slice(0, fetchLimit);
+      }
+      this.logHistoryEntries = freshEntries;
+      this.logHistoryHeadRevision = remoteHead ?? info.revision;
+      return freshEntries;
+    })();
+
+    this.headLogInFlight = { limit: fetchLimit, promise: task };
+    try {
+      return await task;
+    } finally {
+      if (this.headLogInFlight?.promise === task) {
+        this.headLogInFlight = null;
+      }
+    }
   }
 
   async getGraphLog(limit?: number): Promise<GraphCommitNode[]> {
@@ -1716,16 +1920,20 @@ export class SvnService extends GitService {
     const info = await this.getInfo();
     const localRevision = await this.resolveEffectiveLocalRevision(info);
     const safeLimit = limit === undefined ? SVN_GRAPH_LOG_SAFE_LIMIT : Math.min(limit, SVN_GRAPH_LOG_SAFE_LIMIT);
-    const args = [
-      'log',
-      '--xml',
-      '-r',
-      'HEAD:1',
-      ...(safeLimit === undefined ? [] : ['--limit', String(safeLimit)]),
-    ];
-    const raw = await this.svn(args);
-    const entries = this.parseLogEntries(raw);
-    const headRevision = entries[0]?.revision ?? info.revision;
+
+    let entries: SvnLogEntry[];
+    if (this.logHistoryEntries.length >= safeLimit && (!this.logHistoryHeadRevision || this.logHistoryHeadRevision === info.revision)) {
+      entries = this.logHistoryEntries.slice(0, safeLimit);
+    } else {
+      try {
+        entries = await this.ensureHeadLogEntries(safeLimit);
+      } catch (error: unknown) {
+        this.logger?.error('SvnService', 'Failed to load graph log entries', error);
+        entries = this.logHistoryEntries.slice(0, safeLimit);
+      }
+    }
+
+    const headRevision = entries[0]?.revision ?? this.logHistoryHeadRevision ?? info.revision;
     return entries.map(entry => ({
       hash: `r${entry.revision}`,
       repoId: this.repoId,
@@ -1738,7 +1946,8 @@ export class SvnService extends GitService {
     }));
   }
 
-  async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }): Promise<CommitNode[]> {
+  async getLog(limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange; force?: boolean; consumer?: string }): Promise<CommitNode[]> {
+    const consumerKey = opts?.consumer || 'default';
     const info = await this.getInfo();
     if (!this.matchesRefFilter(info, opts?.filterBranch)) return [];
     const filterText = opts?.filterText?.trim() ?? '';
@@ -1754,85 +1963,205 @@ export class SvnService extends GitService {
     if (selectionRevisions && selectionRevisions.size === 0) return [];
     if (revisionSearch !== undefined && selectionRevisions && !selectionRevisions.has(String(revisionSearch))) return [];
 
-    const numericSelectionRevisions = selectionRevisions
-      ? Array.from(selectionRevisions)
-        .map(parseRevisionNumber)
-        .filter((revision): revision is number => revision !== undefined)
-        .sort((a, b) => b - a)
-      : [];
-    const args = ['log', '--xml'];
-    if (selectionRevisions) {
-      if (numericSelectionRevisions.length === 0) return [];
-      args.push('-r', `${numericSelectionRevisions[0]}:${numericSelectionRevisions[numericSelectionRevisions.length - 1]}`);
-    } else if (revisionSearch !== undefined) {
-      args.push('-r', String(revisionSearch));
-    } else {
-      args.push('-r', 'HEAD:1');
-      const hasPostFetchFilters = !!(
-        filterText
-        || opts?.filterAuthor?.trim()
-        || opts?.filterDateFrom
-        || opts?.filterDateTo
-      );
-      // Apply filters to the complete history before paginating. SVN's
-      // --limit truncates the source entries, so limiting here would hide
-      // matching older revisions.
-      if (!hasPostFetchFilters) {
-        args.push('--limit', String(Math.max(limit + skip, limit)));
+    const hasPostFetchFilters = !!(
+      filterText
+      || opts?.filterAuthor?.trim()
+      || opts?.filterDateFrom
+      || opts?.filterDateTo
+    );
+
+    let entries: SvnLogEntry[] = [];
+    let headRevision: string | undefined = info.revision;
+
+    // Fast path: Standard linear pagination without ad-hoc path or query filters.
+    // Uses cached linear history and cursor-based queries (-r (oldestRev-1):1 --limit N).
+    const isStandardLinearLog = !selectionRevisions && revisionSearch === undefined && !hasPostFetchFilters && !opts?.filterPath;
+    const needTotal = skip + limit;
+
+    const existingSearch = this.activeSearches.get(consumerKey);
+    if (!hasPostFetchFilters && existingSearch) {
+      existingSearch.abortController.abort();
+      this.activeSearches.delete(consumerKey);
+    }
+
+    if (isStandardLinearLog) {
+      if (!opts?.force && this.logHistoryEntries.length >= needTotal) {
+        entries = this.logHistoryEntries.slice(skip, needTotal);
+      } else if (this.logHistoryEntries.length === 0 || opts?.force) {
+        try {
+          const freshEntries = await this.ensureHeadLogEntries(needTotal, opts);
+          entries = freshEntries.slice(skip, needTotal);
+        } catch (error: unknown) {
+          this.logger?.error('SvnService', 'Failed to fetch fresh HEAD log', error);
+          entries = this.logHistoryEntries.slice(skip, needTotal);
+        }
       } else {
-        // Safe upper bound when filtering, preventing 10,000+ revision full tree scans
+        const needCount = needTotal - this.logHistoryEntries.length;
+        const fetchLimit = needCount;
+        const lastEntry = this.logHistoryEntries[this.logHistoryEntries.length - 1];
+        const oldestRevNumber = lastEntry ? parseRevisionNumber(lastEntry.revision) : undefined;
+
+        if (oldestRevNumber !== undefined && oldestRevNumber <= 1) {
+          entries = this.logHistoryEntries.slice(skip, needTotal);
+        } else {
+          const fetchRange = oldestRevNumber !== undefined && oldestRevNumber > 1
+            ? `${oldestRevNumber - 1}:1`
+            : 'HEAD:1';
+
+          const generation = this.logHistoryGeneration;
+          try {
+            const raw = await this.svn(['log', '--xml', '-r', fetchRange, '--limit', String(fetchLimit)], { timeout: 15_000 });
+            const newEntries = this.parseLogEntries(raw);
+            this.populateCommitMetaCacheFromLogEntries(newEntries);
+            this.populateCommitFilesCacheFromLogEntries(newEntries, info);
+
+            if (this.logHistoryGeneration === generation) {
+              const existingRevs = new Set(this.logHistoryEntries.map(e => e.revision));
+              for (const e of newEntries) {
+                if (!existingRevs.has(e.revision)) {
+                  this.logHistoryEntries.push(e);
+                  existingRevs.add(e.revision);
+                }
+              }
+            }
+          } catch (error: unknown) {
+            this.logger?.error('SvnService', 'Failed to fetch linear log page', error);
+          }
+          entries = this.logHistoryEntries.slice(skip, needTotal);
+        }
+      }
+      headRevision = this.logHistoryEntries[0]?.revision ?? info.revision;
+    } else if (hasPostFetchFilters && !selectionRevisions && revisionSearch === undefined) {
+      const searchKey = `${opts?.filterPath ?? ''}::${filterText}::${opts?.filterAuthor?.trim() ?? ''}::${opts?.filterDateFrom ?? ''}::${opts?.filterDateTo ?? ''}`;
+      let active = this.activeSearches.get(consumerKey);
+      if (opts?.force || !active || active.key !== searchKey) {
+        active?.abortController.abort();
+        active = {
+          key: searchKey,
+          matchedEntries: [],
+          nextCursorRev: undefined,
+          reachedEnd: false,
+          abortController: new AbortController(),
+          generation: (active?.generation ?? 0) + 1,
+        };
+        this.activeSearches.set(consumerKey, active);
+      }
+
+      const targetCount = skip + limit;
+      const CHUNK_SIZE = 300;
+      const MAX_BATCH_SCANNED = 3000;
+      let batchScanned = 0;
+      const currentAbort = active.abortController;
+      const currentGen = active.generation;
+
+      while (active.matchedEntries.length < targetCount && !active.reachedEnd && batchScanned < MAX_BATCH_SCANNED) {
+        if (currentAbort.signal.aborted || active.generation !== currentGen) {
+          return [];
+        }
+        const fetchRange = active.nextCursorRev !== undefined ? `${active.nextCursorRev}:1` : 'HEAD:1';
+        const chunkArgs = ['log', '--xml', '-r', fetchRange, '--limit', String(CHUNK_SIZE)];
+        if (opts?.filterPath) chunkArgs.push('--', this.workingCopyTarget(opts.filterPath));
+
+        let rawChunk = '';
+        try {
+          rawChunk = await this.svn(chunkArgs, { timeout: 15_000, signal: currentAbort.signal });
+          active.lastError = undefined;
+        } catch (error: unknown) {
+          if (currentAbort.signal.aborted || active.generation !== currentGen) {
+            return [];
+          }
+          const errMsg = error instanceof Error ? error.message : String(error);
+          this.logger?.error('SvnService', 'Search chunk scan failed', error);
+          active.lastError = errMsg;
+          break;
+        }
+
+        if (currentAbort.signal.aborted || active.generation !== currentGen) {
+          return [];
+        }
+
+        const chunkEntries = this.parseLogEntries(rawChunk);
+        if (chunkEntries.length === 0) {
+          active.reachedEnd = true;
+          break;
+        }
+        batchScanned += chunkEntries.length;
+
+        this.populateCommitMetaCacheFromLogEntries(chunkEntries);
+        this.populateCommitFilesCacheFromLogEntries(chunkEntries, info);
+
+        for (const entry of chunkEntries) {
+          const matchText = !filterText || entry.message.toLowerCase().includes(filterText.toLowerCase());
+          const matchAuthor = !opts?.filterAuthor || entry.author.toLowerCase().includes(opts.filterAuthor.toLowerCase());
+          const matchDateFrom = !opts?.filterDateFrom || new Date(entry.date) >= new Date(opts.filterDateFrom);
+          const matchDateTo = !opts?.filterDateTo || new Date(entry.date) <= new Date(opts.filterDateTo);
+          if (matchText && matchAuthor && matchDateFrom && matchDateTo) {
+            active.matchedEntries.push(entry);
+          }
+        }
+
+        const lastRev = parseRevisionNumber(chunkEntries[chunkEntries.length - 1]?.revision);
+        if (lastRev === undefined || lastRev <= 1 || chunkEntries.length < CHUNK_SIZE) {
+          active.reachedEnd = true;
+          break;
+        }
+        active.nextCursorRev = lastRev - 1;
+      }
+
+      entries = active.matchedEntries.slice(skip, skip + limit);
+    } else {
+      // Explicit revision number search or path-line blame history query
+      const numericSelectionRevisions = selectionRevisions
+        ? Array.from(selectionRevisions)
+          .map(parseRevisionNumber)
+          .filter((revision): revision is number => revision !== undefined)
+          .sort((a, b) => b - a)
+        : [];
+      const args = ['log', '--xml'];
+      if (selectionRevisions) {
+        if (numericSelectionRevisions.length === 0) return [];
+        args.push('-r', `${numericSelectionRevisions[0]}:${numericSelectionRevisions[numericSelectionRevisions.length - 1]}`);
+      } else if (revisionSearch !== undefined) {
+        args.push('-r', String(revisionSearch));
+      } else {
+        args.push('-r', 'HEAD:1');
         args.push('--limit', String(Math.max(limit + skip, SVN_FILTER_SEARCH_SCAN_LIMIT)));
       }
-    }
-    if (opts?.filterPath) args.push('--', this.workingCopyTarget(opts.filterPath));
-    let raw: string;
-    try {
-      raw = await this.svn(args, { timeout: 15_000 });
-    } catch (error: unknown) {
-      // Searching an unknown SVN revision should behave like an empty result,
-      // matching Git's unresolved-hash behavior instead of surfacing a CLI error.
-      if (revisionSearch !== undefined && this.errorText(error).toLowerCase().includes('e160006')) return [];
-      throw error;
-    }
-    const allEntries = this.parseLogEntries(raw);
-    this.populateCommitFilesCacheFromLogEntries(allEntries, info);
-    const headRevision = selectionRevisions ? undefined : allEntries[0]?.revision ?? info.revision;
-    const entries = allEntries
-      .filter(entry => !selectionRevisions || selectionRevisions.has(entry.revision))
-      .filter(entry => revisionSearch === undefined || entry.revision === String(revisionSearch))
-      .filter(entry => revisionSearch !== undefined || !filterText || entry.message.toLowerCase().includes(filterText.toLowerCase()))
-      .filter(entry => !opts?.filterAuthor || entry.author.toLowerCase().includes(opts.filterAuthor.toLowerCase()))
-      .filter(entry => !opts?.filterDateFrom || new Date(entry.date) >= new Date(opts.filterDateFrom))
-      .filter(entry => !opts?.filterDateTo || new Date(entry.date) <= new Date(opts.filterDateTo))
-      .slice(skip, skip + limit);
-
-    // In background, prefetch changed files for the first few visible revisions (e.g. 5)
-    // so the initial commit selection and adjacent clicks render instantly (0ms).
-    if (skip === 0 && !selectionRevisions && !opts?.filterPath && entries.length > 0) {
-      void (async () => {
-        try {
-          const topEntries = entries.slice(0, 5);
-          const revisionsToPrefetch = topEntries
-            .map(e => e.revision)
-            .filter(r => Boolean(r) && !this.commitFilesCache.has(r));
-          if (revisionsToPrefetch.length > 0) {
-            const rawLog = await this.svn([
-              'log',
-              '--xml',
-              '-v',
-              '-r',
-              `${revisionsToPrefetch[0]}:${revisionsToPrefetch[revisionsToPrefetch.length - 1]}`,
-            ]);
-            const prefetchEntries = this.parseLogEntries(rawLog);
-            this.populateCommitFilesCacheFromLogEntries(prefetchEntries, info);
-          }
-        } catch {
-          // Silent catch for background prefetch
-        }
-      })();
+      if (opts?.filterPath) args.push('--', this.workingCopyTarget(opts.filterPath));
+      let raw: string;
+      try {
+        raw = await this.svn(args, { timeout: 15_000 });
+      } catch (error: unknown) {
+        if (revisionSearch !== undefined && this.errorText(error).toLowerCase().includes('e160006')) return [];
+        throw error;
+      }
+      const allEntries = this.parseLogEntries(raw);
+      this.populateCommitMetaCacheFromLogEntries(allEntries);
+      this.populateCommitFilesCacheFromLogEntries(allEntries, info);
+      headRevision = selectionRevisions ? undefined : allEntries[0]?.revision ?? info.revision;
+      entries = allEntries
+        .filter(entry => !selectionRevisions || selectionRevisions.has(entry.revision))
+        .filter(entry => revisionSearch === undefined || entry.revision === String(revisionSearch))
+        .filter(entry => revisionSearch !== undefined || !filterText || entry.message.toLowerCase().includes(filterText.toLowerCase()))
+        .filter(entry => !opts?.filterAuthor || entry.author.toLowerCase().includes(opts.filterAuthor.toLowerCase()))
+        .filter(entry => !opts?.filterDateFrom || new Date(entry.date) >= new Date(opts.filterDateFrom))
+        .filter(entry => !opts?.filterDateTo || new Date(entry.date) <= new Date(opts.filterDateTo))
+        .slice(skip, skip + limit);
     }
 
-    return entries.map(entry => ({
+    let explicitHasMore: boolean | undefined = undefined;
+    const currentSearch = this.activeSearches.get(consumerKey);
+    if (hasPostFetchFilters && !selectionRevisions && revisionSearch === undefined && currentSearch) {
+      if (currentSearch.lastError) {
+        explicitHasMore = currentSearch.matchedEntries.length > skip + entries.length;
+      } else {
+        explicitHasMore =
+          currentSearch.matchedEntries.length > skip + entries.length
+          || !currentSearch.reachedEnd;
+      }
+    }
+
+    const commitNodes: CommitLogList = entries.map(entry => ({
       hash: `r${entry.revision}`,
       shortHash: `r${entry.revision}`,
       repoId: this.repoId,
@@ -1850,6 +2179,14 @@ export class SvnService extends GitService {
       incoming: incoming?.incomingRevisions.has(entry.revision)
         ?? (localRevision !== undefined && (parseRevisionNumber(entry.revision) ?? 0) > localRevision),
     }));
+
+    if (explicitHasMore !== undefined) {
+      commitNodes.hasMore = explicitHasMore;
+    }
+    if (currentSearch?.lastError) {
+      commitNodes.repoErrors = [{ repoId: this.repoId, error: currentSearch.lastError }];
+    }
+    return commitNodes;
   }
 
   private async getSelectionHistoryRevisions(filePath: string, lineRange: LineRange): Promise<Set<string>> {
@@ -1923,6 +2260,31 @@ export class SvnService extends GitService {
           const oldestKey = this.commitFilesCache.keys().next().value;
           if (oldestKey) this.commitFilesCache.delete(oldestKey);
         }
+      }
+    }
+  }
+
+  private populateCommitMetaCacheFromLogEntries(entries: SvnLogEntry[]): void {
+    for (const entry of entries) {
+      if (!entry.revision) continue;
+      const revision = entry.revision;
+      if (this.commitMetaCache.has(revision)) continue;
+      const revisionHash = `r${revision}`;
+      const fullMessage = entry.message ?? '';
+      const meta = {
+        hash: revisionHash,
+        shortHash: revisionHash,
+        message: fullMessage.split('\n')[0] ?? t('SVN revision {0}', revision),
+        authorName: entry.author || t('Unknown'),
+        authorEmail: '',
+        authorDate: entry.date ?? '',
+        committerDate: entry.date ?? '',
+        parents: [],
+      };
+      this.commitMetaCache.set(revision, Promise.resolve({ meta, fullMessage }));
+      if (this.commitMetaCache.size > SVN_COMMIT_META_CACHE_LIMIT) {
+        const oldestKey = this.commitMetaCache.keys().next().value;
+        if (oldestKey) this.commitMetaCache.delete(oldestKey);
       }
     }
   }
@@ -2104,77 +2466,174 @@ export class SvnService extends GitService {
       || text.includes('does not exist');
   }
 
-  async getRevisionContentOrUndefined(revision: string, relPath: string): Promise<string | undefined> {
+  private evictRevisionContentKey(key: string): void {
+    const size = this.revisionContentSizes.get(key);
+    if (size !== undefined) {
+      this.revisionContentTotalBytes = Math.max(0, this.revisionContentTotalBytes - size);
+      this.revisionContentSizes.delete(key);
+    }
+  }
+
+  private async fetchRevisionContentRaw(
+    revision: string,
+    relPath: string,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const repositoryUrl = await this.getRepositoryUrl();
+    try {
+      const info = await this.getInfo();
+      if (info.revision === revision) {
+        const absPath = path.join(this.rootPath, relPath);
+        if (fs.existsSync(absPath)) {
+          const rawStatus = await this.svn(['status', '--xml', absPath], { signal }).catch(() => '');
+          if (!rawStatus || !rawStatus.includes('<entry')) {
+            return fs.readFileSync(absPath, 'utf8');
+          }
+        }
+      }
+    } catch {
+      // fallback to standard svn cat
+    }
+
+    for (const target of this.repositoryFileTargets(repositoryUrl, relPath, revision)) {
+      try {
+        return await this.svn(['cat', '-r', revision, target], { signal });
+      } catch (error: unknown) {
+        if (!this.isPathNotFoundError(error)) throw error;
+      }
+    }
+    return undefined;
+  }
+
+  private cacheResolvedRevisionContent(key: string, content: string | undefined): void {
+    if (content === undefined) return;
+    const byteSize = Buffer.byteLength(content, 'utf8');
+    if (byteSize > SVN_MAX_CACHEABLE_FILE_BYTES) {
+      this.revisionContentCache.delete(key);
+      this.evictRevisionContentKey(key);
+      return;
+    }
+    this.evictRevisionContentKey(key);
+    this.revisionContentSizes.set(key, byteSize);
+    this.revisionContentTotalBytes += byteSize;
+    this.revisionContentCache.set(key, Promise.resolve(content));
+
+    while (
+      (this.revisionContentTotalBytes > SVN_REVISION_CONTENT_MAX_TOTAL_BYTES || this.revisionContentCache.size > SVN_REVISION_CONTENT_CACHE_LIMIT)
+      && this.revisionContentCache.size > 0
+    ) {
+      const oldestKey = this.revisionContentCache.keys().next().value;
+      if (!oldestKey) break;
+      this.revisionContentCache.delete(oldestKey);
+      this.evictRevisionContentKey(oldestKey);
+    }
+  }
+
+  async getRevisionContentOrUndefined(
+    revision: string,
+    relPath: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<string | undefined> {
     const repositoryUrl = await this.getRepositoryUrl();
     const key = scopedKey(repositoryUrl, revision, relPath);
     const cached = this.revisionContentCache.get(key);
-    if (cached) return await cached;
-    const task = (async (): Promise<string | undefined> => {
+    if (cached) {
       try {
-        const info = await this.getInfo();
-        if (info.revision === revision) {
-          const absPath = path.join(this.rootPath, relPath);
-          if (fs.existsSync(absPath)) {
-            const rawStatus = await this.svn(['status', '--xml', absPath]).catch(() => '');
-            if (!rawStatus || !rawStatus.includes('<entry')) {
-              return fs.readFileSync(absPath, 'utf8');
-            }
-          }
-        }
-      } catch {
-        // fallback to standard svn cat
+        return await cached;
+      } catch (error: unknown) {
+        if (options?.signal?.aborted) throw error;
+        // Evict aborted/failed cached promise and retry fresh
+        this.revisionContentCache.delete(key);
+        this.evictRevisionContentKey(key);
       }
-
-      for (const target of this.repositoryFileTargets(repositoryUrl, relPath, revision)) {
-        try {
-          return await this.svn(['cat', '-r', revision, target]);
-        } catch (error: unknown) {
-          if (!this.isPathNotFoundError(error)) throw error;
-        }
-      }
-      return undefined;
-    })().catch((error: unknown) => {
-      if (this.revisionContentCache.get(key) === task) this.revisionContentCache.delete(key);
-      throw error;
-    });
-    this.revisionContentCache.set(key, task);
-    if (this.revisionContentCache.size > SVN_REVISION_CONTENT_CACHE_LIMIT) {
-      const oldestKey = this.revisionContentCache.keys().next().value;
-      if (oldestKey) this.revisionContentCache.delete(oldestKey);
     }
+
+    const task = this.fetchRevisionContentRaw(revision, relPath, options?.signal)
+      .then(content => {
+        this.cacheResolvedRevisionContent(key, content);
+        return content;
+      })
+      .catch((error: unknown) => {
+        if (this.revisionContentCache.get(key) === task) {
+          this.revisionContentCache.delete(key);
+          this.evictRevisionContentKey(key);
+        }
+        throw error;
+      });
+
+    this.revisionContentCache.set(key, task);
     return await task;
   }
 
   async prefetchRevisionFiles(
     hash: string,
-    filePaths: string[],
+    filePaths: Array<string | { path: string; status?: string }>,
     options?: { maxFiles?: number },
   ): Promise<void> {
     const revision = parseRevisionNumber(hash);
     if (revision === undefined) return;
+
+    // Abort previous in-flight prefetch if any
+    this.prefetchAbortController?.abort();
+    const abortController = new AbortController();
+    this.prefetchAbortController = abortController;
+
+    const repositoryUrl = await this.getRepositoryUrl();
     const maxFiles = options?.maxFiles ?? 6;
     const targets = filePaths.slice(0, maxFiles);
+    const previousRevision = String(Math.max(0, revision - 1));
+    const currentRevisionStr = String(revision);
+
     const workerCount = Math.min(2, targets.length);
     let nextIndex = 0;
     const workers = Array.from({ length: workerCount }, async () => {
       while (nextIndex < targets.length) {
+        if (abortController.signal.aborted) return;
         const currentIndex = nextIndex++;
         if (currentIndex >= targets.length) return;
-        try {
-          await this.getRevisionFileContents(String(revision), targets[currentIndex]);
-        } catch {
-          // ignore background prefetch error
+
+        const target = targets[currentIndex];
+        const rawPath = typeof target === 'string' ? target : target.path;
+        const rawStatus = typeof target === 'string' ? '' : (target.status ?? '').toUpperCase();
+        const targetRelPath = this.normalizeRepoPath(rawPath);
+
+        const isAdded = rawStatus === 'A' || rawStatus === 'ADDED';
+        const isDeleted = rawStatus === 'D' || rawStatus === 'DELETED';
+        const revsToFetch = isAdded
+          ? [currentRevisionStr]
+          : isDeleted
+            ? [previousRevision]
+            : [previousRevision, currentRevisionStr];
+
+        for (const rev of revsToFetch) {
+          if (abortController.signal.aborted) return;
+          const key = scopedKey(repositoryUrl, rev, targetRelPath);
+          if (this.revisionContentCache.has(key)) continue;
+
+          try {
+            const content = await this.fetchRevisionContentRaw(rev, targetRelPath, abortController.signal);
+            if (!abortController.signal.aborted && content !== undefined) {
+              this.cacheResolvedRevisionContent(key, content);
+            }
+          } catch {
+            // Ignore background prefetch error / abort
+          }
         }
       }
     });
     await Promise.all(workers);
   }
 
-  private async getRevisionContent(revision: string, relPath: string): Promise<string> {
-    return await this.getRevisionContentOrUndefined(revision, relPath) ?? '';
+  private async getRevisionContent(revision: string, relPath: string, options?: { signal?: AbortSignal }): Promise<string> {
+    return await this.getRevisionContentOrUndefined(revision, relPath, options) ?? '';
   }
 
-  async getRevisionFileContents(hash: string, filePath: string, status?: string): Promise<{ originalContent: string; modifiedContent: string; isBinary?: boolean }> {
+  async getRevisionFileContents(
+    hash: string,
+    filePath: string,
+    status?: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ originalContent: string; modifiedContent: string; isBinary?: boolean }> {
     const revision = requireRevision(hash);
     const previousRevision = String(Math.max(0, Number(revision) - 1));
     const relPath = this.normalizeRepoPath(filePath);
@@ -2182,8 +2641,8 @@ export class SvnService extends GitService {
     const isAdded = normalizedStatus === 'A' || normalizedStatus === 'ADDED';
     const isDeleted = normalizedStatus === 'D' || normalizedStatus === 'DELETED';
     const [originalContent, modifiedContent] = await Promise.all([
-      isAdded ? Promise.resolve('') : this.getRevisionContent(previousRevision, relPath),
-      isDeleted ? Promise.resolve('') : this.getRevisionContent(revision, relPath),
+      isAdded ? Promise.resolve('') : this.getRevisionContent(previousRevision, relPath, options),
+      isDeleted ? Promise.resolve('') : this.getRevisionContent(revision, relPath, options),
     ]);
     const isBinary = isLikelyBinaryContent(originalContent) || isLikelyBinaryContent(modifiedContent);
     return isBinary

@@ -5,7 +5,7 @@ import { GitService, type MergeCommitResult, parseGitmodulesFileSync } from './G
 import { SvnService } from '../svn/SvnService';
 import type { WorktreeEntry } from './GitService';
 import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
-import type { BranchInfo, CommitNode, GraphCommitNode, LineRange, RepoMeta, RepoStatus, RepoSubmodules, SubmoduleItem, WorkspaceStatus } from '../types/git';
+import type { BranchInfo, CommitNode, CommitLogList, GraphCommitNode, LineRange, RepoMeta, RepoStatus, RepoSubmodules, SubmoduleItem, WorkspaceStatus } from '../types/git';
 import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
@@ -2038,9 +2038,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return status;
   }
 
-  async getAllBranches(): Promise<BranchInfo[]> {
+  async getAllBranches(options?: { force?: boolean; repoIds?: string[] }): Promise<BranchInfo[]> {
+    const targetRepoIds = options?.repoIds && options.repoIds.length > 0 ? new Set(options.repoIds) : undefined;
     const [allBranches, currentBranches] = await Promise.all([
-      Promise.allSettled(Array.from(this.repos.values()).map(r => r.getBranches())),
+      Promise.allSettled(Array.from(this.repos.values()).map(r => {
+        const shouldForce = options?.force && (!targetRepoIds || targetRepoIds.has(r.repoId));
+        return r instanceof SvnService ? r.getBranches({ force: shouldForce }) : r.getBranches();
+      })),
       Promise.allSettled(Array.from(this.repos.values()).map(r => r.getCurrentBranch())),
     ]);
 
@@ -2098,7 +2102,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return fromStatus;
   }
 
-  async getInterleavedLog(repoIds: string[], limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }): Promise<CommitNode[]> {
+  async getInterleavedLog(repoIds: string[], limit: number, skip: number, opts?: { filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange; consumer?: string }): Promise<CommitNode[]> {
     const targets = repoIds.length > 0
       ? repoIds.map(id => this.repos.get(id)).filter(Boolean) as GitService[]
       : Array.from(this.repos.values());
@@ -2120,24 +2124,58 @@ export class WorkspaceGitManager implements vscode.Disposable {
     // to Git's native --skip and --max-count rather than scanning from 0 to pageEnd.
     if (targets.length === 1) {
       const repo = targets[0];
-      return repo.getLog(limit, skip, {
-        ...opts,
-        worktreeServices: worktreesByMainRepo.get(repo.rootPath) ?? [],
-      });
+      try {
+        return await repo.getLog(limit, skip, {
+          ...opts,
+          worktreeServices: worktreesByMainRepo.get(repo.rootPath) ?? [],
+        });
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const emptyList: CommitLogList = [];
+        emptyList.hasMore = false;
+        emptyList.repoErrors = [{ repoId: repo.repoId, error: errorMsg }];
+        return emptyList;
+      }
     }
 
     const pageEnd = Math.max(limit + skip, limit);
     const results = await Promise.allSettled(
       targets.map(r => r.getLog(pageEnd, 0, { ...opts, worktreeServices: worktreesByMainRepo.get(r.rootPath) ?? [] }))
     );
+    const anyRejected = results.some(r => r.status === 'rejected');
+    const repoErrors: Array<{ repoId: string; error: string }> = [];
+    results.forEach((r, idx) => {
+      if (r.status === 'rejected') {
+        const repo = targets[idx];
+        const errorMsg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        repoErrors.push({ repoId: repo.repoId, error: errorMsg });
+      }
+    });
     const commitLogs = results
-      .filter((r): r is PromiseFulfilledResult<CommitNode[]> => r.status === 'fulfilled')
+      .filter((r): r is PromiseFulfilledResult<CommitLogList> => r.status === 'fulfilled')
       .map(r => r.value);
+    for (const log of commitLogs) {
+      if (log.repoErrors && log.repoErrors.length > 0) {
+        repoErrors.push(...log.repoErrors);
+      }
+    }
+    const anyHasMore = commitLogs.some(log => log.hasMore === true);
+    const allExplicitLast = !anyRejected && commitLogs.length > 0 && commitLogs.every(log => log.hasMore === false);
     // Each service already returns Git's date order. Merge only the current
     // head of each repository so the workspace log remains date-ordered when
     // several repositories are shown together.
     const allCommits = interleaveCommitLogs(commitLogs);
-    return allCommits.slice(skip, skip + limit);
+    const sliced: CommitLogList = allCommits.slice(skip, skip + limit);
+    const hasBufferedMore = allCommits.length > skip + limit;
+    if (hasBufferedMore || anyHasMore) {
+      sliced.hasMore = true;
+    } else if (allExplicitLast || anyRejected) {
+      sliced.hasMore = false;
+    }
+    if (repoErrors.length > 0) {
+      sliced.repoErrors = repoErrors;
+    }
+    return sliced;
   }
 
   async getInterleavedGraphLog(repoIds: string[], maxCommits: number): Promise<GraphCommitNode[]> {

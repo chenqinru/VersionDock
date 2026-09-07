@@ -2587,7 +2587,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             vcs: repo.kind,
             durationMs: Date.now() - startedAt,
           });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           const status = await this.refreshStatusAfterOp();
           this.invalidateSubtreeStatus(undefined, { remote: false });
           void this.broadcastUnpushedCommits();
@@ -2657,7 +2657,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             vcs: repo.kind,
             durationMs: Date.now() - startedAt,
           });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           const status = await this.manager.getAllStatusesFresh();
           this.invalidateSubtreeStatus(undefined, { remote: false });
           void this.broadcastUnpushedCommits();
@@ -2811,7 +2811,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               if (msg.andPush) {
                 vscode.window.showInformationMessage(t('VersionDock: Commits pushed successfully across {0} repositories.', msg.repos.length));
               }
-              this.logProvider?.refresh();
+              this.logProvider?.refresh({ repoIds: msg.repos.map(r => r.repoId) });
             }
             const status = await this.manager.getAllStatusesFresh();
             this.invalidateSubtreeStatus(undefined, { remote: false });
@@ -3115,7 +3115,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             forced: pushResult.forced,
             durationMs: Date.now() - startedAt,
           });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           void this.broadcastUnpushedCommits();
           if (this.isSubtreeTabActive()) {
@@ -4285,7 +4285,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
           if (pushResult.success) {
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-            this.logProvider?.refresh();
+            this.logProvider?.refresh({ repoIds: [msg.repoId] });
           } else {
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false });
           }
@@ -4347,7 +4347,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               }
             }
           }
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: msg.repoIds });
           this.post({
             type: 'COMMIT_OP_RESULT',
             requestId: msg.requestId,
@@ -4546,7 +4546,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
@@ -4572,7 +4572,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
@@ -4581,7 +4581,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             onUnlocked: async () => {
               const status = await this.manager.getAllStatusesFresh();
               this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-              this.logProvider?.refresh();
+              this.logProvider?.refresh({ repoIds: [msg.repoId] });
             },
           });
         }
@@ -4605,7 +4605,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
@@ -4625,7 +4625,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               onUnlocked: async () => {
                 const status = await this.manager.getAllStatusesFresh();
                 this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-                this.logProvider?.refresh();
+                this.logProvider?.refresh({ repoIds: [msg.repoId] });
               },
             });
           }
@@ -4663,7 +4663,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
@@ -4689,7 +4689,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await repo.undoCommit();
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
           this.invalidateSubtreeStatus(undefined, { remote: false });
-          this.logProvider?.refresh();
+          this.logProvider?.refresh({ repoIds: [msg.repoId] });
           if (this.isSubtreeTabActive()) {
             void this.refreshSubtreeList({ force: false });
           }
@@ -4981,7 +4981,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             try {
               await subRepoPush.pushSubmodule();
               this.post({ type: 'SUBMODULE_PUSH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
-              this.logProvider?.refresh();
+              this.logProvider?.refresh({ repoIds: [msg.repoId] });
             } catch (e: unknown) {
               this.post({ type: 'SUBMODULE_PUSH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: String(e) });
             }
@@ -6116,7 +6116,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await repo.checkout(sanitizedBranch, true);
             this.manager.notifyBranchesChanged();
-            this.logProvider?.refresh();
+            this.logProvider?.refresh({ repoIds: [repo.repoId], forceRemoteRefs: true });
           } catch (e) {
             vscode.window.showErrorMessage(t('Failed to create branch: {0}', String(e)));
             return false;
@@ -6195,7 +6195,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await repo.checkout(newBranchName.trim(), true);
             this.manager.notifyBranchesChanged();
-            this.logProvider?.refresh();
+            this.logProvider?.refresh({ repoIds: [repo.repoId], forceRemoteRefs: true });
             vscode.window.showInformationMessage(t('VersionDock: Branch "{0}" created.', newBranchName.trim()));
           } catch (e) {
             vscode.window.showErrorMessage(t('Failed to create branch: {0}', String(e)));

@@ -113,6 +113,7 @@ export function GitLogApp() {
   const { panelRef: detailRef, onMouseDown: onDetailResize, onKeyDown: onDetailResizeKeyDown } = useResize('left', 320, 220, 680);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadRef = useRef<() => void>(() => {});
+  const loadMoreRef = useRef<() => void>(() => {});
   const filterRepoRef = useRef<(repoId: string | null, branch?: string | null) => void>(() => {});
   const bgGenRef = useRef(0);
   const activeRequestIdRef = useRef<string | null>(null);
@@ -248,11 +249,22 @@ export function GitLogApp() {
         case 'LOG_ICON_THEME_UPDATE':
           store.setIconTheme(msg.iconTheme);
           break;
-        case 'LOG_COMMITS_BATCH':
+        case 'LOG_COMMITS_BATCH': {
           if (msg.requestId && activeRequestIdRef.current && msg.requestId !== activeRequestIdRef.current) break;
           if (msg.generation !== undefined && msg.generation !== bgGenRef.current) break;
+          const hasErrors = !!(msg.repoErrors && msg.repoErrors.length > 0);
+          if (hasErrors) {
+            console.warn('[GitLog] Some repositories failed to load logs:', msg.repoErrors);
+            store.setRepoErrors(msg.repoErrors ?? null);
+          } else {
+            store.setRepoErrors(null);
+          }
           store.appendCommits(msg.commits, msg.isLast);
+          if (msg.commits.length === 0 && !msg.isLast && !hasErrors) {
+            loadMoreRef.current();
+          }
           break;
+        }
         case 'LOG_GRAPH_COMMITS':
           if (msg.requestId !== activeGraphRequestIdRef.current) break;
           if (msg.generation !== bgGenRef.current) break;
@@ -399,6 +411,8 @@ export function GitLogApp() {
     });
   }, [send]);
 
+  loadMoreRef.current = handleLoadMore;
+
   const compareCommits = useMemo(() => (
     store.compareState
       ? [...store.compareState.baseOnly.commits, ...store.compareState.targetOnly.commits]
@@ -451,6 +465,7 @@ export function GitLogApp() {
         hash: commit.hash,
         parents: commit.parents,
         includeMergeParentChanges: commit.parents.length >= 2,
+        prefetchContent: true,
       } satisfies LogToHostMsg);
     });
   }, [isCommitListReloading, selectedCommits, setCommitFiles, setLoadingFiles, store.commitFilesByKey, store.commits.length, store.loadingFilesByKey]);
@@ -883,6 +898,7 @@ export function GitLogApp() {
             remoteNamesByRepo={remoteNamesByRepo}
             onSelect={handleSelectCommit}
             onLoadMore={handleLoadMore}
+            onRetry={reloadCommits}
             hasMore={store.hasMore && !isCommitListReloading && !store.backgroundLoading}
             storeHasMore={store.hasMore}
             loading={isCommitListReloading && store.commits.length === 0}

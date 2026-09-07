@@ -4,7 +4,7 @@ import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { GitService } from '../git/GitService';
 import type { LogCommitPathEntry, LogToHostMsg, HostToLogMsg } from '../types/messages';
-import type { BranchInfo, LineRange, RepoMeta } from '../types/git';
+import type { BranchInfo, CommitLogList, LineRange, RepoMeta } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { ShelveDocumentProvider } from '../utils/ShelveDocumentProvider';
 import type { CommitPanelProvider } from './CommitPanelProvider';
@@ -390,7 +390,40 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /** Trigger a full log refresh — call this after any operation that creates new commits. */
-  refresh(): void {
+  refresh(options?: { repoIds?: string[]; forceRemoteRefs?: boolean }): void {
+    const forceRemoteRefs = options?.forceRemoteRefs ?? false;
+    const repoIdFilter = options?.repoIds && options.repoIds.length > 0 ? new Set(options.repoIds) : undefined;
+    for (const meta of this.manager.getRepoMetas()) {
+      if (repoIdFilter && !repoIdFilter.has(meta.id)) {
+        continue;
+      }
+      const repo = this.manager.getRepo(meta.id);
+      if (repo?.kind === 'svn') {
+        const svnRepo = repo as SvnService;
+        svnRepo.clearLogHistoryCache();
+        if (forceRemoteRefs) {
+          svnRepo.clearBranchesCache();
+          svnRepo.clearTagsCache();
+        }
+      }
+    }
+    if (forceRemoteRefs) {
+      const visibleRepos = this.getVisibleRepos();
+      const reposToFetch = repoIdFilter
+        ? visibleRepos.filter(meta => repoIdFilter.has(meta.id))
+        : visibleRepos;
+      for (const meta of reposToFetch) {
+        void this.refreshTags(meta.id, undefined, true).catch(() => {});
+      }
+      void (async () => {
+        try {
+          const branches = await this.getFilteredBranches(visibleRepos, { force: true, repoIds: options?.repoIds });
+          this.post({ type: 'LOG_INIT_DATA', repos: visibleRepos, branches });
+        } catch (error) {
+          this.logger.error('GitLog', 'Failed to refresh branches on manual refresh', error);
+        }
+      })();
+    }
     this.post({ type: 'LOG_REFRESH' });
   }
 
@@ -685,9 +718,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return requestedRepoIds.filter(repoId => visibleRepoIds.has(repoId));
   }
 
-  private async getFilteredBranches(repos = this.getVisibleRepos()) {
+  private async getFilteredBranches(repos = this.getVisibleRepos(), options?: { force?: boolean; repoIds?: string[] }) {
     const ids = new Set(repos.map(r => r.id));
-    const all = await this.manager.getAllBranches();
+    const all = await this.manager.getAllBranches(options);
     return all.filter(b => ids.has(b.repoId));
   }
 
@@ -700,11 +733,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private async refreshTags(
     repoId: string,
     repo = this.manager.getRepo(repoId),
+    force = false,
   ): Promise<void> {
     if (!repo) return;
     const generation = (this.tagSyncGenerations.get(repoId) ?? 0) + 1;
     this.tagSyncGenerations.set(repoId, generation);
-    const rawTags = await repo.getTags();
+    const rawTags: Array<{ name: string; hash: string; date: string }> = await (repo.kind === 'svn' ? (repo as SvnService).getTags({ force }) : repo.getTags());
     if (this.tagSyncGenerations.get(repoId) !== generation) return;
     if (!this.getVisibleRepos().some(visible => visible.id === repoId)) return;
     this.post({ type: 'LOG_TAGS_UPDATE', repoId, tags: rawTags.map(tag => ({ ...tag, repoId })) });
@@ -776,7 +810,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
                 // Send tags for all visible repos without blocking the commit batch.
                 for (const meta of repos) {
-                  void this.refreshTags(meta.id).catch(() => {});
+                  void this.refreshTags(meta.id, undefined, false).catch(() => {});
                 }
               }
             } catch (error) {
@@ -803,6 +837,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           break;
         }
         try {
+          const consumer = this.replyTarget.getStore() ?? 'sidebar';
           const commits = await this.manager.getInterleavedLog(logRepoIds, limit, msg.skip, {
             filterText: msg.filterText,
             filterAuthor: msg.filterAuthor,
@@ -811,8 +846,20 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             filterDateTo: msg.filterDateTo,
             filterPath: msg.filterPath,
             lineRange: msg.lineRange,
+            consumer,
           });
-          this.post({ type: 'LOG_COMMITS_BATCH', commits, isLast: commits.length < limit, batchIndex: 0, generation: msg.generation, requestId: msg.requestId });
+          const explicitHasMore = (commits as CommitLogList).hasMore;
+          const repoErrors = (commits as CommitLogList).repoErrors;
+          const isLast = explicitHasMore !== undefined ? !explicitHasMore : commits.length < limit;
+          this.post({
+            type: 'LOG_COMMITS_BATCH',
+            commits,
+            isLast,
+            batchIndex: 0,
+            generation: msg.generation,
+            requestId: msg.requestId,
+            repoErrors: repoErrors && repoErrors.length > 0 ? repoErrors : undefined,
+          });
         } catch (error) {
           this.logger.error('GitLog', 'Failed to load interleaved log', error);
           this.post({ type: 'LOG_COMMITS_BATCH', commits: [], isLast: true, batchIndex: 0, generation: msg.generation, requestId: msg.requestId });
@@ -848,9 +895,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             files,
             ...(mergeParentChanges ? { mergeParentChanges } : {}),
           });
-          if (repo.kind === 'svn' && files.length > 0 && 'prefetchRevisionFiles' in repo && typeof (repo as any).prefetchRevisionFiles === 'function') {
-            const filePaths = files.map(f => f.path);
-            void (repo as any).prefetchRevisionFiles(msg.hash, filePaths);
+          if (msg.prefetchContent !== false && repo.kind === 'svn' && files.length > 0) {
+            const svnRepo = repo as SvnService;
+            void svnRepo.prefetchRevisionFiles(msg.hash, files);
           }
         } catch (e: unknown) {
           this.post({ type: 'LOG_COMMIT_FILES', requestId: msg.requestId, files: [], error: String(e) });
@@ -1036,7 +1083,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           void showGitErrorMessage(t('VersionDock: Cannot revert file: {0}', String(e)), {
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
-              this.refresh();
+              this.refresh({ repoIds: [msg.repoId] });
             },
           });
         }
@@ -1076,7 +1123,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           void showGitErrorMessage(t('VersionDock: Cannot apply selected changes: {0}', String(e)), {
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
-              this.refresh();
+              this.refresh({ repoIds: [msg.repoId] });
             },
           });
         }
@@ -1116,7 +1163,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           void showGitErrorMessage(t('VersionDock: Cannot revert selected changes: {0}', String(e)), {
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
-              this.refresh();
+              this.refresh({ repoIds: [msg.repoId] });
             },
           });
         }
@@ -1208,7 +1255,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const merged = mergeCurrentIntoBranches(branches, current);
               this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
               this.manager.notifyBranchesChanged();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
               this.showOperationError(e);
@@ -1244,7 +1291,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             scopes: ['unpushed'],
             repoIds: [msg.repoId],
           });
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: [msg.repoId] });
         } else if (pushResult.cancelled) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
         } else {
@@ -1277,7 +1324,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const merged = mergeCurrentIntoBranches(branches, current);
             this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
             this.manager.notifyBranchesChanged();
-            this.post({ type: 'LOG_REFRESH' });
+            this.refresh({ repoIds: [msg.repoId] });
             vscode.window.showInformationMessage(t('VersionDock: Merged SVN branch "{0}" into the working copy.', msg.from));
           } catch (e: unknown) {
             this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -1296,7 +1343,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const merged = mergeCurrentIntoBranches(branches, current);
               this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
               this.manager.notifyBranchesChanged();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
             } catch (e: unknown) {
               const errMsg = String(e);
               const isDirty = errMsg.includes('Your local changes') || errMsg.includes('overwritten by merge') || (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree';
@@ -1351,7 +1398,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const merged = mergeCurrentIntoBranches(branches, current);
               this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
               this.manager.notifyBranchesChanged();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
             } catch (e2: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });
               this.showOperationError(e2);
@@ -1371,7 +1418,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const merged = mergeCurrentIntoBranches(branches, current);
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
           this.manager.notifyBranchesChanged();
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: [msg.repoId] });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e);
@@ -1547,7 +1594,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('; ') });
         } else {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: msg.repoIds, forceRemoteRefs: true });
         }
         break;
       }
@@ -1558,10 +1605,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           async () => { await this.manager.fetchAll(); }
         );
         this.manager.notifyBranchesChanged();
-        const branches = await this.getFilteredBranches();
-        const repos = this.getVisibleRepos();
-        this.post({ type: 'LOG_INIT_DATA', repos, branches });
-        this.post({ type: 'LOG_REFRESH' });
+        this.refresh({ forceRemoteRefs: true });
         break;
       }
 
@@ -1571,10 +1615,16 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await repo.fetchAll();
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
-          const merged = mergeCurrentIntoBranches(branches, current);
-          this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
-          this.manager.notifyBranchesChanged();
+          if (repo.kind === 'svn') {
+            this.manager.notifyBranchesChanged();
+            this.refresh({ repoIds: [msg.repoId], forceRemoteRefs: true });
+          } else {
+            const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+            const merged = mergeCurrentIntoBranches(branches, current);
+            this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+            this.manager.notifyBranchesChanged();
+            this.refresh({ repoIds: [msg.repoId] });
+          }
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
           this.showOperationError(e);
@@ -1591,7 +1641,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             () => repo.cherryPick(msg.hash)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: [msg.repoId] });
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
           this.manager.notifyDataInvalidated({
             scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1607,7 +1657,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             );
             if (choice === t('Continue')) {
               await repo.cherryPickContinue();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1615,7 +1665,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               });
             } else if (choice === t('Skip')) {
               await repo.cherryPickSkip();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1623,7 +1673,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               });
             } else if (choice === t('Abort')) {
               await repo.cherryPickAbort();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1635,7 +1685,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             void showGitErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg), {
               onUnlocked: async () => {
                 await this.manager.getAllStatusesFresh();
-                this.refresh();
+                this.refresh({ repoIds: [msg.repoId] });
               },
             });
           }
@@ -1662,7 +1712,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             () => repo.revertCommit(msg.hash)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: [msg.repoId] });
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
           this.manager.notifyDataInvalidated({
             scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1678,7 +1728,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             );
             if (choice === t('Continue')) {
               await repo.revertContinue();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1686,7 +1736,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               });
             } else if (choice === t('Abort')) {
               await repo.revertAbort();
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               this.manager.notifyDataInvalidated({
                 scopes: ['workingTree', 'unpushed', 'subtree'],
@@ -1698,7 +1748,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             void showGitErrorMessage(t('VersionDock: Revert failed: {0}', errMsg), {
               onUnlocked: async () => {
                 await this.manager.getAllStatusesFresh();
-                this.refresh();
+                this.refresh({ repoIds: [msg.repoId] });
               },
             });
           }
@@ -1721,7 +1771,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await repo.resetTo(msg.hash, msg.mode);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: [msg.repoId] });
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
@@ -1729,7 +1779,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           void showGitErrorMessage(t('VersionDock: Reset failed: {0}', String(e)), {
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
-              this.refresh();
+              this.refresh({ repoIds: [msg.repoId] });
             },
           });
         }
@@ -2271,7 +2321,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             try {
               await repo.mergeTag(msg.tagName);
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-              this.post({ type: 'LOG_REFRESH' });
+              this.refresh({ repoIds: [msg.repoId] });
               await this.manager.refreshStatusNow();
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
               vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}".', msg.tagName));
@@ -2303,7 +2353,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}" in {1} repositories.', msg.tagName, msg.repoIds.length));
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         }
-        this.post({ type: 'LOG_REFRESH' });
+        this.refresh({ repoIds: msg.repoIds });
         await this.manager.refreshStatusNow();
         this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         break;
@@ -2326,7 +2376,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await repo.resetTo(msg.hash, pick.mode);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: reqId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
+          this.refresh({ repoIds: [msg.repoId] });
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
@@ -2369,7 +2419,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         } else if (!pushResult.cancelled) {
           this.showOperationError(pushResult.error, t('VersionDock: Push failed'));
         }
-        this.post({ type: 'LOG_REFRESH' });
+        this.refresh({ repoIds: [msg.repoId] });
         await this.manager.refreshStatusNow();
         break;
       }
@@ -2526,7 +2576,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             title,
             resources,
           );
-          void svnRepo.prefetchRevisionFiles(toRef, files.map(f => f.path));
+          void svnRepo.prefetchRevisionFiles(toRef, files);
           break;
         }
         const commitMeta = await repo.getCommitMeta(msg.hash);
@@ -2557,6 +2607,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         for (const group of msg.groups) {
           const repo = this.manager.getRepo(group.repoId);
           if (!repo) continue;
+          const normalizedFiles = group.files.map(f => typeof f === 'string' ? { path: f, status: undefined } : f);
           if (repo.kind === 'svn') {
             const svnRepo = repo as SvnService;
             const fromRef = group.fromHash ?? `r${Math.max(0, Number(group.toHash.replace(/^r/i, '')) - 1)}`;
@@ -2565,9 +2616,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               svnRepo,
               fromRef,
               toRef,
-              group.files.map(filePath => ({ path: filePath })),
+              normalizedFiles,
             ));
-            void svnRepo.prefetchRevisionFiles(toRef, group.files);
+            void svnRepo.prefetchRevisionFiles(toRef, normalizedFiles);
             continue;
           }
           const gitUri = (ref: string, filePath: string): vscode.Uri => {
@@ -2578,8 +2629,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               query: JSON.stringify({ path: fileUri.fsPath, ref }),
             });
           };
-          for (const filePath of group.files) {
-            const relativePath = repo.resolveRepoPath(filePath).relativePath;
+          for (const file of normalizedFiles) {
+            const relativePath = repo.resolveRepoPath(file.path).relativePath;
             const label = vscode.Uri.file(repo.resolveRepoPath(relativePath).absolutePath);
             resources.push([
               label,
@@ -2641,7 +2692,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       try {
         await repo.createTag(newName.trim(), hash);
         await this.refreshTags(repoId, repo);
-        this.post({ type: 'LOG_REFRESH' });
+        this.refresh({ repoIds: [repoId] });
       } catch (e: unknown) {
         this.showOperationError(e, t('VersionDock: Create tag failed'));
       }
@@ -2662,7 +2713,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         action: async () => {
           try {
             await repo.mergeTag(tagName);
-            this.post({ type: 'LOG_REFRESH' });
+            this.refresh({ repoIds: [repoId] });
             vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}" into "{1}".', tagName, currentBranch));
           } catch (e: unknown) {
             this.showOperationError(e, t('VersionDock: Merge tag failed'));
@@ -2678,7 +2729,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await deleteTagWithRemoteOption(repo, tagName, choice);
             await this.refreshTags(repoId, repo);
-            this.post({ type: 'LOG_REFRESH' });
+            this.refresh({ repoIds: [repoId] });
             vscode.window.showInformationMessage(t('VersionDock: Deleted tag "{0}".', tagName));
           } catch (e: unknown) {
             this.showOperationError(e, t('VersionDock: Delete tag failed'));

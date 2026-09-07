@@ -11,6 +11,7 @@ export interface CliOptions {
   maxBuffer?: number;
   stdin?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }
 
 export class CliError extends Error {
@@ -37,6 +38,7 @@ export function execCli(command: string, args: string[], options: CliOptions): P
         maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
         windowsHide: true,
         env: options.env,
+        signal: options.signal,
       },
       (error, stdout, stderr) => {
         const out = stdout?.toString() ?? '';

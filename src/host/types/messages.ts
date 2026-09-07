@@ -380,7 +380,7 @@ export type HostToLogMsg =
   | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean }
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }
-  | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string }
+  | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string; repoErrors?: Array<{ repoId: string; error: string }> }
   | { type: 'LOG_GRAPH_COMMITS'; commits: GraphCommitNode[]; generation: number; requestId: string }
   | { type: 'LOG_DIFF_RESULT'; requestId: string; files: Array<{ path: string; status: string }>; diff: FileDiff | null; error?: string }
   | { type: 'LOG_COMMIT_FILES'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; mergeParentChanges?: MergeParentChange[]; error?: string }
@@ -406,7 +406,7 @@ export type HostToLogMsg =
 export type LogToHostMsg =
   | { type: 'LOG_REQUEST_COMMITS'; repoIds: string[] | null; limit: number; skip: number; generation?: number; requestId?: string; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }
   | { type: 'LOG_REQUEST_GRAPH_COMMITS'; repoIds: string[] | null; generation: number; requestId: string }
-  | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[]; includeMergeParentChanges?: boolean }
+  | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[]; includeMergeParentChanges?: boolean; prefetchContent?: boolean }
   | { type: 'LOG_REQUEST_FILE_DIFF'; requestId: string; repoId: string; hash: string; filePath: string }
   | { type: 'LOG_OPEN_FILE_DIFF'; repoId: string; hash: string; filePath: string; fileStatus?: string; lineRange?: LineRange }
   | { type: 'LOG_OPEN_FILE_RANGE_DIFF'; repoId: string; fromHash: string; toHash: string; filePath: string; lineRange?: LineRange }
@@ -497,7 +497,7 @@ export type LogToHostMsg =
   | { type: 'LOG_OPEN_AI_EXPLANATION'; repoId: string; hash: string }
   | { type: 'LOG_OPEN_AI_EXPLANATION_MULTI'; commits: Array<{ repoId: string; hash: string }> }
   | { type: 'LOG_OPEN_COMMIT_CHANGES'; repoId: string; hash: string; files?: Array<{ path: string; status: string; added?: number; removed?: number }> }
-  | { type: 'LOG_OPEN_COMMIT_CHANGES_MULTI'; groups: Array<{ repoId: string; fromHash?: string; toHash: string; files: string[] }> }
+  | { type: 'LOG_OPEN_COMMIT_CHANGES_MULTI'; groups: Array<{ repoId: string; fromHash?: string; toHash: string; files: Array<string | { path: string; status?: string }> }> }
   | { type: 'LOG_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'LOG_UNDOCK'; target: 'editorTab' | 'newWindow' | 'pick' };
 

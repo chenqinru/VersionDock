@@ -95,6 +95,11 @@ export interface CommitNode extends GraphCommitNode {
   graphLines?: GraphLine[];
 }
 
+export type CommitLogList = CommitNode[] & {
+  hasMore?: boolean;
+  repoErrors?: Array<{ repoId: string; error: string }>;
+};
+
 export interface GraphLine {
   fromLane: number;
   toLane: number;
