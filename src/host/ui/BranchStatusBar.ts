@@ -526,6 +526,9 @@ export class BranchStatusBar implements vscode.Disposable {
     if (this.hasConflicts || hasOngoingOperation) {
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       this.statusBarItem.color = undefined;
+    } else if (this.totalBehind > 0 && this.totalAhead > 0) {
+      this.statusBarItem.backgroundColor = undefined;
+      this.statusBarItem.color = new vscode.ThemeColor('versiondock.statusBarSyncForeground');
     } else if (this.totalBehind > 0) {
       this.statusBarItem.backgroundColor = undefined;
       this.statusBarItem.color = new vscode.ThemeColor('versiondock.statusBarPullForeground');

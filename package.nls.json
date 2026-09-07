@@ -77,6 +77,7 @@
   "commands.setFileViewModeToTree.checked.title": "✓ Tree View",
   "submenus.commitPanel.expandMode.label": "Expand Mode",
   "submenus.commitPanel.viewMode.label": "View Options",
+  "colors.statusBarSyncForeground.description": "Status bar text color when both incoming and outgoing commits exist (sync needed)",
   "colors.statusBarPullForeground.description": "Status bar text color when incoming commits are available (pull needed)",
   "colors.statusBarPushForeground.description": "Status bar text color when there are unpushed commits or the branch is not on remote",
   "colors.statusBarDirtyForeground.description": "Status bar text color when there are uncommitted changes",

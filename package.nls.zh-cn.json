@@ -77,6 +77,7 @@
   "commands.setFileViewModeToTree.checked.title": "✓ 树形视图",
   "submenus.commitPanel.expandMode.label": "展开方式",
   "submenus.commitPanel.viewMode.label": "视图选项",
+  "colors.statusBarSyncForeground.description": "同时有可拉取与待推送提交时状态栏文本颜色（需要同步）",
   "colors.statusBarPullForeground.description": "有可拉取提交时状态栏文本颜色（需要拉取）",
   "colors.statusBarPushForeground.description": "有未推送提交或分支未关联远程时状态栏文本颜色",
   "colors.statusBarDirtyForeground.description": "有未提交更改时状态栏文本颜色",

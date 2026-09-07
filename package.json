@@ -688,6 +688,16 @@
     ],
     "colors": [
       {
+        "id": "versiondock.statusBarSyncForeground",
+        "description": "%colors.statusBarSyncForeground.description%",
+        "defaults": {
+          "dark": "#4dd0e1",
+          "light": "#00838f",
+          "highContrast": "#4dd0e1",
+          "highContrastLight": "#00838f"
+        }
+      },
+      {
         "id": "versiondock.statusBarPullForeground",
         "description": "%colors.statusBarPullForeground.description%",
         "defaults": {
