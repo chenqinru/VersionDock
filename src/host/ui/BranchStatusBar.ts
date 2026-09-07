@@ -396,8 +396,7 @@ export class BranchStatusBar implements vscode.Disposable {
 
     const suppressDiverged = vscode.workspace.getConfiguration('versiondock').get<boolean>('suppressDivergedBranchWarning') === true;
     const showDivergedWarning = this.branchesDiverged && !suppressDiverged;
-    // Diverge warning is kept clean in text/tooltip; warning icon and high-contrast background are reserved for conflicts/ongoing ops
-    const alertIcon = this.hasConflicts || hasOngoingOperation ? '$(warning) ' : '';
+    const alertIcon = this.hasConflicts || hasOngoingOperation || showDivergedWarning ? '$(warning) ' : '';
     const dirtyDot = this.hasUncommitted ? ' ●' : '';
     const pullPart = this.totalBehind > 0 ? ` $(arrow-down)${this.totalBehind}` : '';
     const pushPart = this.totalAhead > 0 ? ` $(arrow-up)${this.totalAhead}` : '';
@@ -523,7 +522,7 @@ export class BranchStatusBar implements vscode.Disposable {
       this.statusBarItem.tooltip = undefined;
     }
 
-    if (this.hasConflicts || hasOngoingOperation) {
+    if (this.hasConflicts || hasOngoingOperation || showDivergedWarning) {
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
       this.statusBarItem.color = undefined;
     } else if (this.totalBehind > 0 && this.totalAhead > 0) {
@@ -680,7 +679,7 @@ export class BranchStatusBar implements vscode.Disposable {
     }
     items.push({
       label: `${this.hasBehind ? '$(arrow-down) ' : '$(cloud-download) '}${t('Update Project…')}`,
-      description: this.hasBehind ? t('Pull all repositories (incoming commits available)') : t('Pull all repositories'),
+      description: this.hasBehind ? t('Update all repositories (incoming commits available)') : t('Update all repositories'),
       action: () => this.updateProject(),
     });
     if (gitMetas.length > 0) {
@@ -1381,9 +1380,9 @@ export class BranchStatusBar implements vscode.Disposable {
         action: () => this.newBranchFrom(branchName, metas),
       },
       ...(!isRemote ? [{
-        label: `$(cloud-download) ${t('Update (Pull)')}`,
-        description: t('Pull {0} in all repos', branchName),
-        action: () => this.pullBranchAllRepos(branchName, metas),
+        label: `$(cloud-download) ${t('Update')}`,
+        description: t('Update {0} in all repos', branchName),
+        action: () => this.updateBranchAllRepos(branchName, metas),
       },
       {
         label: `$(edit) ${t('Rename…')}`,
@@ -1429,6 +1428,112 @@ export class BranchStatusBar implements vscode.Disposable {
 
   async push(): Promise<void> {
     await this.pushMenu(this.manager.getRepoMetas());
+  }
+
+  async pull(repoId?: string): Promise<void> {
+    await this.pullMenu(repoId);
+  }
+
+  private async pullMenu(targetRepoId?: string): Promise<void> {
+    const allMetas = this.manager.getRepoMetas();
+    if (allMetas.length === 0) return;
+
+    if (targetRepoId) {
+      const meta = allMetas.find(m => m.id === targetRepoId);
+      if (meta) {
+        await this.pullSingleRepoDirect(meta);
+      }
+      return;
+    }
+
+    if (allMetas.length === 1) {
+      await this.pullSingleRepoDirect(allMetas[0]);
+      return;
+    }
+
+    type PullItem = vscode.QuickPickItem & { action: () => Promise<void> };
+    const items: PullItem[] = [
+      {
+        label: `$(cloud-download) ${t('Pull all repositories')}`,
+        description: t('Run native Git/SVN pull across all repositories'),
+        action: async () => {
+          await this.withOperationProgress(async () => {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock: Pulling all repositories…'),
+                cancellable: false,
+              },
+              async progress => {
+                const count = allMetas.length;
+                const results = await this.manager.pullAll(
+                  false,
+                  (completed, total, repo) => {
+                    const name = this.manager.getRepoMeta(repo.repoId)?.name ?? repo.repoId;
+                    progress.report({
+                      message: `(${completed + 1}/${total}) ${name}`,
+                      increment: count > 0 ? 100 / count : undefined,
+                    });
+                  }
+                );
+                const failed = results.filter(r => !r.ok);
+                if (failed.length === 0) {
+                  vscode.window.showInformationMessage(t('VersionDock: Pull completed for all repositories.'));
+                } else {
+                  const failedDescription = failed.map(result => {
+                    const name = this.manager.getRepoMeta(result.repoId)?.name ?? result.repoId;
+                    return `${name}: ${result.message}`;
+                  }).join('; ');
+                  vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) failed: {1}', failed.length, failedDescription));
+                }
+              }
+            );
+          });
+        },
+      },
+      { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
+      ...allMetas.map(meta => ({
+        label: `$(cloud-download) ${formatRepoLabel(meta)}`,
+        description: t('Pull {0}', meta.name),
+        action: async () => {
+          await this.pullSingleRepoDirect(meta);
+        },
+      })),
+    ];
+
+    const pick = (await vscode.window.showQuickPick(items, {
+      title: t('VersionDock — Pull: select repository'),
+      matchOnDescription: true,
+    })) as PullItem | undefined;
+
+    if (!pick) return;
+    await pick.action();
+  }
+
+  private async pullSingleRepoDirect(meta: RepoMeta): Promise<void> {
+    const repo = this.manager.getRepo(meta.id);
+    if (!repo) return;
+
+    await this.withOperationProgress(async () => {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: t('VersionDock [{0}]: Pulling…', meta.name),
+          cancellable: false,
+        },
+        async () => {
+          try {
+            await repo.pull();
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: pulled successfully.', meta.name));
+          } catch (e: unknown) {
+            this.showError(meta, e);
+          }
+        }
+      );
+    });
+    this.manager.notifyBranchesChanged();
+    await this.manager.refreshStatusNow();
+    await this.refresh();
   }
 
   private async pushMenu(metas: RepoMeta[]): Promise<void> {
@@ -1868,9 +1973,17 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(cloud-download) ${t('Update Project…')}`,
         description: t('Run svn update for {0}', meta.name),
         action: async () => {
-          const result = await this.updateSummaryService.run({ repoId: meta.id, execute: target => target.pull() });
-          this.manager.notifyBranchesChanged();
-          await this.updateSummaryService.notify([result]);
+          let result: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
+          await this.withOperationProgress(async () => {
+            await vscode.window.withProgress(
+              { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating…', meta.name), cancellable: false },
+              async () => {
+                result = await this.updateSummaryService.run({ repoId: meta.id, execute: target => target.pull() });
+              }
+            );
+            this.manager.notifyBranchesChanged();
+            if (result) await this.updateSummaryService.notify([result]);
+          }, 'sync', t('Updating…'));
           await this.refresh();
         },
       },
@@ -2086,8 +2199,8 @@ export class BranchStatusBar implements vscode.Disposable {
         action: () => this.newBranchFromSingleRepo(branchName, meta),
       },
       ...(!isRemote ? [{
-        label: `$(cloud-download) ${t('Update (Pull)')}`,
-        action: () => this.pullSingleRepo(meta, (!isCurrent && !isRemote) ? branchName : undefined),
+        label: `$(cloud-download) ${t('Update')}`,
+        action: () => this.updateSingleRepo(meta, (!isCurrent && !isRemote) ? branchName : undefined),
       },
       {
         label: `$(edit) ${t('Rename…')}`,
@@ -2133,12 +2246,12 @@ export class BranchStatusBar implements vscode.Disposable {
       items.push(
         { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
         {
-          label: `$(repo-forked) ${t("Pull into '{0}' using Rebase", currentBranchName)}`,
-          action: () => this.pullRemoteIntoCurrentSingleRepo(branchName, meta, true),
+          label: `$(repo-forked) ${t("Update into '{0}' using Rebase", currentBranchName)}`,
+          action: () => this.updateRemoteIntoCurrentSingleRepo(branchName, meta, true),
         },
         {
-          label: `$(git-merge) ${t("Pull into '{0}' using Merge", currentBranchName)}`,
-          action: () => this.pullRemoteIntoCurrentSingleRepo(branchName, meta, false),
+          label: `$(git-merge) ${t("Update into '{0}' using Merge", currentBranchName)}`,
+          action: () => this.updateRemoteIntoCurrentSingleRepo(branchName, meta, false),
         },
       );
     }
@@ -2400,24 +2513,65 @@ export class BranchStatusBar implements vscode.Disposable {
     await this.refresh();
   }
 
-  private async pullSingleRepo(meta: RepoMeta, branchName?: string): Promise<void> {
+  private async updateSingleRepo(meta: RepoMeta, branchName?: string): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
-    let result: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pulling…', meta.name), cancellable: false },
-      async () => {
-        result = await this.updateSummaryService.run({
-          repoId: meta.id,
-          branchName,
-          execute: target => branchName ? target.pullBranch(branchName) : target.pull(),
-        });
+
+    let useRebase = false;
+    if (meta.kind !== 'svn') {
+      const updateMethod = vscode.workspace
+        .getConfiguration('versiondock')
+        .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
+
+      if (updateMethod === 'prompt') {
+        const pick = await vscode.window.showQuickPick(
+          [
+            {
+              label: `$(repo-forked) ${t('Rebase the current branch on top of incoming changes')}`,
+              rebase: true,
+            },
+            {
+              label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
+              rebase: false,
+            },
+          ],
+          { title: t('Update Project — Strategy') }
+        ) as { label: string; rebase: boolean } | undefined;
+
+        if (!pick) return;
+        useRebase = pick.rebase;
+      } else {
+        useRebase = updateMethod === 'rebase';
       }
-    );
-    if (result?.tracked) await this.updateSummaryService.notify([result]);
-    else if (result?.ok) vscode.window.showInformationMessage(t('VersionDock [{0}]: pulled successfully.', meta.name));
-    else if (result) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, result.error ?? t('Unknown error')));
-    this.manager.notifyBranchesChanged();
+    }
+
+    let result: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
+    await this.withOperationProgress(async () => {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating…', meta.name), cancellable: false },
+        async () => {
+          const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
+          const isCurrent = !branchName || branchName === currentBranch?.name;
+          result = await this.updateSummaryService.run({
+            repoId: meta.id,
+            branchName,
+            execute: target => {
+              if (meta.kind === 'svn') {
+                return branchName ? target.pullBranch(branchName) : target.pull();
+              }
+              if (isCurrent) {
+                return useRebase ? target.pullRebase() : target.pull();
+              }
+              return target.pullBranch(branchName!);
+            },
+          });
+        }
+      );
+      if (result?.tracked) await this.updateSummaryService.notify([result]);
+      else if (result?.ok) vscode.window.showInformationMessage(t('VersionDock [{0}]: updated successfully.', meta.name));
+      else if (result) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, result.error ?? t('Unknown error')));
+      this.manager.notifyBranchesChanged();
+    }, 'sync', t('Updating…'));
     await this.refresh();
   }
 
@@ -2519,7 +2673,7 @@ export class BranchStatusBar implements vscode.Disposable {
     await this.refresh();
   }
 
-  private async pullRemoteIntoCurrentSingleRepo(remoteBranch: string, meta: RepoMeta, useRebase: boolean): Promise<void> {
+  private async updateRemoteIntoCurrentSingleRepo(remoteBranch: string, meta: RepoMeta, useRebase: boolean): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
     const remotes = (await repo.getRemotes().catch(() => [] as string[])).sort((a, b) => b.length - a.length);
@@ -2529,14 +2683,32 @@ export class BranchStatusBar implements vscode.Disposable {
       vscode.window.showErrorMessage(t('VersionDock [{0}]: cannot determine the remote branch for "{1}".', meta.name, remoteBranch));
       return;
     }
-    try {
-      await repo.pullFromRemote(remote, branch, useRebase);
-      vscode.window.showInformationMessage(
-        t('VersionDock [{0}]: pulled "{1}" using {2}.', meta.name, remoteBranch, useRebase ? t('rebase') : t('merge'))
+
+    let result: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
+    await this.withOperationProgress(async () => {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating…', meta.name), cancellable: false },
+        async () => {
+          result = await this.updateSummaryService.run({
+            repoId: meta.id,
+            execute: async target => {
+              await target.pullFromRemote(remote, branch, useRebase);
+              return `updated "${remoteBranch}" using ${useRebase ? 'rebase' : 'merge'}`;
+            },
+          });
+        }
       );
-    } catch (e: unknown) {
-      this.showError(meta, e);
-    }
+      if (result?.tracked) {
+        await this.updateSummaryService.notify([result]);
+      } else if (result?.ok) {
+        vscode.window.showInformationMessage(
+          t('VersionDock [{0}]: updated "{1}" using {2}.', meta.name, remoteBranch, useRebase ? t('rebase') : t('merge'))
+        );
+      } else if (result?.error) {
+        this.showError(meta, new Error(result.error));
+      }
+      this.manager.notifyBranchesChanged();
+    }, 'sync', t('Updating…'));
     await this.refresh();
   }
 
@@ -2587,29 +2759,80 @@ export class BranchStatusBar implements vscode.Disposable {
     await this.refresh();
   }
 
-  private async pullBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
-    let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling "{0}"…', branchName), cancellable: false },
-      async () => {
-        results = await this.updateSummaryService.runAll(metas.map(meta => ({
-          repoId: meta.id,
-          branchName,
-          execute: repo => repo.pullBranch(branchName),
-        })));
-      }
-    );
-    this.manager.notifyBranchesChanged();
-    if (results.some(result => result.tracked)) {
-      await this.updateSummaryService.notify(results);
-    } else {
-      const failed = results.filter(result => !result.ok);
-      if (failed.length > 0) {
-        vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', failed.length, failed.map(result => result.error ?? '').join('; ')));
+  private async updateBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
+    const hasGitRepos = metas.some(meta => meta.kind !== 'svn');
+    let useRebase = false;
+    if (hasGitRepos) {
+      const updateMethod = vscode.workspace
+        .getConfiguration('versiondock')
+        .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
+
+      if (updateMethod === 'prompt') {
+        const pick = await vscode.window.showQuickPick(
+          [
+            {
+              label: `$(repo-forked) ${t('Rebase the current branch on top of incoming changes')}`,
+              rebase: true,
+            },
+            {
+              label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
+              rebase: false,
+            },
+          ],
+          { title: t('Update Project — Strategy') }
+        ) as { label: string; rebase: boolean } | undefined;
+
+        if (!pick) return;
+        useRebase = pick.rebase;
       } else {
-        vscode.window.showInformationMessage(t('VersionDock: Pulled in {0} repos.', metas.length));
+        useRebase = updateMethod === 'rebase';
       }
     }
+
+    let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
+    await this.withOperationProgress(async () => {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating "{0}"…', branchName), cancellable: false },
+        async progress => {
+          const count = metas.length;
+          results = await this.updateSummaryService.runAll(
+            metas.map(meta => ({
+              repoId: meta.id,
+              branchName,
+              execute: async repo => {
+                if (meta.kind === 'svn') {
+                  return repo.pullBranch(branchName);
+                }
+                const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
+                const isCurrent = !branchName || branchName === currentBranch?.name;
+                if (isCurrent) {
+                  return useRebase ? repo.pullRebase() : repo.pull();
+                }
+                return repo.pullBranch(branchName);
+              },
+            })),
+            (completed, total, target) => {
+              const name = metas.find(m => m.id === target.repoId)?.name ?? target.repoId;
+              progress.report({
+                message: `(${completed + 1}/${total}) ${name}`,
+                increment: count > 0 ? 100 / count : undefined,
+              });
+            },
+          );
+        }
+      );
+      this.manager.notifyBranchesChanged();
+      if (results.some(result => result.tracked)) {
+        await this.updateSummaryService.notify(results);
+      } else {
+        const failed = results.filter(result => !result.ok);
+        if (failed.length > 0) {
+          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', failed.length, failed.map(result => result.error ?? '').join('; ')));
+        } else {
+          vscode.window.showInformationMessage(t('VersionDock: Updated in {0} repos.', metas.length));
+        }
+      }
+    }, 'sync', t('Updating…'));
     await this.refresh();
   }
 

@@ -8,7 +8,7 @@ import { type GitService, parseGitmodulesFileSync, parseGitConfigEntries } from 
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent, extractBaseAndTargetFromPatch } from '../utils/ShelveDocumentProvider';
-import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, SubtreeEntry, SubtreeOp, SubtreePushStatus } from '../types/messages';
+import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, SubtreeEntry, SubtreeOp, SubtreePushStatus, SyncPullStrategy } from '../types/messages';
 import type { FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { CHANGELIST_UNVERSIONED_ID } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
@@ -37,7 +37,7 @@ import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { runPushWithProtection } from '../utils/pushProtection';
 import { withGitPushProgress } from '../utils/pushProgress';
-import type { UpdateSummaryService } from '../update/UpdateSummaryService';
+import type { UpdateSummaryService, TrackedUpdateResult } from '../update/UpdateSummaryService';
 import { checkCommitSafety, isSensitivePath } from '../utils/commitSafetyCheck';
 import { sanitizeBranchName, validateBranchNameInput, getBranchCleanCharacter } from '../utils/branchNameSanitizer';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
@@ -2971,7 +2971,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_PULL_ALL': {
         let trackedResults: Awaited<ReturnType<UpdateSummaryService['runAll']>> | undefined;
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling all repositories'), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating all repositories'), cancellable: false },
           async progress => {
             if (this.updateSummaryService) {
               const metas = this.manager.getRepoMetas();
@@ -3005,7 +3005,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 const name = this.manager.getRepoMeta(result.repoId)?.name ?? result.repoId;
                 return `${name}: ${result.message}`;
               }).join('; ');
-              vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) failed: {1}', failed.length, failedDescription));
+              vscode.window.showWarningMessage(t('VersionDock: {0} update(s) failed: {1}', failed.length, failedDescription));
             }
           }
         );
@@ -4207,14 +4207,57 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         try {
-          if (repo.kind === 'svn') {
-            await repo.pull();
-          } else {
-            await (repo as GitService).pullWithCustomStrategy(msg.strategy ?? 'default');
+          let effectiveStrategy: SyncPullStrategy | undefined = msg.strategy ?? 'default';
+          if (repo.kind !== 'svn') {
+            effectiveStrategy = await this.resolveEffectivePullStrategy(msg.strategy);
+            if (!effectiveStrategy) {
+              this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: 'Cancelled' });
+              return;
+            }
           }
+
+          const repoMeta = this.manager.getRepoMeta(msg.repoId);
+          const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
+
+          let trackedResult: TrackedUpdateResult | undefined;
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock [{0}]: Updating…', repoName),
+                cancellable: false,
+              },
+              async () => {
+                if (this.updateSummaryService) {
+                  trackedResult = await this.updateSummaryService.run({
+                    repoId: msg.repoId,
+                    execute: async target => {
+                      if (repo.kind === 'svn') {
+                        return target.pull();
+                      }
+                      return target.pullWithCustomStrategy(effectiveStrategy);
+                    },
+                  });
+                  if (!trackedResult.ok) {
+                    throw new Error(trackedResult.error ?? t('Unknown error'));
+                  }
+                } else {
+                  if (repo.kind === 'svn') {
+                    await repo.pull();
+                  } else {
+                    await (repo as GitService).pullWithCustomStrategy(effectiveStrategy);
+                  }
+                }
+              },
+            );
+          }, 'sync', t('Updating…'));
+
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged();
           this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
+          if (trackedResult) {
+            await this.updateSummaryService?.notify([trackedResult]);
+          }
         } catch (e: unknown) {
           this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: String(e) });
         }
@@ -4223,25 +4266,90 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'SYNC_DO_PULL_MULTI': {
         try {
-          let hasError = false;
-          let firstError = '';
-          for (const repoId of msg.repoIds) {
-            const repo = this.manager.getRepo(repoId);
-            if (!repo) continue;
-            try {
-              if (repo.kind === 'svn') {
-                await repo.pull();
-              } else {
-                await (repo as GitService).pullWithCustomStrategy(msg.strategy ?? 'default');
-              }
-            } catch (err) {
-              hasError = true;
-              firstError = String(err);
+          const hasGitRepos = msg.repoIds.some(id => this.manager.getRepo(id)?.kind !== 'svn');
+          let effectiveStrategy: SyncPullStrategy | undefined = msg.strategy ?? 'default';
+          if (hasGitRepos) {
+            effectiveStrategy = await this.resolveEffectivePullStrategy(msg.strategy);
+            if (!effectiveStrategy) {
+              this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+              return;
             }
           }
+
+          let trackedResults: TrackedUpdateResult[] | undefined;
+          let hasError = false;
+          let firstError = '';
+
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock: Updating all projects…'),
+                cancellable: false,
+              },
+              async progress => {
+                const count = msg.repoIds.length;
+                if (this.updateSummaryService) {
+                  trackedResults = await this.updateSummaryService.runAll(
+                    msg.repoIds.map(repoId => ({
+                      repoId,
+                      execute: async target => {
+                        const r = this.manager.getRepo(repoId);
+                        if (r?.kind === 'svn') {
+                          return target.pull();
+                        }
+                        return target.pullWithCustomStrategy(effectiveStrategy);
+                      },
+                    })),
+                    (completed, total, target) => {
+                      const name = this.manager.getRepoMeta(target.repoId)?.name ?? target.repoId;
+                      progress.report({
+                        message: `(${completed + 1}/${total}) ${name}`,
+                        increment: count > 0 ? 100 / count : undefined,
+                      });
+                    },
+                  );
+                  const failed = trackedResults.filter(r => !r.ok);
+                  if (failed.length > 0) {
+                    hasError = true;
+                    firstError = failed[0]?.error || t('Update failed');
+                  }
+                } else {
+                  let index = 0;
+                  for (const repoId of msg.repoIds) {
+                    const repo = this.manager.getRepo(repoId);
+                    if (!repo) {
+                      index++;
+                      continue;
+                    }
+                    const name = this.manager.getRepoMeta(repoId)?.name ?? repoId;
+                    progress.report({
+                      message: `(${index + 1}/${count}) ${name}`,
+                      increment: count > 0 ? 100 / count : undefined,
+                    });
+                    try {
+                      if (repo.kind === 'svn') {
+                        await repo.pull();
+                      } else {
+                        await (repo as GitService).pullWithCustomStrategy(effectiveStrategy);
+                      }
+                    } catch (err) {
+                      hasError = true;
+                      firstError = String(err);
+                    }
+                    index++;
+                  }
+                }
+              },
+            );
+          }, 'sync', t('Updating…'));
+
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged();
           this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
+          if (trackedResults && trackedResults.length > 0) {
+            await this.updateSummaryService?.notify(trackedResults);
+          }
         } catch (e: unknown) {
           this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
@@ -4255,27 +4363,75 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         try {
+          const repoMeta = this.manager.getRepoMeta(msg.repoId);
+          const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
+
+          let shouldUpdate = false;
+          let effectiveStrategy: SyncPullStrategy | undefined;
           if (repo.kind === 'svn') {
-            await repo.pull();
+            shouldUpdate = true;
           } else {
             const gitRepo = repo as GitService;
             const currentBranch = await gitRepo.getCurrentBranch?.().catch(() => undefined);
             if (currentBranch?.upstream) {
-              await gitRepo.pullWithCustomStrategy(msg.strategy ?? 'default');
+              effectiveStrategy = await this.resolveEffectivePullStrategy(msg.strategy);
+              if (!effectiveStrategy) {
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+                return;
+              }
+              shouldUpdate = true;
             }
           }
-          await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+
+          let trackedResult: TrackedUpdateResult | undefined;
+          if (shouldUpdate) {
+            await this.manager.runWithStatusUpdatesSuppressed(async () => {
+              await vscode.window.withProgress(
+                {
+                  location: vscode.ProgressLocation.Notification,
+                  title: t('VersionDock [{0}]: Updating…', repoName),
+                  cancellable: false,
+                },
+                async () => {
+                  if (repo.kind === 'svn') {
+                    if (this.updateSummaryService) {
+                      trackedResult = await this.updateSummaryService.run({
+                        repoId: msg.repoId,
+                        execute: async target => target.pull(),
+                      });
+                      if (!trackedResult.ok) throw new Error(trackedResult.error ?? t('Unknown error'));
+                    } else {
+                      await repo.pull();
+                    }
+                  } else {
+                    const gitRepo = repo as GitService;
+                    if (this.updateSummaryService) {
+                      trackedResult = await this.updateSummaryService.run({
+                        repoId: msg.repoId,
+                        execute: async target => target.pullWithCustomStrategy(effectiveStrategy),
+                      });
+                      if (!trackedResult.ok) throw new Error(trackedResult.error ?? t('Unknown error'));
+                    } else {
+                      await gitRepo.pullWithCustomStrategy(effectiveStrategy);
+                    }
+                  }
+                },
+              );
+            }, 'sync', t('Updating…'));
+            await this.manager.refreshStatusNow();
+            this.manager.notifyBranchesChanged();
+          }
 
           const status = await repo.getStatus?.();
           if (status && status.conflictCount && status.conflictCount > 0) {
             vscode.window.showWarningMessage(t('Sync stopped due to merge conflicts. Please resolve conflicts before pushing.'));
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Sync stopped due to merge conflicts. Please resolve conflicts before pushing.') });
+            if (trackedResult) {
+              await this.updateSummaryService?.notify([trackedResult]);
+            }
             return;
           }
 
-          const repoMeta = this.manager.getRepoMeta(msg.repoId);
-          const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
           const pushResult = await runPushWithProtection(repo, {
             repoName,
             remote: msg.remote,
@@ -4297,10 +4453,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
               this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
             }
+            if (trackedResult) {
+              await this.updateSummaryService?.notify([trackedResult]);
+            }
           } else if (pushResult.cancelled) {
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+            if (trackedResult) {
+              await this.updateSummaryService?.notify([trackedResult]);
+            }
           } else {
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: pushResult.error ? String(pushResult.error) : t('Push failed') });
+            if (trackedResult) {
+              await this.updateSummaryService?.notify([trackedResult]);
+            }
           }
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
@@ -4313,29 +4478,108 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           let hasError = false;
           const errors: string[] = [];
           const pulledRepoIds: string[] = [];
+          const reposToUpdate: string[] = [];
+
           for (const repoId of msg.repoIds) {
             const repo = this.manager.getRepo(repoId);
             if (!repo) continue;
-            try {
-              if (repo.kind === 'svn') {
-                await repo.pull();
+            if (repo.kind === 'svn') {
+              reposToUpdate.push(repoId);
+            } else {
+              const gitRepo = repo as GitService;
+              const currentBranch = await gitRepo.getCurrentBranch?.().catch(() => undefined);
+              if (currentBranch?.upstream) {
+                reposToUpdate.push(repoId);
               } else {
-                const gitRepo = repo as GitService;
-                const currentBranch = await gitRepo.getCurrentBranch?.().catch(() => undefined);
-                if (currentBranch?.upstream) {
-                  await gitRepo.pullWithCustomStrategy(msg.strategy ?? 'default');
-                }
+                pulledRepoIds.push(repoId);
               }
-              pulledRepoIds.push(repoId);
-            } catch (err) {
-              hasError = true;
-              const repoMeta = this.manager.getRepoMeta(repoId);
-              const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
-              errors.push(`${repoName} (Pull): ${String(err)}`);
             }
           }
-          await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
+
+          let effectiveStrategy: SyncPullStrategy | undefined = msg.strategy ?? 'default';
+          if (reposToUpdate.some(id => this.manager.getRepo(id)?.kind !== 'svn')) {
+            effectiveStrategy = await this.resolveEffectivePullStrategy(msg.strategy);
+            if (!effectiveStrategy) {
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+              return;
+            }
+          }
+
+          let trackedResults: TrackedUpdateResult[] | undefined;
+          if (reposToUpdate.length > 0) {
+            await this.manager.runWithStatusUpdatesSuppressed(async () => {
+              await vscode.window.withProgress(
+                {
+                  location: vscode.ProgressLocation.Notification,
+                  title: t('VersionDock: Updating all projects…'),
+                  cancellable: false,
+                },
+                async progress => {
+                  const count = reposToUpdate.length;
+                  if (this.updateSummaryService) {
+                    trackedResults = await this.updateSummaryService.runAll(
+                      reposToUpdate.map(repoId => ({
+                        repoId,
+                        execute: async target => {
+                          const r = this.manager.getRepo(repoId);
+                          if (r?.kind === 'svn') {
+                            return target.pull();
+                          }
+                          return target.pullWithCustomStrategy(effectiveStrategy);
+                        },
+                      })),
+                      (completed, total, target) => {
+                        const name = this.manager.getRepoMeta(target.repoId)?.name ?? target.repoId;
+                        progress.report({
+                          message: `(${completed + 1}/${total}) ${name}`,
+                          increment: count > 0 ? 100 / count : undefined,
+                        });
+                      },
+                    );
+                    for (const tr of trackedResults) {
+                      const repoMeta = this.manager.getRepoMeta(tr.repoId);
+                      const repoName = repoMeta?.name || path.basename(this.manager.getRepo(tr.repoId)?.rootPath ?? '') || tr.repoId;
+                      if (tr.ok) {
+                        pulledRepoIds.push(tr.repoId);
+                      } else {
+                        hasError = true;
+                        errors.push(`${repoName} (${t('Update')}): ${tr.error ?? t('Unknown error')}`);
+                      }
+                    }
+                  } else {
+                    let index = 0;
+                    for (const repoId of reposToUpdate) {
+                      const repo = this.manager.getRepo(repoId);
+                      if (!repo) {
+                        index++;
+                        continue;
+                      }
+                      const repoMeta = this.manager.getRepoMeta(repoId);
+                      const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
+                      progress.report({
+                        message: `(${index + 1}/${count}) ${repoName}`,
+                        increment: count > 0 ? 100 / count : undefined,
+                      });
+                      try {
+                        if (repo.kind === 'svn') {
+                          await repo.pull();
+                        } else {
+                          await (repo as GitService).pullWithCustomStrategy(effectiveStrategy);
+                        }
+                        pulledRepoIds.push(repoId);
+                      } catch (err) {
+                        hasError = true;
+                        errors.push(`${repoName} (${t('Update')}): ${String(err)}`);
+                      }
+                      index++;
+                    }
+                  }
+                },
+              );
+            }, 'sync', t('Updating…'));
+            await this.manager.refreshStatusNow();
+            this.manager.notifyBranchesChanged();
+          }
 
           for (const repoId of pulledRepoIds) {
             const repo = this.manager.getRepo(repoId);
@@ -4373,6 +4617,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             ok: !hasError,
             error: hasError ? errors.join('\n') : undefined,
           });
+          if (trackedResults && trackedResults.length > 0) {
+            await this.updateSummaryService?.notify(trackedResults);
+          }
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
         }
@@ -6261,6 +6508,39 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const msg = t('VersionDock: Branch "{0}" pushed successfully to "{1}".', targetBranch, remoteLabel);
       void vscode.window.showInformationMessage(msg);
     }
+  }
+
+  private async resolveEffectivePullStrategy(
+    strategy?: SyncPullStrategy,
+  ): Promise<SyncPullStrategy | undefined> {
+    if (strategy && strategy !== 'default') {
+      return strategy;
+    }
+    const updateMethod = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
+
+    if (updateMethod === 'prompt') {
+      const pick = (await vscode.window.showQuickPick(
+        [
+          {
+            label: `$(repo-forked) ${t('Rebase the current branch on top of incoming changes')}`,
+            strategy: 'rebase' as const,
+          },
+          {
+            label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
+            strategy: 'merge' as const,
+          },
+        ],
+        { title: t('Update Project — Strategy') },
+      )) as { label: string; strategy: 'rebase' | 'merge' } | undefined;
+
+      if (!pick) {
+        return undefined;
+      }
+      return pick.strategy;
+    }
+    return updateMethod === 'rebase' ? 'rebase' : 'merge';
   }
 
   dispose(): void {

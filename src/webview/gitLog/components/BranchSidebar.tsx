@@ -774,7 +774,7 @@ function ContextMenu({ merged, x, y, isSvn, isRemote, canDelete, canCompare, onC
     ...(!isSvn ? [{ icon: 'repo-forked', label: t("Rebase onto '{0}'", merged.baseName), action: onRebase }] satisfies MenuItem[] : []),
     ...(!isRemote ? [
       { sep: true as const },
-      { icon: 'cloud-download', label: isSvn ? t('Update') : t('Pull'), action: onPull },
+      { icon: 'cloud-download', label: t('Update'), action: onPull },
       ...(!isSvn ? [{ icon: 'cloud-upload', label: t('Push...'), action: onPush }] satisfies MenuItem[] : []),
     ] : []),
     ...(canDelete ? [{ sep: true as const }, { icon: 'trash', label: isSvn ? t('Delete SVN branch') : t('Delete branch'), action: onDelete, danger: true }] : []),

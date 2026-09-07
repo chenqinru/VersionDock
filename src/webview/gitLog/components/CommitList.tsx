@@ -499,7 +499,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                 </div>
               )}
               {commit.incoming && (
-                <Codicon name="arrow-down" style={styles.incomingIcon} title={t('Not pulled')} />
+                <Codicon name="arrow-down" style={styles.incomingIcon} title={t('Not updated')} />
               )}
               {commit.unpushed && (
                 <Codicon name="arrow-up" style={styles.unpushedIcon} title={t('Not pushed')} />

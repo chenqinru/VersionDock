@@ -839,7 +839,7 @@ export class GitService {
   protected async assertPullAllowed(): Promise<void> {
     const status = await this.getStatusFresh();
     if (status.conflictCount > 0 || status.operationState) {
-      throw new Error(t('Cannot pull while conflicts are unresolved or another version-control operation is in progress. Resolve the conflicts and complete or abort the current operation first.'));
+      throw new Error(t('Cannot update while conflicts are unresolved or another version-control operation is in progress. Resolve the conflicts and complete or abort the current operation first.'));
     }
   }
 

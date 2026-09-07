@@ -2236,7 +2236,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       try {
         const pullPromise = rebase ? r.pullRebase() : r.pull();
         const timeoutPromise = new Promise<string>((_, reject) => {
-          setTimeout(() => reject(new Error(t('Pull timed out after 45 seconds.'))), 45_000);
+          setTimeout(() => reject(new Error(t('Update timed out after 45 seconds.'))), 45_000);
         });
         const message = await Promise.race([pullPromise, timeoutPromise]);
         results.push({ repoId: r.repoId, ok: true, message });

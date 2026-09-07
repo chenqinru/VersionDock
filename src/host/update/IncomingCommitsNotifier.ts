@@ -97,31 +97,76 @@ export class IncomingCommitsNotifier implements vscode.Disposable {
       const reposWithBehind = branches.filter(b => (b.aheadBehind?.behind ?? 0) > 0).length;
       const message = reposWithBehind === 1
         ? (totalBehind === 1
-          ? t('VersionDock: {0} incoming commit available to pull.', totalBehind)
-          : t('VersionDock: {0} incoming commits available to pull.', totalBehind))
+          ? t('VersionDock: {0} incoming commit available to update.', totalBehind)
+          : t('VersionDock: {0} incoming commits available to update.', totalBehind))
         : (totalBehind === 1
-          ? t('VersionDock: {0} incoming commit across {1} repository.', totalBehind, reposWithBehind)
-          : t('VersionDock: {0} incoming commits across {1} repositories.', totalBehind, reposWithBehind));
+          ? t('VersionDock: {0} incoming commit across {1} repository to update.', totalBehind, reposWithBehind)
+          : t('VersionDock: {0} incoming commits across {1} repositories to update.', totalBehind, reposWithBehind));
 
-      const pull = t('Pull');
+      const update = t('Update');
       const dismiss = t('Dismiss');
       const doNotShow = t("Don't show again");
 
-      const picked = await vscode.window.showInformationMessage(message, pull, dismiss, doNotShow);
+      const picked = await vscode.window.showInformationMessage(message, update, dismiss, doNotShow);
 
       if (picked === doNotShow) {
         await this.globalState.update(DO_NOT_SHOW_INCOMING_KEY, true);
-      } else if (picked === pull) {
-        let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling…'), cancellable: false },
-          async () => {
-            results = await this.updateSummaryService.runAll(metas.map(meta => ({
-              repoId: meta.id,
-              execute: repo => repo.pull(),
-            })));
+      } else if (picked === update) {
+        const hasGitRepos = metas.some(meta => meta.kind !== 'svn');
+        let useRebase = false;
+        if (hasGitRepos) {
+          const updateMethod = vscode.workspace
+            .getConfiguration('versiondock')
+            .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
+
+          if (updateMethod === 'prompt') {
+            const pick = await vscode.window.showQuickPick(
+              [
+                {
+                  label: `$(repo-forked) ${t('Rebase the current branch on top of incoming changes')}`,
+                  rebase: true,
+                },
+                {
+                  label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
+                  rebase: false,
+                },
+              ],
+              { title: t('Update Project — Strategy') }
+            ) as { label: string; rebase: boolean } | undefined;
+
+            if (!pick) return;
+            useRebase = pick.rebase;
+          } else {
+            useRebase = updateMethod === 'rebase';
           }
-        );
+        }
+
+        let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating all projects…'), cancellable: false },
+            async progress => {
+              const count = metas.length;
+              results = await this.updateSummaryService.runAll(
+                metas.map(meta => ({
+                  repoId: meta.id,
+                  execute: repo => meta.kind === 'svn'
+                    ? repo.pull()
+                    : useRebase
+                      ? repo.pullRebase()
+                      : repo.pull(),
+                })),
+                (completed, total, target) => {
+                  const name = this.manager.getRepoMeta(target.repoId)?.name ?? target.repoId;
+                  progress.report({
+                    message: `(${completed + 1}/${total}) ${name}`,
+                    increment: count > 0 ? 100 / count : undefined,
+                  });
+                },
+              );
+            }
+          );
+        });
         this.manager.notifyBranchesChanged();
         await this.updateSummaryService.notify(results);
       }

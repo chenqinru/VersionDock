@@ -58,7 +58,7 @@ export async function showGitErrorMessage(
 
   // Detect push rejection (non-fast-forward)
   if (isPushRejectedError(errorOrMessage)) {
-    const diagnostic = t('VersionDock: Push rejected because the remote contains work that you do not have locally. Please pull or rebase before pushing.');
+    const diagnostic = t('VersionDock: Push rejected because the remote contains work that you do not have locally. Please update or rebase before pushing.');
     return vscode.window.showErrorMessage(`${diagnostic}\n\n${message}`);
   }
 

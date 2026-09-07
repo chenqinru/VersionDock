@@ -141,8 +141,8 @@ export function registerCommands(
       return commitPanel.triggerCommitAction(true);
     }),
 
-    vscode.commands.registerCommand('versiondock.pull', () => {
-      return branchStatusBar.updateProject();
+    vscode.commands.registerCommand('versiondock.pull', (repoId?: string) => {
+      return branchStatusBar.pull(repoId);
     }),
 
     vscode.commands.registerCommand('versiondock.push', () => {

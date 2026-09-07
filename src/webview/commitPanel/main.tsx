@@ -1143,7 +1143,7 @@ export function CommitApp() {
 
         case 'SYNC_PULL_RESULT':
           if (msg.ok) {
-            notifyInfo(t('Pull completed.'));
+            notifyInfo(t('Update completed.'));
             const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
             currentGitRepos.forEach(r => {
               requestIncomingCommits(r.repoId, true);

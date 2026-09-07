@@ -487,13 +487,15 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
         onMouseLeave={() => setHovered(false)}
       >
         <div style={styles.commitLeft}>
-          <span style={styles.commitHash}>{commit.shortHash}</span>
           {showDirectionBadge && (
-            <span style={styles.commitDirectionBadge(!!isIncoming)}>
-              <Codicon name={isIncoming ? 'arrow-down' : 'arrow-up'} style={{ fontSize: '8px', marginRight: '2px' }} />
-              {isIncoming ? t('Incoming (Pull)') : t('Outgoing (Push)')}
+            <span
+              style={styles.commitDirectionIcon(!!isIncoming)}
+              title={isIncoming ? t('Incoming (Update)') : t('Outgoing (Push)')}
+            >
+              <Codicon name={isIncoming ? 'arrow-down' : 'arrow-up'} style={{ fontSize: '11px' }} />
             </span>
           )}
+          <span style={styles.commitHash}>{commit.shortHash}</span>
         </div>
         <div style={styles.commitInfo}>
           <span style={styles.commitMessage} title={fullMessage}>{messageTitle}</span>
@@ -1465,7 +1467,7 @@ function RepoSection({
               ) : incomingCount > 0 ? (
                 <div style={styles.behindRow}>
                   <Codicon name="arrow-down" style={{ marginRight: '6px', flexShrink: 0 }} />
-                  <span>{incomingCount === 1 ? t('{0} commit to pull from {1}', incomingCount, repoStatus.branch.upstream ?? '') : t('{0} commits to pull from {1}', incomingCount, repoStatus.branch.upstream ?? '')}</span>
+                  <span>{incomingCount === 1 ? t('{0} commit to update from {1}', incomingCount, repoStatus.branch.upstream ?? '') : t('{0} commits to update from {1}', incomingCount, repoStatus.branch.upstream ?? '')}</span>
                 </div>
               ) : (
                 <div style={styles.upToDate}>
@@ -2068,17 +2070,17 @@ export function PushTab(props: Props) {
     const soloPullItems: SplitDropdownButtonItem[] = [
       {
         icon: 'git-merge',
-        label: t('Pull Strategy: Rebase'),
+        label: t('Update Strategy: Rebase'),
         onSelect: () => onPull?.(solo.repoId, 'rebase'),
       },
       {
         icon: 'git-merge',
-        label: t('Pull Strategy: Merge'),
+        label: t('Update Strategy: Merge'),
         onSelect: () => onPull?.(solo.repoId, 'merge'),
       },
       {
         icon: 'arrow-right',
-        label: t('Pull Strategy: Fast-Forward Only'),
+        label: t('Update Strategy: Fast-Forward Only'),
         onSelect: () => onPull?.(solo.repoId, 'ff-only'),
       },
     ];
@@ -2105,7 +2107,7 @@ export function PushTab(props: Props) {
             colorVariant="pull"
             enabled={canPull}
             icon="cloud-download"
-            label={t('Pull')}
+            label={t('Update')}
             items={soloPullItems}
             dropdownAlign="right"
             onMainClick={() => onPull?.(solo.repoId)}
@@ -2163,7 +2165,7 @@ export function PushTab(props: Props) {
             colorVariant="pull"
             enabled
             icon="cloud-download"
-            label={t('Pull')}
+            label={t('Update')}
             items={soloPullItems}
             dropdownAlign="right"
             onMainClick={() => onPull?.(solo.repoId)}
@@ -2314,7 +2316,7 @@ export function PushTab(props: Props) {
   const multiPullItems: SplitDropdownButtonItem[] = [
     {
       icon: 'git-merge',
-      label: t('Pull Strategy: Rebase'),
+      label: t('Update Strategy: Rebase'),
       onSelect: () => {
         if (pullableChecked.length === 0) return;
         if (pullableChecked.length === 1) onPull?.(pullableChecked[0].repoId, 'rebase');
@@ -2324,7 +2326,7 @@ export function PushTab(props: Props) {
     },
     {
       icon: 'git-merge',
-      label: t('Pull Strategy: Merge'),
+      label: t('Update Strategy: Merge'),
       onSelect: () => {
         if (pullableChecked.length === 0) return;
         if (pullableChecked.length === 1) onPull?.(pullableChecked[0].repoId, 'merge');
@@ -2334,7 +2336,7 @@ export function PushTab(props: Props) {
     },
     {
       icon: 'arrow-right',
-      label: t('Pull Strategy: Fast-Forward Only'),
+      label: t('Update Strategy: Fast-Forward Only'),
       onSelect: () => {
         if (pullableChecked.length === 0) return;
         if (pullableChecked.length === 1) onPull?.(pullableChecked[0].repoId, 'ff-only');
@@ -2386,7 +2388,7 @@ export function PushTab(props: Props) {
           enabled={isEnabled}
           chevronEnabled={isEnabled}
           icon="cloud-download"
-          label={pullableChecked.length > 1 ? `${t('Pull')} (${pullableChecked.length})` : t('Pull')}
+          label={pullableChecked.length > 1 ? `${t('Update')} (${pullableChecked.length})` : t('Update')}
           items={multiPullItems}
           dropdownAlign="right"
           onMainClick={handlePull}
@@ -2455,7 +2457,7 @@ export function PushTab(props: Props) {
           colorVariant="pull"
           enabled
           icon="cloud-download"
-          label={pullableChecked.length > 1 ? `${t('Pull')} (${pullableChecked.length})` : t('Pull')}
+          label={pullableChecked.length > 1 ? `${t('Update')} (${pullableChecked.length})` : t('Update')}
           items={multiPullItems}
           dropdownAlign="right"
           onMainClick={handlePull}
@@ -2775,27 +2777,26 @@ const styles = {
   } as React.CSSProperties,
   commitLeft: {
     display: 'flex',
-    flexDirection: 'column' as const,
-    alignItems: 'flex-start',
-    gap: '2px',
+    alignItems: 'center',
+    gap: '4px',
     flexShrink: 0,
+    alignSelf: 'flex-start',
+    marginTop: '1px',
+    minWidth: '60px',
   } as React.CSSProperties,
   commitHash: {
     fontFamily: 'var(--vscode-editor-font-family, monospace)', fontSize: '10px',
     color: 'var(--vscode-descriptionForeground)',
-    display: 'flex', alignItems: 'center', minWidth: '46px',
+    display: 'flex', alignItems: 'center', minWidth: '44px',
     lineHeight: '14px',
   } as React.CSSProperties,
-  commitDirectionBadge: (isIncoming: boolean): React.CSSProperties => ({
-    ...styles.directionBadge(isIncoming ? PULL_COLOR : PUSH_COLOR),
-    whiteSpace: 'nowrap',
-    fontSize: '9px',
-    lineHeight: '13px',
-    padding: '1px 4px',
-    borderRadius: '3px',
+  commitDirectionIcon: (isIncoming: boolean): React.CSSProperties => ({
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
+    color: isIncoming ? PULL_COLOR : PUSH_COLOR,
     flexShrink: 0,
+    lineHeight: 1,
   }),
   commitInfo: {
     display: 'flex',

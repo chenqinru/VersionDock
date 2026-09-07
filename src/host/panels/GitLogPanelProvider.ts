@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
@@ -1239,29 +1240,74 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_PULL': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        let trackedResult: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: repo.kind === 'svn' ? t('VersionDock: Updating') : t('VersionDock: Pulling'), cancellable: false },
-          async () => {
-            try {
-              trackedResult = await this.updateSummaryService.run({
-                repoId: msg.repoId,
-                branchName: msg.branchName,
-                execute: target => msg.branchName ? target.pullBranch(msg.branchName) : target.pull(),
-              });
-              if (!trackedResult.ok) throw new Error(trackedResult.error ?? t('Unknown error'));
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true, output: trackedResult.output });
-              const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
-              const merged = mergeCurrentIntoBranches(branches, current);
-              this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
-              this.manager.notifyBranchesChanged();
-              this.refresh({ repoIds: [msg.repoId] });
-            } catch (e: unknown) {
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e);
-            }
+
+        let useRebase = false;
+        if (repo.kind !== 'svn') {
+          const updateMethod = vscode.workspace
+            .getConfiguration('versiondock')
+            .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
+
+          if (updateMethod === 'prompt') {
+            const pick = await vscode.window.showQuickPick(
+              [
+                {
+                  label: `$(repo-forked) ${t('Rebase the current branch on top of incoming changes')}`,
+                  rebase: true,
+                },
+                {
+                  label: `$(git-merge) ${t('Merge incoming changes into the current branch')}`,
+                  rebase: false,
+                },
+              ],
+              { title: t('Update Project — Strategy') }
+            ) as { label: string; rebase: boolean } | undefined;
+
+            if (!pick) return;
+            useRebase = pick.rebase;
+          } else {
+            useRebase = updateMethod === 'rebase';
           }
-        );
+        }
+
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
+
+        let trackedResult: Awaited<ReturnType<UpdateSummaryService['run']>> | undefined;
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating…', repoName), cancellable: false },
+            async () => {
+              try {
+                const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
+                const isCurrent = !msg.branchName || msg.branchName === currentBranch?.name;
+
+                trackedResult = await this.updateSummaryService.run({
+                  repoId: msg.repoId,
+                  branchName: msg.branchName,
+                  execute: target => {
+                    if (repo.kind === 'svn') {
+                      return msg.branchName ? target.pullBranch(msg.branchName) : target.pull();
+                    }
+                    if (isCurrent) {
+                      return useRebase ? target.pullRebase() : target.pull();
+                    }
+                    return target.pullBranch(msg.branchName!);
+                  },
+                });
+                if (!trackedResult.ok) throw new Error(trackedResult.error ?? t('Unknown error'));
+                this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true, output: trackedResult.output });
+                const [branches, current] = await Promise.all([repo.getBranches(), repo.getCurrentBranch()]);
+                const merged = mergeCurrentIntoBranches(branches, current);
+                this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
+                this.manager.notifyBranchesChanged();
+                this.refresh({ repoIds: [msg.repoId] });
+              } catch (e: unknown) {
+                this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+                this.showOperationError(e);
+              }
+            }
+          );
+        });
         if (trackedResult?.ok) await this.updateSummaryService.notify([trackedResult]);
         break;
       }

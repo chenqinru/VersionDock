@@ -249,7 +249,7 @@ export async function runPushWithProtection(
             } else if (repo.pull) {
               await repo.pull();
             } else {
-              throw new Error(t('VersionDock [{0}]: Pull/Rebase is not supported on this repository.', repoName));
+              throw new Error(t('VersionDock [{0}]: Update/Rebase is not supported on this repository.', repoName));
             }
           },
         );
