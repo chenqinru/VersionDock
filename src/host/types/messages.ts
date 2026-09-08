@@ -264,7 +264,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_OPEN_AI_REVIEW'; candidates: CodeReviewCandidate[] }
   | { type: 'SHELVE_LIST'; requestId: string; repoId: string }
   | { type: 'SHELVE_PUSH'; requestId: string; repoId: string; name: string; paths?: string[] }
-  | { type: 'SHELVE_APPLY'; requestId: string; repoId: string; shelveId: string; paths?: string[] }
+  | { type: 'SHELVE_APPLY'; requestId: string; repoId: string; shelveId: string; paths?: string[]; drop?: boolean }
   | { type: 'SHELVE_DROP'; requestId: string; repoId: string; shelveId: string }
   | { type: 'SHELVE_GET_FILE_DIFF'; requestId: string; repoId: string; shelveId: string; filePath: string }
   | { type: 'SHELVE_OPEN_FILE_DIFF'; repoId: string; shelveId: string; filePath: string }

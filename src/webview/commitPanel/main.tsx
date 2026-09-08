@@ -815,7 +815,7 @@ export function CommitApp() {
           }
           const freshRepos = useCommitStore.getState().status?.repos ?? [];
           const gitRepoList = freshRepos.filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
-          if (currentTab === 'shelf') gitRepoList.forEach(r => requestShelveList(r.repoId, true));
+          gitRepoList.forEach(r => requestShelveList(r.repoId, currentTab !== 'shelf'));
           if (currentTab === 'stash') gitRepoList.forEach(r => { requestStashCount(r.repoId); requestStashList(r.repoId, true); });
           if (currentTab === 'push') gitRepoList.forEach(r => { requestUnpushedCommits(r.repoId, true); requestIncomingCommits(r.repoId, true); });
           if (currentTab === 'worktree') requestWorktreeList(true);
@@ -847,9 +847,12 @@ export function CommitApp() {
             }
           }
 
-          // Always keep stash count badge updated on status updates
+          // Always keep stash and shelve count badges updated on status updates
           const currentGitRepos = (msg.status?.repos ?? []).filter(r => msg.repos.find(m => m.id === r.repoId)?.kind !== 'svn');
-          currentGitRepos.forEach(r => requestStashCount(r.repoId));
+          currentGitRepos.forEach(r => {
+            requestStashCount(r.repoId);
+            requestShelveList(r.repoId, true);
+          });
 
           const currentTab = activeTabRef.current;
           if (!isManualRefresh && currentTab !== 'changes') {
@@ -1004,9 +1007,9 @@ export function CommitApp() {
               notifyInfo(t('Conflicts in {0} file(s) — merge editor opened', msg.conflictFiles.length), msg.repoId);
             }
             if (activeTabRef.current === 'shelf') {
-              setShelveLoading(prev => ({ ...prev, [msg.repoId]: true }));
-              getVsCodeApi().postMessage({ type: 'SHELVE_LIST', requestId: generateId(), repoId: msg.repoId } satisfies CommitToHostMsg);
+              requestShelveList(msg.repoId, false);
             } else {
+              requestShelveList(msg.repoId, true);
               markTabDirty('shelf');
             }
           }
@@ -1295,6 +1298,10 @@ export function CommitApp() {
 
   const handleUnshelve = useCallback((repoId: string, shelveId: string) => {
     send({ type: 'SHELVE_APPLY', requestId: generateId(), repoId, shelveId });
+  }, [send]);
+
+  const handleUnshelveAndDrop = useCallback((repoId: string, shelveId: string) => {
+    send({ type: 'SHELVE_APPLY', requestId: generateId(), repoId, shelveId, drop: true });
   }, [send]);
 
   const handleUnshelveFile = useCallback((repoId: string, shelveId: string, filePath: string) => {
@@ -2688,6 +2695,7 @@ export function CommitApp() {
                     error={shelveError[repoId] ?? null}
                     viewMode={store.shelveViewMode}
                     onUnshelve={handleUnshelve}
+                    onUnshelveAndDrop={handleUnshelveAndDrop}
                     onUnshelveFile={handleUnshelveFile}
                     onDrop={handleDropShelve}
                     onOpenFileDiff={handleOpenFileDiff}

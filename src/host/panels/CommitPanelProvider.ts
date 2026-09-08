@@ -2964,6 +2964,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     repoName: (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId,
                     logger: this.logger,
                     silentOnSuccess: msg.repos.length > 1,
+                    suppressProgress: msg.repos.length > 1,
                     beforePush: () => this.checkUnpushedSubmodules(r.repoId),
                   });
                   if (pushResult.success) {
@@ -3563,6 +3564,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 remote: target.remote,
                 force: msg.force,
                 silentOnSuccess: msg.targets.length > 1,
+                suppressProgress: msg.targets.length > 1,
                 logger: this.logger,
                 beforePush: () => this.checkUnpushedSubmodules(target.repoId),
               });
@@ -4310,6 +4312,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           const paths = msg.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
           const clAssignments = await svc.apply(msg.shelveId, paths);
+          if (msg.drop && (!paths || paths.length === 0)) {
+            svc.drop(msg.shelveId);
+          }
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
           // Restore changelist assignments if present
@@ -4317,7 +4322,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             await this.restoreChangelistAssignments(msg.repoId, clAssignments);
           }
           this.postChangelistsUpdate(status);
-          this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'apply', ok: true });
+          this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: msg.drop ? 'drop' : 'apply', ok: true });
         } catch (e: unknown) {
           const err = e as { code?: string; conflictFiles?: string[] };
           if (err.code === 'SHELVE_CONFLICT' && err.conflictFiles?.length) {
@@ -5225,6 +5230,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     repoName,
                     logger: this.logger,
                     silentOnSuccess: totalPush > 1,
+                    suppressProgress: totalPush > 1,
                     beforePush: () => this.checkUnpushedSubmodules(repoId),
                   });
                   if (!pushResult.success) {

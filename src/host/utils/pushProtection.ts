@@ -25,6 +25,7 @@ export interface RunPushOptions {
   force?: boolean;
   remote?: string;
   silentOnSuccess?: boolean;
+  suppressProgress?: boolean;
   beforePush?: () => Promise<boolean>;
   logger?: {
     info(category: string, message: string, detail?: unknown): void;
@@ -148,15 +149,22 @@ export async function runPushWithProtection(
     }
   }
 
-  // 1. Initial push attempt (wrapped with push progress)
-  try {
-    await withGitPushProgress(
+  const runPushWithOptionalProgress = async <T>(action: () => Promise<T>): Promise<T> => {
+    if (options?.suppressProgress) {
+      return action();
+    }
+    return withGitPushProgress(
       repo,
       options?.remote
         ? t('VersionDock [{0}]: Pushing to {1}…', repoName, options.remote)
         : t('VersionDock [{0}]: Pushing…', repoName),
-      () => repo.push(force, remote),
+      action,
     );
+  };
+
+  // 1. Initial push attempt (wrapped with push progress)
+  try {
+    await runPushWithOptionalProgress(() => repo.push(force, remote));
     return { success: true, rebased: false, forced: force };
   } catch (error: unknown) {
     if (isRemoteRepositoryCancelled(error)) {
@@ -292,13 +300,7 @@ export async function runPushWithProtection(
       // 3.5 Retry push after successful update
       options?.logger?.info('Git', 'Retrying push after update', { repoName, remote });
       try {
-        await withGitPushProgress(
-          repo,
-          options?.remote
-            ? t('VersionDock [{0}]: Pushing to {1}…', repoName, options.remote)
-            : t('VersionDock [{0}]: Pushing…', repoName),
-          () => repo.push(false, remote),
-        );
+        await runPushWithOptionalProgress(() => repo.push(false, remote));
 
         if (!options?.silentOnSuccess) {
           const successMsg = selectedUpdateMethod === 'merge'
@@ -322,13 +324,7 @@ export async function runPushWithProtection(
 
       options?.logger?.info('Git', 'Executing force push per user request', { repoName, remote });
       try {
-        await withGitPushProgress(
-          repo,
-          options?.remote
-            ? t('VersionDock [{0}]: Pushing to {1}…', repoName, options.remote)
-            : t('VersionDock [{0}]: Pushing…', repoName),
-          () => repo.push(true, remote),
-        );
+        await runPushWithOptionalProgress(() => repo.push(true, remote));
 
         if (!options?.silentOnSuccess) {
           void vscode.window.showInformationMessage(

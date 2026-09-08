@@ -2471,5 +2471,9 @@
   "Shelving changes…": "Shelving changes…",
   "Stashing changes…": "Stashing changes…",
   "VersionDock [{0}]: Commits committed and pushed successfully.": "VersionDock [{0}]: Commits committed and pushed successfully.",
-  "VersionDock: Commits committed and pushed successfully across {0} repositories.": "VersionDock: Commits committed and pushed successfully across {0} repositories."
+  "VersionDock: Commits committed and pushed successfully across {0} repositories.": "VersionDock: Commits committed and pushed successfully across {0} repositories.",
+  "Apply and delete": "Apply and delete",
+  "Apply and keep": "Apply and keep",
+  "Unshelve (apply and delete)": "Unshelve (apply and delete)",
+  "Apply (keep shelve)": "Apply (keep shelve)"
 }

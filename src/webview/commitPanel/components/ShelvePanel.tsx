@@ -23,15 +23,17 @@ interface Props {
   error: string | null;
   viewMode: ViewMode;
   onUnshelve: (repoId: string, shelveId: string) => void;
+  onUnshelveAndDrop: (repoId: string, shelveId: string) => void;
   onUnshelveFile: (repoId: string, shelveId: string, filePath: string) => void;
   onDrop: (repoId: string, shelveId: string) => void;
   onOpenFileDiff: (repoId: string, shelveId: string, filePath: string) => void;
 }
 
 const SHELVE_CTX_ITEMS: ContextMenuEntry[] = [
-  { id: 'unshelve', label: t('Unshelve'), icon: 'desktop-download' },
+  { id: 'pop',      label: t('Apply and delete'), icon: 'desktop-download' },
+  { id: 'unshelve', label: t('Apply and keep'),   icon: 'arrow-down' },
   { separator: true },
-  { id: 'drop', label: t('Delete'), icon: 'trash', danger: true },
+  { id: 'drop',     label: t('Delete'),           icon: 'trash', danger: true },
 ];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -239,11 +241,12 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
 
 // ── Single shelve row ─────────────────────────────────────────────────────────
 
-function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop, onOpenFileDiff }: {
+function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff }: {
   entry: ShelveEntry;
   repoId: string;
   viewMode: ViewMode;
   onUnshelve: Props['onUnshelve'];
+  onUnshelveAndDrop: Props['onUnshelveAndDrop'];
   onUnshelveFile: Props['onUnshelveFile'];
   onDrop: Props['onDrop'];
   onOpenFileDiff: Props['onOpenFileDiff'];
@@ -292,8 +295,11 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
         </div>
         {hovered && (
           <div style={rowStyle.actions}>
-            <button data-action-btn="" style={rowStyle.btn} title={t('Unshelve (apply and keep)')} onClick={e => { e.stopPropagation(); onUnshelve(repoId, entry.id); }}>
+            <button data-action-btn="" style={rowStyle.btn} title={t('Apply and delete')} onClick={e => { e.stopPropagation(); onUnshelveAndDrop(repoId, entry.id); }}>
               <Codicon name="desktop-download" />
+            </button>
+            <button data-action-btn="" style={rowStyle.btn} title={t('Apply and keep')} onClick={e => { e.stopPropagation(); onUnshelve(repoId, entry.id); }}>
+              <Codicon name="arrow-down" />
             </button>
             <button data-action-btn="" style={{ ...rowStyle.btn, color: 'var(--vscode-errorForeground)' }} title={t('Delete shelve')} onClick={e => { e.stopPropagation(); onDrop(repoId, entry.id); }}>
               <Codicon name="trash" />
@@ -324,6 +330,7 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveFile, onDrop
           items={SHELVE_CTX_ITEMS}
           onSelect={id => {
             setCtxMenu(null);
+            if (id === 'pop') onUnshelveAndDrop(repoId, entry.id);
             if (id === 'unshelve') onUnshelve(repoId, entry.id);
             if (id === 'drop') onDrop(repoId, entry.id);
           }}
@@ -375,7 +382,7 @@ const rowStyle = {
 
 // ── Public component ──────────────────────────────────────────────────────────
 
-export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveFile, onDrop, onOpenFileDiff }: Props) {
+export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff }: Props) {
   const projectColor = readableAccentColor(repoColor);
 
   return (
@@ -412,6 +419,7 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBr
             repoId={repoId}
             viewMode={viewMode}
             onUnshelve={onUnshelve}
+            onUnshelveAndDrop={onUnshelveAndDrop}
             onUnshelveFile={onUnshelveFile}
             onDrop={onDrop}
             onOpenFileDiff={onOpenFileDiff}

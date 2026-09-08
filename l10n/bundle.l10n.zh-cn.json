@@ -2471,5 +2471,9 @@
   "Shelving changes…": "正在搁置更改…",
   "Stashing changes…": "正在贮藏更改…",
   "VersionDock [{0}]: Commits committed and pushed successfully.": "VersionDock [{0}]：已成功提交并推送。",
-  "VersionDock: Commits committed and pushed successfully across {0} repositories.": "VersionDock：已成功提交并推送到 {0} 个仓库。"
+  "VersionDock: Commits committed and pushed successfully across {0} repositories.": "VersionDock：已成功提交并推送到 {0} 个仓库。",
+  "Apply and delete": "应用并删除",
+  "Apply and keep": "应用并保留",
+  "Unshelve (apply and delete)": "取消搁置（应用并删除）",
+  "Apply (keep shelve)": "应用（保留搁置）"
 }
