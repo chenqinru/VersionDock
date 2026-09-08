@@ -13,7 +13,6 @@ import { WorktreeDiffPanel } from './components/WorktreeDiffPanel';
 import { WorktreePanel } from './components/WorktreePanel';
 import { SubtreePanel } from './components/SubtreePanel';
 import { SubmodulePanel } from './components/SubmodulePanel';
-import { ConflictBanner, type ConflictBannerAction } from './components/ConflictBanner';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { Codicon } from '../shared/Codicon';
 import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, IncomingCommit, SyncPullStrategy, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus, RepoSubmodules, SubmoduleItem } from '../shared/msgTypes';
@@ -357,6 +356,8 @@ export function CommitApp() {
   const [stashError, setStashError]   = useState<Record<string, string | null>>({});
   const [stashExpansionCommand, setStashExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: false });
   const [pushExpansionCommand, setPushExpansionCommand] = useState<ExpansionCommand>({ sequence: 0, expanded: true });
+  const [pushSelectionCommand, setPushSelectionCommand] = useState<{ sequence: number; action: 'selectAll' | 'invert' }>({ sequence: 0, action: 'selectAll' });
+  const [pushSelectionState, setPushSelectionState] = useState<{ isAllSelected: boolean; hasSelectable: boolean }>({ isAllSelected: false, hasSelectable: false });
   const [stashFilesMap, setStashFilesMap] = useState<Record<string, Record<string, { loading: boolean; files?: StashEntry['files']; error?: string }>>>({});
 
   // ── Worktree state ────────────────────────────────────────────────────────
@@ -973,6 +974,24 @@ export function CommitApp() {
             setStashExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: false }));
           } else if (currentTab === 'push') {
             setPushExpansionCommand(command => ({ sequence: command.sequence + 1, expanded: false }));
+          }
+          break;
+        }
+        case 'COMMIT_SELECT_ALL': {
+          const currentTab = activeTabRef.current;
+          if (currentTab === 'changes') {
+            store.selectAllFiles();
+          } else if (currentTab === 'push' || currentTab === 'sync') {
+            setPushSelectionCommand(command => ({ sequence: command.sequence + 1, action: 'selectAll' }));
+          }
+          break;
+        }
+        case 'COMMIT_INVERT_SELECTION': {
+          const currentTab = activeTabRef.current;
+          if (currentTab === 'changes') {
+            store.invertFileSelections();
+          } else if (currentTab === 'push' || currentTab === 'sync') {
+            setPushSelectionCommand(command => ({ sequence: command.sequence + 1, action: 'invert' }));
           }
           break;
         }
@@ -1682,59 +1701,32 @@ export function CommitApp() {
   const visibleTabs = (repos.length > 0 && gitRepos.length === 0) ? SVN_ONLY_TABS : ALL_TABS;
   const visibleRepoIds = new Set(repos.map(repo => repo.repoId));
   const multiRepo = repos.length >= 1;
-  const totalConflictCount = repos.reduce((sum, repo) => sum + repo.conflictCount, 0);
-  const conflictRepoIds = repos.filter(repo => repo.conflictCount > 0).map(repo => repo.repoId);
-  const abortableConflictRepos = repos.filter(repo =>
-    repo.conflictCount > 0 && (repo.operationState === 'merge' || repo.operationState === 'rebase')
-  );
-  const abortableConflictRepoIds = abortableConflictRepos.map(repo => repo.repoId);
-  const abortableConflictStates = new Set(abortableConflictRepos.map(repo => repo.operationState));
-  const abortOperationLabel = abortableConflictStates.size > 1
-    ? t('Abort Merge/Rebase')
-    : abortableConflictStates.has('rebase')
-      ? t('Abort Rebase')
-      : t('Abort Merge');
-  const abortOperationTitle = abortableConflictStates.size > 1
-    ? t('Merge or rebase in progress — abort and restore previous state')
-    : abortableConflictStates.has('rebase')
-      ? t('Rebase in progress — abort and restore previous state')
-      : t('Merge in progress — abort and restore previous state');
-  const restorableConflictRepoIds = repos
-    .filter(repo => repo.conflictCount > 0 && repo.operationState === null && metaMap.get(repo.repoId)?.kind !== 'svn')
-    .map(repo => repo.repoId);
-  const conflictRepoCount = conflictRepoIds.length;
-  const conflictRepoSummary = conflictRepoCount === 1
-    ? t('{0} repository', conflictRepoCount)
-    : t('{0} repositories', conflictRepoCount);
-  const conflictFileSummary = totalConflictCount === 1
-    ? t('{0} unresolved conflict file', totalConflictCount)
-    : t('{0} unresolved conflict files', totalConflictCount);
-  const conflictSummary = conflictRepoCount > 0
-    ? `${conflictRepoSummary} ${t('·')} ${conflictFileSummary}`
-    : '';
-  const conflictBannerActions: ConflictBannerAction[] = totalConflictCount > 0 ? [
-    {
-      id: 'resolve',
-      label: t('Resolve Conflicts'),
-      title: t('Open the conflicts panel to resolve files'),
-      tone: 'primary',
-      onClick: () => send({ type: 'COMMIT_OPEN_CONFLICTS' }),
-    },
-    ...(abortableConflictRepoIds.length > 0 ? [{
-      id: 'abort',
-      label: abortOperationLabel,
-      title: abortOperationTitle,
-      tone: 'danger' as const,
-      onClick: () => send({ type: 'COMMIT_ABORT_OPERATION', requestId: generateId(), repoIds: abortableConflictRepoIds }),
-    }] : []),
-    ...(restorableConflictRepoIds.length > 0 ? [{
-      id: 'restore',
-      label: t('Restore Current Branch'),
-      title: t('Discard conflicted index and working tree changes, then restore the current branch versions'),
-      tone: 'danger' as const,
-      onClick: () => send({ type: 'COMMIT_RESTORE_CONFLICTS', requestId: generateId(), repoIds: restorableConflictRepoIds }),
-    }] : []),
-  ] : [];
+
+  // ── Selection state for Select All / Invert button ───────────────────────
+  const changesTotalFiles = repos.reduce((sum, r) => sum + r.stagedFiles.length + r.unstagedFiles.length, 0);
+  const changesSelectedFilesCount = repos.reduce((sum, r) => sum + (store.fileSelections[r.repoId]?.size ?? 0), 0);
+  const changesHasSelectable = changesTotalFiles > 0;
+  const changesIsAllSelected = changesHasSelectable && changesSelectedFilesCount === changesTotalFiles;
+
+  const currentTabHasSelectable = activeTab === 'changes'
+    ? changesHasSelectable
+    : (activeTab === 'push' || activeTab === 'sync')
+      ? pushSelectionState.hasSelectable
+      : false;
+
+  const currentTabIsAllSelected = activeTab === 'changes'
+    ? changesIsAllSelected
+    : (activeTab === 'push' || activeTab === 'sync')
+      ? pushSelectionState.isAllSelected
+      : false;
+
+  useEffect(() => {
+    send({
+      type: 'COMMIT_SELECTION_STATE_CHANGED',
+      isAllSelected: currentTabIsAllSelected,
+      hasSelectable: currentTabHasSelectable,
+    });
+  }, [currentTabIsAllSelected, currentTabHasSelectable, send]);
 
   useEffect(() => {
     if (!visibleTabs.includes(activeTab)) switchTab('changes');
@@ -2409,11 +2401,6 @@ export function CommitApp() {
         </div>
       )}
 
-      {/* ── Conflict Banner (visible across all tabs when conflicts exist) ── */}
-      {totalConflictCount > 0 && (
-        <ConflictBanner summary={conflictSummary} actions={conflictBannerActions} />
-      )}
-
       {/* ── Tab content ── */}
       <div style={css.main}>
 
@@ -2789,6 +2776,8 @@ export function CommitApp() {
               expansionCommand={pushExpansionCommand}
               viewMode={store.viewMode}
               onExpansionChange={expanded => setPushExpansionCommand(prev => ({ ...prev, expanded }))}
+              selectionCommand={pushSelectionCommand}
+              onSelectionChange={(isAllSelected, hasSelectable) => setPushSelectionState({ isAllSelected, hasSelectable })}
             />
           </div>
         )}

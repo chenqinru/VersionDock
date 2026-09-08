@@ -1,0 +1,20 @@
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      @keyframes vd-conflict-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.35; transform: scale(0.92); }
+      }
+      .vd-conflict-icon {
+        transform-origin: 8px 8.5px;
+        animation: vd-conflict-pulse 1.6s ease-in-out infinite;
+      }
+    </style>
+  </defs>
+  <g class="vd-conflict-icon">
+    <path fill="#D97706" d="M6.93 1.9a1.23 1.23 0 0 1 2.14 0l6.17 10.8a1.23 1.23 0 0 1-1.07 1.84H1.83a1.23 1.23 0 0 1-1.07-1.84L6.93 1.9z"/>
+    <rect x="7.2" y="5.2" width="1.6" height="4.2" rx="0.8" fill="#FFFFFF"/>
+    <circle cx="8" cy="11.8" r="0.9" fill="#FFFFFF"/>
+    <animate attributeName="opacity" values="1;0.35;1" dur="1.6s" repeatCount="indefinite" />
+  </g>
+</svg>

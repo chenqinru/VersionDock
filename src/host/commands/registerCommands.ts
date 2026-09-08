@@ -12,6 +12,7 @@ import type { LineRange } from '../types/git';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { formatRepoLabel } from '../utils/repoLabels';
 import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
+import { showConflictActionsMenu } from './showConflictActionsMenu';
 
 function getScmResourceUri(resource: unknown): vscode.Uri | undefined {
   if (resource instanceof vscode.Uri) return resource;
@@ -54,6 +55,14 @@ export function registerCommands(
 
     vscode.commands.registerCommand('versiondock.refreshCommitPanel', () => {
       return commitPanel.refresh({ refreshSubtrees: commitPanel.isSubtreeTabActive() });
+    }),
+
+    vscode.commands.registerCommand('versiondock.selectAll', () => {
+      commitPanel.selectAll();
+    }),
+
+    vscode.commands.registerCommand('versiondock.invertSelection', () => {
+      commitPanel.invertSelection();
     }),
 
     vscode.commands.registerCommand('versiondock.expandAll', () => {
@@ -99,6 +108,11 @@ export function registerCommands(
 
     vscode.commands.registerCommand('versiondock.openConflicts', () => {
       conflictsPanel.open();
+    }),
+
+    vscode.commands.registerCommand('versiondock.showConflictActions', async () => {
+      if (!manager) return;
+      await showConflictActionsMenu(manager, conflictsPanel);
     }),
 
     vscode.commands.registerCommand('versiondock.openMergeEditorFromSCM', (resource?: unknown) => {

@@ -207,6 +207,8 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_REFRESH_START' }
   | { type: 'COMMIT_EXPAND_ALL' }
   | { type: 'COMMIT_COLLAPSE_ALL' }
+  | { type: 'COMMIT_SELECT_ALL' }
+  | { type: 'COMMIT_INVERT_SELECTION' }
   | { type: 'COMMIT_SET_FILE_VIEW_MODE'; mode: 'flat' | 'tree' }
   | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab };
 
@@ -215,6 +217,7 @@ export type HostToCommitMsg =
 export type CommitToHostMsg =
   | { type: 'COMMIT_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'COMMIT_REQUEST_STATUS'; refreshSubtrees?: boolean }
+  | { type: 'COMMIT_SELECTION_STATE_CHANGED'; isAllSelected: boolean; hasSelectable: boolean }
   | { type: 'COMMIT_ACTIVE_TAB_CHANGED'; tab: CommitPanelTab; viewMode?: 'flat' | 'tree'; expandMode?: 'expand' | 'collapse' }
   | { type: 'COMMIT_EXPAND_MODE_CHANGED'; expandMode: 'expand' | 'collapse' }
   | { type: 'COMMIT_REQUEST_DIFF'; requestId: string; repoId: string; filePath: string; staged: boolean }

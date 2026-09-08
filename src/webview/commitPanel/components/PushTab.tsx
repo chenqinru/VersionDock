@@ -60,6 +60,8 @@ export interface PushTabProps {
   expansionCommand?: ExpansionCommand;
   viewMode?: PushFileViewMode;
   onExpansionChange?: (expanded: boolean) => void;
+  selectionCommand?: { sequence: number; action: 'selectAll' | 'invert' };
+  onSelectionChange?: (isAllSelected: boolean, hasSelectable: boolean) => void;
 }
 
 type Props = PushTabProps;
@@ -1961,6 +1963,8 @@ export function PushTab(props: Props) {
     expansionCommand,
     viewMode,
     onExpansionChange,
+    selectionCommand,
+    onSelectionChange,
   } = props;
   const metaMap = new Map(repoMetas.map(meta => [meta.id, meta]));
   const isSingleRepo = repos.length === 1;
@@ -1991,22 +1995,40 @@ export function PushTab(props: Props) {
     });
   }, [repos.length, onExpansionChange]);
 
-  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('all');
+  const [repoDirectionFilters, setRepoDirectionFilters] = useState<Record<string, DirectionFilter>>({});
 
-  const toggleDirectionFilter = useCallback((target: 'outgoing' | 'incoming') => {
-    setDirectionFilter(curr => {
+  const getRepoDirectionFilter = useCallback((repoId: string): DirectionFilter => {
+    return repoDirectionFilters[repoId] ?? 'all';
+  }, [repoDirectionFilters]);
+
+  const toggleRepoDirectionFilter = useCallback((repoId: string, target: 'outgoing' | 'incoming') => {
+    setRepoDirectionFilters(prev => {
+      const curr = prev[repoId] ?? 'all';
       const outgoingActive = curr === 'all' || curr === 'outgoing';
       const incomingActive = curr === 'all' || curr === 'incoming';
 
       const nextOutgoing = target === 'outgoing' ? !outgoingActive : outgoingActive;
       const nextIncoming = target === 'incoming' ? !incomingActive : incomingActive;
 
-      if (nextOutgoing && nextIncoming) return 'all';
-      if (nextOutgoing) return 'outgoing';
-      if (nextIncoming) return 'incoming';
-      return 'none';
+      let next: DirectionFilter = 'all';
+      if (nextOutgoing && nextIncoming) next = 'all';
+      else if (nextOutgoing) next = 'outgoing';
+      else if (nextIncoming) next = 'incoming';
+      else next = 'none';
+
+      return { ...prev, [repoId]: next };
     });
   }, []);
+
+  const isRepoOutgoingActive = useCallback((repoId: string) => {
+    const filter = repoDirectionFilters[repoId] ?? 'all';
+    return filter === 'all' || filter === 'outgoing';
+  }, [repoDirectionFilters]);
+
+  const isRepoIncomingActive = useCallback((repoId: string) => {
+    const filter = repoDirectionFilters[repoId] ?? 'all';
+    return filter === 'all' || filter === 'incoming';
+  }, [repoDirectionFilters]);
 
   const repoHasUpstream = useCallback((repo: RepoStatus) => !!repo.branch.upstream && !repo.branch.isGone, []);
 
@@ -2041,6 +2063,34 @@ export function PushTab(props: Props) {
     });
   };
 
+  const eligibleRepos = useMemo(
+    () => isSingleRepo ? [] : repos.filter(repo => canPushRepo(repo) || canPullRepo(repo)),
+    [isSingleRepo, repos, canPushRepo, canPullRepo]
+  );
+  const lastSelectionSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!selectionCommand || selectionCommand.sequence === 0 || selectionCommand.sequence === lastSelectionSeqRef.current) return;
+    lastSelectionSeqRef.current = selectionCommand.sequence;
+    if (selectionCommand.action === 'selectAll') {
+      setChecked(new Set(eligibleRepos.map(r => r.repoId)));
+    } else if (selectionCommand.action === 'invert') {
+      setChecked(prev => {
+        const next = new Set<string>();
+        for (const r of eligibleRepos) {
+          if (!prev.has(r.repoId)) next.add(r.repoId);
+        }
+        return next;
+      });
+    }
+  }, [selectionCommand, eligibleRepos]);
+
+  useEffect(() => {
+    const hasSelectable = eligibleRepos.length > 0;
+    const isAllSelected = hasSelectable && eligibleRepos.every(r => checked.has(r.repoId));
+    onSelectionChange?.(isAllSelected, hasSelectable);
+  }, [checked, eligibleRepos, onSelectionChange]);
+
   const pushButtonLabel = (targets: RepoStatus[]) => {
     const hasPublish = targets.some(repo => !repoHasUpstream(repo));
     const hasPush = targets.some(repo => repoHasUpstream(repo));
@@ -2063,6 +2113,7 @@ export function PushTab(props: Props) {
 
   if (isSingleRepo) {
     const solo = repos[0];
+    const soloFilter = getRepoDirectionFilter(solo.repoId);
     const canPush = canPushRepo(solo);
     const canPull = canPullRepo(solo);
     const ahead = solo.branch.aheadBehind?.ahead ?? 0;
@@ -2102,7 +2153,7 @@ export function PushTab(props: Props) {
     ];
 
     const renderSoloButtons = () => {
-      if (directionFilter === 'incoming') {
+      if (soloFilter === 'incoming') {
         return (
           <SplitDropdownButton
             fullWidth
@@ -2116,7 +2167,7 @@ export function PushTab(props: Props) {
           />
         );
       }
-      if (directionFilter === 'outgoing') {
+      if (soloFilter === 'outgoing') {
         const isPurePush = repoHasUpstream(solo);
         return (
           <SplitDropdownButton
@@ -2132,7 +2183,7 @@ export function PushTab(props: Props) {
           />
         );
       }
-      if (directionFilter === 'none') {
+      if (soloFilter === 'none') {
         return (
           <SplitDropdownButton
             fullWidth
@@ -2146,7 +2197,7 @@ export function PushTab(props: Props) {
           />
         );
       }
-      // directionFilter === 'all' (根据当前的单向/双向差异显示精确操作)
+      // soloFilter === 'all' (根据当前的单向/双向差异显示精确操作)
       if (!repoHasUpstream(solo)) {
         return (
           <SplitDropdownButton
@@ -2232,8 +2283,8 @@ export function PushTab(props: Props) {
             onBranchClick={onBranchClick}
             iconTheme={iconTheme}
             singleRepo
-            directionFilter={directionFilter}
-            onToggleDirectionFilter={toggleDirectionFilter}
+            directionFilter={soloFilter}
+            onToggleDirectionFilter={target => toggleRepoDirectionFilter(solo.repoId, target)}
             isExpanded={!collapsedRepoIds.has(solo.repoId)}
             onToggleExpanded={() => toggleRepoExpanded(solo.repoId)}
             expansionCommand={expansionCommand}
@@ -2248,8 +2299,8 @@ export function PushTab(props: Props) {
   }
 
   const checkedRepos = repos.filter(repo => checked.has(repo.repoId));
-  const pushableChecked = checkedRepos.filter(canPushRepo);
-  const pullableChecked = checkedRepos.filter(canPullRepo);
+  const pushableChecked = checkedRepos.filter(repo => canPushRepo(repo) && isRepoOutgoingActive(repo.repoId));
+  const pullableChecked = checkedRepos.filter(repo => canPullRepo(repo) && isRepoIncomingActive(repo.repoId));
 
   const totalBehind = pullableChecked.reduce((acc, r) => acc + (r.branch.aheadBehind?.behind ?? 0), 0);
   const totalAhead = pushableChecked.reduce((acc, r) => acc + (r.branch.aheadBehind?.ahead ?? 0), 0);
@@ -2282,8 +2333,8 @@ export function PushTab(props: Props) {
     const syncTargets: string[] = [];
 
     for (const repo of checkedRepos) {
-      const canPull = canPullRepo(repo);
-      const canPush = canPushRepo(repo);
+      const canPull = canPullRepo(repo) && isRepoIncomingActive(repo.repoId);
+      const canPush = canPushRepo(repo) && isRepoOutgoingActive(repo.repoId);
       if (canPull && canPush && repoHasUpstream(repo)) {
         syncTargets.push(repo.repoId);
       } else if (canPull) {
@@ -2391,59 +2442,11 @@ export function PushTab(props: Props) {
   ];
 
   const renderMultiButtons = () => {
-    if (directionFilter === 'incoming') {
-      const isEnabled = pullableChecked.length > 0;
-      return (
-        <SplitDropdownButton
-          fullWidth
-          colorVariant="pull"
-          enabled={isEnabled}
-          chevronEnabled={isEnabled}
-          icon="cloud-download"
-          label={pullableChecked.length > 1 ? `${t('Update')} (${pullableChecked.length})` : t('Update')}
-          items={multiPullItems}
-          dropdownAlign="right"
-          onMainClick={handlePull}
-        />
-      );
-    }
-    if (directionFilter === 'outgoing') {
-      const isEnabled = pushableChecked.length > 0;
-      const isPurePush = pushableChecked.length > 0 && pushableChecked.every(r => repoHasUpstream(r));
-      return (
-        <SplitDropdownButton
-          fullWidth
-          colorVariant={isPurePush ? 'push' : 'default'}
-          enabled={isEnabled}
-          chevronEnabled={isPurePush}
-          icon="cloud-upload"
-          label={pushButtonLabel(pushableChecked)}
-          items={isPurePush ? multiPushItems : []}
-          dropdownAlign="right"
-          onMainClick={handlePush}
-        />
-      );
-    }
-    if (directionFilter === 'none') {
-      return (
-        <SplitDropdownButton
-          fullWidth
-          enabled={false}
-          chevronEnabled={false}
-          icon="sync"
-          label={t('Sync')}
-          items={[]}
-          dropdownAlign="right"
-          onMainClick={() => {}}
-        />
-      );
-    }
-    // directionFilter === 'all' (根据已选仓库的单向/双向差异显示精确操作)
     const hasChecked = checkedRepos.length > 0;
     const hasPullTargets = pullableChecked.length > 0;
     const hasPushTargets = pushableChecked.length > 0;
 
-    const unpublishedChecked = checkedRepos.filter(repo => !repoHasUpstream(repo));
+    const unpublishedChecked = checkedRepos.filter(repo => !repoHasUpstream(repo) && isRepoOutgoingActive(repo.repoId));
     const publishedChecked = checkedRepos.filter(repo => repoHasUpstream(repo));
 
     if (hasChecked && hasPushTargets && !hasPullTargets) {
@@ -2537,8 +2540,8 @@ export function PushTab(props: Props) {
             onCreateBranchFromCommit={onCreateBranchFromCommit}
             onBranchClick={onBranchClick}
             iconTheme={iconTheme}
-            directionFilter={directionFilter}
-            onToggleDirectionFilter={toggleDirectionFilter}
+            directionFilter={getRepoDirectionFilter(repoStatus.repoId)}
+            onToggleDirectionFilter={target => toggleRepoDirectionFilter(repoStatus.repoId, target)}
             isExpanded={!collapsedRepoIds.has(repoStatus.repoId)}
             onToggleExpanded={() => toggleRepoExpanded(repoStatus.repoId)}
             expansionCommand={expansionCommand}
@@ -2568,13 +2571,13 @@ export function PushTab(props: Props) {
                     <Codicon name="close" style={{ fontSize: '10px' }} />
                   </button>
                   {displayName}
-                  {(directionFilter === 'all' || directionFilter === 'outgoing') && ahead > 0 && (
+                  {isRepoOutgoingActive(repo.repoId) && ahead > 0 && (
                     <span style={css.pillCount}>
                       <Codicon name="arrow-up" style={{ fontSize: '8px', marginRight: '1px' }} />
                       {ahead}
                     </span>
                   )}
-                  {(directionFilter === 'all' || directionFilter === 'incoming') && behind > 0 && (
+                  {isRepoIncomingActive(repo.repoId) && behind > 0 && (
                     <span style={{ ...css.pillCount, color: PULL_COLOR }}>
                       <Codicon name="arrow-down" style={{ fontSize: '8px', marginRight: '1px' }} />
                       {behind}

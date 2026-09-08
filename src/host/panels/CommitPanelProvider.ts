@@ -109,6 +109,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private currentTabFileViewMode: 'flat' | 'tree' = 'tree';
   private currentTabIsCollapsed = false;
+  private hasConflicts = false;
+
+  private updateConflictContext(hasConflicts: boolean): void {
+    if (this.hasConflicts !== hasConflicts) {
+      this.hasConflicts = hasConflicts;
+      void vscode.commands.executeCommand('setContext', 'versiondock.hasConflicts', hasConflicts);
+    }
+  }
 
   private updateViewAndExpandContext(fileViewMode: 'flat' | 'tree' = this.getFileViewMode(), isCollapsed: boolean = false): void {
     void vscode.commands.executeCommand('setContext', 'versiondock.fileViewMode', fileViewMode);
@@ -133,6 +141,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.currentTabIsCollapsed = true;
     this.updateViewAndExpandContext(this.currentTabFileViewMode, true);
     this.post({ type: 'COMMIT_COLLAPSE_ALL' });
+  }
+
+  selectAll(): void {
+    this.post({ type: 'COMMIT_SELECT_ALL' });
+  }
+
+  invertSelection(): void {
+    this.post({ type: 'COMMIT_INVERT_SELECTION' });
   }
 
   async setFileViewMode(mode: 'flat' | 'tree'): Promise<void> {
@@ -285,6 +301,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }
           }
         }
+
+        const hasConflicts = Array.isArray(status?.repos) && status.repos.some(repo => (repo.conflictCount || 0) > 0);
+        this.updateConflictContext(hasConflicts);
 
         this.postChangelistsUpdate(status);
         this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -1679,6 +1698,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         ? loadIconTheme(this.view.webview)
         : Promise.resolve(undefined),
     ]);
+    const hasConflicts = Array.isArray(status?.repos) && status.repos.some(repo => (repo.conflictCount || 0) > 0);
+    this.updateConflictContext(hasConflicts);
     this.badgeController?.update(status);
     this.post({ type: 'COMMIT_STATUS_UPDATE', repos, status, iconTheme });
     this.postChangelistsUpdate(status);
@@ -2438,6 +2459,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_EXPAND_MODE_CHANGED': {
         this.currentTabIsCollapsed = msg.expandMode === 'collapse';
         this.updateViewAndExpandContext(this.currentTabFileViewMode, this.currentTabIsCollapsed);
+        break;
+      }
+
+      case 'COMMIT_SELECTION_STATE_CHANGED': {
+        void vscode.commands.executeCommand('setContext', 'versiondock.isAllSelected', msg.isAllSelected);
+        void vscode.commands.executeCommand('setContext', 'versiondock.canSelectAll', msg.hasSelectable);
         break;
       }
 

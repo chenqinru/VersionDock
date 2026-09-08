@@ -109,6 +109,8 @@ async function runStartupRefresh(
 
     const status = await manager.getAllStatusesFresh();
     badge.update(status);
+    const hasConflicts = status.repos.some(repo => (repo.conflictCount || 0) > 0);
+    void vscode.commands.executeCommand('setContext', 'versiondock.hasConflicts', hasConflicts);
     logger.info('Startup', 'Repository refresh completed', {
       repositoryCount: status.repos.length,
       durationMs: Date.now() - startedAt,
@@ -136,6 +138,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Set default menu toggle contexts immediately on activation
   void vscode.commands.executeCommand('setContext', 'versiondock.isExpanded', true);
   void vscode.commands.executeCommand('setContext', 'versiondock.isCollapsed', false);
+  void vscode.commands.executeCommand('setContext', 'versiondock.hasConflicts', false);
+  void vscode.commands.executeCommand('setContext', 'versiondock.canSelectAll', false);
+  void vscode.commands.executeCommand('setContext', 'versiondock.isAllSelected', false);
   const initialFileViewMode = context.globalState.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
   void vscode.commands.executeCommand('setContext', 'versiondock.isTreeFileView', initialFileViewMode === 'tree');
   void vscode.commands.executeCommand('setContext', 'versiondock.isFlatFileView', initialFileViewMode === 'flat');

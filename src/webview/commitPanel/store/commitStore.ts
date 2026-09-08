@@ -74,6 +74,8 @@ export interface CommitState {
   setRepoSelection: (repoId: string, selected: boolean) => void;
   toggleFileSelection: (repoId: string, path: string) => void;
   setFileSelections: (repoId: string, paths: string[], selected: boolean) => void;
+  selectAllFiles: () => void;
+  invertFileSelections: () => void;
   isFileSelected: (repoId: string, path: string) => boolean;
   getSelectedFilesForRepo: (repoId: string) => string[];
   selectFile: (repoId: string, path: string) => void;
@@ -231,6 +233,42 @@ export const useCommitStore = create<CommitState>((set, get) => ({
       if (s.changesViewMode === 'simplified' || s.changesViewMode === 'changelists') savePersistedSelection(s.changesViewMode, repoId, next);
       return { fileSelections: { ...s.fileSelections, [repoId]: next } };
     }),
+
+  selectAllFiles: () => {
+    const { status, changesViewMode } = get();
+    if (!status?.repos) return;
+    const nextFileSelections: FileSelections = {};
+    for (const r of status.repos) {
+      const paths = allFilePaths(r);
+      const next = new Set(paths);
+      nextFileSelections[r.repoId] = next;
+      if (changesViewMode === 'simplified' || changesViewMode === 'changelists') {
+        savePersistedSelection(changesViewMode, r.repoId, next);
+      }
+    }
+    set({ fileSelections: nextFileSelections });
+  },
+
+  invertFileSelections: () => {
+    const { status, fileSelections, changesViewMode } = get();
+    if (!status?.repos) return;
+    const nextFileSelections: FileSelections = {};
+    for (const r of status.repos) {
+      const paths = allFilePaths(r);
+      const currentSelected = fileSelections[r.repoId] ?? new Set<string>();
+      const next = new Set<string>();
+      for (const p of paths) {
+        if (!currentSelected.has(p)) {
+          next.add(p);
+        }
+      }
+      nextFileSelections[r.repoId] = next;
+      if (changesViewMode === 'simplified' || changesViewMode === 'changelists') {
+        savePersistedSelection(changesViewMode, r.repoId, next);
+      }
+    }
+    set({ fileSelections: nextFileSelections });
+  },
 
   isFileSelected: (repoId, path) =>
     get().fileSelections[repoId]?.has(path) ?? false,

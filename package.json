@@ -169,6 +169,30 @@
         "icon": "$(git-branch)"
       },
       {
+        "command": "versiondock.selectAll",
+        "title": "%commands.selectAll.title%",
+        "icon": {
+          "light": "./media/icons/select-all-light.svg",
+          "dark": "./media/icons/select-all-dark.svg"
+        }
+      },
+      {
+        "command": "versiondock.invertSelection",
+        "title": "%commands.invertSelection.title%",
+        "icon": {
+          "light": "./media/icons/invert-selection-light.svg",
+          "dark": "./media/icons/invert-selection-dark.svg"
+        }
+      },
+      {
+        "command": "versiondock.showConflictActions",
+        "title": "%commands.showConflictActions.title%",
+        "icon": {
+          "light": "./media/icons/warning-conflict-light.svg",
+          "dark": "./media/icons/warning-conflict-dark.svg"
+        }
+      },
+      {
         "command": "versiondock.updateProject",
         "title": "%commands.updateProject.title%",
         "icon": "$(cloud-download)"
@@ -430,6 +454,21 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "versiondock.showConflictActions",
+          "when": "view == versiondock.commitPanel && versiondock.hasConflicts",
+          "group": "navigation@0"
+        },
+        {
+          "command": "versiondock.selectAll",
+          "when": "view == versiondock.commitPanel && versiondock.canSelectAll && !versiondock.isAllSelected",
+          "group": "navigation@0.5"
+        },
+        {
+          "command": "versiondock.invertSelection",
+          "when": "view == versiondock.commitPanel && versiondock.canSelectAll && versiondock.isAllSelected",
+          "group": "navigation@0.5"
+        },
         {
           "command": "versiondock.updateProject",
           "when": "view == versiondock.commitPanel",
