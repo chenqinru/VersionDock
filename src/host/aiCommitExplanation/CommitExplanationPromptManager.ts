@@ -38,7 +38,7 @@ export class CommitExplanationPromptManager {
 
     const document = await vscode.workspace.openTextDocument(target.uri);
     await vscode.window.showTextDocument(document, { preview: false });
-    vscode.window.showInformationMessage(t('Commit Explanation Prompt opened: {0}', target.uri.fsPath));
+    vscode.window.showInformationMessage(t('VersionDock: Commit Explanation Prompt opened: {0}', target.uri.fsPath));
   }
 
   async reset(): Promise<void> {
@@ -52,8 +52,8 @@ export class CommitExplanationPromptManager {
     }
     vscode.window.showInformationMessage(
       target.scope === 'workspace'
-        ? t('Workspace Commit Explanation Prompt reset to the built-in default.')
-        : t('Global Commit Explanation Prompt reset to the built-in default.'),
+        ? t('VersionDock: Workspace Commit Explanation Prompt reset to the built-in default.')
+        : t('VersionDock: Global Commit Explanation Prompt reset to the built-in default.'),
     );
   }
 

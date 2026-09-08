@@ -31,7 +31,7 @@ export class CodeReviewPromptManager {
     if (!target) return;
     if (!await this.read(target.uri)) await this.write(target.uri, `${getDefaultCodeReviewPrompt()}\n`);
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target.uri), { preview: false });
-    vscode.window.showInformationMessage(t('AI Code Review Prompt opened: {0}', target.uri.fsPath));
+    vscode.window.showInformationMessage(t('VersionDock: AI Code Review Prompt opened: {0}', target.uri.fsPath));
   }
 
   async reset(): Promise<void> {
@@ -41,7 +41,7 @@ export class CodeReviewPromptManager {
     catch (error: unknown) {
       if (!this.isMissing(error)) throw error;
     }
-    vscode.window.showInformationMessage(t('AI Code Review Prompt reset to the built-in default.'));
+    vscode.window.showInformationMessage(t('VersionDock: AI Code Review Prompt reset to the built-in default.'));
   }
 
   private globalUri(): vscode.Uri { return vscode.Uri.joinPath(this.context.globalStorageUri, GLOBAL_PROMPT); }

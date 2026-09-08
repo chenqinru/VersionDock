@@ -575,12 +575,12 @@ export function CommitApp() {
     send({ type: 'COMMIT_REQUEST_STATUS', refreshSubtrees: options.refreshSubtrees });
   }, [send, subtreeLoading]);
 
-  const notifyError = useCallback((message: string) => {
-    send({ type: 'NOTIFY_ERROR', message } satisfies CommitToHostMsg);
+  const notifyError = useCallback((message: string, repoId?: string) => {
+    send({ type: 'NOTIFY_ERROR', message, repoId } satisfies CommitToHostMsg);
   }, [send]);
 
-  const notifyInfo = useCallback((message: string) => {
-    send({ type: 'NOTIFY_INFO', message } satisfies CommitToHostMsg);
+  const notifyInfo = useCallback((message: string, repoId?: string) => {
+    send({ type: 'NOTIFY_INFO', message, repoId } satisfies CommitToHostMsg);
   }, [send]);
 
   const currentViewMode: 'flat' | 'tree' = useMemo(() => {
@@ -910,8 +910,8 @@ export function CommitApp() {
               ));
             }
           }
-          if (!msg.ok && msg.error && msg.error !== 'Cancelled') {
-            notifyError(msg.error);
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled' && !msg.handled) {
+            notifyError(msg.error, msg.repoId);
           }
           break;
         case 'COMMIT_MESSAGE_HISTORY_RESULT':
@@ -926,14 +926,14 @@ export function CommitApp() {
         case 'COMMIT_LAST_COMMIT_MESSAGE_RESULT':
           if (msg.message && !useCommitStore.getState().commitMessage.trim()) {
             store.setCommitMessage(msg.message);
-          } else if (msg.error) notifyError(msg.error);
+          } else if (msg.error) notifyError(msg.error, msg.repoId);
           break;
         case 'COMMIT_GENERATE_MESSAGE_RESULT':
           if (activeGenerateRequestIdRef.current !== msg.requestId) break;
           activeGenerateRequestIdRef.current = null;
           setGeneratingMessage(false);
           if (msg.message) store.setCommitMessage(msg.message);
-          else if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          else if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           break;
         case 'COMMIT_SET_MESSAGE':
           if (msg.requestId && activeGenerateRequestIdRef.current !== msg.requestId) break;
@@ -998,10 +998,10 @@ export function CommitApp() {
           break;
         case 'SHELVE_OP_RESULT':
           if (!msg.ok) {
-            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           } else {
             if (msg.hasConflicts && msg.conflictFiles?.length) {
-              notifyInfo(t('Conflicts in {0} file(s) — merge editor opened', msg.conflictFiles.length));
+              notifyInfo(t('Conflicts in {0} file(s) — merge editor opened', msg.conflictFiles.length), msg.repoId);
             }
             if (activeTabRef.current === 'shelf') {
               setShelveLoading(prev => ({ ...prev, [msg.repoId]: true }));
@@ -1054,7 +1054,7 @@ export function CommitApp() {
 
         case 'STASH_OP_RESULT':
           if (!msg.ok) {
-            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           } else {
             // Reset cached files for affected repo
             setStashFilesMap(prev => {
@@ -1093,16 +1093,14 @@ export function CommitApp() {
           break;
 
         case 'PUSH_SQUASH_RESULT':
-          if (msg.ok) notifyInfo(t('Squash completed.'));
-          else if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           break;
         case 'PUSH_DROP_RESULT':
         case 'PUSH_REVERT_RESULT':
-          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           break;
         case 'PUSH_EDIT_MSG_RESULT':
-          if (msg.ok) notifyInfo(t('Commit message updated.'));
-          else if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           break;
 
         case 'SYNC_INCOMING_RESULT':
@@ -1128,9 +1126,11 @@ export function CommitApp() {
           if (msg.partial) {
             // 部分成功已由 Host 侧弹出警告，Webview 不重复弹出 Fetch completed
           } else if (msg.ok) {
-            notifyInfo(t('Fetch completed.'));
+            const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
+            const targetRepoId = msg.repoId ?? (currentGitRepos.length === 1 ? currentGitRepos[0].repoId : undefined);
+            notifyInfo(t('Fetch completed.'), targetRepoId);
           } else if (msg.error) {
-            notifyError(msg.error);
+            notifyError(msg.error, msg.repoId);
           }
           if (msg.ok || msg.partial) {
             const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
@@ -1143,14 +1143,13 @@ export function CommitApp() {
 
         case 'SYNC_PULL_RESULT':
           if (msg.ok) {
-            notifyInfo(t('Update completed.'));
             const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
             currentGitRepos.forEach(r => {
               requestIncomingCommits(r.repoId, true);
               requestUnpushedCommits(r.repoId, true);
             });
           } else if (msg.error) {
-            notifyError(msg.error);
+            notifyError(msg.error, msg.repoId);
           }
           break;
 
@@ -1165,7 +1164,7 @@ export function CommitApp() {
             }
             return next;
           });
-          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.parentRepoId);
           else if (msg.ok && (msg.op === 'init' || msg.op === 'deinit' || msg.op === 'update' || msg.op === 'sync' || msg.op === 'update-all' || msg.op === 'add' || msg.op === 'remove')) {
             requestCommitStatus({ refreshSubtrees: false });
           }
@@ -1201,7 +1200,7 @@ export function CommitApp() {
 
         case 'SUBMODULE_PUSH_RESULT':
         case 'SUBMODULE_PULL_RESULT':
-          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+          if (!msg.ok && msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           break;
 
         case 'WORKTREE_LIST_RESULT':
@@ -1212,7 +1211,7 @@ export function CommitApp() {
 
         case 'WORKTREE_OP_RESULT':
           if (!msg.ok) {
-            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error);
+            if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           } else {
             if (activeTabRef.current === 'worktree') {
               requestWorktreeList(true);
@@ -1517,7 +1516,7 @@ export function CommitApp() {
           return;
         }
         if (msg.error && msg.error !== 'Cancelled') {
-          notifyError(msg.error);
+          notifyError(msg.error, repoId);
         }
         resolve(msg.files);
       });
@@ -1541,7 +1540,7 @@ export function CommitApp() {
           return;
         }
         if (msg.error) {
-          if (msg.error !== 'Cancelled') notifyError(msg.error);
+          if (msg.error !== 'Cancelled') notifyError(msg.error, repoId);
           reject(new Error(msg.error));
           return;
         }
@@ -1587,7 +1586,7 @@ export function CommitApp() {
           return;
         }
         if (msg.error) {
-          if (msg.error !== 'Cancelled') notifyError(msg.error);
+          if (msg.error !== 'Cancelled') notifyError(msg.error, repoId);
           reject(new Error(msg.error));
           return;
         }
@@ -1993,16 +1992,38 @@ export function CommitApp() {
     send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote });
   };
 
+  const doPushMulti = (repoIds: string[]) => {
+    const targets = repoIds
+      .filter(id => !isSvnRepo(id))
+      .map(repoId => ({
+        repoId,
+        remote: useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName,
+      }));
+    if (targets.length === 0) return;
+    if (targets.length === 1) {
+      send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId: targets[0].repoId, remote: targets[0].remote });
+    } else {
+      send({ type: 'COMMIT_PUSH_MULTI', requestId: generateId(), targets });
+    }
+  };
+
   const doForcePush = (repoId: string) => {
     const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
     send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote, force: true });
   };
 
   const doForcePushMulti = (repoIds: string[]) => {
-    for (const repoId of repoIds) {
-      if (isSvnRepo(repoId)) continue;
-      const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
-      send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId, remote, force: true });
+    const targets = repoIds
+      .filter(id => !isSvnRepo(id))
+      .map(repoId => ({
+        repoId,
+        remote: useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName,
+      }));
+    if (targets.length === 0) return;
+    if (targets.length === 1) {
+      send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId: targets[0].repoId, remote: targets[0].remote, force: true });
+    } else {
+      send({ type: 'COMMIT_PUSH_MULTI', requestId: generateId(), targets, force: true });
     }
   };
 
@@ -2050,12 +2071,17 @@ export function CommitApp() {
 
   const doPushAll = () => {
     const allRepos = useCommitStore.getState().status?.repos ?? [];
-    for (const r of allRepos) {
-      if (isSvnRepo(r.repoId)) continue;
-      if ((r.branch.aheadBehind?.ahead ?? 0) > 0) {
-        const remote = r.branch.remoteName;
-        send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId: r.repoId, remote });
-      }
+    const targets = allRepos
+      .filter(r => !isSvnRepo(r.repoId) && (r.branch.aheadBehind?.ahead ?? 0) > 0)
+      .map(r => ({
+        repoId: r.repoId,
+        remote: r.branch.remoteName,
+      }));
+    if (targets.length === 0) return;
+    if (targets.length === 1) {
+      send({ type: 'COMMIT_PUSH_REPO', requestId: generateId(), repoId: targets[0].repoId, remote: targets[0].remote });
+    } else {
+      send({ type: 'COMMIT_PUSH_MULTI', requestId: generateId(), targets });
     }
   };
 
@@ -2376,15 +2402,16 @@ export function CommitApp() {
         </div>
       )}
 
+      {/* ── Conflict Banner (visible across all tabs when conflicts exist) ── */}
+      {totalConflictCount > 0 && (
+        <ConflictBanner summary={conflictSummary} actions={conflictBannerActions} />
+      )}
+
       {/* ── Tab content ── */}
       <div style={css.main}>
 
         {visitedTabs.has('changes') && (
           <div style={{ display: activeTab === 'changes' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-
-          {totalConflictCount > 0 && (
-            <ConflictBanner summary={conflictSummary} actions={conflictBannerActions} />
-          )}
 
           {/* File list */}
           <div className="versiondock-commit-scroll-container" style={css.repoList}>
@@ -2421,6 +2448,8 @@ export function CommitApp() {
                 onUnstageFiles={(rid, paths) => { store.isCollapsed('vscode-section:unstaged') && store.toggleCollapsed('vscode-section:unstaged'); send({ type: 'COMMIT_UNSTAGE_FILES', requestId: generateId(), repoId: rid, paths }); }}
                 onStageAll={rid => { store.isCollapsed('vscode-section:staged') && store.toggleCollapsed('vscode-section:staged'); send({ type: 'COMMIT_STAGE_ALL', requestId: generateId(), repoId: rid }); }}
                 onUnstageAll={rid => { store.isCollapsed('vscode-section:unstaged') && store.toggleCollapsed('vscode-section:unstaged'); send({ type: 'COMMIT_UNSTAGE_ALL', requestId: generateId(), repoId: rid }); }}
+                onStageAllMulti={rids => { store.isCollapsed('vscode-section:staged') && store.toggleCollapsed('vscode-section:staged'); send({ type: 'COMMIT_STAGE_ALL_MULTI', requestId: generateId(), repoIds: rids }); }}
+                onUnstageAllMulti={rids => { store.isCollapsed('vscode-section:unstaged') && store.toggleCollapsed('vscode-section:unstaged'); send({ type: 'COMMIT_UNSTAGE_ALL_MULTI', requestId: generateId(), repoIds: rids }); }}
                 onRepoContextMenu={(e, rid, staged) => setRepoCtxMenu({ x: e.clientX, y: e.clientY, repoId: rid, stagedSection: staged })}
                 onBranchClick={rid => send({ type: 'COMMIT_SHOW_BRANCH_MENU', repoId: rid })}
                 onOpenStagedChanges={rid => send({ type: 'COMMIT_OPEN_ALL_CHANGES', repoId: rid, section: 'staged' })}
@@ -2720,6 +2749,7 @@ export function CommitApp() {
               unpushedMap={unpushedMap}
               incomingMap={incomingMap}
               onPush={doPush}
+              onPushMulti={doPushMulti}
               onPushAll={doPushAll}
               onForcePush={doForcePush}
               onForcePushMulti={doForcePushMulti}

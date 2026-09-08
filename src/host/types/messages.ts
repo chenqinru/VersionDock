@@ -163,12 +163,12 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_WORKTREE_DIFF_STARTED'; repoId: string; repoName: string; repoColor: string; baseRef: string; currentRef: string; files: FileStatus[] }
   | { type: 'COMMIT_WORKTREE_DIFF_FILES_RESULT'; requestId: string; repoId: string; baseRef: string; currentRef: string; files: FileStatus[]; error?: string }
   | { type: 'COMMIT_WORKTREE_DIFF_RESULT'; requestId: string; diff: FileDiff | null; error?: string }
-  | { type: 'COMMIT_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string }
+  | { type: 'COMMIT_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string; repoId?: string; handled?: boolean }
   | { type: 'COMMIT_BRANCHES_UPDATE'; repoId: string; branches: BranchInfo[] }
   | { type: 'COMMIT_REMOTES_RESULT'; requestId: string; remotes: string[]; error?: string }
-  | { type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT'; requestId: string; message: string; error?: string }
+  | { type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT'; requestId: string; message: string; error?: string; repoId?: string }
   | { type: 'COMMIT_MESSAGE_HISTORY_RESULT'; requestId: string; messages: string[] }
-  | { type: 'COMMIT_GENERATE_MESSAGE_RESULT'; requestId: string; message?: string; error?: string }
+  | { type: 'COMMIT_GENERATE_MESSAGE_RESULT'; requestId: string; message?: string; error?: string; repoId?: string }
   | { type: 'SHELVE_LIST_RESULT'; requestId: string; repoId: string; shelves: ShelveEntry[]; error?: string }
   | { type: 'SHELVE_DIFF_RESULT'; requestId: string; repoId: string; shelveId: string; filePath: string; diff: string; error?: string }
   | { type: 'SHELVE_OP_RESULT'; requestId: string; repoId: string; op: 'push' | 'apply' | 'drop'; ok: boolean; error?: string; hasConflicts?: boolean; conflictFiles?: string[] }
@@ -180,10 +180,10 @@ export type HostToCommitMsg =
   | { type: 'PUSH_UNPUSHED_RESULT'; requestId?: string; repoId?: string; commits?: UnpushedCommit[]; repos?: Array<{ repoId: string; commits: UnpushedCommit[]; error?: string }>; error?: string }
   | { type: 'PUSH_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
   | { type: 'PUSH_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
-  | { type: 'PUSH_SQUASH_RESULT'; requestId: string; ok: boolean; error?: string }
-  | { type: 'PUSH_DROP_RESULT'; requestId: string; ok: boolean; error?: string }
-  | { type: 'PUSH_REVERT_RESULT'; requestId: string; ok: boolean; error?: string }
-  | { type: 'PUSH_EDIT_MSG_RESULT'; requestId: string; ok: boolean; error?: string }
+  | { type: 'PUSH_SQUASH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
+  | { type: 'PUSH_DROP_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
+  | { type: 'PUSH_REVERT_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
+  | { type: 'PUSH_EDIT_MSG_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'SYNC_INCOMING_RESULT'; requestId?: string; repoId?: string; commits?: IncomingCommit[]; repos?: Array<{ repoId: string; commits: IncomingCommit[]; error?: string }>; error?: string }
   | { type: 'SYNC_INCOMING_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
   | { type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
@@ -225,6 +225,8 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_UNSTAGE_FILES'; requestId: string; repoId: string; paths: string[] }
   | { type: 'COMMIT_STAGE_ALL'; requestId: string; repoId: string }
   | { type: 'COMMIT_UNSTAGE_ALL'; requestId: string; repoId: string }
+  | { type: 'COMMIT_STAGE_ALL_MULTI'; requestId: string; repoIds: string[] }
+  | { type: 'COMMIT_UNSTAGE_ALL_MULTI'; requestId: string; repoIds: string[] }
   | { type: 'COMMIT_DO_COMMIT'; requestId: string; repoId: string; message: string; amend: boolean; noVerify?: boolean }
   | { type: 'COMMIT_DO_COMMIT_PUSH'; requestId: string; repoId: string; message: string; amend: boolean; noVerify?: boolean }
   | { type: 'COMMIT_DO_COMMIT_MULTI'; requestId: string; repos: Array<{ repoId: string; message: string; amend: boolean; filesToStage: string[]; filesToUnstage: string[] }>; andPush: boolean; noVerify?: boolean }
@@ -236,6 +238,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_PULL_REPO'; requestId: string; repoId: string }
   | { type: 'COMMIT_GET_REMOTES'; requestId: string; repoId: string }
   | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote?: string; force?: boolean }
+  | { type: 'COMMIT_PUSH_MULTI'; requestId: string; targets: Array<{ repoId: string; remote?: string }>; force?: boolean }
   | { type: 'SYNC_PUSH_TAGS'; requestId: string; repoId: string; remote?: string }
   | { type: 'SYNC_PUSH_TAGS_MULTI'; requestId: string; repoIds: string[] }
   | { type: 'COMMIT_DISCARD_FILE'; requestId: string; repoId: string; path: string }
@@ -322,8 +325,8 @@ export type CommitToHostMsg =
   | { type: 'SUBMODULE_PUSH'; requestId: string; repoId: string }
   | { type: 'SUBMODULE_PULL'; requestId: string; repoId: string; rebase?: boolean }
   | { type: 'SUBMODULE_OPEN_CONFLICT'; parentRepoId: string; submodulePath: string; companionPath?: string }
-  | { type: 'NOTIFY_ERROR'; message: string }
-  | { type: 'NOTIFY_INFO'; message: string }
+  | { type: 'NOTIFY_ERROR'; message: string; repoId?: string }
+  | { type: 'NOTIFY_INFO'; message: string; repoId?: string }
   | { type: 'COMMIT_REVEAL_IN_EXPLORER'; repoId: string; filePath: string }
   | { type: 'COMMIT_REVEAL_IN_OS'; repoId: string; filePath: string }
   | { type: 'WORKTREE_REQUEST_LIST' }

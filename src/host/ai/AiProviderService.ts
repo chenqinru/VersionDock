@@ -158,7 +158,7 @@ export class AiProviderService {
     if (!config.apiKey || !config.apiUrl || !config.model) {
       const configure = t('Open Settings');
       const selected = await vscode.window.showWarningMessage(
-        t('Provider {0} requires an API Key, API URL, and model.', config.provider),
+        t('VersionDock: Provider {0} requires an API Key, API URL, and model.', config.provider),
         configure,
       );
       if (selected === configure) {

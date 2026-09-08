@@ -15,6 +15,7 @@ export type TrackedUpdateResult = {
   repoId: string;
   tracked: boolean;
   ok: boolean;
+  conflict?: boolean;
   output?: string;
   error?: string;
   skippedReason?: string;
@@ -182,6 +183,7 @@ export class UpdateSummaryService {
           repoId: target.repoId,
           tracked: trackingRequested,
           ok: false,
+          conflict: true,
           output,
           error: t('Update stopped with conflicts or an unfinished version-control operation.'),
           commits: [],
@@ -268,10 +270,14 @@ export class UpdateSummaryService {
       // Ensure working tree is restored even on update error
       await this.restoreWorkingTreeAfterUpdate(repo, repoName, shelveSvc, shelvedBackupId, shelfBackupName, stashedBackup);
 
+      const statusAfterCatch = await repo.getStatusFresh().catch(() => undefined);
+      const isConflict = Boolean(statusAfterCatch && (statusAfterCatch.conflictCount > 0 || statusAfterCatch.operationState));
+
       return {
         repoId: target.repoId,
         tracked: trackingRequested,
         ok: false,
+        conflict: isConflict,
         error: errorText(error),
         commits: [],
         files: [],
@@ -354,6 +360,7 @@ export class UpdateSummaryService {
           repoId: target.repoId,
           tracked: true,
           ok: false,
+          conflict: false,
           error: errorText(error),
           commits: [],
           files: [],
@@ -366,9 +373,32 @@ export class UpdateSummaryService {
   async notify(results: readonly TrackedUpdateResult[]): Promise<void> {
     const relevant = results.filter(result => result.tracked);
     const failed = results.filter(result => !result.ok);
+    const resolveConflictsLabel = t('Resolve Conflicts');
+    const hasConflict = failed.some(r => Boolean(r.conflict) || /conflict|冲突/i.test(r.error ?? ''));
+
+    const singleRepoId = results.length === 1 ? results[0].repoId : undefined;
+    const singleRepoName = singleRepoId ? (this.manager.getRepoMeta(singleRepoId)?.name ?? singleRepoId) : undefined;
+
     if (relevant.length === 0) {
       if (failed.length > 0) {
-        void vscode.window.showErrorMessage(t('VersionDock: Update failed: {0}', this.describeFailures(failed)));
+        const description = singleRepoName && failed.length === 1
+          ? (failed[0]?.error ?? t('Unknown error'))
+          : this.describeFailures(failed);
+        const failMessage = singleRepoName
+          ? t('VersionDock [{0}]: Update failed: {1}', singleRepoName, description)
+          : t('VersionDock: Update failed: {0}', description);
+        if (hasConflict) {
+          void vscode.window.showErrorMessage(
+            failMessage,
+            resolveConflictsLabel,
+          ).then(choice => {
+            if (choice === resolveConflictsLabel) {
+              void vscode.commands.executeCommand('versiondock.openConflicts');
+            }
+          });
+        } else {
+          void vscode.window.showErrorMessage(failMessage);
+        }
       }
       return;
     }
@@ -393,11 +423,16 @@ export class UpdateSummaryService {
     );
 
     const openDetailsPanel = (): void => {
+      const singleRepoId = updatedRepoCount === 1 ? commits[0]?.repoId : undefined;
+      const singleRepoName = singleRepoId ? (this.manager.getRepoMeta(singleRepoId)?.name ?? singleRepoId) : undefined;
+      const progressTitle = singleRepoName
+        ? t('VersionDock [{0}]: Loading update details…', singleRepoName)
+        : t('VersionDock: Loading update details…');
       void Promise.resolve(
         vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: t('VersionDock: Loading update details…'),
+            title: progressTitle,
             cancellable: false,
           },
           () => openAggregatedCommitDetailPanel(
@@ -417,8 +452,24 @@ export class UpdateSummaryService {
 
     let notification: Thenable<string | undefined> | undefined;
     if (succeeded.length === 0) {
-      const description = this.describeFailures(failed);
-      void vscode.window.showErrorMessage(t('VersionDock: Update failed: {0}', description));
+      const description = singleRepoName && failed.length === 1
+        ? (failed[0]?.error ?? t('Unknown error'))
+        : this.describeFailures(failed);
+      const failMessage = singleRepoName
+        ? t('VersionDock [{0}]: Update failed: {1}', singleRepoName, description)
+        : t('VersionDock: Update failed: {0}', description);
+      if (hasConflict) {
+        void vscode.window.showErrorMessage(
+          failMessage,
+          resolveConflictsLabel,
+        ).then(choice => {
+          if (choice === resolveConflictsLabel) {
+            void vscode.commands.executeCommand('versiondock.openConflicts');
+          }
+        });
+      } else {
+        void vscode.window.showErrorMessage(failMessage);
+      }
       return;
     }
 
@@ -431,11 +482,15 @@ export class UpdateSummaryService {
         commits.length,
         this.describeFailures(failed),
       );
-      if (commits.length === 0) {
+      const actions: string[] = [
+        ...(hasConflict ? [resolveConflictsLabel] : []),
+        ...(commits.length > 0 ? [viewDetails] : []),
+      ];
+      if (actions.length === 0) {
         void vscode.window.showWarningMessage(message);
         return;
       }
-      notification = vscode.window.showWarningMessage(message, viewDetails);
+      notification = vscode.window.showWarningMessage(message, ...actions);
     } else if (summaryFailures.length > 0) {
       const message = commits.length > 0
         ? t(
@@ -451,27 +506,41 @@ export class UpdateSummaryService {
       }
       notification = vscode.window.showWarningMessage(message, viewDetails);
     } else if (commits.length > 0) {
-      const message = updatedRepoCount > 1
-        ? t('VersionDock: {0} repositories updated {1} files in {2} commits.', updatedRepoCount, fileCount, commits.length)
-        : t('VersionDock: Updated {0} files in {1} commits.', fileCount, commits.length);
+      const singleTargetRepoName = singleRepoName
+        ?? (updatedRepoCount === 1 ? (this.manager.getRepoMeta(commits[0].repoId)?.name ?? commits[0].repoId) : undefined);
+
+      const message = singleTargetRepoName
+        ? t('VersionDock [{0}]: Updated {1} files in {2} commits.', singleTargetRepoName, fileCount, commits.length)
+        : (updatedRepoCount > 1
+          ? t('VersionDock: {0} repositories updated {1} files in {2} commits.', updatedRepoCount, fileCount, commits.length)
+          : t('VersionDock: Updated {0} files in {1} commits.', fileCount, commits.length));
 
       if (showUpdateNotification) {
         notification = vscode.window.showInformationMessage(message, viewDetails);
       }
     } else if (skipped.length > 0) {
       const skipItem = skipped[0];
+      const skipRepoName = this.manager.getRepoMeta(skipItem.repoId)?.name ?? skipItem.repoId;
+      const isSingleSkip = results.length === 1;
       const noUpstreamMsg = t('Current branch has no upstream tracking branch.');
       if (skipItem.skippedReason === noUpstreamMsg) {
         const pushLabel = t('Push to Remote');
+        const skipMessage = isSingleSkip
+          ? t('VersionDock [{0}]: Update skipped because the current branch has no remote tracking branch.', skipRepoName)
+          : t('VersionDock: Update skipped because the current branch has no remote tracking branch.');
         void vscode.window.showWarningMessage(
-          t('VersionDock: Update skipped because the current branch has no remote tracking branch.'),
+          skipMessage,
           pushLabel
         ).then(async choice => {
           if (choice === pushLabel) {
             const repo = this.manager.getRepo(skipItem.repoId);
             if (repo) {
               await repo.push();
-              vscode.window.showInformationMessage(t('VersionDock: Pushed and configured remote tracking.'));
+              vscode.window.showInformationMessage(
+                isSingleSkip
+                  ? t('VersionDock [{0}]: Pushed and configured remote tracking.', skipRepoName)
+                  : t('VersionDock: Pushed and configured remote tracking.')
+              );
               this.manager.notifyDataInvalidated({
                 scopes: ['unpushed'],
                 repoIds: [skipItem.repoId],
@@ -480,11 +549,18 @@ export class UpdateSummaryService {
           }
         });
       } else {
-        void vscode.window.showWarningMessage(t('VersionDock: Update skipped: {0}', skipItem.skippedReason ?? ''));
+        void vscode.window.showWarningMessage(
+          isSingleSkip
+            ? t('VersionDock [{0}]: Update skipped: {1}', skipRepoName, skipItem.skippedReason ?? '')
+            : t('VersionDock: Update skipped: {0}', skipItem.skippedReason ?? '')
+        );
       }
       return;
     } else {
-      void vscode.window.showInformationMessage(t('VersionDock: Already up to date. No files updated.'));
+      const message = singleRepoName
+        ? t('VersionDock [{0}]: Already up to date. No files updated.', singleRepoName)
+        : t('VersionDock: Already up to date. No files updated.');
+      void vscode.window.showInformationMessage(message);
       return;
     }
 
@@ -492,6 +568,8 @@ export class UpdateSummaryService {
     void Promise.resolve(notification).then(picked => {
       if (picked === viewDetails) {
         openDetailsPanel();
+      } else if (picked === resolveConflictsLabel) {
+        void vscode.commands.executeCommand('versiondock.openConflicts');
       }
     }).catch(error => {
       this.logger.error('UpdateSummary', 'Failed to handle update notification', error);

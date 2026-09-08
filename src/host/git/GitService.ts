@@ -18,6 +18,7 @@ import type {
   LineRange,
   SubmoduleEntry,
   ConflictFileStatus,
+  RepoMeta,
 } from '../types/git';
 import type { StashEntry, UnpushedCommit, SubtreePushStatus, PushCommitFile, IncomingCommit, SyncPullStrategy } from '../types/messages';
 import { parseDiff, detectLanguage } from './DiffParser';
@@ -328,7 +329,7 @@ function gitErrorDetail(error: unknown): string {
   return 'Unknown error';
 }
 
-export type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
+export type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash' | 'stage';
 export type SuppressStatusUpdates = <T>(operation: () => Promise<T>, kind: StatusOperationKind, label?: string) => Promise<T>;
 export type RefreshStatus = () => Promise<void>;
 
@@ -435,6 +436,28 @@ export async function parseGitmodulesFile(git: SimpleGit, gitmodulesPath: string
 
 export class GitService {
   public readonly kind: 'git' | 'svn' = 'git';
+  private _metaProvider?: () => RepoMeta | undefined;
+
+  public setMetaProvider(provider: () => RepoMeta | undefined): void {
+    this._metaProvider = provider;
+  }
+
+  public get meta(): RepoMeta {
+    const provided = this._metaProvider?.();
+    if (provided) return provided;
+    return {
+      id: this.repoId,
+      name: path.basename(this.rootPath),
+      rootPath: this.rootPath,
+      color: '#4fc1ff',
+      kind: this.kind,
+    };
+  }
+
+  public get name(): string {
+    return this.meta.name;
+  }
+
   private git: SimpleGit;
   private readonly blameService = new BlameService();
   private pendingPullAutoStash: PullAutoStash | undefined;
@@ -3174,17 +3197,21 @@ export class GitService {
         : await this.git.pull(strategyOptions);
     } catch (error: unknown) {
       const pullError = gitErrorDetail(error);
-      if (!autoStash) throw new Error(pullError);
 
       const status = await this.getStatusFresh().catch(() => undefined);
       if (status && (status.conflictCount > 0 || status.operationState)) {
         await this.openPullConflicts();
-        throw new Error(t(
-          'Update stopped with conflicts: {0} Your local tracked changes remain safe in VersionDock auto-stash {1}. Resolve or abort the current operation, then restore the stash from the Stash panel.',
-          pullError,
-          autoStash.shortHash,
-        ));
+        if (autoStash) {
+          throw new Error(t(
+            'Update stopped with conflicts: {0} Your local tracked changes remain safe in VersionDock auto-stash {1}. Resolve or abort the current operation, then restore the stash from the Stash panel.',
+            pullError,
+            autoStash.shortHash,
+          ));
+        }
+        throw new Error(pullError);
       }
+
+      if (!autoStash) throw new Error(pullError);
 
       try {
         await this.restorePullAutoStash(autoStash);
@@ -3280,7 +3307,6 @@ export class GitService {
 
   private async openPullConflicts(): Promise<void> {
     await this.refreshStatusAfterOperation();
-    await vscode.commands.executeCommand('versiondock.openConflicts');
   }
 
   getPendingPullAutoStash(): { hash: string; shortHash: string } | undefined {

@@ -153,8 +153,8 @@ export async function runPushWithProtection(
     await withGitPushProgress(
       repo,
       options?.remote
-        ? t('VersionDock: Pushing to {0}…', options.remote)
-        : t('VersionDock: Pushing'),
+        ? t('VersionDock [{0}]: Pushing to {1}…', repoName, options.remote)
+        : t('VersionDock [{0}]: Pushing…', repoName),
       () => repo.push(force, remote),
     );
     return { success: true, rebased: false, forced: force };
@@ -295,8 +295,8 @@ export async function runPushWithProtection(
         await withGitPushProgress(
           repo,
           options?.remote
-            ? t('VersionDock: Pushing to {0}…', options.remote)
-            : t('VersionDock: Pushing'),
+            ? t('VersionDock [{0}]: Pushing to {1}…', repoName, options.remote)
+            : t('VersionDock [{0}]: Pushing…', repoName),
           () => repo.push(false, remote),
         );
 
@@ -325,8 +325,8 @@ export async function runPushWithProtection(
         await withGitPushProgress(
           repo,
           options?.remote
-            ? t('VersionDock: Pushing to {0}…', options.remote)
-            : t('VersionDock: Pushing'),
+            ? t('VersionDock [{0}]: Pushing to {1}…', repoName, options.remote)
+            : t('VersionDock [{0}]: Pushing…', repoName),
           () => repo.push(true, remote),
         );
 

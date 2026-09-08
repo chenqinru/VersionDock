@@ -95,10 +95,17 @@ export class IncomingCommitsNotifier implements vscode.Disposable {
       this.cleanupStartupListeners();
 
       const reposWithBehind = branches.filter(b => (b.aheadBehind?.behind ?? 0) > 0).length;
-      const message = reposWithBehind === 1
+      const singleRepo = reposWithBehind === 1
+        ? metas.find((_, i) => {
+          const r = branchResults[i];
+          return r.status === 'fulfilled' && (r.value?.aheadBehind?.behind ?? 0) > 0;
+        })
+        : undefined;
+      const singleRepoName = singleRepo?.name;
+      const message = singleRepoName
         ? (totalBehind === 1
-          ? t('VersionDock: {0} incoming commit available to update.', totalBehind)
-          : t('VersionDock: {0} incoming commits available to update.', totalBehind))
+          ? t('VersionDock [{0}]: {1} incoming commit available to update.', singleRepoName, totalBehind)
+          : t('VersionDock [{0}]: {1} incoming commits available to update.', singleRepoName, totalBehind))
         : (totalBehind === 1
           ? t('VersionDock: {0} incoming commit across {1} repository to update.', totalBehind, reposWithBehind)
           : t('VersionDock: {0} incoming commits across {1} repositories to update.', totalBehind, reposWithBehind));
@@ -144,7 +151,13 @@ export class IncomingCommitsNotifier implements vscode.Disposable {
         let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
         await this.manager.runWithStatusUpdatesSuppressed(async () => {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating all projects…'), cancellable: false },
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: metas.length === 1
+                ? t('VersionDock [{0}]: Updating project…', metas[0].name)
+                : t('VersionDock: Updating all projects…'),
+              cancellable: false,
+            },
             async progress => {
               const count = metas.length;
               results = await this.updateSummaryService.runAll(

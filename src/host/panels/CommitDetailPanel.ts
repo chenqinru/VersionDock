@@ -180,7 +180,8 @@ async function createCommitDetailPanel(
 ): Promise<void> {
   const repo = manager.getRepo(repoId);
   if (!repo) {
-    vscode.window.showErrorMessage(t('VersionDock: Repository not found.'));
+    const repoName = manager.getRepoMeta(repoId)?.name ?? repoId;
+    vscode.window.showErrorMessage(t('VersionDock [{0}]: Repository not found.', repoName));
     return;
   }
 
@@ -245,7 +246,8 @@ async function createCommitDetailPanel(
       if (needMergeParentChanges) mergeParentChanges = loadedMergeChanges;
     }
   } catch (e: unknown) {
-    vscode.window.showErrorMessage(t('VersionDock: Failed to load commit details: {0}', String(e)));
+    const repoName = manager.getRepoMetas().find(r => r.id === repoId)?.name ?? repoId;
+    vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to load commit details: {1}', repoName, String(e)));
     return;
   }
 
@@ -372,43 +374,43 @@ async function createCommitDetailPanel(
               ? t('{0} (deleted in {1})', fileName, formatShortRef(diffHash))
               : t('{0} ({1})', fileName, formatShortRef(diffHash));
         if (msg.fromHash && msg.toHash) {
-          await openCommitRangeFileDiff(repo, msg.fromHash, msg.toHash, msg.filePath, status, title);
+          await openCommitRangeFileDiff(repo, msg.fromHash, msg.toHash, msg.filePath, status, title, repoName);
         } else {
-          await openCommitFileDiff(repo, diffHash, msg.filePath, status, title);
+          await openCommitFileDiff(repo, diffHash, msg.filePath, status, title, repoName);
         }
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open diff: {1}', repoName, String(e)));
       }
     } else if (msg.type === 'openFile' && msg.filePath) {
       try {
         const fileUri = vscode.Uri.file(repo.resolveRepoPath(msg.filePath).absolutePath);
         vscode.commands.executeCommand('vscode.open', fileUri);
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open file: {1}', repoName, String(e)));
       }
     } else if (msg.type === 'revealInExplorer' && msg.filePath) {
       try {
         const fileUri = vscode.Uri.file(repo.resolveRepoPath(msg.filePath).absolutePath);
         vscode.commands.executeCommand('revealInExplorer', fileUri);
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open file: {1}', repoName, String(e)));
       }
     } else if (msg.type === 'revealInOS' && msg.filePath) {
       try {
         const fileUri = vscode.Uri.file(repo.resolveRepoPath(msg.filePath).absolutePath);
         vscode.commands.executeCommand('revealFileInOS', fileUri);
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open file: {1}', repoName, String(e)));
       }
     } else if (msg.type === 'revertFile' && msg.filePath) {
       if (repo.kind === 'svn') {
-        vscode.window.showWarningMessage(t('VersionDock: Revert Selected Changes is not supported for SVN commit detail.'));
+        vscode.window.showWarningMessage(t('VersionDock [{0}]: Revert Selected Changes is not supported for SVN commit detail.', repoName));
         return;
       }
       try {
         const resolvedPath = repo.resolveRepoPath(msg.filePath);
         const confirmed = await vscode.window.showWarningMessage(
-          t('Revert changes to "{0}" from commit {1}?', resolvedPath.relativePath, commitInfo!.shortHash),
+          t('VersionDock [{0}]: Revert changes to "{1}" from commit {2}?', repoName, resolvedPath.relativePath, commitInfo!.shortHash),
           { modal: true }, t('Revert')
         );
         if (confirmed !== t('Revert')) return;
@@ -418,14 +420,15 @@ async function createCommitDetailPanel(
         } else {
           await repo.revertFileToParent(hash, resolvedPath.relativePath);
         }
-        vscode.window.showInformationMessage(t('VersionDock: Reverted "{0}".', resolvedPath.relativePath));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Reverted "{1}".', repoName, resolvedPath.relativePath));
         panel.webview.postMessage({ type: 'revertDone', filePath: resolvedPath.relativePath });
         manager.notifyDataInvalidated({
           scopes: ['workingTree'],
           repoIds: [repo.repoId],
         });
       } catch (e: unknown) {
-        void showGitErrorMessage(t('VersionDock: Revert failed: {0}', String(e)), {
+        void showGitErrorMessage(t('VersionDock [{0}]: Revert failed: {1}', repoName, String(e)), {
+          repoName,
           onUnlocked: async () => {
             await manager.getAllStatusesFresh();
           },
@@ -594,12 +597,24 @@ async function createAggregatedCommitDetailPanel(
       fileEntries.push(...detail.entries);
     }
   } catch (e: unknown) {
-    vscode.window.showErrorMessage(t('VersionDock: Failed to load commit details: {0}', String(e)));
+    const singleRepoId = commits.every(s => s.repoId === commits[0]?.repoId) ? commits[0]?.repoId : undefined;
+    const singleRepoName = singleRepoId ? (manager.getRepoMeta(singleRepoId)?.name ?? singleRepoId) : undefined;
+    vscode.window.showErrorMessage(
+      singleRepoName
+        ? t('VersionDock [{0}]: Failed to load commit details: {1}', singleRepoName, String(e))
+        : t('VersionDock: Failed to load commit details: {0}', String(e))
+    );
     return;
   }
 
   if (commitSummaries.length === 0) {
-    vscode.window.showErrorMessage(t('VersionDock: Repository not found.'));
+    const singleRepoId = commits.every(s => s.repoId === commits[0]?.repoId) ? commits[0]?.repoId : undefined;
+    const singleRepoName = singleRepoId ? (manager.getRepoMeta(singleRepoId)?.name ?? singleRepoId) : undefined;
+    vscode.window.showErrorMessage(
+      singleRepoName
+        ? t('VersionDock [{0}]: Repository not found.', singleRepoName)
+        : t('VersionDock: Repository not found.')
+    );
     return;
   }
 
@@ -718,6 +733,7 @@ async function createAggregatedCommitDetailPanel(
     const targetRepoId = msg.repoId ?? firstCommit.repoId;
     const targetRepo = manager.getRepo(targetRepoId);
     if (!targetRepo) return;
+    const targetRepoName = manager.getRepoMeta(targetRepoId)?.name || targetRepoId;
     if (msg.type === 'openDiff' && msg.filePath) {
       try {
         const pathMod = await import('path');
@@ -726,33 +742,33 @@ async function createAggregatedCommitDetailPanel(
           ? t('{0} ({1}..{2})', fileName, formatShortRef(msg.fromHash), formatShortRef(msg.toHash))
           : t('{0} ({1})', fileName, formatShortRef(msg.hash ?? firstCommit.hash));
         if (msg.fromHash && msg.toHash) {
-          await openCommitRangeFileDiff(targetRepo, msg.fromHash, msg.toHash, msg.filePath, msg.fileStatus ?? 'M', title);
+          await openCommitRangeFileDiff(targetRepo, msg.fromHash, msg.toHash, msg.filePath, msg.fileStatus ?? 'M', title, targetRepoName);
         } else {
-          await openCommitFileDiff(targetRepo, msg.hash ?? firstCommit.hash, msg.filePath, msg.fileStatus ?? 'M', title);
+          await openCommitFileDiff(targetRepo, msg.hash ?? firstCommit.hash, msg.filePath, msg.fileStatus ?? 'M', title, targetRepoName);
         }
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open diff: {1}', targetRepoName, String(e)));
       }
     } else if (msg.type === 'openFile' && msg.filePath) {
       try {
         const fileUri = vscode.Uri.file(targetRepo.resolveRepoPath(msg.filePath).absolutePath);
         vscode.commands.executeCommand('vscode.open', fileUri);
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open file: {1}', targetRepoName, String(e)));
       }
     } else if (msg.type === 'revealInExplorer' && msg.filePath) {
       try {
         const fileUri = vscode.Uri.file(targetRepo.resolveRepoPath(msg.filePath).absolutePath);
         vscode.commands.executeCommand('revealInExplorer', fileUri);
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open file: {1}', targetRepoName, String(e)));
       }
     } else if (msg.type === 'revealInOS' && msg.filePath) {
       try {
         const fileUri = vscode.Uri.file(targetRepo.resolveRepoPath(msg.filePath).absolutePath);
         vscode.commands.executeCommand('revealFileInOS', fileUri);
       } catch (e: unknown) {
-        vscode.window.showErrorMessage(t('VersionDock: Cannot open file: {0}', String(e)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open file: {1}', targetRepoName, String(e)));
       }
     }
   });
@@ -970,16 +986,18 @@ async function openCommitFileDiff(
   filePath: string,
   status: string,
   title: string,
+  repoName?: string,
 ): Promise<void> {
   const resolvedPath = repo.resolveRepoPath(filePath);
   const relativePath = resolvedPath.relativePath;
+  const displayRepoName = repoName || repo.repoId;
   if (repo.kind === 'svn') {
     let originalContent = '';
     let modifiedContent = '';
     if (typeof repo.getRevisionFileContents === 'function') {
       const contents = await repo.getRevisionFileContents(diffHash, relativePath, status);
       if (contents.isBinary) {
-        vscode.window.showInformationMessage(t('Binary file — no diff available'));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Binary file — no diff available', displayRepoName));
         return;
       }
       originalContent = contents.originalContent;
@@ -987,7 +1005,7 @@ async function openCommitFileDiff(
     } else {
       const diff = await repo.getFileDiff(repo.repoId, diffHash, relativePath);
       if (!diff) {
-        vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN diff available for {1}.', displayRepoName, relativePath));
         return;
       }
       originalContent = diff.originalContent ?? '';
@@ -995,7 +1013,7 @@ async function openCommitFileDiff(
     }
     const normalizedStatus = (status ?? '').toUpperCase();
     if (!originalContent && !modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
-      vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN diff available for {1}.', displayRepoName, relativePath));
       return;
     }
     await openSvnDiffWithProvider(repo.repoId, 'base', diffHash, relativePath, originalContent, modifiedContent, title);
@@ -1016,7 +1034,9 @@ async function openCommitRangeFileDiff(
   filePath: string,
   status: string,
   title: string,
+  repoName?: string,
 ): Promise<void> {
+  const displayRepoName = repoName || repo.repoId;
   if (repo.kind === 'svn') {
     const resolvedPath = repo.resolveRepoPath(filePath);
     const relativePath = resolvedPath.relativePath;
@@ -1025,7 +1045,7 @@ async function openCommitRangeFileDiff(
     if (typeof repo.getRevisionRangeFileContents === 'function') {
       const contents = await repo.getRevisionRangeFileContents(fromHash, toHash, relativePath);
       if (contents.isBinary) {
-        vscode.window.showInformationMessage(t('Binary file — no diff available'));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Binary file — no diff available', displayRepoName));
         return;
       }
       originalContent = contents.originalContent;
@@ -1033,7 +1053,7 @@ async function openCommitRangeFileDiff(
     } else {
       const diff = await repo.getFileDiff(repo.repoId, toHash, relativePath);
       if (!diff) {
-        vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN diff available for {1}.', displayRepoName, relativePath));
         return;
       }
       originalContent = diff.originalContent ?? '';
@@ -1041,7 +1061,7 @@ async function openCommitRangeFileDiff(
     }
     const normalizedStatus = (status ?? '').toUpperCase();
     if (!originalContent && !modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
-      vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN diff available for {1}.', displayRepoName, relativePath));
       return;
     }
     await openSvnDiffWithProvider(repo.repoId, fromHash, toHash, relativePath, originalContent, modifiedContent, title);

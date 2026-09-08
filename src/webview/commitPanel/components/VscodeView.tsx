@@ -31,6 +31,8 @@ interface Props {
   onUnstageFiles: (repoId: string, paths: string[]) => void;
   onStageAll: (repoId: string) => void;
   onUnstageAll: (repoId: string) => void;
+  onStageAllMulti?: (repoIds: string[]) => void;
+  onUnstageAllMulti?: (repoIds: string[]) => void;
   onRepoContextMenu: (e: React.MouseEvent, repoId: string, staged: boolean) => void;
   onBranchClick: (repoId: string) => void;
   onOpenStagedChanges: (repoId: string) => void;
@@ -525,7 +527,7 @@ export function VscodeView({
   repos, repoMetas, selectedFile, ctxFile, viewMode,
   isCollapsed, toggleCollapsed,
   onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge,
-  onStageFiles, onUnstageFiles, onStageAll, onUnstageAll,
+  onStageFiles, onUnstageFiles, onStageAll, onUnstageAll, onStageAllMulti, onUnstageAllMulti,
   onRepoContextMenu, onBranchClick, onOpenStagedChanges, onOpenUnstagedChanges, iconTheme, activeFolderPath,
   selectedRepos, onToggleRepoSelection, onOpenAllChanges,
 }: Props) {
@@ -577,7 +579,17 @@ export function VscodeView({
           onContextMenu={() => {}}
           actionIcon={totalStaged > 0 && gitRepos.length > 0 ? 'remove' : undefined}
           actionTitle={totalStaged > 0 && gitRepos.length > 0 ? t('Unstage All') : undefined}
-          onAction={totalStaged > 0 && gitRepos.length > 0 ? () => gitRepos.forEach(r => onUnstageAll(r.repoId)) : undefined}
+          onAction={
+            totalStaged > 0 && gitRepos.length > 0
+              ? () => {
+                  if (gitRepos.length > 1 && onUnstageAllMulti) {
+                    onUnstageAllMulti(gitRepos.map(r => r.repoId));
+                  } else {
+                    gitRepos.forEach(r => onUnstageAll(r.repoId));
+                  }
+                }
+              : undefined
+          }
           openChangesIcon={isSingleRepo ? 'diff-multiple' : undefined}
           openChangesTitle={isSingleRepo ? t('Open Staged Changes') : undefined}
           onOpenChanges={isSingleRepo && singleRepoStatus ? () => onOpenStagedChanges(singleRepoStatus.repoId) : undefined}
@@ -639,7 +651,13 @@ export function VscodeView({
           totalUnstaged > 0 && allReposAreSvn
             ? (hasSvnUntracked ? () => repos.forEach(r => onStageFiles(r.repoId, r.unstagedFiles.filter(file => file.status === 'untracked').map(file => file.path))) : undefined)
             : totalUnstaged > 0
-              ? () => gitRepos.forEach(r => onStageAll(r.repoId))
+              ? () => {
+                  if (gitRepos.length > 1 && onStageAllMulti) {
+                    onStageAllMulti(gitRepos.map(r => r.repoId));
+                  } else {
+                    gitRepos.forEach(r => onStageAll(r.repoId));
+                  }
+                }
               : undefined
         }
         secondActionIcon={totalUnstaged > 0 ? 'discard' : undefined}

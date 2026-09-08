@@ -74,6 +74,21 @@ function throwIfCancellationRequested(token: vscode.CancellationToken): void {
   if (token.isCancellationRequested) throw new Error('Cancelled');
 }
 
+function findFailedSubmoduleDescendant(repoId: string, failedSubmoduleIds: Set<string>, repoMetas: RepoMeta[]): RepoMeta | undefined {
+  if (failedSubmoduleIds.size === 0) return undefined;
+  for (const failedId of failedSubmoduleIds) {
+    let curr = repoMetas.find(m => m.id === failedId);
+    while (curr && curr.parentRepoId) {
+      if (curr.parentRepoId === repoId) {
+        return repoMetas.find(m => m.id === failedId) || curr;
+      }
+      const parentId: string = curr.parentRepoId;
+      curr = repoMetas.find(m => m.id === parentId);
+    }
+  }
+  return undefined;
+}
+
 export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewType = 'versiondock.commitPanel';
   private view?: vscode.WebviewView;
@@ -399,7 +414,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     const result = await this.profileService.getEffectiveProfile(resolvedPath);
     if (!result) {
-      vscode.window.showWarningMessage(t('VersionDock: No Git identity configured. Set a profile before committing.'));
+      vscode.window.showWarningMessage(t('VersionDock [{0}]: No Git identity configured. Set a profile before committing.', meta?.name ?? repoId));
       return undefined;
     }
     if (result.source === 'local' || result.source === 'global') return undefined;
@@ -756,7 +771,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     try { workingStat = fs.statSync(resolvedPath.absolutePath); } catch { /* missing conflicted path */ }
     if (workingStat?.isDirectory()) {
       await vscode.window.showInformationMessage(
-        t('SVN directory conflicts cannot be edited as text. Choose a conflict side or resolve the directory manually.'),
+        t('VersionDock [{0}]: SVN directory conflicts cannot be edited as text. Choose a conflict side or resolve the directory manually.', repo.meta.name),
       );
       return;
     }
@@ -764,7 +779,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const resource = await this.prepareSvnWorkingDiffResource(repo, filePath);
     if (!resource) {
       if (!workingStat?.isFile()) {
-        await vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', path.basename(resolvedPath.relativePath)));
+        await vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN diff available for {1}.', repo.name, path.basename(resolvedPath.relativePath)));
         return;
       }
       await vscode.window.showTextDocument(vscode.Uri.file(resolvedPath.absolutePath), { preview: options.preview ?? true });
@@ -784,7 +799,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     section?: 'staged' | 'unstaged',
   ): Promise<void> {
     if (section === 'staged') {
-      await vscode.window.showInformationMessage(t('SVN does not use staged changes.'));
+      await vscode.window.showInformationMessage(t('VersionDock [{0}]: SVN does not use staged changes.', repo.meta.name));
       return;
     }
 
@@ -815,7 +830,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       return leftRank - rightRank || left.path.localeCompare(right.path);
     });
     if (files.length === 0) {
-      await vscode.window.showInformationMessage(t('No SVN file changes to open.'));
+      await vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN file changes to open.', repo.meta.name));
       return;
     }
 
@@ -830,7 +845,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
     }
     if (resources.length === 0) {
-      await vscode.window.showInformationMessage(t('No SVN file changes to open.'));
+      await vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN file changes to open.', repo.meta.name));
       return;
     }
     try {
@@ -851,7 +866,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
     }
     if (errors.length > 0) {
-      await vscode.window.showWarningMessage(t('VersionDock: Could not open {0} SVN change(s): {1}', errors.length, errors.join('; ')));
+      await vscode.window.showWarningMessage(t('VersionDock [{0}]: Could not open {1} SVN change(s): {2}', repo.meta.name, errors.length, errors.join('; ')));
     }
   }
 
@@ -1586,19 +1601,26 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     if (changed.length === 0) return;
+    const singleRepoName = changed.length === 1
+      ? (this.manager.getRepoMeta(changed[0].entry.repoId)?.name || changed[0].entry.repoId)
+      : undefined;
     const totalAhead = changed.reduce((sum, item) => sum + (item.status.aheadCount ?? 0), 0);
     if (totalAhead > 0) {
-      const message = changed.length === 1
-        ? t('VersionDock: Subtree "{0}" has {1} to push.', changed[0].entry.name, totalAhead)
-        : t('VersionDock: {0} subtrees have {1} to push.', changed.length, totalAhead);
+      const message = singleRepoName
+        ? t('VersionDock [{0}]: Subtree "{1}" has {2} to push.', singleRepoName, changed[0].entry.name, totalAhead)
+        : (changed.length === 1
+          ? t('VersionDock: Subtree "{0}" has {1} to push.', changed[0].entry.name, totalAhead)
+          : t('VersionDock: {0} subtrees have {1} to push.', changed.length, totalAhead));
       vscode.window.showInformationMessage(message);
       return;
     }
 
-    const message = changed.length === 1
-      ? t('VersionDock: Subtree "{0}" has updates to push.', changed[0].entry.name)
-      : t('VersionDock: {0} subtrees have updates to push.', changed.length);
-      vscode.window.showInformationMessage(message);
+    const message = singleRepoName
+      ? t('VersionDock [{0}]: Subtree "{1}" has updates to push.', singleRepoName, changed[0].entry.name)
+      : (changed.length === 1
+        ? t('VersionDock: Subtree "{0}" has updates to push.', changed[0].entry.name)
+        : t('VersionDock: {0} subtrees have updates to push.', changed.length));
+    vscode.window.showInformationMessage(message);
   }
 
   private async postSubtreeStatuses(
@@ -1729,7 +1751,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       if (meta) return meta;
     }
     if (metas.length === 0) {
-      vscode.window.showInformationMessage(t('No Git repositories found in this workspace.'));
+      vscode.window.showInformationMessage(t('VersionDock: No Git repositories found in this workspace.'));
       return undefined;
     }
     if (metas.length === 1) return metas[0];
@@ -1867,7 +1889,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     const repo = this.manager.getRepo(meta.id);
     if (!repo) {
-      vscode.window.showWarningMessage(t('VersionDock: Repository not found.'));
+      vscode.window.showWarningMessage(t('VersionDock [{0}]: Repository not found.', meta.name));
       return undefined;
     }
 
@@ -2066,14 +2088,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         throw new Error(t('Cannot add subtree: prefix "{0}" already exists and is not empty.', result.entry.prefix));
       }
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Adding subtree {0}', result.entry.name), cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Adding subtree {1}', repo.meta.name, result.entry.name), cancellable: false },
         async () => repo.addSubtree(result.entry.prefix, result.entry.repository, result.entry.ref, result.entry.defaultSquash, result.message),
       );
       await this.upsertSubtreeEntry(result.entry, { postList: false });
       await this.refreshAfterSubtreeOp(result.entry.id);
-      vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" added.', result.entry.name));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" added.', repo.meta.name, result.entry.name));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock: Failed to add subtree — {0}', String(e)));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to add subtree — {1}', repo.meta.name, String(e)));
     }
   }
 
@@ -2084,14 +2106,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     if (!repo) return;
     const absPrefix = repo.resolveRepoPath(result.entry.prefix).absolutePath;
     if (!fs.existsSync(absPrefix)) {
-      vscode.window.showWarningMessage(t('VersionDock: Prefix "{0}" does not exist in this repository.', result.entry.prefix));
+      vscode.window.showWarningMessage(t('VersionDock [{0}]: Prefix "{1}" does not exist in this repository.', repo.meta.name, result.entry.prefix));
       return;
     }
     try {
       await this.upsertSubtreeEntry(result.entry);
-      vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" registered.', result.entry.name));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" registered.', repo.meta.name, result.entry.name));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock: Failed to register subtree — {0}', String(e)));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to register subtree — {1}', repo.meta.name, String(e)));
     }
   }
 
@@ -2101,13 +2123,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       vscode.window.showWarningMessage(t('VersionDock: Subtree entry not found.'));
       return;
     }
+    const repoName = this.manager.getRepoMeta(existing.repoId)?.name || existing.repoId;
     const result = await this.promptSubtreeEntry('edit', existing);
     if (!result) return;
     try {
       await this.upsertSubtreeEntry(result.entry);
-      vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" updated.', result.entry.name));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" updated.', repoName, result.entry.name));
     } catch (e: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock: Failed to update subtree — {0}', String(e)));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to update subtree — {1}', repoName, String(e)));
     }
   }
 
@@ -2126,7 +2149,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const repo = this.manager.getRepo(entry.repoId);
     if (!repo) {
       const error = t('Repo not found');
-      vscode.window.showErrorMessage(t('VersionDock: {0}', error));
+      const repoName = this.manager.getRepoMeta(entry.repoId)?.name ?? entry.repoId;
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, error));
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op, ok: false, error });
       return;
     }
@@ -2135,27 +2159,27 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       if (op === 'pull') {
         await this.ensureSubtreeClean(repo, 'pull');
         output = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pulling subtree {0}…', entry.name), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pulling subtree {1}…', repo.meta.name, entry.name), cancellable: false },
           async () => repo.pullSubtree(entry.prefix, entry.repository, entry.ref, entry.defaultSquash),
         );
       } else if (op === 'push') {
         const confirm = await vscode.window.showWarningMessage(
-          t('Push subtree "{0}" from prefix "{1}" to "{2}" ref "{3}"? This pushes only the subtree history, not the parent repository.', entry.name, entry.prefix, entry.repository, entry.ref),
+          t('VersionDock [{0}]: Push subtree "{1}" from prefix "{2}" to "{3}" ref "{4}"? This pushes only the subtree history, not the parent repository.', repo.meta.name, entry.name, entry.prefix, entry.repository, entry.ref),
           { modal: true },
           t('Push Subtree'),
         );
         if (confirm !== t('Push Subtree')) {
-          this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op, ok: false, error: 'Cancelled' });
+          this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'push', ok: false, error: 'Cancelled' });
           return;
         }
         output = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing subtree {0}…', entry.name), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing subtree {1}…', repo.meta.name, entry.name), cancellable: false },
           async () => repo.pushSubtree(entry.prefix, entry.repository, entry.ref),
         );
       } else if (op === 'remove') {
         await this.ensureSubtreeClean(repo, 'remove');
         const confirm = await vscode.window.showWarningMessage(
-          t('Remove subtree "{0}" from prefix "{1}"? This stages the deletion but does not commit it.', entry.name, entry.prefix),
+          t('VersionDock [{0}]: Remove subtree "{1}" from prefix "{2}"? This stages the deletion but does not commit it.', repo.meta.name, entry.name, entry.prefix),
           { modal: true },
           t('Remove'),
         );
@@ -2164,26 +2188,26 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         output = await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Removing subtree {0}…', entry.name), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Removing subtree {1}…', repo.meta.name, entry.name), cancellable: false },
           async () => repo.removeSubtree(entry.prefix),
         );
       }
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op, ok: true, output });
       await this.refreshAfterSubtreeOp(entry.id);
       if (op === 'pull') {
-        vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" pulled.', entry.name));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" pulled.', repo.meta.name, entry.name));
       } else if (op === 'push') {
-        vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" pushed.', entry.name));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" pushed.', repo.meta.name, entry.name));
       } else if (op === 'remove') {
-        vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" removed from working tree.', entry.name));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" removed from working tree.', repo.meta.name, entry.name));
       }
     } catch (e: unknown) {
       const error = String(e);
       const message = op === 'pull'
-        ? t('VersionDock: Failed to pull subtree "{0}" — {1}', entry.name, error)
+        ? t('VersionDock [{0}]: Failed to pull subtree "{1}" — {2}', repo.meta.name, entry.name, error)
         : op === 'push'
-          ? t('VersionDock: Failed to push subtree "{0}" — {1}', entry.name, error)
-          : t('VersionDock: Failed to remove subtree "{0}" — {1}', entry.name, error);
+          ? t('VersionDock [{0}]: Failed to push subtree "{1}" — {2}', repo.meta.name, entry.name, error)
+          : t('VersionDock [{0}]: Failed to remove subtree "{1}" — {2}', repo.meta.name, entry.name, error);
       vscode.window.showErrorMessage(message);
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op, ok: false, error });
     }
@@ -2200,7 +2224,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const repo = this.manager.getRepo(entry.repoId);
     if (!repo) {
       const error = t('Repo not found');
-      vscode.window.showErrorMessage(t('VersionDock: {0}', error));
+      const repoName = this.manager.getRepoMeta(entry.repoId)?.name ?? entry.repoId;
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, error));
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'split', ok: false, error });
       return;
     }
@@ -2246,7 +2271,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     try {
       if (rejoinPick.value) await this.ensureSubtreeClean(repo, 'split');
       const output = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Splitting subtree {0}…', entry.name), cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Splitting subtree {1}…', repo.meta.name, entry.name), cancellable: false },
         async () => repo.splitSubtree(
           entry.prefix,
           branch || undefined,
@@ -2262,13 +2287,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'split', ok: true, output });
       await this.refreshAfterSubtreeOp(entry.id);
       if (branch) {
-        vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" split to branch "{1}".', entry.name, branch));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" split to branch "{2}".', repo.meta.name, entry.name, branch));
       } else {
-        vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" split.', entry.name));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" split.', repo.meta.name, entry.name));
       }
     } catch (e: unknown) {
       const error = String(e);
-      vscode.window.showErrorMessage(t('VersionDock: Failed to split subtree "{0}" — {1}', entry.name, error));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to split subtree "{1}" — {2}', repo.meta.name, entry.name, error));
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'split', ok: false, error });
     }
   }
@@ -2284,7 +2309,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const repo = this.manager.getRepo(entry.repoId);
     if (!repo) {
       const error = t('Repo not found');
-      vscode.window.showErrorMessage(t('VersionDock: {0}', error));
+      const repoName = this.manager.getRepoMeta(entry.repoId)?.name ?? entry.repoId;
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repoName, error));
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'merge', ok: false, error });
       return;
     }
@@ -2305,15 +2331,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     try {
       await this.ensureSubtreeClean(repo, 'merge');
       const output = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging subtree {0}…', entry.name), cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Merging subtree {1}…', repo.meta.name, entry.name), cancellable: false },
         async () => repo.mergeSubtree(entry.prefix, commit, squash, message),
       );
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'merge', ok: true, output });
       await this.refreshAfterSubtreeOp(entry.id);
-      vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" merged.', entry.name));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" merged.', repo.meta.name, entry.name));
     } catch (e: unknown) {
       const error = String(e);
-      vscode.window.showErrorMessage(t('VersionDock: Failed to merge subtree "{0}" — {1}', entry.name, error));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to merge subtree "{1}" — {2}', repo.meta.name, entry.name, error));
       this.post({ type: 'SUBTREE_OP_RESULT', requestId, repoId: entry.repoId, entryId, op: 'merge', ok: false, error });
     }
   }
@@ -2321,7 +2347,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private async pickSubtreeEntry(title: string): Promise<SubtreeEntry | undefined> {
     const entries = this.getSubtreeEntries();
     if (entries.length === 0) {
-      vscode.window.showInformationMessage(t('No subtrees registered in this workspace.'));
+      vscode.window.showInformationMessage(t('VersionDock: No subtrees registered in this workspace.'));
       return undefined;
     }
     if (entries.length === 1) return entries[0];
@@ -2385,14 +2411,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_GET_LAST_COMMIT_MESSAGE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) {
-          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, message: '', error: t('Repo not found') });
+          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, repoId: msg.repoId, message: '', error: t('Repo not found') });
           return;
         }
         try {
           const message = await repo.getLastCommitMessage();
-          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, message });
+          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, repoId: msg.repoId, message });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, message: '', error: String(e) });
+          this.post({ type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT', requestId: msg.requestId, repoId: msg.repoId, message: '', error: String(e) });
         }
         break;
       }
@@ -2496,68 +2522,182 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await this.openWorktreeDiffEditor(repo, msg.baseRef, msg.filePath);
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open diff: {1}', repo.meta.name, String(e)));
         }
         break;
       }
 
       case 'COMMIT_STAGE_FILES': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         try {
-          await repo.stageFiles(msg.paths);
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await repo.stageFiles(msg.paths);
+          }, 'stage', t('Staging changes…'));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.refreshStatusAfterOp();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
 
       case 'COMMIT_UNSTAGE_FILES': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         try {
-          await repo.unstageFiles(msg.paths);
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await repo.unstageFiles(msg.paths);
+          }, 'stage', t('Unstaging changes…'));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.refreshStatusAfterOp();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
 
       case 'COMMIT_STAGE_ALL': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         try {
-          await repo.stageAll();
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await repo.stageAll();
+          }, 'stage', t('Staging all changes…'));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.refreshStatusAfterOp();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
 
       case 'COMMIT_UNSTAGE_ALL': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         try {
-          await repo.unstageAll();
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await repo.unstageAll();
+          }, 'stage', t('Unstaging all changes…'));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.refreshStatusAfterOp();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
+        break;
+      }
+
+      case 'COMMIT_STAGE_ALL_MULTI': {
+        const repoIds = msg.repoIds;
+        const total = repoIds.length;
+        const stepIncrement = total > 0 ? 100 / total : undefined;
+        const runStageAllMulti = async (
+          progress?: vscode.Progress<{ message?: string; increment?: number }>,
+        ) => {
+          const errors: string[] = [];
+          for (let i = 0; i < total; i++) {
+            const repoId = repoIds[i];
+            const repo = this.manager.getRepo(repoId);
+            const repoName = (this.manager.getRepoMeta(repoId)?.name ?? path.basename(repo?.rootPath ?? '')) || repoId;
+            progress?.report({
+              message: total > 1 ? `(${i + 1}/${total}) ${repoName}` : repoName,
+              increment: stepIncrement,
+            });
+            if (!repo) {
+              errors.push(`${repoName}: ${t('Repo not found')}`);
+              continue;
+            }
+            try {
+              await repo.stageAll();
+            } catch (e: unknown) {
+              errors.push(`${repoName}: ${String(e)}`);
+            }
+          }
+          if (errors.length > 0) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+          } else {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          }
+          const status = await this.refreshStatusAfterOp();
+          this.postChangelistsUpdate(status);
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+        };
+
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          if (total <= 1) {
+            await runStageAllMulti();
+          } else {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock: Staging {0} repositories…', total),
+                cancellable: false,
+              },
+              progress => runStageAllMulti(progress),
+            );
+          }
+        }, 'stage', t('Staging all changes…'));
+        break;
+      }
+
+      case 'COMMIT_UNSTAGE_ALL_MULTI': {
+        const repoIds = msg.repoIds;
+        const total = repoIds.length;
+        const stepIncrement = total > 0 ? 100 / total : undefined;
+        const runUnstageAllMulti = async (
+          progress?: vscode.Progress<{ message?: string; increment?: number }>,
+        ) => {
+          const errors: string[] = [];
+          for (let i = 0; i < total; i++) {
+            const repoId = repoIds[i];
+            const repo = this.manager.getRepo(repoId);
+            const repoName = (this.manager.getRepoMeta(repoId)?.name ?? path.basename(repo?.rootPath ?? '')) || repoId;
+            progress?.report({
+              message: total > 1 ? `(${i + 1}/${total}) ${repoName}` : repoName,
+              increment: stepIncrement,
+            });
+            if (!repo) {
+              errors.push(`${repoName}: ${t('Repo not found')}`);
+              continue;
+            }
+            try {
+              await repo.unstageAll();
+            } catch (e: unknown) {
+              errors.push(`${repoName}: ${String(e)}`);
+            }
+          }
+          if (errors.length > 0) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+          } else {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          }
+          const status = await this.refreshStatusAfterOp();
+          this.postChangelistsUpdate(status);
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+        };
+
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          if (total <= 1) {
+            await runUnstageAllMulti();
+          } else {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock: Unstaging {0} repositories…', total),
+                cancellable: false,
+              },
+              progress => runUnstageAllMulti(progress),
+            );
+          }
+        }, 'stage', t('Unstaging all changes…'));
         break;
       }
 
@@ -2569,18 +2709,20 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           amend: msg.amend,
         });
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         const isSafe = await this.validateCommitSafety(repo);
         if (!isSafe) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled by user safety check' });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled by user safety check', repoId: msg.repoId });
           return;
         }
         try {
           const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
-          const output = await repo.commit(msg.message, msg.amend, creds, detail => {
-            this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
-          }, msg.noVerify);
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output });
+          const output = await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            return await repo.commit(msg.message, msg.amend, creds, detail => {
+              this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
+            }, msg.noVerify);
+          }, 'commit', t('VersionDock [{0}]: Committing changes…', repo.meta.name));
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output, repoId: msg.repoId });
           this.logger?.info('Commit', 'Commit completed', {
             repoId: msg.repoId,
             requestId: msg.requestId,
@@ -2604,7 +2746,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             vcs: repo.kind,
             durationMs: Date.now() - startedAt,
           });
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
@@ -2617,22 +2759,17 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           amend: msg.amend,
         });
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         const isSafe = await this.validateCommitSafety(repo);
         if (!isSafe) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled by user safety check' });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled by user safety check', repoId: msg.repoId });
           return;
         }
         try {
           const creds = repo.kind === 'svn' ? undefined : await this.getCommitCredentials(repo.repoId);
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('Commit'), cancellable: false },
-            async () => {
-              await repo.commit(msg.message, msg.amend, creds, detail => {
-                this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
-              }, msg.noVerify);
-            },
-          );
+          await repo.commit(msg.message, msg.amend, creds, detail => {
+            this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
+          }, msg.noVerify);
           if (repo.kind !== 'svn') {
             const pushResult = await runPushWithProtection(repo, {
               repoName: this.manager.getRepoMeta(msg.repoId)?.name ?? path.basename(repo.rootPath),
@@ -2641,7 +2778,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             });
             if (!pushResult.success) {
               if (pushResult.cancelled) {
-                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
                 return;
               }
               throw pushResult.error;
@@ -2650,7 +2787,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               void this.notifyPushSuccess(repo);
             }
           }
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           this.logger?.info('Commit', 'Commit and push completed', {
             repoId: msg.repoId,
             requestId: msg.requestId,
@@ -2682,7 +2819,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               durationMs: Date.now() - startedAt,
             });
           }
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: cancelled ? 'Cancelled' : String(e), repoId: msg.repoId });
         }
         break;
       }
@@ -2713,15 +2850,17 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               requestId: msg.requestId,
             });
             vscode.window.showInformationMessage(
-              t('VersionDock: Cannot push — no remote configured for: {0}. Add a remote first (git remote add <name> <url>).', noRemoteRepos.join(', ')),
+              noRemoteRepos.length === 1
+                ? t('VersionDock [{0}]: Cannot push — no remote configured. Add a remote first (git remote add <name> <url>).', noRemoteRepos[0])
+                : t('VersionDock: Cannot push — no remote configured for: {0}. Add a remote first (git remote add <name> <url>).', noRemoteRepos.join(', ')),
             );
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'No remote configured' });
             return;
           }
         }
-        const runMultiCommit = async (): Promise<void> => {
-            const errors: string[] = [];
-            let cancelled = false;
+        const runMultiCommit = async (
+          progress?: vscode.Progress<{ message?: string; increment?: number }>,
+        ): Promise<void> => {
             // Commit submodules before parent repos so the parent's pointer update
             // always refers to an already-committed submodule state.
             const repoMetas = this.manager.getRepoMetas();
@@ -2732,14 +2871,50 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const bDepth = bMeta?.depth ?? 0;
               return bDepth - aDepth; // deeper (submodules) first
             });
-            for (const r of ordered) {
+
+            const total = ordered.length;
+            const stepIncrement = total > 0 ? 100 / total : undefined;
+            const committedRepoIds = new Set<string>();
+            const commitErrors: string[] = [];
+            const pushedRepoIds = new Set<string>();
+            const pushCancelledRepoIds = new Set<string>();
+            const pushErrors: string[] = [];
+            const failedSubmoduleIds = new Set<string>();
+            const failedPushSubmoduleIds = new Set<string>();
+
+            for (let i = 0; i < ordered.length; i++) {
+              const r = ordered[i];
               const repo = this.manager.getRepo(r.repoId);
-              if (!repo) { errors.push(`${r.repoId}: not found`); continue; }
+              const repoMeta = repoMetas.find(m => m.id === r.repoId);
+              const repoName = (repoMeta?.name ?? path.basename(repo?.rootPath ?? '')) || r.repoId;
+
+              progress?.report({
+                message: total > 1 ? `(${i + 1}/${total}) ${repoName}` : repoName,
+                increment: stepIncrement,
+              });
+
+              if (!repo) {
+                commitErrors.push(`${repoName}: not found`);
+                continue;
+              }
+
+              // Submodule dependency safety: if a child submodule failed to commit or push earlier,
+              // skip committing the parent repo to prevent committing an invalid submodule pointer.
+              if (failedSubmoduleIds.size > 0) {
+                const failedDescendant = findFailedSubmoduleDescendant(r.repoId, failedSubmoduleIds, repoMetas);
+                if (failedDescendant) {
+                  failedSubmoduleIds.add(r.repoId);
+                  const childName = failedDescendant.name || failedDescendant.id;
+                  const reason = failedPushSubmoduleIds.has(failedDescendant.id)
+                    ? t('Skipped because child submodule "{0}" failed to push.', childName)
+                    : t('Skipped because child submodule "{0}" failed to commit.', childName);
+                  commitErrors.push(`${repoName}: ${reason}`);
+                  continue;
+                }
+              }
+
               try {
                 if (repo.kind === 'svn') {
-                  // SVN permits leading/trailing whitespace in node names.
-                  // Preserve repository paths byte-for-byte instead of treating
-                  // them like user-entered labels.
                   const selectedPaths = Array.from(new Set(r.filesToStage.filter(p => p.length > 0)));
                   const svnRepo = repo as typeof repo & { commitPaths?: (message: string, paths: string[]) => Promise<string> };
                   if (svnRepo.commitPaths) {
@@ -2747,6 +2922,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   } else {
                     await repo.commit(r.message, false);
                   }
+                  committedRepoIds.add(r.repoId);
                   continue;
                 }
                 // Stage/unstage according to user selection before committing
@@ -2758,25 +2934,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     this.logger?.debug('Commit', detail, { repoId: r.repoId, requestId: msg.requestId });
                   }, msg.noVerify);
                 });
-                if (msg.andPush) {
-                  const pushResult = await runPushWithProtection(repo, {
-                    repoName: (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId,
-                    logger: this.logger,
-                    beforePush: () => this.checkUnpushedSubmodules(r.repoId),
-                  });
-                  if (!pushResult.success) {
-                    if (pushResult.cancelled) {
-                      cancelled = true;
-                    } else {
-                      throw pushResult.error;
-                    }
-                  }
-                }
+                committedRepoIds.add(r.repoId);
               } catch (e: unknown) {
+                if (repoMeta?.isSubmodule || (repoMeta?.depth ?? 0) > 0) {
+                  failedSubmoduleIds.add(r.repoId);
+                }
                 const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
                 if (isRemoteRepositoryCancelled(e)) {
-                  cancelled = true;
-                  this.logger?.info('Commit', 'Repository commit and push cancelled', {
+                  this.logger?.info('Commit', 'Repository commit cancelled', {
                     repoId: r.repoId,
                     requestId: msg.requestId,
                     vcs: repo.kind,
@@ -2787,31 +2952,147 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     requestId: msg.requestId,
                     vcs: repo.kind,
                   });
-                  errors.push(`${repoName}: ${String(e)}`);
+                  commitErrors.push(`${repoName}: ${String(e)}`);
+                }
+                continue;
+              }
+
+              if (msg.andPush) {
+                const isSubmodule = Boolean(repoMeta?.isSubmodule || (repoMeta?.depth ?? 0) > 0);
+                try {
+                  const pushResult = await runPushWithProtection(repo, {
+                    repoName: (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId,
+                    logger: this.logger,
+                    silentOnSuccess: msg.repos.length > 1,
+                    beforePush: () => this.checkUnpushedSubmodules(r.repoId),
+                  });
+                  if (pushResult.success) {
+                    pushedRepoIds.add(r.repoId);
+                  } else if (pushResult.cancelled) {
+                    pushCancelledRepoIds.add(r.repoId);
+                    if (isSubmodule) {
+                      failedSubmoduleIds.add(r.repoId);
+                      failedPushSubmoduleIds.add(r.repoId);
+                    }
+                  } else {
+                    if (isSubmodule) {
+                      failedSubmoduleIds.add(r.repoId);
+                      failedPushSubmoduleIds.add(r.repoId);
+                    }
+                    pushErrors.push(`${repoName}: ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
+                  }
+                } catch (pushErr: unknown) {
+                  if (isSubmodule) {
+                    failedSubmoduleIds.add(r.repoId);
+                    failedPushSubmoduleIds.add(r.repoId);
+                  }
+                  if (isRemoteRepositoryCancelled(pushErr)) {
+                    pushCancelledRepoIds.add(r.repoId);
+                  } else {
+                    pushErrors.push(`${repoName}: ${String(pushErr)}`);
+                  }
                 }
               }
             }
-            if (errors.length > 0 || cancelled) {
-              this.logger?.warn('Commit', 'Multi-repository commit completed with failures', {
-                repositoryCount: msg.repos.length,
-                failedCount: errors.length + (cancelled ? 1 : 0),
-                requestId: msg.requestId,
-                andPush: msg.andPush,
-                durationMs: Date.now() - startedAt,
-              });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.length > 0 ? errors.join('\n') : 'Cancelled' });
-            } else {
-              this.logger?.info('Commit', 'Multi-repository commit completed', {
-                repositoryCount: msg.repos.length,
-                requestId: msg.requestId,
-                andPush: msg.andPush,
-                durationMs: Date.now() - startedAt,
-              });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-              if (msg.andPush) {
-                vscode.window.showInformationMessage(t('VersionDock: Commits pushed successfully across {0} repositories.', msg.repos.length));
+
+            if (!msg.andPush) {
+              if (commitErrors.length > 0) {
+                this.logger?.warn('Commit', 'Multi-repository commit completed with failures', {
+                  repositoryCount: msg.repos.length,
+                  failedCount: commitErrors.length,
+                  succeededCount: committedRepoIds.size,
+                  requestId: msg.requestId,
+                  durationMs: Date.now() - startedAt,
+                });
+                let errorMessage = commitErrors.join('\n');
+                if (committedRepoIds.size > 0) {
+                  errorMessage = `${t('VersionDock: {0} repositories committed successfully, {1} failed:', committedRepoIds.size, commitErrors.length)}\n\n${errorMessage}`;
+                }
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errorMessage });
+              } else {
+                this.logger?.info('Commit', 'Multi-repository commit completed', {
+                  repositoryCount: msg.repos.length,
+                  requestId: msg.requestId,
+                  durationMs: Date.now() - startedAt,
+                });
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+                this.logProvider?.refresh({ repoIds: msg.repos.map(r => r.repoId) });
               }
-              this.logProvider?.refresh({ repoIds: msg.repos.map(r => r.repoId) });
+            } else {
+              const allPushTargetCount = ordered.filter(r => this.manager.getRepo(r.repoId)?.kind !== 'svn').length;
+              const isAllPushed = committedRepoIds.size === total && pushedRepoIds.size === allPushTargetCount;
+
+              if (isAllPushed) {
+                this.logger?.info('Commit', 'Multi-repository commit and push completed successfully', {
+                  repositoryCount: msg.repos.length,
+                  requestId: msg.requestId,
+                  durationMs: Date.now() - startedAt,
+                });
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+                const singleRepoName = msg.repos.length === 1 ? this.manager.getRepoMeta(msg.repos[0].repoId)?.name : undefined;
+                if (singleRepoName) {
+                  vscode.window.showInformationMessage(t('VersionDock [{0}]: Commits committed and pushed successfully.', singleRepoName));
+                } else {
+                  vscode.window.showInformationMessage(t('VersionDock: Commits committed and pushed successfully across {0} repositories.', msg.repos.length));
+                }
+                this.logProvider?.refresh({ repoIds: msg.repos.map(r => r.repoId) });
+              } else {
+                const totalFailures = commitErrors.length + pushErrors.length;
+                const totalCancelled = pushCancelledRepoIds.size;
+                this.logger?.warn('Commit', 'Multi-repository commit and push completed with partial results', {
+                  repositoryCount: msg.repos.length,
+                  committedCount: committedRepoIds.size,
+                  pushedCount: pushedRepoIds.size,
+                  cancelledCount: totalCancelled,
+                  failedCount: totalFailures,
+                  requestId: msg.requestId,
+                  durationMs: Date.now() - startedAt,
+                });
+
+                if (committedRepoIds.size === 0 && totalFailures === 0 && totalCancelled > 0) {
+                  this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+                } else {
+                  const details = [...commitErrors, ...pushErrors];
+                  let summaryHeader: string;
+                  const committedCount = committedRepoIds.size;
+                  const pushedCount = pushedRepoIds.size;
+                  const cancelledCount = totalCancelled;
+                  const failedCount = totalFailures;
+
+                  if (cancelledCount > 0 && failedCount > 0) {
+                    summaryHeader = t(
+                      'VersionDock: {0} committed, {1} pushed, {2} cancelled, {3} failed:',
+                      committedCount,
+                      pushedCount,
+                      cancelledCount,
+                      failedCount
+                    );
+                  } else if (cancelledCount > 0) {
+                    summaryHeader = t(
+                      'VersionDock: {0} committed, {1} pushed, {2} cancelled.',
+                      committedCount,
+                      pushedCount,
+                      cancelledCount
+                    );
+                  } else if (failedCount > 0) {
+                    summaryHeader = t(
+                      'VersionDock: {0} committed, {1} pushed, {2} failed:',
+                      committedCount,
+                      pushedCount,
+                      failedCount
+                    );
+                  } else {
+                    summaryHeader = t(
+                      'VersionDock: {0} committed, {1} pushed.',
+                      committedCount,
+                      pushedCount
+                    );
+                  }
+                  const finalError = details.length > 0 ? `${summaryHeader}\n\n${details.join('\n')}` : summaryHeader;
+                  this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: finalError });
+                }
+                this.logProvider?.refresh({ repoIds: Array.from(committedRepoIds) });
+              }
             }
             const status = await this.manager.getAllStatusesFresh();
             this.invalidateSubtreeStatus(undefined, { remote: false });
@@ -2822,22 +3103,27 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               void this.refreshSubtreeList({ force: false });
             }
         };
-        if (msg.andPush) {
-          // Publishing may open QuickPick/InputBox controls. Do not keep a
-          // surrounding progress notification visible while that happens.
-          await runMultiCommit();
-        } else {
-          await vscode.window.withProgress(
-            {
-              location: vscode.ProgressLocation.Notification,
-              title: msg.repos.length === 1
-                ? t('VersionDock: Committing {0} repository', msg.repos.length)
-                : t('VersionDock: Committing {0} repositories', msg.repos.length),
-              cancellable: false,
-            },
-            runMultiCommit,
-          );
-        }
+        const label = msg.andPush
+          ? t('Committing and pushing changes…')
+          : t('Committing changes…');
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          if (msg.repos.length === 1) {
+            // Single repository commits complete quickly; avoid showing a transient progress notification.
+            await runMultiCommit();
+          } else {
+            const title = msg.andPush
+              ? t('VersionDock: Committing and pushing {0} repositories…', msg.repos.length)
+              : t('VersionDock: Committing {0} repositories', msg.repos.length);
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title,
+                cancellable: false,
+              },
+              progress => runMultiCommit(progress),
+            );
+          }
+        }, 'commit', label);
         break;
       }
 
@@ -2847,59 +3133,78 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           repositoryCount: msg.repos.length,
           requestId: msg.requestId,
         });
-        await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: msg.repos.length === 1
-              ? t('VersionDock: Stashing {0} repository', msg.repos.length)
-              : t('VersionDock: Stashing {0} repositories', msg.repos.length),
-            cancellable: false,
-          },
-          async () => {
-            const errors: string[] = [];
-            const affectedRepoIds: string[] = [];
-            for (const r of msg.repos) {
-              const repo = this.manager.getRepo(r.repoId);
-              if (!repo) { errors.push(`${r.repoId}: not found`); continue; }
-              if (repo.kind === 'svn') continue;
-              try {
-                const safePaths = r.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
-                await repo.stashPush(msg.message, safePaths);
-                affectedRepoIds.push(r.repoId);
-              } catch (e: unknown) {
-                const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
-                this.logger?.error('Stash', 'Repository stash failed', e, {
-                  repoId: r.repoId,
-                  requestId: msg.requestId,
-                  vcs: repo.kind,
-                });
-                errors.push(`${repoName}: ${String(e)}`);
-              }
-            }
-            if (errors.length > 0) {
-              this.logger?.warn('Stash', 'Multi-repository stash completed with failures', {
-                repositoryCount: msg.repos.length,
-                failedCount: errors.length,
+        const runStash = async (
+          progress?: vscode.Progress<{ message?: string; increment?: number }>,
+        ) => {
+          const errors: string[] = [];
+          const affectedRepoIds: string[] = [];
+          const total = msg.repos.length;
+          const stepIncrement = total > 0 ? 100 / total : undefined;
+          for (let i = 0; i < total; i++) {
+            const r = msg.repos[i];
+            const repo = this.manager.getRepo(r.repoId);
+            const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo?.rootPath ?? '')) || r.repoId;
+            progress?.report({
+              message: total > 1 ? `(${i + 1}/${total}) ${repoName}` : repoName,
+              increment: stepIncrement,
+            });
+            if (!repo) { errors.push(`${r.repoId}: not found`); continue; }
+            if (repo.kind === 'svn') continue;
+            try {
+              const safePaths = r.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
+              await repo.stashPush(msg.message, safePaths);
+              affectedRepoIds.push(r.repoId);
+            } catch (e: unknown) {
+              this.logger?.error('Stash', 'Repository stash failed', e, {
+                repoId: r.repoId,
                 requestId: msg.requestId,
-                durationMs: Date.now() - startedAt,
+                vcs: repo.kind,
               });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
-            } else {
-              this.logger?.info('Stash', 'Multi-repository stash completed', {
-                repositoryCount: msg.repos.length,
-                requestId: msg.requestId,
-                durationMs: Date.now() - startedAt,
-              });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-            }
-            const status = await this.manager.getAllStatusesFresh();
-            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-            this.postChangelistsUpdate(status);
-            for (const repoId of affectedRepoIds) {
-              this.post({ type: 'STASH_OP_RESULT', requestId: `${msg.requestId}-${repoId}`, repoId, op: 'push', ok: true });
+              errors.push(`${repoName}: ${String(e)}`);
             }
           }
-        );
+          if (errors.length > 0) {
+            this.logger?.warn('Stash', 'Multi-repository stash completed with failures', {
+              repositoryCount: msg.repos.length,
+              failedCount: errors.length,
+              requestId: msg.requestId,
+              durationMs: Date.now() - startedAt,
+            });
+            let errorMessage = errors.join('\n');
+            if (affectedRepoIds.length > 0) {
+              errorMessage = `${t('VersionDock: Stashed in {0} repositories, {1} failed:', affectedRepoIds.length, errors.length)}\n\n${errorMessage}`;
+            }
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errorMessage });
+          } else {
+            this.logger?.info('Stash', 'Multi-repository stash completed', {
+              repositoryCount: msg.repos.length,
+              requestId: msg.requestId,
+              durationMs: Date.now() - startedAt,
+            });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          }
+          const status = await this.manager.getAllStatusesFresh();
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          this.postChangelistsUpdate(status);
+          for (const repoId of affectedRepoIds) {
+            this.post({ type: 'STASH_OP_RESULT', requestId: `${msg.requestId}-${repoId}`, repoId, op: 'push', ok: true });
+          }
+        };
+
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          if (msg.repos.length === 1) {
+            await runStash();
+          } else {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock: Stashing {0} repositories…', msg.repos.length),
+                cancellable: false,
+              },
+              progress => runStash(progress),
+            );
+          }
+        }, 'stash', t('Stashing changes…'));
         break;
       }
 
@@ -2909,72 +3214,98 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           repositoryCount: msg.repos.length,
           requestId: msg.requestId,
         });
-        await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: msg.repos.length === 1
-              ? t('VersionDock: Shelving {0} repository', msg.repos.length)
-              : t('VersionDock: Shelving {0} repositories', msg.repos.length),
-            cancellable: false,
-          },
-          async () => {
-            const errors: string[] = [];
-            const affectedRepoIds: string[] = [];
-            const clSvc = this.getOrCreateChangelistService();
-            for (const r of msg.repos) {
-              const shelveSvc = this.getShelveService(r.repoId);
-              const repo = this.manager.getRepo(r.repoId);
-              if (!shelveSvc || !repo) { errors.push(`${r.repoId}: not found`); continue; }
-              if (repo.kind === 'svn') continue;
-              try {
-                const safePaths = r.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
-                const clAssignments = clSvc ? this.buildChangelistAssignments(clSvc, r.repoId, safePaths) : undefined;
-                await shelveSvc.push(msg.name, safePaths, clAssignments);
-                affectedRepoIds.push(r.repoId);
-              } catch (e: unknown) {
-                const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo.rootPath)) || r.repoId;
-                this.logger?.error('Shelve', 'Repository shelve failed', e, {
-                  repoId: r.repoId,
-                  requestId: msg.requestId,
-                  vcs: repo.kind,
-                });
-                errors.push(`${repoName}: ${String(e)}`);
-              }
-            }
-            if (errors.length > 0) {
-              this.logger?.warn('Shelve', 'Multi-repository shelve completed with failures', {
-                repositoryCount: msg.repos.length,
-                failedCount: errors.length,
+        const runShelve = async (
+          progress?: vscode.Progress<{ message?: string; increment?: number }>,
+        ) => {
+          const errors: string[] = [];
+          const affectedRepoIds: string[] = [];
+          const clSvc = this.getOrCreateChangelistService();
+          const total = msg.repos.length;
+          const stepIncrement = total > 0 ? 100 / total : undefined;
+          for (let i = 0; i < total; i++) {
+            const r = msg.repos[i];
+            const shelveSvc = this.getShelveService(r.repoId);
+            const repo = this.manager.getRepo(r.repoId);
+            const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo?.rootPath ?? '')) || r.repoId;
+            progress?.report({
+              message: total > 1 ? `(${i + 1}/${total}) ${repoName}` : repoName,
+              increment: stepIncrement,
+            });
+            if (!shelveSvc || !repo) { errors.push(`${r.repoId}: not found`); continue; }
+            if (repo.kind === 'svn') continue;
+            try {
+              const safePaths = r.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
+              const clAssignments = clSvc ? this.buildChangelistAssignments(clSvc, r.repoId, safePaths) : undefined;
+              await shelveSvc.push(msg.name, safePaths, clAssignments);
+              affectedRepoIds.push(r.repoId);
+            } catch (e: unknown) {
+              const repoName = (this.manager.getRepoMeta(r.repoId)?.name ?? path.basename(repo?.rootPath ?? '')) || r.repoId;
+              this.logger?.error('Shelve', 'Repository shelve failed', e, {
+                repoId: r.repoId,
                 requestId: msg.requestId,
-                durationMs: Date.now() - startedAt,
+                vcs: repo.kind,
               });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
-            } else {
-              this.logger?.info('Shelve', 'Multi-repository shelve completed', {
-                repositoryCount: msg.repos.length,
-                requestId: msg.requestId,
-                durationMs: Date.now() - startedAt,
-              });
-              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
-            }
-            const status = await this.manager.getAllStatusesFresh();
-            this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-            this.postChangelistsUpdate(status);
-            for (const repoId of affectedRepoIds) {
-              this.post({ type: 'SHELVE_OP_RESULT', requestId: `${msg.requestId}-${repoId}`, repoId, op: 'push', ok: true });
+              errors.push(`${repoName}: ${String(e)}`);
             }
           }
-        );
+          if (errors.length > 0) {
+            this.logger?.warn('Shelve', 'Multi-repository shelve completed with failures', {
+              repositoryCount: msg.repos.length,
+              failedCount: errors.length,
+              requestId: msg.requestId,
+              durationMs: Date.now() - startedAt,
+            });
+            let errorMessage = errors.join('\n');
+            if (affectedRepoIds.length > 0) {
+              errorMessage = `${t('VersionDock: Shelved in {0} repositories, {1} failed:', affectedRepoIds.length, errors.length)}\n\n${errorMessage}`;
+            }
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errorMessage });
+          } else {
+            this.logger?.info('Shelve', 'Multi-repository shelve completed', {
+              repositoryCount: msg.repos.length,
+              requestId: msg.requestId,
+              durationMs: Date.now() - startedAt,
+            });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          }
+          const status = await this.manager.getAllStatusesFresh();
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          this.postChangelistsUpdate(status);
+          for (const repoId of affectedRepoIds) {
+            this.post({ type: 'SHELVE_OP_RESULT', requestId: `${msg.requestId}-${repoId}`, repoId, op: 'push', ok: true });
+          }
+        };
+
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          if (msg.repos.length === 1) {
+            await runShelve();
+          } else {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: t('VersionDock: Shelving {0} repositories…', msg.repos.length),
+                cancellable: false,
+              },
+              progress => runShelve(progress),
+            );
+          }
+        }, 'stash', t('Shelving changes…'));
         break;
       }
 
       case 'COMMIT_PULL_ALL': {
         let trackedResults: Awaited<ReturnType<UpdateSummaryService['runAll']>> | undefined;
+        const metas = this.manager.getRepoMetas();
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating all repositories'), cancellable: false },
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: metas.length === 1
+              ? t('VersionDock [{0}]: Updating repository…', metas[0].name)
+              : t('VersionDock: Updating all repositories'),
+            cancellable: false,
+          },
           async progress => {
             if (this.updateSummaryService) {
-              const metas = this.manager.getRepoMetas();
               const count = metas.length;
               trackedResults = await this.updateSummaryService.runAll(
                 metas.map(meta => ({ repoId: meta.id, execute: repo => repo.pull() })),
@@ -2987,7 +3318,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 },
               );
             } else {
-              const metas = this.manager.getRepoMetas();
               const count = metas.length;
               const results = await this.manager.pullAll(
                 false,
@@ -3001,11 +3331,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               );
               const failed = results.filter(r => !r.ok);
               if (failed.length === 0) return;
+              const successCount = results.length - failed.length;
               const failedDescription = failed.map(result => {
                 const name = this.manager.getRepoMeta(result.repoId)?.name ?? result.repoId;
                 return `${name}: ${result.message}`;
               }).join('; ');
-              vscode.window.showWarningMessage(t('VersionDock: {0} update(s) failed: {1}', failed.length, failedDescription));
+              if (failed.length === 1 && results.length === 1) {
+                vscode.window.showWarningMessage(t('VersionDock [{0}]: Update failed: {1}', this.manager.getRepoMeta(failed[0].repoId)?.name ?? failed[0].repoId, failed[0].message));
+              } else if (successCount > 0) {
+                vscode.window.showWarningMessage(t('VersionDock: {0} update(s) succeeded, {1} failed: {2}', successCount, failed.length, failedDescription));
+              } else {
+                vscode.window.showWarningMessage(t('VersionDock: {0} update(s) failed: {1}', failed.length, failedDescription));
+              }
             }
           }
         );
@@ -3019,14 +3356,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_PULL_REPO': {
         const startedAt = Date.now();
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         this.logger?.info('VCS', 'Pull started', { repoId: msg.repoId, requestId: msg.requestId, vcs: repo.kind });
         try {
           const result = this.updateSummaryService
             ? await this.updateSummaryService.run({ repoId: msg.repoId, execute: target => target.pull() })
             : { repoId: msg.repoId, tracked: false, ok: true, output: await repo.pull(), commits: [], files: [] };
           if (!result.ok) throw new Error(result.error ?? t('Unknown error'));
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output: result.output });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output: result.output, repoId: msg.repoId });
           this.logger?.info('VCS', 'Pull completed', {
             repoId: msg.repoId,
             requestId: msg.requestId,
@@ -3044,7 +3381,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             vcs: repo.kind,
             durationMs: Date.now() - startedAt,
           });
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
@@ -3064,7 +3401,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_PUSH_REPO': {
         const startedAt = Date.now();
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
 
         const repoMeta = this.manager.getRepoMeta(msg.repoId);
         const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
@@ -3089,21 +3426,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             forceBtn,
           );
           if (choice !== forceBtn) {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
             return;
           }
         }
 
-        const pushResult = await runPushWithProtection(repo, {
-          repoName,
-          remote: msg.remote,
-          force: msg.force,
-          logger: this.logger,
-          beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
-        });
+        const pushResult = await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          return await runPushWithProtection(repo, {
+            repoName,
+            remote: msg.remote,
+            force: msg.force,
+            logger: this.logger,
+            beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
+          });
+        }, 'sync', t('Updating…'));
 
         if (pushResult.success) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           if (!pushResult.rebased && !pushResult.forced) {
             void this.notifyPushSuccess(repo, undefined, msg.remote);
           }
@@ -3129,7 +3468,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             remote: msg.remote,
             durationMs: Date.now() - startedAt,
           });
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
         } else {
           this.logger?.error('Git', 'Push failed', pushResult.error, {
             repoId: msg.repoId,
@@ -3137,49 +3476,295 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             remote: msg.remote,
             durationMs: Date.now() - startedAt,
           });
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(pushResult.error) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(pushResult.error), repoId: msg.repoId });
         }
+        break;
+      }
+
+      case 'COMMIT_PUSH_MULTI': {
+        const startedAt = Date.now();
+        this.logger?.info('Git', 'Multi-repository push started', {
+          targetCount: msg.targets.length,
+          requestId: msg.requestId,
+          force: msg.force,
+        });
+
+        const repoMetas = this.manager.getRepoMetas();
+        // Sort deeper (submodules) first to ensure child commits reach remote before parent updates
+        const ordered = [...msg.targets].sort((a, b) => {
+          const aMeta = repoMetas.find(m => m.id === a.repoId);
+          const bMeta = repoMetas.find(m => m.id === b.repoId);
+          const aDepth = aMeta?.depth ?? 0;
+          const bDepth = bMeta?.depth ?? 0;
+          return bDepth - aDepth;
+        });
+
+        if (msg.force) {
+          const forceBtn = t('Force Push');
+          const repoNames = ordered.map(t => repoMetas.find(m => m.id === t.repoId)?.name || t.repoId).join(', ');
+          const choice = await vscode.window.showWarningMessage(
+            ordered.length === 1
+              ? t('VersionDock [{0}]: Are you sure you want to Force Push? Remote commits not present locally will be overwritten.', repoNames)
+              : t(
+                  'VersionDock: Are you sure you want to Force Push {0} repositories ({1})? Remote commits not present locally will be overwritten.',
+                  ordered.length,
+                  repoNames,
+                ),
+            { modal: true },
+            forceBtn,
+          );
+          if (choice !== forceBtn) {
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+            return;
+          }
+        }
+
+        const runPushQueue = async (
+          progress?: vscode.Progress<{ message?: string; increment?: number }>,
+        ): Promise<void> => {
+          const total = ordered.length;
+          const stepIncrement = total > 0 ? 100 / total : undefined;
+          const succeededRepoIds: string[] = [];
+          const cancelledRepoIds: string[] = [];
+          const skippedRepoNames: string[] = [];
+          const errors: string[] = [];
+          const failedSubmoduleIds = new Set<string>();
+
+          for (let i = 0; i < total; i++) {
+            const target = ordered[i];
+            const repo = this.manager.getRepo(target.repoId);
+            const repoMeta = repoMetas.find(m => m.id === target.repoId);
+            const repoName = (repoMeta?.name ?? path.basename(repo?.rootPath ?? '')) || target.repoId;
+
+            progress?.report({
+              message: total > 1 ? `(${i + 1}/${total}) ${repoName}` : repoName,
+              increment: stepIncrement,
+            });
+
+            if (!repo) {
+              errors.push(`${repoName}: not found`);
+              continue;
+            }
+
+            // Submodule safety: skip parent repos if child submodule push failed
+            if (failedSubmoduleIds.size > 0) {
+              const failedDescendant = findFailedSubmoduleDescendant(target.repoId, failedSubmoduleIds, repoMetas);
+              if (failedDescendant) {
+                failedSubmoduleIds.add(target.repoId);
+                const childName = failedDescendant.name || failedDescendant.id;
+                errors.push(`${repoName}: ${t('Skipped because child submodule "{0}" failed to push.', childName)}`);
+                continue;
+              }
+            }
+
+            try {
+              const pushResult = await runPushWithProtection(repo, {
+                repoName,
+                remote: target.remote,
+                force: msg.force,
+                silentOnSuccess: msg.targets.length > 1,
+                logger: this.logger,
+                beforePush: () => this.checkUnpushedSubmodules(target.repoId),
+              });
+
+              if (pushResult.success) {
+                succeededRepoIds.push(target.repoId);
+              } else if (pushResult.cancelled) {
+                cancelledRepoIds.push(target.repoId);
+                const remaining = ordered.slice(i + 1);
+                for (const rem of remaining) {
+                  const remName = (repoMetas.find(m => m.id === rem.repoId)?.name) || rem.repoId;
+                  skippedRepoNames.push(remName);
+                }
+                break;
+              } else {
+                if (repoMeta?.isSubmodule || (repoMeta?.depth ?? 0) > 0) {
+                  failedSubmoduleIds.add(target.repoId);
+                }
+                errors.push(`${repoName}: ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
+              }
+            } catch (err) {
+              if (repoMeta?.isSubmodule || (repoMeta?.depth ?? 0) > 0) {
+                failedSubmoduleIds.add(target.repoId);
+              }
+              errors.push(`${repoName}: ${String(err)}`);
+            }
+          }
+
+          const hasFailures = errors.length > 0;
+          const hasCancelled = cancelledRepoIds.length > 0;
+          const hasSkipped = skippedRepoNames.length > 0;
+
+          if (hasFailures || hasCancelled || hasSkipped) {
+            const succeededCount = succeededRepoIds.length;
+            const cancelledCount = cancelledRepoIds.length;
+            const skippedCount = skippedRepoNames.length;
+            const failedCount = errors.length;
+
+            this.logger?.warn('Git', 'Multi-repository push completed with partial results', {
+              targetCount: msg.targets.length,
+              succeededCount,
+              cancelledCount,
+              skippedCount,
+              failedCount,
+              requestId: msg.requestId,
+              durationMs: Date.now() - startedAt,
+            });
+
+            if (succeededCount === 0 && !hasFailures && hasCancelled) {
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+            } else {
+              const details = [...errors];
+              if (skippedRepoNames.length > 0) {
+                details.push(t('Skipped: {0}', skippedRepoNames.join(', ')));
+              }
+              let summaryHeader: string;
+              if (skippedCount > 0) {
+                if (succeededCount > 0 && failedCount > 0) {
+                  summaryHeader = t(
+                    'VersionDock: {0} repositories pushed successfully, {1} cancelled, {2} skipped, {3} failed:',
+                    succeededCount,
+                    cancelledCount,
+                    skippedCount,
+                    failedCount
+                  );
+                } else if (succeededCount > 0) {
+                  summaryHeader = t(
+                    'VersionDock: {0} repositories pushed successfully, {1} cancelled, {2} skipped.',
+                    succeededCount,
+                    cancelledCount,
+                    skippedCount
+                  );
+                } else {
+                  summaryHeader = t(
+                    'VersionDock: {0} repositories failed, {1} cancelled, {2} skipped:',
+                    failedCount,
+                    cancelledCount,
+                    skippedCount
+                  );
+                }
+              } else if (succeededCount > 0 && cancelledCount > 0 && failedCount > 0) {
+                summaryHeader = t(
+                  'VersionDock: {0} repositories pushed successfully, {1} cancelled, {2} failed:',
+                  succeededCount,
+                  cancelledCount,
+                  failedCount
+                );
+              } else if (succeededCount > 0 && cancelledCount > 0) {
+                summaryHeader = t(
+                  'VersionDock: {0} repositories pushed successfully, {1} cancelled.',
+                  succeededCount,
+                  cancelledCount
+                );
+              } else if (succeededCount > 0 && failedCount > 0) {
+                summaryHeader = t(
+                  'VersionDock: {0} repositories pushed successfully, {1} failed:',
+                  succeededCount,
+                  failedCount
+                );
+              } else if (cancelledCount > 0 && failedCount > 0) {
+                summaryHeader = t(
+                  'VersionDock: {0} repositories failed, {1} cancelled:',
+                  failedCount,
+                  cancelledCount
+                );
+              } else {
+                summaryHeader = errors.length > 0 ? errors.join('\n') : 'Cancelled';
+              }
+              const finalMessage = details.length > 0 && summaryHeader !== details.join('\n')
+                ? `${summaryHeader}\n\n${details.join('\n')}`
+                : summaryHeader;
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: finalMessage });
+            }
+          } else {
+            this.logger?.info('Git', 'Multi-repository push completed successfully', {
+              targetCount: msg.targets.length,
+              requestId: msg.requestId,
+              durationMs: Date.now() - startedAt,
+            });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+            if (succeededRepoIds.length === 1) {
+              const singleRepo = this.manager.getRepo(succeededRepoIds[0]);
+              if (singleRepo) {
+                void this.notifyPushSuccess(singleRepo, undefined, ordered[0]?.remote);
+              }
+            } else if (succeededRepoIds.length > 1) {
+              vscode.window.showInformationMessage(t('VersionDock: Commits pushed successfully across {0} repositories.', succeededRepoIds.length));
+            }
+          }
+
+          this.logProvider?.refresh({ repoIds: msg.targets.map(t => t.repoId) });
+          this.invalidateSubtreeStatus(undefined, { remote: false });
+          void this.broadcastUnpushedCommits();
+          if (this.isSubtreeTabActive()) {
+            void this.refreshSubtreeList({ force: false });
+          }
+          await this.manager.refreshStatusNow();
+        };
+
+        await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: ordered.length === 1
+                ? t('VersionDock [{0}]: Pushing changes…', repoMetas.find(m => m.id === ordered[0].repoId)?.name || '')
+                : t('VersionDock: Pushing {0} repositories…', ordered.length),
+              cancellable: false,
+            },
+            progress => runPushQueue(progress),
+          );
+        }, 'sync', t('Updating…'));
         break;
       }
 
       case 'COMMIT_DISCARD_FILE': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         const confirm = await vscode.window.showWarningMessage(
-          t('Discard changes to {0}? This cannot be undone.', msg.path),
+          t('VersionDock [{0}]: Discard changes to {1}? This cannot be undone.', repo.meta.name, msg.path),
           { modal: true }, t('Discard')
         );
-        if (confirm !== t('Discard')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' }); return; }
+        if (confirm !== t('Discard')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId }); return; }
         try {
           await repo.discardFile(msg.path);
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
 
       case 'COMMIT_DISCARD_FILES': {
         const n = msg.files.length;
+        const singleRepoId = msg.files.every(f => f.repoId === msg.files[0]?.repoId) ? msg.files[0]?.repoId : undefined;
+        const singleRepoName = singleRepoId ? this.manager.getRepoMeta(singleRepoId)?.name : undefined;
         const confirm = await vscode.window.showWarningMessage(
-          n === 1
-            ? t('Discard changes to {0} file? This cannot be undone.', n)
-            : t('Discard changes to {0} files? This cannot be undone.', n),
+          singleRepoName
+            ? (n === 1
+                ? t('VersionDock [{0}]: Discard changes to {1} file? This cannot be undone.', singleRepoName, n)
+                : t('VersionDock [{0}]: Discard changes to {1} files? This cannot be undone.', singleRepoName, n))
+            : (n === 1
+                ? t('VersionDock: Discard changes to {0} file? This cannot be undone.', n)
+                : t('VersionDock: Discard changes to {0} files? This cannot be undone.', n)),
           { modal: true }, t('Discard')
         );
         if (confirm !== t('Discard')) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: singleRepoId });
           break;
         }
         const errors: string[] = [];
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: n === 1
-              ? t('VersionDock: Discarding changes to {0} file…', n)
-              : t('VersionDock: Discarding changes to {0} files…', n),
+            title: singleRepoName
+              ? (n === 1
+                ? t('VersionDock [{0}]: Discarding changes to {1} file…', singleRepoName, n)
+                : t('VersionDock [{0}]: Discarding changes to {1} files…', singleRepoName, n))
+              : (n === 1
+                ? t('VersionDock: Discarding changes to {0} file…', n)
+                : t('VersionDock: Discarding changes to {0} files…', n)),
             cancellable: false,
           },
           async () => {
@@ -3196,9 +3781,16 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         );
         if (errors.length > 0) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+          const discardedCount = msg.files.length - errors.length;
+          let errorMessage = errors.join('\n');
+          if (discardedCount > 0) {
+            errorMessage = singleRepoName
+              ? `${t('VersionDock [{0}]: Discarded {1} file(s), {2} failed:', singleRepoName, discardedCount, errors.length)}\n\n${errorMessage}`
+              : `${t('VersionDock: Discarded {0} file(s), {1} failed:', discardedCount, errors.length)}\n\n${errorMessage}`;
+          }
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errorMessage, repoId: singleRepoId });
         } else {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: singleRepoId });
         }
         const status = await this.manager.getAllStatusesFresh();
         this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -3212,14 +3804,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await this.openSvnWorkingDiffEditor(repo, msg.filePath);
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('VersionDock: Cannot open SVN diff: {0}', String(e)));
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open SVN diff: {1}', repo.meta.name, String(e)));
           }
           break;
         }
         const resolvedPath = repo.resolveRepoPath(msg.filePath);
         const absUri = vscode.Uri.file(resolvedPath.absolutePath);
         if (fs.existsSync(absUri.fsPath) && fs.statSync(absUri.fsPath).isDirectory()) {
-          vscode.window.showInformationMessage(t('VersionDock: Open the submodule repository section to inspect nested file changes.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Open the submodule repository section to inspect nested file changes.', repo.meta.name));
           return;
         }
         // git.openChange opens the native VS Code diff (index↔worktree or HEAD↔index)
@@ -3281,52 +3873,52 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_DELETE_FILE': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         let resolvedPath: ReturnType<typeof repo.resolveRepoPath>;
         try {
           resolvedPath = repo.resolveRepoPath(msg.filePath);
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
           return;
         }
         const confirm = await vscode.window.showWarningMessage(
-          t('Delete {0}? This cannot be undone.', resolvedPath.relativePath),
+          t('VersionDock [{0}]: Delete {1}? This cannot be undone.', repo.meta.name, resolvedPath.relativePath),
           { modal: true }, t('Delete')
         );
-        if (confirm !== t('Delete')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' }); return; }
+        if (confirm !== t('Delete')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId }); return; }
         try {
           assertNoSymlinkAncestors(repo.rootPath, resolvedPath.absolutePath);
           await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { useTrash: true });
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
 
       case 'COMMIT_DELETE_FOLDER': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         let resolvedPath: ReturnType<typeof repo.resolveRepoPath>;
         try {
           resolvedPath = repo.resolveRepoPath(msg.folderPath);
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
           return;
         }
         const confirm = await vscode.window.showWarningMessage(
-          t('Delete folder "{0}" and all its contents? This cannot be undone.', resolvedPath.relativePath),
+          t('VersionDock [{0}]: Delete folder "{1}" and all its contents? This cannot be undone.', repo.meta.name, resolvedPath.relativePath),
           { modal: true }, t('Delete')
         );
-        if (confirm !== t('Delete')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' }); return; }
+        if (confirm !== t('Delete')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId }); return; }
         try {
           assertNoSymlinkAncestors(repo.rootPath, resolvedPath.absolutePath, { includeTarget: true });
           await vscode.workspace.fs.delete(vscode.Uri.file(resolvedPath.absolutePath), { recursive: true, useTrash: true });
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
@@ -3384,14 +3976,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try { existing = fs.readFileSync(targetPath, 'utf8'); } catch { /* new file */ }
         const lines = existing.split('\n').map(l => l.trim());
         if (lines.includes(entry) || lines.includes('/' + entry)) {
-          vscode.window.showInformationMessage(t('"{0}" is already in {1}', entry, path.relative(repo.rootPath, targetPath)));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: "{1}" is already in {2}', repo.meta.name, entry, path.relative(repo.rootPath, targetPath)));
           return;
         }
         const newContent = existing.endsWith('\n') || existing === ''
           ? existing + entry + '\n'
           : existing + '\n' + entry + '\n';
         fs.writeFileSync(targetPath, newContent, 'utf8');
-        vscode.window.showInformationMessage(t('Added "{0}" to {1}', entry, path.relative(repo.rootPath, targetPath)));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Added "{1}" to {2}', repo.meta.name, entry, path.relative(repo.rootPath, targetPath)));
 
         // Refresh status so the newly-ignored file disappears
         const status = await this.manager.getAllStatusesFresh();
@@ -3407,15 +3999,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           const result = await svn.addIgnoreEntry(msg.entryPath);
           if (result.alreadyExists) {
-            vscode.window.showInformationMessage(t('"{0}" is already in SVN ignore for {1}', result.entry, result.directoryPath || '.'));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: "{1}" is already in SVN ignore for {2}', repo.meta.name, result.entry, result.directoryPath || '.'));
           } else {
-            vscode.window.showInformationMessage(t('Added "{0}" to SVN ignore for {1}', result.entry, result.directoryPath || '.'));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Added "{1}" to SVN ignore for {2}', repo.meta.name, result.entry, result.directoryPath || '.'));
           }
           const status = await this.manager.getAllStatusesFresh();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repo.repoId, String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -3448,9 +4040,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (!entryPath) return;
             const result = await svn.addIgnoreEntry(entryPath);
             if (result.alreadyExists) {
-              vscode.window.showInformationMessage(t('"{0}" is already in SVN ignore for {1}', result.entry, result.directoryPath || '.'));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: "{1}" is already in SVN ignore for {2}', repo.meta.name, result.entry, result.directoryPath || '.'));
             } else {
-              vscode.window.showInformationMessage(t('Added "{0}" to SVN ignore for {1}', result.entry, result.directoryPath || '.'));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Added "{1}" to SVN ignore for {2}', repo.meta.name, result.entry, result.directoryPath || '.'));
             }
             const status = await this.manager.getAllStatusesFresh();
             this.postChangelistsUpdate(status);
@@ -3459,7 +4051,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
 
           if (entries.length === 0) {
-            vscode.window.showInformationMessage(t('No SVN ignore entries found.'));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN ignore entries found.', repo.meta.name));
             return;
           }
 
@@ -3479,19 +4071,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           if (!selected || selected.length === 0) return;
 
           const confirm = await vscode.window.showWarningMessage(
-            t('Remove selected SVN ignore entries?'),
+            t('VersionDock [{0}]: Remove selected SVN ignore entries?', repo.meta.name),
             { modal: true },
             t('Remove'),
           );
           if (confirm !== t('Remove')) return;
 
           await svn.removeIgnoreEntries(selected.map(item => item.entry));
-          vscode.window.showInformationMessage(t('Removed {0} SVN ignore entries.', selected.length));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Removed {1} SVN ignore entries.', repo.meta.name, selected.length));
           const status = await this.manager.getAllStatusesFresh();
           this.postChangelistsUpdate(status);
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repo.repoId, String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -3550,10 +4142,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
           const fileCount = targets.reduce((sum, target) => sum + target.paths.length, 0);
           if (fileCount === 0) throw new Error(t('No restorable conflicted files found'));
+          const singleTarget = targets.length === 1 ? targets[0] : undefined;
           const confirm = await vscode.window.showWarningMessage(
-            fileCount === 1
-              ? t('Restore the conflicted file to the current branch version? This discards its index and working tree changes.')
-              : t('Restore {0} conflicted files to their current branch versions? This discards their index and working tree changes.', fileCount),
+            singleTarget
+              ? (fileCount === 1
+                  ? t('VersionDock [{0}]: Restore the conflicted file to the current branch version? This discards its index and working tree changes.', singleTarget.repo.meta.name)
+                  : t('VersionDock [{0}]: Restore {1} conflicted files to their current branch versions? This discards their index and working tree changes.', singleTarget.repo.meta.name, fileCount))
+              : (fileCount === 1
+                  ? t('VersionDock: Restore the conflicted file to the current branch version? This discards its index and working tree changes.')
+                  : t('VersionDock: Restore {0} conflicted files to their current branch versions? This discards their index and working tree changes.', fileCount)),
             { modal: true },
             t('Restore Current Branch'),
           );
@@ -3607,32 +4204,41 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_ACCEPT_OURS':
       case 'COMMIT_ACCEPT_THEIRS': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         try {
           const relativePath = repo.resolveRepoPath(msg.filePath).relativePath;
           if (msg.type === 'COMMIT_ACCEPT_OURS') await repo.acceptOurs(relativePath);
           else await repo.acceptTheirs(relativePath);
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
 
       case 'COMMIT_GENERATE_MESSAGE': {
+        const uniqueRepoIds = new Set<string>();
+        if (msg.repoIds) {
+          for (const id of msg.repoIds) if (id) uniqueRepoIds.add(id);
+        }
+        if (msg.targets) {
+          for (const target of msg.targets) if (target.repoId) uniqueRepoIds.add(target.repoId);
+        }
+        const singleRepoId = uniqueRepoIds.size === 1 ? Array.from(uniqueRepoIds)[0] : undefined;
+
         const cancellationSource = new vscode.CancellationTokenSource();
         this.activeCommitMessageGenerations.set(msg.requestId, cancellationSource);
         try {
           const message = await this.generateCommitMessage(msg.targets, msg.repoIds, msg.requestId, cancellationSource.token);
           throwIfCancellationRequested(cancellationSource.token);
-          this.post({ type: 'COMMIT_GENERATE_MESSAGE_RESULT', requestId: msg.requestId, message });
+          this.post({ type: 'COMMIT_GENERATE_MESSAGE_RESULT', requestId: msg.requestId, repoId: singleRepoId, message });
         } catch (e: unknown) {
           const error = cancellationSource.token.isCancellationRequested
             ? 'Cancelled'
             : e instanceof Error ? e.message : String(e);
-          this.post({ type: 'COMMIT_GENERATE_MESSAGE_RESULT', requestId: msg.requestId, error });
+          this.post({ type: 'COMMIT_GENERATE_MESSAGE_RESULT', requestId: msg.requestId, repoId: singleRepoId, error });
         } finally {
           if (this.activeCommitMessageGenerations.get(msg.requestId) === cancellationSource) {
             this.activeCommitMessageGenerations.delete(msg.requestId);
@@ -3644,7 +4250,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_OPEN_AI_COMPOSER': {
         if (!this.aiCommitComposerProvider) {
-          vscode.window.showErrorMessage(t('AI Commit Composer is unavailable.'));
+          vscode.window.showErrorMessage(t('VersionDock: AI Commit Composer is unavailable.'));
           return;
         }
         await this.aiCommitComposerProvider.openWorking(msg.candidates);
@@ -3653,7 +4259,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_OPEN_AI_REVIEW': {
         if (!this.aiCodeReviewProvider) {
-          vscode.window.showErrorMessage(t('AI Code Review is unavailable.'));
+          vscode.window.showErrorMessage(t('VersionDock: AI Code Review is unavailable.'));
           return;
         }
         this.aiCodeReviewProvider.open(msg.candidates);
@@ -3686,10 +4292,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           // Capture changelist assignments for the shelved files, if in changelists mode
           const clSvc = this.getOrCreateChangelistService();
           const clAssignments = clSvc ? this.buildChangelistAssignments(clSvc, msg.repoId, paths) : undefined;
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Shelving changes…'), cancellable: false },
-            () => svc.push(msg.name, paths, clAssignments)
-          );
+          await svc.push(msg.name, paths, clAssignments);
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
           this.postChangelistsUpdate(status);
@@ -3706,13 +4309,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (!svc || !repo) { this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'apply', ok: false, error: t('Repo not found') }); return; }
         try {
           const paths = msg.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
-          let clAssignments: Awaited<ReturnType<typeof svc.apply>> | undefined;
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Unshelving changes…'), cancellable: false },
-            async () => {
-              clAssignments = await svc.apply(msg.shelveId, paths);
-            }
-          );
+          const clAssignments = await svc.apply(msg.shelveId, paths);
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
           // Restore changelist assignments if present
@@ -3753,8 +4350,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'SHELVE_DROP': {
         const svc = this.getShelveService(msg.repoId);
         if (!svc) { this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'drop', ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || msg.repoId;
         const confirmDrop = await vscode.window.showWarningMessage(
-          t('Delete this shelved changelist? This cannot be undone.'),
+          t('VersionDock [{0}]: Delete this shelved changelist? This cannot be undone.', repoName),
           { modal: true }, t('Delete')
         );
         if (confirmDrop !== t('Delete')) { this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'drop', ok: false, error: 'Cancelled' }); return; }
@@ -3895,7 +4493,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             );
           }
         } catch (e) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open stash diff — {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open stash diff — {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -4002,7 +4600,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         const confirmDrop = await vscode.window.showWarningMessage(
-          t('Drop this stash? This cannot be undone.'),
+          t('VersionDock [{0}]: Drop this stash? This cannot be undone.', repo.meta.name),
           { modal: true }, t('Drop')
         );
         if (confirmDrop !== t('Drop')) {
@@ -4069,7 +4667,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await this.openCommitDiffEditor(repo, msg.hash, msg.filePath, msg.fileStatus);
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open diff: {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -4080,7 +4678,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await this.openAggregatedCommitDiffEditor(repo as GitService, msg.oldestHash, msg.filePath, msg.fileStatus);
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open aggregated diff: {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open aggregated diff: {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -4136,7 +4734,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await this.openCommitDiffEditor(repo as GitService, msg.hash, msg.filePath, msg.fileStatus);
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open diff: {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open diff: {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -4147,7 +4745,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await this.openIncomingAggregatedCommitDiffEditor(repo as GitService, msg.filePath, msg.fileStatus);
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Cannot open aggregated diff: {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open aggregated diff: {1}', repo.meta.name, String(e)));
         }
         break;
       }
@@ -4187,10 +4785,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await this.manager.refreshStatusNow();
           if (errors.length === gitRepos.length && gitRepos.length > 0) {
             this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
-            vscode.window.showErrorMessage(t('Fetch failed for all repositories:\n{0}', errors.join('\n')));
+            if (gitRepos.length === 1) {
+              vscode.window.showErrorMessage(t('VersionDock [{0}]: Fetch failed — {1}', this.manager.getRepoMeta(gitRepos[0].id)?.name ?? gitRepos[0].id, errors[0]));
+            } else {
+              vscode.window.showErrorMessage(t('VersionDock: Fetch failed for all repositories:\n{0}', errors.join('\n')));
+            }
           } else if (errors.length > 0) {
             this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, partial: true, error: errors.join('\n') });
-            vscode.window.showWarningMessage(t('Fetch partially succeeded. Some repositories failed:\n{0}', errors.join('\n')));
+            vscode.window.showWarningMessage(t('VersionDock: Fetch partially succeeded. Some repositories failed:\n{0}', errors.join('\n')));
           } else {
             this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: true });
           }
@@ -4284,7 +4886,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             await vscode.window.withProgress(
               {
                 location: vscode.ProgressLocation.Notification,
-                title: t('VersionDock: Updating all projects…'),
+                title: msg.repoIds.length === 1
+                  ? t('VersionDock [{0}]: Updating project…', this.manager.getRepoMeta(msg.repoIds[0])?.name || '')
+                  : t('VersionDock: Updating all projects…'),
                 cancellable: false,
               },
               async progress => {
@@ -4359,7 +4963,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'SYNC_DO_SYNC': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId });
           return;
         }
         try {
@@ -4376,7 +4980,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (currentBranch?.upstream) {
               effectiveStrategy = await this.resolveEffectivePullStrategy(msg.strategy);
               if (!effectiveStrategy) {
-                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
                 return;
               }
               shouldUpdate = true;
@@ -4424,8 +5028,17 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
           const status = await repo.getStatus?.();
           if (status && status.conflictCount && status.conflictCount > 0) {
-            vscode.window.showWarningMessage(t('Sync stopped due to merge conflicts. Please resolve conflicts before pushing.'));
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Sync stopped due to merge conflicts. Please resolve conflicts before pushing.') });
+            const resolveBtn = t('Resolve Conflicts');
+            const conflictMsg = t('VersionDock [{0}]: Sync stopped due to merge conflicts. Please resolve conflicts before pushing.', repoName);
+            void vscode.window.showWarningMessage(
+              conflictMsg,
+              resolveBtn,
+            ).then(choice => {
+              if (choice === resolveBtn) {
+                void vscode.commands.executeCommand('versiondock.openConflicts');
+              }
+            });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: conflictMsg, repoId: msg.repoId });
             if (trackedResult) {
               await this.updateSummaryService?.notify([trackedResult]);
             }
@@ -4440,7 +5053,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
 
           if (pushResult.success) {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
             this.logProvider?.refresh({ repoIds: [msg.repoId] });
             this.invalidateSubtreeStatus(undefined, { remote: false });
             void this.broadcastUnpushedCommits();
@@ -4457,18 +5070,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await this.updateSummaryService?.notify([trackedResult]);
             }
           } else if (pushResult.cancelled) {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
             if (trackedResult) {
               await this.updateSummaryService?.notify([trackedResult]);
             }
           } else {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: pushResult.error ? String(pushResult.error) : t('Push failed') });
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: pushResult.error ? String(pushResult.error) : t('Push failed'), repoId: msg.repoId });
             if (trackedResult) {
               await this.updateSummaryService?.notify([trackedResult]);
             }
           }
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
@@ -4511,7 +5124,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
-                  title: t('VersionDock: Updating all projects…'),
+                  title: reposToUpdate.length === 1
+                    ? t('VersionDock [{0}]: Updating project…', this.manager.getRepoMeta(reposToUpdate[0])?.name || '')
+                    : t('VersionDock: Updating all projects…'),
                   cancellable: false,
                 },
                 async progress => {
@@ -4581,28 +5196,48 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.manager.notifyBranchesChanged();
           }
 
-          for (const repoId of pulledRepoIds) {
-            const repo = this.manager.getRepo(repoId);
-            if (!repo) continue;
-            const status = await repo.getStatus?.();
-            if (status && status.conflictCount && status.conflictCount > 0) {
-              continue;
-            }
-            const repoMeta = this.manager.getRepoMeta(repoId);
-            const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
-            const pushResult = await runPushWithProtection(repo, {
-              repoName,
-              logger: this.logger,
-              beforePush: () => this.checkUnpushedSubmodules(repoId),
-            });
-            if (!pushResult.success) {
-              hasError = true;
-              if (pushResult.cancelled) {
-                errors.push(`${repoName} (Push): ${t('Push cancelled')}`);
-              } else {
-                errors.push(`${repoName} (Push): ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
-              }
-            }
+          if (pulledRepoIds.length > 0) {
+            await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: pulledRepoIds.length === 1
+                  ? t('VersionDock [{0}]: Pushing changes…', this.manager.getRepoMeta(pulledRepoIds[0])?.name || '')
+                  : t('VersionDock: Pushing {0} repositories…', pulledRepoIds.length),
+                cancellable: false,
+              },
+              async pushProgress => {
+                const totalPush = pulledRepoIds.length;
+                for (let i = 0; i < totalPush; i++) {
+                  const repoId = pulledRepoIds[i];
+                  const repo = this.manager.getRepo(repoId);
+                  if (!repo) continue;
+                  const status = await repo.getStatus?.();
+                  if (status && status.conflictCount && status.conflictCount > 0) {
+                    continue;
+                  }
+                  const repoMeta = this.manager.getRepoMeta(repoId);
+                  const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
+                  pushProgress.report({
+                    message: totalPush > 1 ? `(${i + 1}/${totalPush}) ${repoName}` : repoName,
+                    increment: totalPush > 0 ? 100 / totalPush : undefined,
+                  });
+                  const pushResult = await runPushWithProtection(repo, {
+                    repoName,
+                    logger: this.logger,
+                    silentOnSuccess: totalPush > 1,
+                    beforePush: () => this.checkUnpushedSubmodules(repoId),
+                  });
+                  if (!pushResult.success) {
+                    hasError = true;
+                    if (pushResult.cancelled) {
+                      errors.push(`${repoName} (Push): ${t('Push cancelled')}`);
+                    } else {
+                      errors.push(`${repoName} (Push): ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
+                    }
+                  }
+                }
+              },
+            );
           }
           this.logProvider?.refresh({ repoIds: msg.repoIds });
           this.invalidateSubtreeStatus(undefined, { remote: false });
@@ -4629,7 +5264,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'SYNC_PUSH_TAGS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo || repo.kind === 'svn') {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId });
           return;
         }
         const repoMeta = this.manager.getRepoMeta(msg.repoId);
@@ -4638,22 +5273,22 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await withGitPushProgress(
             repo,
             msg.remote
-              ? t('VersionDock: Pushing tags to {0}…', msg.remote)
-              : t('VersionDock: Pushing tags…'),
+              ? t('VersionDock [{0}]: Pushing tags to {1}…', repoName, msg.remote)
+              : t('VersionDock [{0}]: Pushing tags…', repoName),
             () => (repo as GitService).pushTags(msg.remote),
           );
           vscode.window.showInformationMessage(t('VersionDock [{0}]: tags pushed successfully.', repoName));
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
         } catch (err: unknown) {
           vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', repoName, String(err)));
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(err) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(err), repoId: msg.repoId });
         }
         break;
       }
 
       case 'SYNC_PUSH_TAGS_MULTI': {
-        let hasError = false;
-        let firstError = '';
+        const succeededRepoIds: string[] = [];
+        const errors: string[] = [];
         for (const repoId of msg.repoIds) {
           const repo = this.manager.getRepo(repoId);
           if (!repo || repo.kind === 'svn') continue;
@@ -4662,23 +5297,43 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             const gitRepo = repo as GitService;
             await gitRepo.pushTags();
+            succeededRepoIds.push(repoId);
           } catch (err: unknown) {
-            hasError = true;
-            firstError = String(err);
-            vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', repoName, String(err)));
+            errors.push(`${repoName}: ${String(err)}`);
           }
         }
-        if (!hasError) {
-          vscode.window.showInformationMessage(t('VersionDock: tags pushed successfully for all selected repositories.'));
+        if (errors.length === 0) {
+          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name || msg.repoIds[0]) : undefined;
+          if (singleName) {
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Tags pushed successfully.', singleName));
+          } else {
+            vscode.window.showInformationMessage(t('VersionDock: tags pushed successfully for all selected repositories.'));
+          }
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, handled: true });
+        } else if (succeededRepoIds.length > 0) {
+          vscode.window.showWarningMessage(
+            t('VersionDock: Tags pushed in {0} repositories, {1} failed: {2}', succeededRepoIds.length, errors.length, errors.join('; '))
+          );
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n'), handled: true });
+        } else {
+          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name || msg.repoIds[0]) : undefined;
+          if (singleName) {
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', singleName, errors[0] ?? ''));
+          } else {
+            vscode.window.showErrorMessage(
+              t('VersionDock: Push tags failed in all {0} repositories: {1}', errors.length, errors.join('; '))
+            );
+          }
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n'), handled: true });
         }
-        this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
         break;
       }
 
       case 'SYNC_CHERRY_PICK': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo || repo.kind === 'svn') {
-          vscode.window.showErrorMessage(t('Repo not found'));
+          const repoName = this.manager.getRepoMeta(msg.repoId)?.name ?? msg.repoId;
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Repo not found', repoName));
           return;
         }
         const gitRepo = repo as GitService;
@@ -4689,12 +5344,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           if (count === 1) {
             const shortHash = msg.hashes[0].slice(0, 7);
             await vscode.window.withProgress(
-              { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Cherry-picking commit {0}…', shortHash), cancellable: false },
+              { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Cherry-picking commit {1}…', repo.meta.name, shortHash), cancellable: false },
               () => gitRepo.cherryPick(msg.hashes[0])
             );
           } else {
             await vscode.window.withProgress(
-              { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Cherry-picking {0} commits…', count), cancellable: false },
+              { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Cherry-picking {1} commits…', repo.meta.name, count), cancellable: false },
               () => gitRepo.cherryPickMulti(msg.hashes)
             );
           }
@@ -4708,7 +5363,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const errMsg = String(e);
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
             let activeChoice = await vscode.window.showWarningMessage(
-              t('Cherry-pick has conflicts. Resolve them in the editor, then choose an action.'),
+              t('VersionDock [{0}]: Cherry-pick has conflicts. Resolve them in the editor, then choose an action.', repo.meta.name),
               t('Continue'), t('Skip'), t('Abort')
             );
             while (activeChoice === t('Continue') || activeChoice === t('Skip')) {
@@ -4723,7 +5378,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 const stepErrMsg = String(stepErr);
                 if (stepErrMsg.includes('CONFLICT') || stepErrMsg.includes('could not apply')) {
                   activeChoice = await vscode.window.showWarningMessage(
-                    t('Cherry-pick has conflicts. Resolve them in the editor, then choose an action.'),
+                    t('VersionDock [{0}]: Cherry-pick has conflicts. Resolve them in the editor, then choose an action.', repo.meta.name),
                     t('Continue'), t('Skip'), t('Abort')
                   );
                   if (activeChoice === t('Abort')) {
@@ -4731,7 +5386,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     break;
                   }
                 } else {
-                  vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', stepErrMsg));
+                  vscode.window.showErrorMessage(t('VersionDock [{0}]: Cherry-pick failed: {1}', repo.meta.name, stepErrMsg));
                   break;
                 }
               }
@@ -4746,7 +5401,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               repoIds: [msg.repoId],
             });
           } else {
-            vscode.window.showErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg));
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: Cherry-pick failed: {1}', repo.meta.name, errMsg));
           }
         }
         break;
@@ -4755,9 +5410,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'SYNC_CREATE_BRANCH_FROM_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) {
-          vscode.window.showErrorMessage(t('Repo not found'));
+          const repoName = this.manager.getRepoMeta(msg.repoId)?.name ?? msg.repoId;
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Repo not found', repoName));
           return;
         }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath);
         const shortRef = msg.hash.slice(0, 7);
         const branchName = await vscode.window.showInputBox({
           prompt: repo.kind === 'svn' ? t('Create SVN branch from revision {0}', shortRef) : t('Create new branch from {0}', shortRef),
@@ -4771,7 +5428,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged();
         } catch (e: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock: Create branch failed: {0}', String(e)));
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Create branch failed: {1}', repoName, String(e)));
         }
         break;
       }
@@ -4797,7 +5454,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'PUSH_SQUASH_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const fullMessages = await Promise.all(msg.hashes.map(h => repo.getFullCommitMessage(h).then(m => m.trim())));
         const fullCommits = msg.commits.map((c, i) => ({ ...c, message: fullMessages[i] ?? c.message }));
         const result = await openSquashEditor(
@@ -4815,74 +5473,68 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }),
         );
         if (!result.confirmed) {
-          this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') });
+          this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Cancelled') });
           return;
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Squashing {0} commits…', msg.hashes.length), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Squashing {1} commits…', repoName, msg.hashes.length), cancellable: false },
             () => repo.squashCommits(msg.hashes, result.message),
           );
-          this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Squash completed.', repoName));
         } catch (e: unknown) {
-          this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, ok: false, error: t('Squash failed: {0}', String(e)) });
+          this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('VersionDock [{0}]: Squash failed: {1}', repoName, String(e)) });
         }
         break;
       }
 
       case 'PUSH_DROP_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const drop = t('Drop');
+        if (!repo) { this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const confirm = await vscode.window.showWarningMessage(
-          t('Drop {0} commits? This rewrites history and cannot be undone.', msg.hashes.length),
-          { modal: true }, drop
+          t('VersionDock [{0}]: Drop {1} commit(s)? This will hard reset the branch and delete these commits permanently.', repoName, msg.hashes.length),
+          { modal: true }, t('Drop Commits')
         );
-        if (confirm !== drop) { this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') }); return; }
+        if (confirm !== t('Drop Commits')) { this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: 'Cancelled' }); return; }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Dropping {0} commits…', msg.hashes.length), cancellable: false },
-            () => repo.dropCommits(msg.oldestHash)
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Dropping {1} commits…', repoName, msg.hashes.length), cancellable: false },
+            () => repo.dropCommits(msg.oldestHash),
           );
-          this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
-          this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          void showGitErrorMessage(t('VersionDock: Drop failed: {0}', String(e)), {
-            onUnlocked: async () => {
-              const status = await this.manager.getAllStatusesFresh();
-              this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-              this.logProvider?.refresh({ repoIds: [msg.repoId] });
-            },
-          });
+          this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('VersionDock [{0}]: Drop failed: {1}', repoName, String(e)) });
         }
         break;
       }
 
       case 'PUSH_REVERT_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const revert = t('Revert');
+        if (!repo) { this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const confirm = await vscode.window.showWarningMessage(
-          t('Revert {0} commits? This creates new commits that undo the changes.', msg.hashes.length),
-          { modal: true }, revert
+          t('VersionDock [{0}]: Revert {1} commit(s)? New inverse commits will be created on the current branch.', repoName, msg.hashes.length),
+          { modal: true }, t('Revert Commits')
         );
-        if (confirm !== revert) { this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') }); return; }
+        if (confirm !== t('Revert Commits')) { this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: 'Cancelled' }); return; }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Reverting {0} commits…', msg.hashes.length), cancellable: false },
-            () => repo.revertCommits(msg.hashes)
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Reverting {1} commits…', repoName, msg.hashes.length), cancellable: false },
+            () => repo.revertCommits(msg.hashes),
           );
-          this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
@@ -4890,32 +5542,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
           const errMsg = String(e);
-          this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
-          if (errMsg.includes('CONFLICT') || errMsg.includes('could not revert')) {
-            const continueAction = t('Continue');
-            const abortAction = t('Abort');
-            const choice = await vscode.window.showWarningMessage(
-              t('Revert has conflicts. Resolve them, then choose an action.'),
-              continueAction, abortAction
-            );
-            if (choice === continueAction) await repo.revertContinue();
-            else await repo.revertAbort();
-          } else {
-            void showGitErrorMessage(t('VersionDock: Revert failed: {0}', errMsg), {
-              onUnlocked: async () => {
-                const status = await this.manager.getAllStatusesFresh();
-                this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
-                this.logProvider?.refresh({ repoIds: [msg.repoId] });
-              },
+          if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
+            void vscode.window.showWarningMessage(
+              t('VersionDock [{0}]: Revert has conflicts. Resolve them in the Merge Editor, then commit or abort.', repoName),
+              t('Open Merge List')
+            ).then(choice => {
+              if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
             });
           }
+          this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('VersionDock [{0}]: Revert failed: {1}', repoName, errMsg) });
         }
         break;
       }
 
       case 'PUSH_EDIT_COMMIT_MSG': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const fullMessage = (await repo.getFullCommitMessage(msg.hash)).trim();
         const result = await openEditMessageEditor(
           this.extensionUri,
@@ -4932,22 +5575,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }),
         );
         if (!result.confirmed) {
-          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: false, error: t('Cancelled') });
+          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Cancelled') });
           return;
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating commit message…'), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating commit message…', repoName), cancellable: false },
             () => repo.rewordCommit(result.message),
           );
-          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           await this.manager.refreshStatusNow();
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Commit message updated.', repoName));
         } catch (e: unknown) {
-          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, ok: false, error: t('Edit commit message failed: {0}', String(e)) });
+          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('VersionDock [{0}]: Edit commit message failed: {1}', repoName, String(e)) });
         }
         break;
       }
@@ -4959,15 +5603,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_UNDO_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         const confirm = await vscode.window.showWarningMessage(
-          t('Undo last commit? Changes will be kept as unstaged (git reset --soft HEAD~1).'),
+          t('VersionDock [{0}]: Undo last commit? Changes will be kept as unstaged (git reset --soft HEAD~1).', repo.meta.name),
           { modal: true }, t('Undo Commit')
         );
-        if (confirm !== t('Undo Commit')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' }); return; }
+        if (confirm !== t('Undo Commit')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId }); return; }
         try {
           await repo.undoCommit();
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
           this.invalidateSubtreeStatus(undefined, { remote: false });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           if (this.isSubtreeTabActive()) {
@@ -4977,7 +5621,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
         } catch (e: unknown) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
         break;
       }
@@ -5038,7 +5682,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const clToDelete = svcDel.getAll().find(c => c.id === msg.id);
         const clName = clToDelete?.name ?? t('this changelist');
         const confirmed = await vscode.window.showWarningMessage(
-          t('Delete "{0}"? Its files will be moved to Changes.', clName),
+          t('VersionDock: Delete "{0}"? Its files will be moved to Changes.', clName),
           { modal: true }, t('Delete')
         );
         if (confirmed !== t('Delete')) break;
@@ -5085,7 +5729,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const repo = this.manager.getRepo(repoId);
           if (paths.length > 0 && repo?.kind !== 'svn') filesByRepo.set(repoId, paths);
         }
-        if (filesByRepo.size === 0) { vscode.window.showInformationMessage(t('No files in this changelist to shelve.')); break; }
+        if (filesByRepo.size === 0) { vscode.window.showInformationMessage(t('VersionDock: No files in this changelist to shelve.')); break; }
         const shelveName = await vscode.window.showInputBox({
           title: t('Shelve "{0}"', clForShelve.name),
           value: clForShelve.name,
@@ -5102,7 +5746,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await shelveSvc.push(shelveName.trim(), safePaths, clAssignments);
           } catch (e: unknown) {
-            void showGitErrorMessage(t('Shelve failed for repo {0}: {1}', repoId, String(e)), {
+            const repoName = this.manager.getRepoMeta(repoId)?.name ?? repoId;
+            void showGitErrorMessage(t('VersionDock [{0}]: Shelve failed: {1}', repoName, String(e)), {
+              repoName,
               onUnlocked: async () => {
                 const status = await this.manager.getAllStatusesFresh();
                 this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -5138,7 +5784,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const safePaths = paths.map(filePath => repo.resolveRepoPath(filePath).relativePath);
             await repo.stashPush(stashName.trim(), safePaths);
           } catch (e: unknown) {
-            void showGitErrorMessage(t('Stash failed for repo {0}: {1}', repoId, String(e)), {
+            const repoName = this.manager.getRepoMeta(repoId)?.name ?? repoId;
+            void showGitErrorMessage(t('VersionDock [{0}]: Stash failed: {1}', repoName, String(e)), {
+              repoName,
               onUnlocked: async () => {
                 const status = await this.manager.getAllStatusesFresh();
                 this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -5159,7 +5807,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await this.openSvnAllChanges(repo, msg.section);
           } catch (e: unknown) {
-            vscode.window.showErrorMessage(t('VersionDock: Cannot open SVN diff: {0}', String(e)));
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open SVN diff: {1}', repo.meta.name, String(e)));
           }
           break;
         }
@@ -5256,7 +5904,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing submodule {0}', path.basename(subRepoPush.rootPath) || subRepoPush.rootPath), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing submodule…', subRepoPush.meta.name), cancellable: false },
           async () => {
             try {
               await subRepoPush.pushSubmodule();
@@ -5308,7 +5956,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const parentRemoteUrl = await gitRepo.getDefaultRemoteUrl().catch(() => undefined);
         let allowFileProtocol = false;
         if (this.isLocalSubmoduleUrl(configUrl, parentRemoteUrl)) {
-          const allowed = await this.confirmLocalSubmoduleProtocol(msg.submodulePath, configUrl);
+          const allowed = await this.confirmLocalSubmoduleProtocol(msg.submodulePath, configUrl, gitRepo.meta.name);
           if (!allowed) {
             this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: false, error: 'Cancelled' });
             return;
@@ -5319,7 +5967,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: t('VersionDock: Initializing submodule {0}…', path.basename(msg.submodulePath) || msg.submodulePath),
+            title: t('VersionDock [{0}]: Initializing submodule "{1}"…', parentRepo.meta.name, path.basename(msg.submodulePath) || msg.submodulePath),
             cancellable: false,
           },
           async () => {
@@ -5331,7 +5979,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 if (!allowFileProtocol && (initErrMsg.includes("transport 'file' not allowed") || initErrMsg.includes('protocol.file.allow'))) {
                   const retryConfirm = await vscode.window.showWarningMessage(
                     t(
-                      'A nested submodule in "{0}" references a local path or file protocol. Do you want to allow local submodule operations and retry?',
+                      'VersionDock [{0}]: A nested submodule in "{1}" references a local path or file protocol. Do you want to allow local submodule operations and retry?',
+                      parentRepo.meta.name,
                       path.basename(msg.submodulePath) || msg.submodulePath
                     ),
                     { modal: true },
@@ -5357,7 +6006,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             } catch (e: unknown) {
               const errStr = e instanceof Error ? e.message : String(e);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'init', ok: false, error: errStr });
-              void vscode.window.showErrorMessage(t('Failed to initialize submodule "{0}": {1}', msg.submodulePath, errStr));
+              void vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to initialize submodule "{1}" — {2}', parentRepo.meta.name, msg.submodulePath, errStr));
             }
           }
         );
@@ -5371,7 +6020,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         const confirmDeinit = await vscode.window.showWarningMessage(
-          t('Deinit submodule "{0}"? The working directory will be cleared.', msg.submodulePath),
+          t('VersionDock [{0}]: Deinit submodule "{1}"? The working directory will be cleared.', parentRepoD.meta.name, msg.submodulePath),
           { modal: true }, t('Deinit')
         );
         if (confirmDeinit !== t('Deinit')) {
@@ -5381,7 +6030,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: t('VersionDock: Deinitializing submodule {0}…', path.basename(msg.submodulePath) || msg.submodulePath),
+            title: t('VersionDock [{0}]: Deinitializing submodule "{1}"…', parentRepoD.meta.name, path.basename(msg.submodulePath) || msg.submodulePath),
             cancellable: false,
           },
           async () => {
@@ -5392,7 +6041,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 const errStr = String((firstErr as { message?: string })?.message || firstErr);
                 if (!msg.force && (errStr.includes('local modifications') || errStr.includes('--force') || errStr.includes('-f'))) {
                   const forceChoice = await vscode.window.showWarningMessage(
-                    t('Submodule "{0}" has uncommitted changes or detached HEAD. Discard changes and force deinitialize?', msg.submodulePath),
+                    t('VersionDock [{0}]: Submodule "{1}" has uncommitted changes or detached HEAD. Discard changes and force deinitialize?', parentRepoD.meta.name, msg.submodulePath),
                     { modal: true },
                     t('Force Deinitialize')
                   );
@@ -5415,7 +6064,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
               const errMsg = e instanceof Error ? e.message : String(e);
-              void vscode.window.showErrorMessage(t('Failed to deinitialize submodule "{0}": {1}', msg.submodulePath, errMsg));
+              void vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to deinitialize submodule "{1}" — {2}', parentRepoD.meta.name, msg.submodulePath, errMsg));
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'deinit', ok: false, error: errMsg });
             }
           }
@@ -5434,7 +6083,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const parentRemoteUrlU = await gitRepoU.getDefaultRemoteUrl().catch(() => undefined);
         let allowFileProtocolU = false;
         if (this.isLocalSubmoduleUrl(configUrlU, parentRemoteUrlU)) {
-          const allowed = await this.confirmLocalSubmoduleProtocol(msg.submodulePath, configUrlU);
+          const allowed = await this.confirmLocalSubmoduleProtocol(msg.submodulePath, configUrlU, gitRepoU.meta.name);
           if (!allowed) {
             this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: false, error: 'Cancelled' });
             return;
@@ -5443,7 +6092,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
 
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating submodule {0}', msg.submodulePath), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating submodule "{1}"…', parentRepoU.meta.name, path.basename(msg.submodulePath) || msg.submodulePath), cancellable: false },
           async () => {
             try {
               try {
@@ -5453,7 +6102,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 if (!allowFileProtocolU && (updateErrMsg.includes("transport 'file' not allowed") || updateErrMsg.includes('protocol.file.allow'))) {
                   const retryConfirm = await vscode.window.showWarningMessage(
                     t(
-                      'A nested submodule in "{0}" references a local path or file protocol. Do you want to allow local submodule operations and retry?',
+                      'VersionDock [{0}]: A nested submodule in "{1}" references a local path or file protocol. Do you want to allow local submodule operations and retry?',
+                      parentRepoU.meta.name,
                       path.basename(msg.submodulePath) || msg.submodulePath
                     ),
                     { modal: true },
@@ -5477,7 +6127,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
               const errMsg = e instanceof Error ? e.message : String(e);
-              void vscode.window.showErrorMessage(t('Failed to update submodule "{0}": {1}', msg.submodulePath, errMsg));
+              void vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to update submodule "{1}" — {2}', parentRepoU.meta.name, msg.submodulePath, errMsg));
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'update', ok: false, error: errMsg });
             }
           }
@@ -5487,8 +6137,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'SUBMODULE_UPDATE_ALL': {
         const reqId = Math.random().toString(36).slice(2);
+        const singleParentMeta = msg.parentRepoId ? this.manager.getRepoMeta(msg.parentRepoId) : undefined;
+        const progressTitle = singleParentMeta
+          ? t('VersionDock [{0}]: Updating all submodules…', singleParentMeta.name)
+          : t('VersionDock: Updating all submodules…');
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating all submodules…'), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
           async () => {
             try {
               let parentRepos: GitService[] = [];
@@ -5556,7 +6210,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
               let allowFileProtocolAll = false;
               if (anyLocalSubmodule) {
-                const allowed = await this.confirmLocalSubmoduleProtocol(t('One or more submodules'), t('local path or file protocol'));
+                const allowed = await this.confirmLocalSubmoduleProtocol(t('One or more submodules'), t('local path or file protocol'), singleParentMeta?.name);
                 if (!allowed) {
                   this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: false, error: 'Cancelled' });
                   return;
@@ -5576,7 +6230,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 const updateErrMsg = updateErr instanceof Error ? updateErr.message : String(updateErr);
                 if (!allowFileProtocolAll && (updateErrMsg.includes("transport 'file' not allowed") || updateErrMsg.includes('protocol.file.allow'))) {
                   const retryConfirm = await vscode.window.showWarningMessage(
-                    t('A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?'),
+                    singleParentMeta
+                      ? t('VersionDock [{0}]: A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?', singleParentMeta.name)
+                      : t('A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?'),
                     { modal: true },
                     t('Allow Local Submodule & Retry')
                   );
@@ -5600,11 +6256,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
             } catch (e: unknown) {
               const errMsg = e instanceof Error ? e.message : String(e);
-              let userFriendlyMsg = t('Failed to update all submodules: {0}', errMsg);
+              let userFriendlyMsg = singleParentMeta
+                ? t('VersionDock [{0}]: Failed to update all submodules: {1}', singleParentMeta.name, errMsg)
+                : t('VersionDock: Failed to update all submodules: {0}', errMsg);
               if (errMsg.includes("transport 'file' not allowed") || errMsg.includes('protocol.file.allow')) {
-                userFriendlyMsg = t(
-                  'A nested submodule references a local path or file protocol which requires authorization. Please run submodule update with local protocol permission allowed.'
-                );
+                userFriendlyMsg = singleParentMeta
+                  ? t(
+                      'VersionDock [{0}]: A nested submodule references a local path or file protocol which requires authorization. Please run submodule update with local protocol permission allowed.',
+                      singleParentMeta.name
+                    )
+                  : t(
+                      'VersionDock: A nested submodule references a local path or file protocol which requires authorization. Please run submodule update with local protocol permission allowed.'
+                    );
               }
               void vscode.window.showErrorMessage(userFriendlyMsg);
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId: msg.parentRepoId ?? '', submodulePath: '', op: 'update-all', ok: false, error: userFriendlyMsg });
@@ -5618,7 +6281,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         let parentRepoId = msg.repoId;
         const candidateMetas = this.manager.getRepoMetas().filter(m => (m.kind ?? 'git') === 'git' && !m.isSubmodule && !m.isWorktree);
         if (candidateMetas.length === 0) {
-          vscode.window.showWarningMessage(t('No suitable Git repository found for adding a submodule.'));
+          vscode.window.showWarningMessage(t('VersionDock: No suitable Git repository found for adding a submodule.'));
           return;
         }
         if (!parentRepoId) {
@@ -5668,16 +6331,16 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
         let allowFileProtocol = false;
         const trimmedUrl = url.trim();
+        const parentRepoName = this.manager.getRepoMeta(parentRepoId)?.name || path.basename(parentRepoA.rootPath) || parentRepoId;
         const parentRemoteUrl = await (parentRepoA as GitService).getDefaultRemoteUrl().catch(() => undefined);
         if (this.isLocalSubmoduleUrl(trimmedUrl, parentRemoteUrl)) {
-          const allowed = await this.confirmLocalSubmoduleProtocol(subPath.trim() || trimmedUrl, trimmedUrl);
+          const allowed = await this.confirmLocalSubmoduleProtocol(subPath.trim() || trimmedUrl, trimmedUrl, parentRepoName);
           if (!allowed) return;
           allowFileProtocol = true;
         }
-
         const reqId = Math.random().toString(36).slice(2);
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Adding submodule {0}', subPath), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Adding submodule {1}', parentRepoName, subPath), cancellable: false },
           async () => {
             try {
               await (parentRepoA as GitService).addSubmodule(url.trim(), subPath.trim(), branch?.trim() || undefined, allowFileProtocol);
@@ -5688,10 +6351,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               });
               const repos = await this.manager.getAllSubmodules();
               this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
-              vscode.window.showInformationMessage(t('Submodule "{0}" added successfully.', subPath.trim()));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Submodule "{1}" added successfully.', parentRepoName, subPath.trim()));
             } catch (e: unknown) {
               this.post({ type: 'SUBMODULE_OP_RESULT', requestId: reqId, parentRepoId, submodulePath: subPath.trim(), op: 'add', ok: false, error: String(e) });
-              vscode.window.showErrorMessage(t('Failed to add submodule: {0}', String(e)));
+              vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to add submodule: {1}', parentRepoName, String(e)));
             }
           }
         );
@@ -5741,7 +6404,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
 
         const confirmRemove = await vscode.window.showWarningMessage(
-          t('Remove submodule "{0}"? This will deinitialize, unregister from .gitmodules, and delete its files.{1}', msg.submodulePath, riskWarning),
+          t('VersionDock [{0}]: Remove submodule "{1}"? This will deinitialize, unregister from .gitmodules, and delete its files.{2}', parentRepoR.meta.name, msg.submodulePath, riskWarning),
           { modal: true }, t('Remove Submodule')
         );
         if (confirmRemove !== t('Remove Submodule')) {
@@ -5779,7 +6442,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (isDirty) {
               const dirtyChoice = await vscode.window.showWarningMessage(
                 t(
-                  'WARNING: Submodule "{0}" has uncommitted local changes or unpushed commits. Deleting the directory will permanently discard these changes! Do you want to proceed?',
+                  'VersionDock [{0}]: WARNING: Submodule "{1}" has uncommitted local changes or unpushed commits. Deleting the directory will permanently discard these changes! Do you want to proceed?',
+                  gitRepo.meta.name,
                   path.basename(msg.submodulePath) || msg.submodulePath
                 ),
                 { modal: true },
@@ -5799,7 +6463,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             } else {
               const choice = await vscode.window.showWarningMessage(
                 t(
-                  'Submodule "{0}" was removed on the selected side. Do you also want to remove its local directory and Git metadata from disk?',
+                  'VersionDock [{0}]: Submodule "{1}" was removed on the selected side. Do you also want to remove its local directory and Git metadata from disk?',
+                  gitRepo.meta.name,
                   path.basename(msg.submodulePath) || msg.submodulePath
                 ),
                 { modal: true },
@@ -5817,7 +6482,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const resolveRes = await gitRepo.resolveSubmoduleConflict(msg.submodulePath, msg.side, { removeDirectory, force });
           if (resolveRes?.cleanupWarning) {
             void vscode.window.showWarningMessage(
-              t('Submodule conflict resolved in Git, but failed to clean up directory on disk: {0}', resolveRes.cleanupWarning)
+              t('VersionDock [{0}]: Submodule conflict resolved in Git, but failed to clean up directory on disk: {1}', gitRepo.meta.name, resolveRes.cleanupWarning)
             );
           }
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: true });
@@ -5829,7 +6494,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'SUBMODULE_LIST_RESULT', repos });
         } catch (e: unknown) {
           const errMsg = e instanceof Error ? e.message : String(e);
-          void vscode.window.showErrorMessage(errMsg);
+          void vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to resolve submodule conflict — {1}', gitRepo.meta.name, errMsg));
           this.post({ type: 'SUBMODULE_OP_RESULT', requestId: msg.requestId, parentRepoId: msg.parentRepoId, submodulePath: msg.submodulePath, op: 'resolve-conflict', ok: false, error: errMsg });
         }
         break;
@@ -5850,7 +6515,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(resolved.absolutePath));
           }
         } catch (err) {
-          void vscode.window.showErrorMessage(t('Failed to open conflict in editor: {0}', String(err)));
+          void vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to open conflict in editor: {1}', gitRepo.meta.name, String(err)));
         }
         break;
       }
@@ -5934,9 +6599,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         });
         if (!worktreePath?.trim()) return;
 
+        const repoName = this.manager.getRepoMeta(repoCP.repoId)?.name || repoFolderName;
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating worktree…'), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Creating worktree…', repoName), cancellable: false },
             async () => {
               await repoCP.createWorktree(worktreePath.trim(), {
                 branch: picked.isNew ? undefined : picked.branchName,
@@ -5946,9 +6612,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
           const repos = await this.manager.getAllWorktrees();
           this.post({ type: 'WORKTREE_LIST_RESULT', repos });
-          vscode.window.showInformationMessage(t('VersionDock: Worktree created at {0}', worktreePath.trim()));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Worktree created at {1}', repoName, worktreePath.trim()));
         } catch (e: unknown) {
-          void showGitErrorMessage(t('VersionDock: Failed to create worktree — {0}', String(e)), {
+          void showGitErrorMessage(t('VersionDock [{0}]: Failed to create worktree — {1}', repoName, String(e)), {
+            repoName,
             onUnlocked: async () => {
               const status = await this.manager.getAllStatusesFresh();
               this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -6105,8 +6772,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
           break;
         }
+        const repoMeta = this.manager.getRepoMeta(entry.repoId);
         const confirm = await vscode.window.showWarningMessage(
-          t('Delete registry for subtree "{0}" at prefix "{1}"? This only removes the saved association and does not delete files.', entry.name, entry.prefix),
+          repoMeta
+            ? t('VersionDock [{0}]: Delete registry for subtree "{1}" at prefix "{2}"? This only removes the saved association and does not delete files.', repoMeta.name, entry.name, entry.prefix)
+            : t('Delete registry for subtree "{0}" at prefix "{1}"? This only removes the saved association and does not delete files.', entry.name, entry.prefix),
           { modal: true },
           t('Delete Registry'),
         );
@@ -6122,8 +6792,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
           break;
         }
+        const repoName = this.manager.getRepoMeta(entry.repoId)?.name || entry.repoId;
         await this.removeSubtreeEntry(msg.entryId);
-        vscode.window.showInformationMessage(t('VersionDock: Subtree "{0}" registry deleted.', entry.name));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: Subtree "{1}" registry deleted.', repoName, entry.name));
         this.post({
           type: 'SUBTREE_OP_RESULT',
           requestId: msg.requestId,
@@ -6170,7 +6841,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'NOTIFY_ERROR': {
+        const repoName = msg.repoId ? (this.manager.getRepoMeta(msg.repoId)?.name ?? msg.repoId) : undefined;
         void showGitErrorMessage(msg.message, {
+          repoName,
           onUnlocked: async () => {
             const status = await this.manager.getAllStatusesFresh();
             this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -6180,7 +6853,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'NOTIFY_INFO': {
-        vscode.window.showInformationMessage(t('VersionDock: {0}', msg.message));
+        const repoName = msg.repoId ? (this.manager.getRepoMeta(msg.repoId)?.name ?? msg.repoId) : undefined;
+        if (repoName) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: {1}', repoName, msg.message));
+        } else {
+          vscode.window.showInformationMessage(t('VersionDock: {0}', msg.message));
+        }
         break;
       }
 
@@ -6252,9 +6930,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       if (unpushedSubs.length > 0) {
+        const repoMeta = this.manager.getRepoMeta(repoId);
+        const repoName = repoMeta?.name || repoId;
         const subNames = unpushedSubs.map(s => `${s.name} (${s.unpushedCount} ${t('unpushed')})`).join(', ');
         const choice = await vscode.window.showWarningMessage(
-          t('Submodules have unpushed commits: {0}. Pushing the parent repository now may cause CI or teammate build failures. Do you want to continue pushing?', subNames),
+          t('VersionDock [{0}]: Submodules have unpushed commits: {1}. Pushing the parent repository now may cause CI or teammate build failures. Do you want to continue pushing?', repoName, subNames),
           { modal: true },
           t('Push Anyway')
         );
@@ -6290,14 +6970,22 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return false;
   }
 
-  private async confirmLocalSubmoduleProtocol(submoduleNameOrPath: string, url?: string): Promise<boolean> {
+  private async confirmLocalSubmoduleProtocol(submoduleNameOrPath: string, url?: string, parentRepoName?: string): Promise<boolean> {
     const trimmedUrl = url?.trim() || '';
+    const message = parentRepoName
+      ? t(
+          'VersionDock [{0}]: The submodule "{1}" references a local path or file protocol ("{2}"). Git restricts local submodule operations by default to prevent unauthorized repository access. Do you want to allow this local submodule operation?',
+          parentRepoName,
+          submoduleNameOrPath,
+          trimmedUrl
+        )
+      : t(
+          'VersionDock: The submodule "{0}" references a local path or file protocol ("{1}"). Git restricts local submodule operations by default to prevent unauthorized repository access. Do you want to allow this local submodule operation?',
+          submoduleNameOrPath,
+          trimmedUrl
+        );
     const confirm = await vscode.window.showWarningMessage(
-      t(
-        'The submodule "{0}" references a local path or file protocol ("{1}"). Git restricts local submodule operations by default to prevent unauthorized repository access. Do you want to allow this local submodule operation?',
-        submoduleNameOrPath,
-        trimmedUrl
-      ),
+      message,
       { modal: true },
       t('Allow Local Submodule')
     );
@@ -6376,7 +7064,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       if (isDetached) {
         const createBranchAndCommit = t('Create Branch & Commit');
         const commitAnyway = t('Commit Anyway');
-        const warningMessage = t('VersionDock Warning: You are committing to a detached HEAD. To keep these changes safe on a branch, create a branch now or commit anyway.');
+        const warningMessage = t('VersionDock [{0}] Warning: You are committing to a detached HEAD. To keep these changes safe on a branch, create a branch now or commit anyway.', repo.meta.name);
         const choice = await vscode.window.showWarningMessage(
           warningMessage,
           { modal: true },
@@ -6398,13 +7086,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.manager.notifyBranchesChanged();
             this.logProvider?.refresh({ repoIds: [repo.repoId], forceRemoteRefs: true });
           } catch (e) {
-            vscode.window.showErrorMessage(t('Failed to create branch: {0}', String(e)));
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to create branch: {1}', repo.meta.name, String(e)));
             return false;
           }
         }
       } else if (opState === 'rebase') {
         const commitAnyway = t('Commit Anyway');
-        const warningMessage = t('VersionDock Warning: A rebase operation is currently in progress. Do you want to commit anyway?');
+        const warningMessage = t('VersionDock [{0}] Warning: A rebase operation is currently in progress. Do you want to commit anyway?', repo.meta.name);
         const choice = await vscode.window.showWarningMessage(
           warningMessage,
           { modal: true },
@@ -6447,7 +7135,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     const warningMessage = t(
-      'VersionDock Warning: The commit contains potential issues:\n{0}\nDo you want to commit anyway?',
+      'VersionDock [{0}] Warning: The commit contains potential issues:\n{1}\nDo you want to commit anyway?',
+      repo.meta.name,
       details.join('\n')
     );
     const commitAnyway = t('Commit Anyway');
@@ -6462,8 +7151,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const isDetached = current.name === 'HEAD' || Boolean(current.detachedTag) || Boolean(current.detachedHash);
     if (!isDetached) return;
 
+    const repoName = this.manager.getRepoMeta(repo.repoId)?.name || path.basename(repo.rootPath);
     const createBranchLabel = t('Create Branch');
-    const msg = t('VersionDock: You have committed to a detached HEAD. Create a new branch to keep these changes?');
+    const msg = t('VersionDock [{0}]: You have committed to a detached HEAD. Create a new branch to keep these changes?', repoName);
     void vscode.window.showWarningMessage(msg, createBranchLabel, t('Dismiss')).then(async choice => {
       if (choice === createBranchLabel) {
         const newBranchName = await vscode.window.showInputBox({
@@ -6476,9 +7166,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             await repo.checkout(newBranchName.trim(), true);
             this.manager.notifyBranchesChanged();
             this.logProvider?.refresh({ repoIds: [repo.repoId], forceRemoteRefs: true });
-            vscode.window.showInformationMessage(t('VersionDock: Branch "{0}" created.', newBranchName.trim()));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Branch "{1}" created.', repoName, newBranchName.trim()));
           } catch (e) {
-            vscode.window.showErrorMessage(t('Failed to create branch: {0}', String(e)));
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to create branch: {1}', repoName, String(e)));
           }
         }
       }
@@ -6494,10 +7184,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const matchingRemote = remoteName ? remotes.find(r => r.name === remoteName) : remotes[0];
     const remoteUrl = matchingRemote?.pushUrl || matchingRemote?.fetchUrl || '';
     const prInfo = remoteUrl ? buildPullRequestUrl(remoteUrl, targetBranch) : undefined;
+    const repoName = this.manager.getRepoMeta(repo.repoId)?.name || path.basename(repo.rootPath);
 
     if (prInfo) {
       const createPrLabel = t('Create Pull Request');
-      const msg = t('VersionDock: Branch "{0}" pushed to {1}.', targetBranch, prInfo.platform);
+      const msg = t('VersionDock [{0}]: Branch "{1}" pushed to {2}.', repoName, targetBranch, prInfo.platform);
       void vscode.window.showInformationMessage(msg, createPrLabel, t('Dismiss')).then(choice => {
         if (choice === createPrLabel) {
           void vscode.env.openExternal(vscode.Uri.parse(prInfo.url));
@@ -6505,7 +7196,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       });
     } else {
       const remoteLabel = remoteName ?? matchingRemote?.name ?? 'remote';
-      const msg = t('VersionDock: Branch "{0}" pushed successfully to "{1}".', targetBranch, remoteLabel);
+      const msg = t('VersionDock [{0}]: Branch "{1}" pushed successfully to "{2}".', repoName, targetBranch, remoteLabel);
       void vscode.window.showInformationMessage(msg);
     }
   }

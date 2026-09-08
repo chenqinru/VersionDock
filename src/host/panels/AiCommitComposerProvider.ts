@@ -59,7 +59,7 @@ export class AiCommitComposerProvider implements vscode.Disposable {
   async openWorking(candidates: ComposerWorkingCandidate[]): Promise<void> {
     const valid = candidates.filter(candidate => candidate.paths.length > 0 && this.manager.getRepo(candidate.repoId));
     if (!valid.length) {
-      vscode.window.showWarningMessage(t('Select changes from one repository before opening AI Commit Composer.'));
+      vscode.window.showWarningMessage(t('VersionDock: Select changes from one repository before opening AI Commit Composer.'));
       return;
     }
     let candidate = valid[0];

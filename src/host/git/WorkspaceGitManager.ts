@@ -26,7 +26,7 @@ export interface StatusChangeContext {
 }
 export type StatusListener = (status: WorkspaceStatus, context?: StatusChangeContext) => void;
 export type StatusOperationListener = (inProgress: boolean, kind?: StatusOperationKind, label?: string) => void;
-type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash';
+type StatusOperationKind = 'checkout' | 'squash' | 'merge' | 'commit' | 'rebase' | 'cherry-pick' | 'revert' | 'sync' | 'stash' | 'stage';
 type BranchChangeOptions = { refreshDerivedData?: boolean };
 type BranchListener = (options?: BranchChangeOptions) => void;
 type WorktreeListener = (repoId: string) => void;
@@ -473,7 +473,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private createGitService(repoId: string, rootPath: string): GitService {
-    return new GitService(
+    const service = new GitService(
       repoId,
       rootPath,
       (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
@@ -481,10 +481,12 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.publishMissingRemote,
       this.logger,
     );
+    service.setMetaProvider(() => this.getRepoMeta(repoId));
+    return service;
   }
 
   private createSvnService(repoId: string, rootPath: string): SvnService {
-    return new SvnService(
+    const service = new SvnService(
       repoId,
       rootPath,
       (operation, kind, label) => this.runWithStatusUpdatesSuppressed(operation, kind, label),
@@ -492,6 +494,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.publishMissingRemote,
       this.logger,
     );
+    service.setMetaProvider(() => this.getRepoMeta(repoId));
+    return service;
   }
 
   private attachGitApiRepoListeners(): void {
@@ -1277,7 +1281,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
             if (picked && picked.length > 0) {
               for (const item of picked) {
                 await repo.deleteBranch(item.branchName, false).catch(e => {
-                  vscode.window.showErrorMessage(t('Failed to delete branch {0}: {1}', item.branchName, String(e)));
+                  vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to delete branch {1}: {2}', repoName, item.branchName, String(e)));
                 });
               }
               this.notifyBranchesChanged();
@@ -1297,8 +1301,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const task = this.runWithStatusUpdatesSuppressed(async () => {
       const result = await repo.commitMergeIfResolved();
       if (result) {
+        const repoName = this.getRepoMeta(repoId)?.name || repo.meta.name;
         vscode.window.showInformationMessage(
-          t('VersionDock: Merged "{0}" into "{1}" and committed.', result.sourceBranch ?? t('the incoming branch'), result.targetBranch)
+          t('VersionDock [{0}]: Merged "{1}" into "{2}" and committed.', repoName, result.sourceBranch ?? t('the incoming branch'), result.targetBranch)
         );
       }
       return result;
@@ -1441,9 +1446,17 @@ export class WorkspaceGitManager implements vscode.Disposable {
   ): Promise<void> {
     const names = files.map(f => f.relPath);
     const kind = files.some(f => f.repo.kind === 'svn') ? 'SVN' : 'Git';
-    const label = names.length === 1
-      ? t('Do you want to add "{0}" to {1}?', names[0], kind)
-      : t('Do you want to add {0} new files to {1}?', names.length, kind);
+    const distinctRepos = [...new Set(files.map(f => f.repo))];
+    const singleRepoMeta = distinctRepos.length === 1 ? this.repoMetas.get(distinctRepos[0].repoId) : undefined;
+    const singleRepoName = singleRepoMeta?.name ?? (distinctRepos.length === 1 ? distinctRepos[0].repoId : undefined);
+
+    const label = singleRepoName
+      ? (names.length === 1
+          ? t('VersionDock [{0}]: Do you want to add "{1}" to {2}?', singleRepoName, names[0], kind)
+          : t('VersionDock [{0}]: Do you want to add {1} new files to {2}?', singleRepoName, names.length, kind))
+      : (names.length === 1
+          ? t('VersionDock: Do you want to add "{0}" to {1}?', names[0], kind)
+          : t('VersionDock: Do you want to add {0} new files to {1}?', names.length, kind));
 
     const add = t('Add');
     const answer = await vscode.window.showInformationMessage(label, add, t('Cancel'));

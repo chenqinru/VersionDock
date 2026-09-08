@@ -28,7 +28,7 @@ export class AiCodeReviewProvider implements vscode.Disposable {
       .filter(candidate => candidate.paths.length > 0 && this.manager.getRepo(candidate.repoId))
       .map(candidate => ({ ...candidate, paths: Array.from(new Set(candidate.paths)) }));
     if (!valid.length) {
-      vscode.window.showWarningMessage(t('Select changes before opening AI Code Review.'));
+      vscode.window.showWarningMessage(t('VersionDock: Select changes before opening AI Code Review.'));
       return;
     }
     this.cancel();

@@ -67,12 +67,20 @@ async function showViewModeQuickpick(globalState: vscode.Memento): Promise<void>
   }
 }
 
-async function maybeNotifyConflicts(status: WorkspaceStatus): Promise<void> {
-  const conflictCount = status.repos.reduce((total, repo) => total + repo.conflictCount, 0);
-  if (conflictCount === 0) return;
+async function maybeNotifyConflicts(manager: WorkspaceVcsManager, status: WorkspaceStatus): Promise<void> {
+  const conflictingRepos = status.repos.filter(repo => repo.conflictCount > 0);
+  if (conflictingRepos.length === 0) return;
+
+  const repoName = conflictingRepos.length === 1
+    ? (manager.getRepoMeta(conflictingRepos[0].repoId)?.name ?? conflictingRepos[0].repoId)
+    : undefined;
+
+  const title = repoName
+    ? t('VersionDock [{0}]: Merge conflicts detected. Use the Merge Editor to resolve them.', repoName)
+    : t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
 
   const picked = await vscode.window.showWarningMessage(
-    t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.'),
+    title,
     t('Open Merge List'),
   );
   if (picked === t('Open Merge List')) {
@@ -107,7 +115,7 @@ async function runStartupRefresh(
     });
 
     // Run notifications asynchronously in background so startup lifecycle and UI spinners finish immediately
-    void maybeNotifyConflicts(status).catch(err => logger.error('Startup', 'Failed to notify conflicts', err));
+    void maybeNotifyConflicts(manager, status).catch(err => logger.error('Startup', 'Failed to notify conflicts', err));
     void incomingCommitsNotifier.checkAndNotify().catch(err => logger.error('Startup', 'Failed to check incoming commits', err));
     void unpushedCommitsNotifier.checkAndNotify().catch(err => logger.error('Startup', 'Failed to check unpushed commits', err));
   } catch (error) {

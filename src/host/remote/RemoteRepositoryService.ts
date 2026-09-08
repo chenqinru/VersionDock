@@ -82,7 +82,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
     }
     try {
       await this.github.authenticate();
-      vscode.window.showInformationMessage(vscode.l10n.t('GitHub account is connected through VS Code.'));
+      vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: GitHub account is connected through VS Code.'));
     } catch (error) {
       this.showRemoteError('GitHub', error);
     }
@@ -247,7 +247,8 @@ export class RemoteRepositoryService implements vscode.Disposable {
       });
       if (pushAfterCreate) {
         await this.pushPublishedBranch(rootPath, branch);
-        vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: Remote created and branch pushed successfully.'));
+        const repoName = path.basename(rootPath);
+        vscode.window.showInformationMessage(vscode.l10n.t('VersionDock [{0}]: remote created and branch pushed successfully.', repoName));
       }
     });
   }
@@ -319,7 +320,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
       ? error.message
       : error instanceof Error ? error.message : String(error);
     this.logger.error('Remote', `${provider} operation failed`, error);
-    void vscode.window.showErrorMessage(vscode.l10n.t('{0}: {1}', provider, value));
+    void vscode.window.showErrorMessage(vscode.l10n.t('VersionDock: {0}: {1}', provider, value));
   }
 
   async getProtectedBranches(url: string): Promise<string[]> {

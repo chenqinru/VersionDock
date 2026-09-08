@@ -90,10 +90,17 @@ export class UnpushedCommitsNotifier implements vscode.Disposable {
       this.cleanupStartupListeners();
 
       const reposWithAhead = counts.filter(c => c > 0).length;
-      const message = reposWithAhead === 1
+      const singleRepo = reposWithAhead === 1
+        ? metas.find((_, i) => {
+          const r = countResults[i];
+          return r.status === 'fulfilled' && r.value > 0;
+        })
+        : undefined;
+      const singleRepoName = singleRepo?.name;
+      const message = singleRepoName
         ? (totalAhead === 1
-          ? t('VersionDock: {0} unpushed commit ready to push.', totalAhead)
-          : t('VersionDock: {0} unpushed commits ready to push.', totalAhead))
+          ? t('VersionDock [{0}]: {1} unpushed commit ready to push.', singleRepoName, totalAhead)
+          : t('VersionDock [{0}]: {1} unpushed commits ready to push.', singleRepoName, totalAhead))
         : (totalAhead === 1
           ? t('VersionDock: {0} unpushed commit across {1} repository.', totalAhead, reposWithAhead)
           : t('VersionDock: {0} unpushed commits across {1} repositories.', totalAhead, reposWithAhead));

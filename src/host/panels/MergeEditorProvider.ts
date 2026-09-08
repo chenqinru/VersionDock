@@ -38,7 +38,12 @@ export class MergeEditorProvider implements vscode.Disposable {
   openForFile(filePath: string, repoId?: string, relativePath?: string): void {
     void this.openForFileResolved(filePath, repoId, relativePath).catch(error => {
       this.logger.error('MergeEditor', 'Failed to open conflict file', error, { repoId, relativePath });
-      void showGitErrorMessage(t('VersionDock: {0}', error instanceof Error ? error.message : String(error)), {
+      const repoName = repoId ? (this.manager.getRepoMeta(repoId)?.name ?? repoId) : undefined;
+      const message = repoName
+        ? t('VersionDock [{0}]: {1}', repoName, error instanceof Error ? error.message : String(error))
+        : t('VersionDock: {0}', error instanceof Error ? error.message : String(error));
+      void showGitErrorMessage(message, {
+        repoName,
         onUnlocked: async () => {
           await this.manager.getAllStatusesFresh();
         },
@@ -220,7 +225,8 @@ export class MergeEditorProvider implements vscode.Disposable {
       return { file: this.buildSyntheticConflictFile(resolved, versions, sideStatus) };
     } catch (error) {
       const fileName = path.basename(resolved.absolutePath);
-      const noMarkersMessage = t('VersionDock: No conflict markers found in {0}', fileName);
+      const repoName = this.manager.getRepoMeta(resolved.repoId)?.name ?? resolved.repoId;
+      const noMarkersMessage = t('VersionDock [{0}]: No conflict markers found in {1}', repoName, fileName);
       throw new Error(`${noMarkersMessage}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -441,7 +447,8 @@ export class MergeEditorProvider implements vscode.Disposable {
             durationMs: Date.now() - startedAt,
           });
           if (!mergeCommit) {
-            vscode.window.showInformationMessage(t('VersionDock: File resolved and staged: {0}', path.basename(relativePath)));
+            const repoName = this.manager.getRepoMeta(repoId)?.name ?? repoId;
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: File resolved and staged: {1}', repoName, path.basename(relativePath)));
           }
           await this.refreshCommitPanel();
           vscode.commands.executeCommand('versiondock.commitPanel.focus');
@@ -517,7 +524,12 @@ export class MergeEditorProvider implements vscode.Disposable {
     const filePath = editor.document.uri.fsPath;
     const content = editor.document.getText();
     if (!hasConflictMarkers(content)) {
-      vscode.window.showWarningMessage(t('VersionDock: No conflict markers found in the current file'));
+      const repo = this.manager.getServicesForFile(filePath)[0];
+      const repoName = repo?.name;
+      const noMarkersMsg = repoName
+        ? t('VersionDock [{0}]: No conflict markers found in the current file', repoName)
+        : t('VersionDock: No conflict markers found in the current file');
+      vscode.window.showWarningMessage(noMarkersMsg);
       return;
     }
     this.openForFile(filePath);

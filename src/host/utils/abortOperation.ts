@@ -149,10 +149,10 @@ async function confirmAbortOperation(target: AbortOperationTarget): Promise<bool
     ? t('Abort Cherry-pick')
     : t('Abort Revert');
   const message = target.meta.kind === 'svn' && target.state === 'merge'
-    ? t('Abort SVN merge in {0}? This will revert conflicted SVN files and keep other local changes.', target.meta.name)
+    ? t('VersionDock [{0}]: Abort SVN merge? This will revert conflicted SVN files and keep other local changes.', target.meta.name)
     : target.state === 'merge'
-    ? t('Abort merge in {0}? This will restore the repository to its pre-merge state.', target.meta.name)
-    : t('Abort {0} in {1}? This will restore the repository to its previous state.', getAbortOperationName(target.state), target.meta.name);
+    ? t('VersionDock [{0}]: Abort merge? This will restore the repository to its pre-merge state.', target.meta.name)
+    : t('VersionDock [{0}]: Abort {1}? This will restore the repository to its previous state.', target.meta.name, getAbortOperationName(target.state));
   const confirmed = await vscode.window.showWarningMessage(
     message,
     { modal: true },

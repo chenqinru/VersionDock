@@ -435,6 +435,8 @@ export class BranchStatusBar implements vscode.Disposable {
         opDetail = t('Cherry-picking commits…');
       } else if (this.activeOperationKind === 'revert') {
         opDetail = t('Reverting commits…');
+      } else if (this.activeOperationKind === 'stage') {
+        opDetail = this.activeOperationLabel ? this.activeOperationLabel : t('Updating staged changes…');
       }
       md.appendMarkdown(`$(loading~spin) **${opDetail}**\n\n`);
     }
@@ -567,7 +569,7 @@ export class BranchStatusBar implements vscode.Disposable {
   async showMenu(repoId?: string): Promise<void> {
     if (this.statusOperationInProgress) {
       const waitChoice = await vscode.window.showWarningMessage(
-        t('A Git/VCS operation is currently in progress. Please wait for it to complete.'),
+        t('VersionDock: A Git/VCS operation is currently in progress. Please wait for it to complete.'),
         t('Wait and Open Menu'),
       );
       if (waitChoice === t('Wait and Open Menu')) {
@@ -783,7 +785,7 @@ export class BranchStatusBar implements vscode.Disposable {
   async showSvnMenu(repoId?: string): Promise<void> {
     const svnMetas = this.manager.getRepoMetas().filter(meta => meta.kind === 'svn');
     if (svnMetas.length === 0) {
-      vscode.window.showInformationMessage(t('No SVN working copies found in this workspace.'));
+      vscode.window.showInformationMessage(t('VersionDock: No SVN working copies found in this workspace.'));
       return;
     }
 
@@ -848,8 +850,8 @@ export class BranchStatusBar implements vscode.Disposable {
     if (items.length === 0) {
       vscode.window.showInformationMessage(
         options.conflictsOnly
-          ? t('No SVN conflicts found in {0}.', meta.name)
-          : t('No SVN files available in {0}.', meta.name)
+          ? t('VersionDock [{0}]: No SVN conflicts found.', meta.name)
+          : t('VersionDock [{0}]: No SVN files available.', meta.name)
       );
       return undefined;
     }
@@ -869,6 +871,7 @@ export class BranchStatusBar implements vscode.Disposable {
     if (isRemoteRepositoryCancelled(error)) return;
     const msg = error instanceof Error ? error.message : String(error);
     void showGitErrorMessage(t('VersionDock [{0}]: {1}', meta.name, msg), {
+      repoName: meta.name,
       onUnlocked: async () => {
         await this.manager.getAllStatusesFresh();
         await this.refresh();
@@ -1005,16 +1008,16 @@ export class BranchStatusBar implements vscode.Disposable {
         if (!entryPath) return;
         const result = await svn.addIgnoreEntry(entryPath);
         if (result.alreadyExists) {
-          vscode.window.showInformationMessage(t('"{0}" is already in SVN ignore for {1}', result.entry, result.directoryPath || '.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: "{1}" is already in SVN ignore for {2}', meta.name, result.entry, result.directoryPath || '.'));
         } else {
-          vscode.window.showInformationMessage(t('Added "{0}" to SVN ignore for {1}', result.entry, result.directoryPath || '.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Added "{1}" to SVN ignore for {2}', meta.name, result.entry, result.directoryPath || '.'));
         }
         await this.refresh();
         return;
       }
 
       if (entries.length === 0) {
-        vscode.window.showInformationMessage(t('No SVN ignore entries found.'));
+        vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN ignore entries found.', meta.name));
         return;
       }
 
@@ -1034,14 +1037,14 @@ export class BranchStatusBar implements vscode.Disposable {
       if (!selected || selected.length === 0) return;
 
       const confirm = await vscode.window.showWarningMessage(
-        t('Remove selected SVN ignore entries?'),
+        t('VersionDock [{0}]: Remove selected SVN ignore entries?', meta.name),
         { modal: true },
         t('Remove'),
       );
       if (confirm !== t('Remove')) return;
 
       await svn.removeIgnoreEntries(selected.map(item => item.entry));
-      vscode.window.showInformationMessage(t('Removed {0} SVN ignore entries.', selected.length));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Removed {1} SVN ignore entries.', meta.name, selected.length));
       await this.refresh();
     } catch (e: unknown) {
       this.showError(meta, e);
@@ -1242,19 +1245,34 @@ export class BranchStatusBar implements vscode.Disposable {
     const pushItems: ActionItem[] = allRemotes.map(remote => ({
       label: `$(cloud-upload) ${t('Push to "{0}"', remote)}`,
       action: async () => {
+        const progressTitle = metas.length === 1
+          ? t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', metas[0].name, tagName, remote)
+          : t('VersionDock: Pushing tag "{0}" to {1}…', tagName, remote);
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing tag "{0}" to {1}…', tagName, remote), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
           async () => {
             const errors: string[] = [];
+            let succeededCount = 0;
             for (const meta of metas) {
               const repo = this.manager.getRepo(meta.id);
               if (!repo) continue;
-              try { await repo.pushTag(tagName, remote); } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
+              try {
+                await repo.pushTag(tagName, remote);
+                succeededCount++;
+              } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
             }
             if (errors.length > 0) {
-              vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+              vscode.window.showWarningMessage(
+                metas.length === 1
+                  ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+                  : succeededCount > 0
+                    ? t('VersionDock: Tag pushed in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                    : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+              );
+            } else if (metas.length === 1) {
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Tag "{1}" pushed to "{2}".', metas[0].name, tagName, remote));
             } else {
-              vscode.window.showInformationMessage(t('VersionDock: tag "{0}" pushed to "{1}" in {2} repos.', tagName, remote, metas.length));
+              vscode.window.showInformationMessage(t('VersionDock: tag "{0}" pushed to "{1}" in {2} repos.', tagName, remote, succeededCount));
             }
           }
         );
@@ -1271,17 +1289,35 @@ export class BranchStatusBar implements vscode.Disposable {
         label: `$(arrow-right) ${t('Checkout')}`,
         description: t('Checkout tag "{0}" in all repos (detached HEAD)', tagName),
         action: async () => {
+          const progressTitle = metas.length === 1
+            ? t('VersionDock [{0}]: Checking out tag "{1}"…', metas[0].name, tagName)
+            : t('VersionDock: Checking out tag "{0}"…', tagName);
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out tag "{0}"…', tagName), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
             async () => {
               const errors: string[] = [];
+              let succeededCount = 0;
               for (const meta of metas) {
                 const repo = this.manager.getRepo(meta.id);
                 if (!repo) continue;
-                try { await repo.checkoutTag(tagName); } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
+                try {
+                  await repo.checkoutTag(tagName);
+                  succeededCount++;
+                } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
               }
-              if (errors.length > 0) vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
-              else vscode.window.showInformationMessage(t('VersionDock: checked out tag "{0}" in {1} repos.', tagName, metas.length));
+              if (errors.length > 0) {
+                vscode.window.showWarningMessage(
+                  metas.length === 1
+                    ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+                    : succeededCount > 0
+                      ? t('VersionDock: Tag checked out in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                      : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+                );
+              } else if (metas.length === 1) {
+                vscode.window.showInformationMessage(t('VersionDock [{0}]: Checked out tag "{1}" (detached HEAD).', metas[0].name, tagName));
+              } else {
+                vscode.window.showInformationMessage(t('VersionDock: checked out tag "{0}" in {1} repos.', tagName, succeededCount));
+              }
             }
           );
           await this.refresh();
@@ -1290,17 +1326,35 @@ export class BranchStatusBar implements vscode.Disposable {
       {
         label: `$(git-merge) ${t('Merge "{0}" into "{1}"', tagName, branchLabel)}`,
         action: async () => {
+          const progressTitle = metas.length === 1
+            ? t('VersionDock [{0}]: Merging tag "{1}"…', metas[0].name, tagName)
+            : t('VersionDock: Merging tag "{0}"…', tagName);
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging tag "{0}"…', tagName), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
             async () => {
               const errors: string[] = [];
+              let succeededCount = 0;
               for (const meta of metas) {
                 const repo = this.manager.getRepo(meta.id);
                 if (!repo) continue;
-                try { await repo.mergeTag(tagName); } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
+                try {
+                  await repo.mergeTag(tagName);
+                  succeededCount++;
+                } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
               }
-              if (errors.length > 0) vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
-              else vscode.window.showInformationMessage(t('VersionDock: merged tag "{0}" in {1} repos.', tagName, metas.length));
+              if (errors.length > 0) {
+                vscode.window.showWarningMessage(
+                  metas.length === 1
+                    ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+                    : succeededCount > 0
+                      ? t('VersionDock: Tag merged in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                      : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+                );
+              } else if (metas.length === 1) {
+                vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged tag "{1}".', metas[0].name, tagName));
+              } else {
+                vscode.window.showInformationMessage(t('VersionDock: merged tag "{0}" in {1} repos.', tagName, succeededCount));
+              }
             }
           );
           await this.refresh();
@@ -1314,17 +1368,21 @@ export class BranchStatusBar implements vscode.Disposable {
         action: async () => {
           const pick = await vscode.window.showWarningMessage(
             metas.length === 1
-              ? t('Delete tag "{0}" in {1} repository?', tagName, metas.length)
-              : t('Delete tag "{0}" in {1} repositories?', tagName, metas.length),
+              ? t('VersionDock [{0}]: Delete tag "{1}"?', metas[0].name, tagName)
+              : t('VersionDock: Delete tag "{0}" in {1} repositories?', tagName, metas.length),
             { modal: true }, t('Delete Local'), t('Delete on Remote'), t('Delete Local and Remote')
           );
           if (!pick) return;
           const deleteLocal = pick !== t('Delete on Remote');
           const deleteRemote = pick === t('Delete on Remote') || pick === t('Delete Local and Remote');
+          const progressTitle = metas.length === 1
+            ? t('VersionDock [{0}]: Deleting tag "{1}"…', metas[0].name, tagName)
+            : t('VersionDock: Deleting tag "{0}"…', tagName);
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Deleting tag "{0}"…', tagName), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
             async () => {
               const errors: string[] = [];
+              let succeededCount = 0;
               for (const meta of metas) {
                 const repo = this.manager.getRepo(meta.id);
                 if (!repo) continue;
@@ -1336,10 +1394,22 @@ export class BranchStatusBar implements vscode.Disposable {
                       await repo.deleteTagRemote(tagName, remote).catch(() => {});
                     }
                   }
+                  succeededCount++;
                 } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
               }
-              if (errors.length > 0) vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
-              else vscode.window.showInformationMessage(t('VersionDock: deleted tag "{0}" in {1} repos.', tagName, metas.length));
+              if (errors.length > 0) {
+                vscode.window.showWarningMessage(
+                  metas.length === 1
+                    ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+                    : succeededCount > 0
+                      ? t('VersionDock: Tag deleted in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                      : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+                );
+              } else if (metas.length === 1) {
+                vscode.window.showInformationMessage(t('VersionDock [{0}]: Deleted tag "{1}".', metas[0].name, tagName));
+              } else {
+                vscode.window.showInformationMessage(t('VersionDock: deleted tag "{0}" in {1} repos.', tagName, succeededCount));
+              }
             }
           );
           await this.refresh();
@@ -1458,10 +1528,13 @@ export class BranchStatusBar implements vscode.Disposable {
         description: t('Run native Git/SVN pull across all repositories'),
         action: async () => {
           await this.withOperationProgress(async () => {
+            const title = allMetas.length === 1
+              ? t('VersionDock [{0}]: Pulling…', allMetas[0].name)
+              : t('VersionDock: Pulling all repositories…');
             await vscode.window.withProgress(
               {
                 location: vscode.ProgressLocation.Notification,
-                title: t('VersionDock: Pulling all repositories…'),
+                title,
                 cancellable: false,
               },
               async progress => {
@@ -1478,13 +1551,25 @@ export class BranchStatusBar implements vscode.Disposable {
                 );
                 const failed = results.filter(r => !r.ok);
                 if (failed.length === 0) {
-                  vscode.window.showInformationMessage(t('VersionDock: Pull completed for all repositories.'));
+                  const singleRepoName = results.length === 1 ? (this.manager.getRepoMeta(results[0].repoId)?.name ?? results[0].repoId) : undefined;
+                  vscode.window.showInformationMessage(
+                    singleRepoName
+                      ? t('VersionDock [{0}]: Pull completed.', singleRepoName)
+                      : t('VersionDock: Pull completed for all repositories.')
+                  );
                 } else {
                   const failedDescription = failed.map(result => {
                     const name = this.manager.getRepoMeta(result.repoId)?.name ?? result.repoId;
                     return `${name}: ${result.message}`;
                   }).join('; ');
-                  vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) failed: {1}', failed.length, failedDescription));
+                  const successCount = results.length - failed.length;
+                  if (failed.length === 1 && results.length === 1) {
+                    vscode.window.showWarningMessage(t('VersionDock [{0}]: Pull failed: {1}', this.manager.getRepoMeta(failed[0].repoId)?.name ?? failed[0].repoId, failed[0].message));
+                  } else if (successCount > 0) {
+                    vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) succeeded, {1} failed: {2}', successCount, failed.length, failedDescription));
+                  } else {
+                    vscode.window.showWarningMessage(t('VersionDock: {0} pull(s) failed: {1}', failed.length, failedDescription));
+                  }
                 }
               }
             );
@@ -1586,12 +1671,12 @@ export class BranchStatusBar implements vscode.Disposable {
       if (pushResult.success) {
         if (!pushResult.rebased && !pushResult.forced) {
           vscode.window.showInformationMessage(pick.remote
-            ? t('VersionDock [{0}]: pushed to \'{1}\' successfully.', pick.repoLabel, pick.remote)
+            ? t('VersionDock [{0}]: pushed to "{1}" successfully.', pick.repoLabel, pick.remote)
             : t('VersionDock [{0}]: remote created and branch pushed successfully.', pick.repoLabel));
         }
         this.manager.notifyDataInvalidated({ scopes: ['unpushed'], repoIds: [pick.repoId] });
       } else if (!pushResult.cancelled) {
-        vscode.window.showErrorMessage(t('VersionDock: Push failed — {0}', String(pushResult.error)));
+        vscode.window.showErrorMessage(t('VersionDock [{0}]: Push failed — {1}', pick.repoLabel, String(pushResult.error)));
       }
     });
   }
@@ -1608,17 +1693,25 @@ export class BranchStatusBar implements vscode.Disposable {
           t('VersionDock [{0}]: {1} aborted successfully.', result.target.meta.name, getAbortOperationName(result.target.state))
         );
       } else if (!('cancelled' in result)) {
-        vscode.window.showErrorMessage(result.error);
+        vscode.window.showErrorMessage(
+          'target' in result && result.target
+            ? t('VersionDock [{0}]: {1}', (result.target as AbortOperationTarget).meta.name, result.error)
+            : result.error
+        );
       }
     });
   }
 
   async fetchAll(): Promise<void> {
+    const allMetas = this.manager.getRepoMetas();
+    const progressTitle = allMetas.length === 1
+      ? t('VersionDock [{0}]: Fetching all remotes…', allMetas[0].name)
+      : t('VersionDock: Fetching all remotes…');
     await this.withOperationProgress(async () => {
       await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: t('VersionDock: Fetching all remotes…'),
+          title: progressTitle,
           cancellable: false,
         },
         async () => {
@@ -1626,7 +1719,11 @@ export class BranchStatusBar implements vscode.Disposable {
         }
       );
     });
-    vscode.window.showInformationMessage(t('VersionDock: Fetch complete.'));
+    if (allMetas.length === 1) {
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Fetch complete.', allMetas[0].name));
+    } else {
+      vscode.window.showInformationMessage(t('VersionDock: Fetch complete.'));
+    }
   }
 
   async updateProject(): Promise<void> {
@@ -1659,10 +1756,13 @@ export class BranchStatusBar implements vscode.Disposable {
 
     let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
     await this.withOperationProgress(async () => {
+      const progressTitle = metas.length === 1
+        ? t('VersionDock [{0}]: Updating project…', metas[0].name)
+        : t('VersionDock: Updating all projects…');
       await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: t('VersionDock: Updating all projects…'),
+          title: progressTitle,
           cancellable: false,
         },
         async progress => {
@@ -1746,10 +1846,15 @@ export class BranchStatusBar implements vscode.Disposable {
     const doCheckout = (checkoutPick as { value: boolean }).value;
 
     // Execute
+    const singleRepoLabel = (pickedRepos[0] as typeof repoItems[number]).label;
+    const progressTitle = pickedRepos.length === 1
+      ? t('VersionDock [{0}]: Creating branch "{1}"…', singleRepoLabel, sanitizedBranchName)
+      : t('VersionDock: Creating branch "{0}"…', sanitizedBranchName);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const item of pickedRepos) {
           const repo = this.manager.getRepo((item as typeof repoItems[number]).repoId);
           if (!repo) continue;
@@ -1759,15 +1864,26 @@ export class BranchStatusBar implements vscode.Disposable {
             } else {
               await repo.createBranch(sanitizedBranchName, baseFrom);
             }
+            succeededCount++;
           } catch (e: unknown) {
             errors.push(`${item.label}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          vscode.window.showWarningMessage(
+            pickedRepos.length === 1
+              ? t('VersionDock [{0}]: {1}', singleRepoLabel, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Branch created in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
+        } else if (pickedRepos.length === 1) {
+          vscode.window.showInformationMessage(
+            t('VersionDock [{0}]: branch "{1}" created.', singleRepoLabel, sanitizedBranchName)
+          );
         } else {
           vscode.window.showInformationMessage(
-            t('VersionDock: Branch "{0}" created in {1} repos.', sanitizedBranchName, pickedRepos.length)
+            t('VersionDock: Branch "{0}" created in {1} repos.', sanitizedBranchName, succeededCount)
           );
         }
       }
@@ -2075,7 +2191,7 @@ export class BranchStatusBar implements vscode.Disposable {
       label: `$(cloud-upload) ${t('Push to "{0}"', r)}`,
       action: async () => {
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing tag "{0}" to {1}…', tagName, r), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', meta.name, tagName, r), cancellable: false },
           async () => {
             try {
               await repo.pushTag(tagName, r);
@@ -2128,7 +2244,7 @@ export class BranchStatusBar implements vscode.Disposable {
         description: t('Delete tag "{0}"', tagName),
         action: async () => {
           const pick = await vscode.window.showWarningMessage(
-            t('Delete tag "{0}" in {1}?', tagName, meta.name),
+            t('VersionDock [{0}]: Delete tag "{1}"?', meta.name, tagName),
             { modal: true }, t('Delete Local'), t('Delete on Remote'), t('Delete Local and Remote')
           );
           if (!pick) return;
@@ -2305,7 +2421,7 @@ export class BranchStatusBar implements vscode.Disposable {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName),
+        title: t('VersionDock [{0}]: Creating branch "{1}"…', meta.name, sanitizedBranchName),
         cancellable: false,
       },
       async () => {
@@ -2332,15 +2448,20 @@ export class BranchStatusBar implements vscode.Disposable {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', branchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Checking out "{1}"…', meta.name, branchName), cancellable: false },
       async () => {
         try {
           await repo.checkout(branchName);
           this.recordRecentBranch(meta.id, branchName);
           vscode.window.showInformationMessage(t('VersionDock [{0}]: switched to "{1}"', meta.name, branchName));
         } catch (e: unknown) {
-          const handled = await this.handleDirtyCheckout(repo, meta, branchName, e);
-          if (!handled) vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+          const outcome = await this.handleDirtyCheckout(repo, meta, branchName, e);
+          if (outcome === 'succeeded') {
+            this.recordRecentBranch(meta.id, branchName);
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: switched to "{1}"', meta.name, branchName));
+          } else if (outcome === 'notHandled') {
+            vscode.window.showErrorMessage(t('VersionDock [{0}]: {1}', meta.name, String(e)));
+          }
         }
       }
     );
@@ -2352,11 +2473,11 @@ export class BranchStatusBar implements vscode.Disposable {
     meta: RepoMeta,
     branchName: string,
     originalError: unknown
-  ): Promise<boolean> {
+  ): Promise<'succeeded' | 'cancelled' | 'notHandled'> {
     const msg = String(originalError);
     // Only offer the menu for "dirty working tree" errors
     if (!msg.includes('Your local changes') && !msg.includes('local changes') && !msg.includes('overwritten by checkout')) {
-      return false;
+      return 'notHandled';
     }
 
     type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> };
@@ -2411,8 +2532,16 @@ export class BranchStatusBar implements vscode.Disposable {
       ignoreFocusOut: true,
     });
 
-    if (pick) await pick.action();
-    return true;
+    if (!pick || pick.label.includes(t('Cancel'))) {
+      return 'cancelled';
+    }
+
+    try {
+      await pick.action();
+      return 'succeeded';
+    } catch {
+      return 'notHandled';
+    }
   }
 
   private async checkoutBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
@@ -2437,26 +2566,67 @@ export class BranchStatusBar implements vscode.Disposable {
       return;
     }
 
+    const progressTitle = candidates.length === 1
+      ? t('VersionDock [{0}]: Checking out "{1}"…', candidates[0].meta.name, branchName)
+      : t('VersionDock: Checking out "{0}"…', branchName);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', branchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        const cancelledRepoNames: string[] = [];
+        let succeededCount = 0;
         for (const { meta, fullName } of candidates) {
           const repo = this.manager.getRepo(meta.id);
           if (!repo) continue;
           try {
             await repo.checkout(fullName ?? branchName);
             this.recordRecentBranch(meta.id, branchName);
+            succeededCount++;
           } catch (e: unknown) {
-            const handled = await this.handleDirtyCheckout(repo, meta, fullName ?? branchName, e);
-            if (!handled) errors.push(`${meta.name}: ${String(e)}`);
+            const outcome = await this.handleDirtyCheckout(repo, meta, fullName ?? branchName, e);
+            if (outcome === 'succeeded') {
+              this.recordRecentBranch(meta.id, branchName);
+              succeededCount++;
+            } else if (outcome === 'cancelled') {
+              cancelledRepoNames.push(meta.name);
+            } else {
+              errors.push(`${meta.name}: ${String(e)}`);
+            }
           }
         }
-        if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+        if (errors.length > 0 || cancelledRepoNames.length > 0) {
+          if (candidates.length === 1) {
+            if (errors.length > 0) {
+              vscode.window.showWarningMessage(t('VersionDock [{0}]: {1}', candidates[0].meta.name, errors.join('; ')));
+            }
+          } else if (succeededCount > 0 && cancelledRepoNames.length > 0 && errors.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: Branch checked out in {0} repos, {1} cancelled, {2} failed: {3}', succeededCount, cancelledRepoNames.length, errors.length, errors.join('; '))
+            );
+          } else if (succeededCount > 0 && cancelledRepoNames.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: Branch checked out in {0} repos, {1} cancelled.', succeededCount, cancelledRepoNames.length)
+            );
+          } else if (succeededCount > 0 && errors.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: Branch checked out in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+            );
+          } else if (errors.length > 0 && cancelledRepoNames.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: {0} error(s), {1} cancelled: {2}', errors.length, cancelledRepoNames.length, errors.join('; '))
+            );
+          } else if (errors.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+            );
+          }
+        } else if (candidates.length === 1) {
+          vscode.window.showInformationMessage(
+            t('VersionDock [{0}]: switched to "{1}"', candidates[0].meta.name, branchName)
+          );
         } else {
           vscode.window.showInformationMessage(
-            t('VersionDock: Checked out "{0}" in {1} repos.', branchName, candidates.length)
+            t('VersionDock: Checked out "{0}" in {1} repos.', branchName, succeededCount)
           );
         }
       }
@@ -2490,7 +2660,7 @@ export class BranchStatusBar implements vscode.Disposable {
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName),
+        title: t('VersionDock [{0}]: Creating branch "{1}"…', meta.name, sanitizedBranchName),
         cancellable: false,
       },
       async () => {
@@ -2649,7 +2819,7 @@ export class BranchStatusBar implements vscode.Disposable {
 
   private async deleteSingleRepo(branchName: string, meta: RepoMeta): Promise<void> {
     if (isBranchProtected(branchName, undefined, meta.id)) {
-      vscode.window.showErrorMessage(t("Cannot delete protected branch '{0}'.", branchName));
+      vscode.window.showErrorMessage(t("VersionDock [{0}]: Cannot delete protected branch '{1}'.", meta.name, branchName));
       return;
     }
     const repo = this.manager.getRepo(meta.id);
@@ -2733,10 +2903,14 @@ export class BranchStatusBar implements vscode.Disposable {
     ) as { label: string; value: boolean } | undefined;
     if (!checkoutPick) return;
 
+    const progressTitle = metas.length === 1
+      ? t('VersionDock [{0}]: Creating branch "{1}"…', metas[0].name, sanitizedBranchName)
+      : t('VersionDock: Creating branch "{0}"…', sanitizedBranchName);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Creating branch "{0}"…', sanitizedBranchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const meta of metas) {
           const repo = this.manager.getRepo(meta.id);
           if (!repo) continue;
@@ -2746,14 +2920,23 @@ export class BranchStatusBar implements vscode.Disposable {
             } else {
               await repo.createBranch(sanitizedBranchName, fromBranch);
             }
+            succeededCount++;
           } catch (e: unknown) {
             errors.push(`${meta.name}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          vscode.window.showWarningMessage(
+            metas.length === 1
+              ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Branch created in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
+        } else if (metas.length === 1) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: branch "{1}" created.', metas[0].name, sanitizedBranchName));
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Branch "{0}" created in {1} repos.', sanitizedBranchName, metas.length));
+          vscode.window.showInformationMessage(t('VersionDock: Branch "{0}" created in {1} repos.', sanitizedBranchName, succeededCount));
         }
       }
     );
@@ -2797,8 +2980,11 @@ export class BranchStatusBar implements vscode.Disposable {
 
     let results: Awaited<ReturnType<UpdateSummaryService['runAll']>> = [];
     await this.withOperationProgress(async () => {
+      const progressTitle = metas.length === 1
+        ? t('VersionDock [{0}]: Updating "{1}"…', metas[0].name, branchName)
+        : t('VersionDock: Updating "{0}"…', branchName);
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating "{0}"…', branchName), cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
         async progress => {
           const count = metas.length;
           results = await this.updateSummaryService.runAll(
@@ -2833,7 +3019,13 @@ export class BranchStatusBar implements vscode.Disposable {
       } else {
         const failed = results.filter(result => !result.ok);
         if (failed.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', failed.length, failed.map(result => result.error ?? '').join('; ')));
+          vscode.window.showWarningMessage(
+            metas.length === 1
+              ? t('VersionDock [{0}]: {1}', metas[0].name, failed.map(result => result.error ?? '').join('; '))
+              : t('VersionDock: {0} error(s): {1}', failed.length, failed.map(result => result.error ?? '').join('; '))
+          );
+        } else if (metas.length === 1) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: updated successfully.', metas[0].name));
         } else {
           vscode.window.showInformationMessage(t('VersionDock: Updated in {0} repos.', metas.length));
         }
@@ -2852,23 +3044,36 @@ export class BranchStatusBar implements vscode.Disposable {
     const sanitizedNewName = sanitizeBranchName(newName.trim());
     if (sanitizedNewName === oldName) return;
 
+    const progressTitle = metas.length === 1
+      ? t('VersionDock [{0}]: Renaming "{1}" → "{2}"…', metas[0].name, oldName, sanitizedNewName)
+      : t('VersionDock: Renaming "{0}" → "{1}"…', oldName, sanitizedNewName);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Renaming "{0}" → "{1}"…', oldName, sanitizedNewName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const meta of metas) {
           const repo = this.manager.getRepo(meta.id);
           if (!repo) continue;
           try {
             await repo.renameBranch(oldName, newName);
+            succeededCount++;
           } catch (e: unknown) {
             errors.push(`${meta.name}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          vscode.window.showWarningMessage(
+            metas.length === 1
+              ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Renamed in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
+        } else if (metas.length === 1) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Renamed "{1}" → "{2}".', metas[0].name, oldName, newName));
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Renamed "{0}" → "{1}" in {2} repos.', oldName, newName, metas.length));
+          vscode.window.showInformationMessage(t('VersionDock: Renamed "{0}" → "{1}" in {2} repos.', oldName, newName, succeededCount));
         }
       }
     );
@@ -2886,23 +3091,36 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async rebaseAllRepos(onto: string, metas: RepoMeta[]): Promise<void> {
+    const progressTitle = metas.length === 1
+      ? t('VersionDock [{0}]: Rebasing onto "{1}"…', metas[0].name, onto)
+      : t('VersionDock: Rebasing onto "{0}"…', onto);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Rebasing onto "{0}"…', onto), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const meta of metas) {
           const repo = this.manager.getRepo(meta.id);
           if (!repo) continue;
           try {
             await repo.rebase(onto);
+            succeededCount++;
           } catch (e: unknown) {
             errors.push(`${meta.name}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          vscode.window.showWarningMessage(
+            metas.length === 1
+              ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Rebased in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
+        } else if (metas.length === 1) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: rebased onto "{1}".', metas[0].name, onto));
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Rebased onto "{0}" in {1} repos.', onto, metas.length));
+          vscode.window.showInformationMessage(t('VersionDock: Rebased onto "{0}" in {1} repos.', onto, succeededCount));
         }
       }
     );
@@ -2910,15 +3128,21 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async mergeBranchAllRepos(from: string, metas: RepoMeta[]): Promise<void> {
+    const progressTitle = metas.length === 1
+      ? t('VersionDock [{0}]: Merging "{1}"…', metas[0].name, from)
+      : t('VersionDock: Merging "{0}"…', from);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging "{0}"…', from), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        const cancelledRepoNames: string[] = [];
+        let succeededCount = 0;
         for (const meta of metas) {
           const repo = this.manager.getRepo(meta.id);
           if (!repo) continue;
           try {
             await repo.merge(from);
+            succeededCount++;
           } catch (e: unknown) {
             const errMsg = String(e);
             const isDirty = errMsg.includes('Your local changes') || errMsg.includes('overwritten by merge') || (e as { gitErrorCode?: string })?.gitErrorCode === 'DirtyWorkTree';
@@ -2940,19 +3164,48 @@ export class BranchStatusBar implements vscode.Disposable {
                     await repo.stashPush(t('WIP before merge of {0}', from));
                     await repo.merge(from);
                   });
+                  succeededCount++;
                 } catch (e2: unknown) {
                   errors.push(`${meta.name}: ${String(e2)}`);
                 }
+              } else {
+                cancelledRepoNames.push(meta.name);
               }
             } else {
               errors.push(`${meta.name}: ${errMsg}`);
             }
           }
         }
-        if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+        if (errors.length > 0 || cancelledRepoNames.length > 0) {
+          if (metas.length === 1) {
+            if (errors.length > 0) {
+              vscode.window.showWarningMessage(t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; ')));
+            }
+          } else if (succeededCount > 0 && cancelledRepoNames.length > 0 && errors.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: Merged in {0} repos, {1} cancelled, {2} failed: {3}', succeededCount, cancelledRepoNames.length, errors.length, errors.join('; '))
+            );
+          } else if (succeededCount > 0 && cancelledRepoNames.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: Merged in {0} repos, {1} cancelled.', succeededCount, cancelledRepoNames.length)
+            );
+          } else if (succeededCount > 0 && errors.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: Merged in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+            );
+          } else if (errors.length > 0 && cancelledRepoNames.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: {0} error(s), {1} cancelled: {2}', errors.length, cancelledRepoNames.length, errors.join('; '))
+            );
+          } else if (errors.length > 0) {
+            vscode.window.showWarningMessage(
+              t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+            );
+          }
+        } else if (metas.length === 1) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: merged "{1}".', metas[0].name, from));
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Merged "{0}" in {1} repos.', from, metas.length));
+          vscode.window.showInformationMessage(t('VersionDock: Merged "{0}" in {1} repos.', from, succeededCount));
         }
       }
     );
@@ -2961,7 +3214,11 @@ export class BranchStatusBar implements vscode.Disposable {
 
   private async deleteBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
     if (metas.some(meta => isBranchProtected(branchName, undefined, meta.id))) {
-      vscode.window.showErrorMessage(t("Cannot delete protected branch '{0}'.", branchName));
+      vscode.window.showErrorMessage(
+        metas.length === 1
+          ? t("VersionDock [{0}]: Cannot delete protected branch '{1}'.", metas[0].name, branchName)
+          : t("Cannot delete protected branch '{0}'.", branchName)
+      );
       return;
     }
     const confirm = await vscode.window.showQuickPick(
@@ -2969,27 +3226,44 @@ export class BranchStatusBar implements vscode.Disposable {
         { label: `$(trash) ${t('Delete')}`, description: branchName, value: 'delete' },
         { label: `$(warning) ${t('Force delete')}`, description: t('even if not merged'), value: 'force' },
       ],
-      { title: t("Delete branch '{0}' in all repos?", branchName) }
+      {
+        title: metas.length === 1
+          ? t("Delete branch '{0}' in {1}?", branchName, metas[0].name)
+          : t("Delete branch '{0}' in all repos?", branchName)
+      }
     ) as { label: string; value: string } | undefined;
     if (!confirm) return;
 
+    const progressTitle = metas.length === 1
+      ? t('VersionDock [{0}]: Deleting "{1}"…', metas[0].name, branchName)
+      : t('VersionDock: Deleting "{0}"…', branchName);
     await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Deleting "{0}"…', branchName), cancellable: false },
+      { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
       async () => {
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const meta of metas) {
           const repo = this.manager.getRepo(meta.id);
           if (!repo) continue;
           try {
             await repo.deleteBranch(branchName, confirm.value === 'force');
+            succeededCount++;
           } catch (e: unknown) {
             errors.push(`${meta.name}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          vscode.window.showWarningMessage(
+            metas.length === 1
+              ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Deleted in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
+        } else if (metas.length === 1) {
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: deleted "{1}".', metas[0].name, branchName));
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Deleted "{0}" in {1} repos.', branchName, metas.length));
+          vscode.window.showInformationMessage(t('VersionDock: Deleted "{0}" in {1} repos.', branchName, succeededCount));
         }
       }
     );

@@ -24,7 +24,7 @@ export class ComposerPromptManager {
     if (!target) return;
     if (!await this.read(target)) await this.write(target, `${getDefaultComposerPrompt()}\n`);
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(target), { preview: false });
-    vscode.window.showInformationMessage(t('AI Commit Composer Prompt opened: {0}', target.fsPath));
+    vscode.window.showInformationMessage(t('VersionDock: AI Commit Composer Prompt opened: {0}', target.fsPath));
   }
 
   async reset(): Promise<void> {
@@ -34,7 +34,7 @@ export class ComposerPromptManager {
     catch (error: unknown) {
       if (!error || typeof error !== 'object' || !('code' in error) || (error as { code?: unknown }).code !== 'FileNotFound') throw error;
     }
-    vscode.window.showInformationMessage(t('AI Commit Composer Prompt reset to the built-in default.'));
+    vscode.window.showInformationMessage(t('VersionDock: AI Commit Composer Prompt reset to the built-in default.'));
   }
 
   private async pickTarget(): Promise<vscode.Uri | undefined> {

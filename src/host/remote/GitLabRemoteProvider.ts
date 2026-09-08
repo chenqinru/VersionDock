@@ -285,12 +285,12 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider {
     await this.context.secrets.store(tokenKey(host), token.trim());
     const hosts = await this.getHosts();
     await this.context.globalState.update(HOSTS_KEY, [...new Set([...hosts, host])]);
-    vscode.window.showInformationMessage(vscode.l10n.t('GitLab account connected: {0}', host));
+    vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: GitLab account connected: {0}', host));
   }
 
   private async removeAccount(host: string): Promise<void> {
     const choice = await vscode.window.showWarningMessage(
-      vscode.l10n.t('Remove the saved GitLab Token for {0}?', host),
+      vscode.l10n.t('VersionDock: Remove the saved GitLab Token for {0}?', host),
       vscode.l10n.t('Remove'),
       vscode.l10n.t('Cancel'),
     );

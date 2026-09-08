@@ -113,7 +113,7 @@ export function registerCommands(
     vscode.commands.registerCommand('versiondock.showFileHistory', async (resource?: unknown) => {
       const uri = getScmResourceUri(resource) ?? vscode.window.activeTextEditor?.document.uri;
       if (!uri || uri.scheme !== 'file') {
-        vscode.window.showWarningMessage(t('Open a local file to show file history.'));
+        vscode.window.showWarningMessage(t('VersionDock: Open a local file to show file history.'));
         return;
       }
       await logPanel.showFileHistoryForFile(uri.fsPath);
@@ -122,12 +122,12 @@ export function registerCommands(
     vscode.commands.registerCommand('versiondock.showSelectionHistory', async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.document.uri.scheme !== 'file') {
-        vscode.window.showWarningMessage(t('Open a local file to show selection history.'));
+        vscode.window.showWarningMessage(t('VersionDock: Open a local file to show selection history.'));
         return;
       }
       const { selection } = editor;
       if (selection.isEmpty) {
-        vscode.window.showWarningMessage(t('Select one or more lines to show selection history.'));
+        vscode.window.showWarningMessage(t('VersionDock: Select one or more lines to show selection history.'));
         return;
       }
       await logPanel.showFileHistoryForFile(editor.document.uri.fsPath, getSelectionLineRange(selection));
@@ -358,7 +358,7 @@ export function registerCommands(
       if (!picked) return;
       const svn = picked.repo as typeof picked.repo & { cleanup?: () => Promise<string> };
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: SVN cleanup {0}', picked.meta.name), cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: SVN cleanup', picked.meta.name), cancellable: false },
         async () => {
           await svn.cleanup?.();
         }
@@ -425,7 +425,7 @@ export function registerCommands(
       if (newRootUrl === undefined) return;
       const targetUrl = newRootUrl.trim();
       const confirm = await vscode.window.showWarningMessage(
-        t('Relocate SVN working copy "{0}" from "{1}" to "{2}"?', picked.meta.name, info.rootUrl, targetUrl),
+        t('VersionDock [{0}]: Relocate SVN working copy from "{1}" to "{2}"?', picked.meta.name, info.rootUrl, targetUrl),
         {
           modal: true,
           detail: t('This runs svn switch --relocate and changes the repository root URL for the working copy.'),
@@ -436,7 +436,7 @@ export function registerCommands(
 
       try {
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: SVN relocating {0}…', picked.meta.name), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: SVN relocating…', picked.meta.name), cancellable: false },
           async () => {
             await svn.relocateRepository(targetUrl);
           },
@@ -447,6 +447,7 @@ export function registerCommands(
         await branchStatusBar.refresh();
       } catch (e: unknown) {
         void showGitErrorMessage(t('VersionDock [{0}]: {1}', picked.meta.name, String(e)), {
+          repoName: picked.meta.name,
           onUnlocked: async () => {
             await manager?.getAllStatusesFresh();
           },
@@ -541,7 +542,7 @@ async function pickSvnRepo(
 ): Promise<{ meta: NonNullable<ReturnType<WorkspaceGitManager['getRepoMetas']>[number]>; repo: NonNullable<ReturnType<WorkspaceGitManager['getRepo']>> } | undefined> {
   const metas = manager?.getRepoMetas().filter(meta => meta.kind === 'svn') ?? [];
   if (metas.length === 0) {
-    vscode.window.showInformationMessage(t('No SVN working copies found in this workspace.'));
+    vscode.window.showInformationMessage(t('VersionDock: No SVN working copies found in this workspace.'));
     return undefined;
   }
 
@@ -566,7 +567,7 @@ async function pickSvnFile(
 ): Promise<{ repo: NonNullable<ReturnType<WorkspaceGitManager['getRepo']>>; relativePath: string } | undefined> {
   const uri = getScmResourceUri(resource) ?? vscode.window.activeTextEditor?.document.uri;
   if (!uri || uri.scheme !== 'file') {
-    vscode.window.showWarningMessage(t('Open a local SVN file first.'));
+    vscode.window.showWarningMessage(t('VersionDock: Open a local SVN file first.'));
     return undefined;
   }
   const service = manager ? await manager.resolveServiceForFile(uri.fsPath, 'svn', {
@@ -591,7 +592,7 @@ async function pickSubmodule(
 ): Promise<{ parentRepoId: string; submodulePath: string } | undefined> {
   const metas = manager?.getRepoMetas().filter(m => m.isSubmodule) ?? [];
   if (metas.length === 0) {
-    vscode.window.showInformationMessage(t('No submodules found in this workspace.'));
+    vscode.window.showInformationMessage(t('VersionDock: No submodules found in this workspace.'));
     return undefined;
   }
 

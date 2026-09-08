@@ -175,6 +175,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
           void showGitErrorMessage(
             t('VersionDock [{0}]: Could not delete auto-stash backup {1}: {2}', repoName, pending.shortHash, String(error)),
             {
+              repoName,
               onUnlocked: async () => {
                 await this.manager.getAllStatusesFresh();
               },
@@ -208,7 +209,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
           const conflict = (await repo.getConflictFileStatuses().catch(() => new Map())).get(msg.filePath);
           if (msg.filePath === '.' || (conflict && (conflict.nodeKind === 'directory' || conflict.conflictType !== 'text'))) {
             vscode.window.showInformationMessage(
-              t('SVN property and directory conflicts cannot be opened in the text merge editor. Use a conflict action instead.'),
+              t('VersionDock [{0}]: SVN property and directory conflicts cannot be opened in the text merge editor. Use a conflict action instead.', repo.meta.name),
             );
             return;
           }

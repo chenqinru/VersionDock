@@ -128,6 +128,7 @@ async function deleteTagWithRemoteOption(
   repo: import('../git/GitService').GitService,
   tagName: string,
   choice: DeleteTagChoice,
+  repoName?: string,
 ): Promise<void> {
   if (!choice) return;
   if (choice === 'local') {
@@ -138,7 +139,11 @@ async function deleteTagWithRemoteOption(
   if (choice === 'remote') {
     // Remote only — don't delete locally
     if (remotes.length === 0) {
-      vscode.window.showWarningMessage(t('VersionDock: No remotes configured.'));
+      vscode.window.showWarningMessage(
+        repoName
+          ? t('VersionDock [{0}]: No remotes configured.', repoName)
+          : t('VersionDock: No remotes configured.')
+      );
       return;
     }
     const remote = remotes.length === 1
@@ -151,7 +156,11 @@ async function deleteTagWithRemoteOption(
   // 'both': delete local first, then remote
   await repo.deleteTag(tagName);
   if (remotes.length === 0) {
-    vscode.window.showWarningMessage(t('VersionDock: Tag "{0}" deleted locally, but no remotes configured.', tagName));
+    vscode.window.showWarningMessage(
+      repoName
+        ? t('VersionDock [{0}]: Tag "{1}" deleted locally, but no remotes configured.', repoName, tagName)
+        : t('VersionDock: Tag "{0}" deleted locally, but no remotes configured.', tagName)
+    );
     return;
   }
   const remote = remotes.length === 1
@@ -428,11 +437,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.post({ type: 'LOG_REFRESH' });
   }
 
-  private showOperationError(error: unknown, customPrefix?: string): void {
+  private showOperationError(error: unknown, customPrefix?: string, repoName?: string): void {
     if (isRemoteRepositoryCancelled(error)) return;
     const rawMsg = (error instanceof Error ? error.message : String(error)).replace(/^Error:\s*/, '');
     const message = customPrefix ? `${customPrefix}: ${rawMsg}` : rawMsg;
     void showGitErrorMessage(message, {
+      repoName,
       onUnlocked: async () => {
         await this.manager.getAllStatusesFresh();
         this.refresh();
@@ -555,7 +565,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     const task = (async () => {
-      const statusMessage = vscode.window.setStatusBarMessage(t('VersionDock: Loading diff for {0}…', relativePath));
+      const repoName = this.manager.getRepoMeta(repo.repoId)?.name || path.basename(repo.rootPath) || repo.repoId;
+      const statusMessage = vscode.window.setStatusBarMessage(t('VersionDock [{0}]: Loading diff for {1}…', repoName, relativePath));
       try {
         // The file list already tells us whether this revision added or deleted the file.
         // Fetching revision contents directly avoids a redundant `svn diff` round trip;
@@ -564,12 +575,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ? await repo.getRevisionRangeFileContents(fromHash, hash, relativePath)
           : await repo.getRevisionFileContents(hash, relativePath, options?.fileStatus);
         if (contents.isBinary) {
-          vscode.window.showInformationMessage(t('Binary file — no diff available'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Binary file — no diff available', repoName));
           return;
         }
         const normalizedStatus = (options?.fileStatus ?? '').toUpperCase();
         if (!contents.originalContent && !contents.modifiedContent && normalizedStatus !== 'A' && normalizedStatus !== 'D') {
-          vscode.window.showInformationMessage(t('VersionDock: No SVN diff available for {0}.', relativePath));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN diff available for {1}.', repoName, relativePath));
           return;
         }
 
@@ -949,6 +960,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
           return;
         }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           const nodePath = await import('path');
           const status = msg.fileStatus ?? 'M';
@@ -971,7 +983,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
           await this.openDiffBetweenRefs(repo, msg.filePath, `${msg.hash}~1`, msg.hash, title, msg.lineRange);
         } catch (e: unknown) {
-          this.showOperationError(e, t('VersionDock: Cannot open diff'));
+          this.showOperationError(e, t('VersionDock: Cannot open diff'), repoName);
         } finally {
           this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
         }
@@ -984,9 +996,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
           return;
         }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
-          const path = await import('path');
-          const fileName = path.basename(msg.filePath);
+          const pathMod = await import('path');
+          const fileName = pathMod.basename(msg.filePath);
           if (repo.kind === 'svn') {
             await this.openSvnRevisionDiffEditor(
               repo as SvnService,
@@ -1007,7 +1020,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             msg.lineRange,
           );
         } catch (e: unknown) {
-          this.showOperationError(e, t('VersionDock: Cannot open diff'));
+          this.showOperationError(e, t('VersionDock: Cannot open diff'), repoName);
         } finally {
           this.post({ type: 'LOG_DIFF_OPENED', repoId: msg.repoId, filePath: msg.filePath });
         }
@@ -1017,6 +1030,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_OPEN_FILE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           const uri = vscode.Uri.file(repo.resolveRepoPath(msg.filePath).absolutePath);
           await vscode.commands.executeCommand(
@@ -1027,7 +1041,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               : undefined,
           );
         } catch (e: unknown) {
-          this.showOperationError(e, t('VersionDock: Cannot open file'));
+          this.showOperationError(e, t('VersionDock: Cannot open file'), repoName);
         }
         break;
       }
@@ -1066,6 +1080,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_REVERT_FILE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           const resolvedPath = repo.resolveRepoPath(msg.filePath);
           if (msg.fileStatus === 'A') {
@@ -1081,7 +1096,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          void showGitErrorMessage(t('VersionDock: Cannot revert file: {0}', String(e)), {
+          void showGitErrorMessage(t('VersionDock [{0}]: Cannot revert file: {1}', repoName, String(e)), {
+            repoName,
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
               this.refresh({ repoIds: [msg.repoId] });
@@ -1094,6 +1110,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_APPLY_COMMIT_PATHS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const uniqueEntries = Array.from(new Map(msg.entries.map(entry => [scopedKey(entry.repoId, entry.hash, entry.path), entry])).values());
         if (uniqueEntries.length === 0) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1103,7 +1120,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ? `'${uniqueEntries[0].path.split('/').pop() ?? uniqueEntries[0].path}'`
           : t('{0} paths', uniqueEntries.length);
         const confirm = await vscode.window.showWarningMessage(
-          t('Apply changes from the selected commit scope to {0}?', targetLabel),
+          t('VersionDock [{0}]: Apply changes from the selected commit scope to {1}?', repoName, targetLabel),
           { modal: true },
           t('Apply'),
         );
@@ -1121,7 +1138,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          void showGitErrorMessage(t('VersionDock: Cannot apply selected changes: {0}', String(e)), {
+          void showGitErrorMessage(t('VersionDock [{0}]: Cannot apply selected changes: {1}', repoName, String(e)), {
+            repoName,
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
               this.refresh({ repoIds: [msg.repoId] });
@@ -1134,6 +1152,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_RESTORE_COMMIT_PATHS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const uniqueEntries = Array.from(new Map(msg.entries.map(entry => [scopedKey(entry.repoId, entry.hash, entry.path), entry])).values());
         if (uniqueEntries.length === 0) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1143,7 +1162,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ? `'${uniqueEntries[0].path.split('/').pop() ?? uniqueEntries[0].path}'`
           : t('{0} paths', uniqueEntries.length);
         const confirm = await vscode.window.showWarningMessage(
-          t('Revert changes from the selected commit scope for {0}?', targetLabel),
+          t('VersionDock [{0}]: Revert changes from the selected commit scope for {1}?', repoName, targetLabel),
           { modal: true },
           t('Revert'),
         );
@@ -1161,7 +1180,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
         } catch (e: unknown) {
           this.post({ type: 'LOG_FILE_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          void showGitErrorMessage(t('VersionDock: Cannot revert selected changes: {0}', String(e)), {
+          void showGitErrorMessage(t('VersionDock [{0}]: Cannot revert selected changes: {1}', repoName, String(e)), {
+            repoName,
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
               this.refresh({ repoIds: [msg.repoId] });
@@ -1174,8 +1194,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHECKOUT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath);
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', msg.branchName), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Checking out "{1}"…', repoName, msg.branchName), cancellable: false },
           async () => {
             try {
               await repo.checkout(msg.branchName, msg.createNew, msg.from);
@@ -1191,7 +1212,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 const stashAndCheckout = t('Stash and checkout');
                 const bringChanges = t('Bring changes');
                 const choice = await vscode.window.showWarningMessage(
-                  t('Your local changes would be overwritten by checkout. Choose how to handle them:'),
+                  t('VersionDock [{0}]: Your local changes would be overwritten by checkout. Choose how to handle them:', repoName),
                   stashAndCheckout, bringChanges, t('Cancel')
                 );
                 if (choice === stashAndCheckout) {
@@ -1205,10 +1226,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     const merged = mergeCurrentIntoBranches(branches, current);
                     this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
                     this.post({ type: 'LOG_REFRESH' });
-                    vscode.window.showInformationMessage(t('VersionDock: Changes stashed, switched to "{0}".', msg.branchName));
+                    vscode.window.showInformationMessage(t('VersionDock [{0}]: Changes stashed, switched to "{1}".', repoName, msg.branchName));
                     return;
                   } catch (err: unknown) {
-                    this.showOperationError(err);
+                    this.showOperationError(err, undefined, repoName);
                   }
                 } else if (choice === bringChanges) {
                   try {
@@ -1222,15 +1243,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     const merged = mergeCurrentIntoBranches(branches, current);
                     this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
                     this.post({ type: 'LOG_REFRESH' });
-                    vscode.window.showInformationMessage(t('VersionDock: Changes migrated to "{0}".', msg.branchName));
+                    vscode.window.showInformationMessage(t('VersionDock [{0}]: Changes migrated to "{1}".', repoName, msg.branchName));
                     return;
                   } catch (err: unknown) {
-                    this.showOperationError(err);
+                    this.showOperationError(err, undefined, repoName);
                   }
                 }
               }
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e);
+              this.showOperationError(e, undefined, repoName);
             }
           }
         );
@@ -1302,7 +1323,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 this.refresh({ repoIds: [msg.repoId] });
               } catch (e: unknown) {
                 this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-                this.showOperationError(e);
+                this.showOperationError(e, undefined, repoName);
               }
             }
           );
@@ -1341,7 +1362,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
         } else {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(pushResult.error) });
-          this.showOperationError(pushResult.error);
+          this.showOperationError(pushResult.error, undefined, repoName);
         }
         break;
       }
@@ -1361,6 +1382,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_MERGE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath);
         if (repo.kind === 'svn') {
           try {
             await repo.merge(msg.from);
@@ -1370,16 +1392,16 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: merged });
             this.manager.notifyBranchesChanged();
             this.refresh({ repoIds: [msg.repoId] });
-            vscode.window.showInformationMessage(t('VersionDock: Merged SVN branch "{0}" into the working copy.', msg.from));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged SVN branch "{1}" into the working copy.', repoName, msg.from));
           } catch (e: unknown) {
             this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-            this.showOperationError(e, t('VersionDock: SVN merge failed'));
+            this.showOperationError(e, t('VersionDock [{0}]: SVN merge failed', repoName), repoName);
           }
           break;
         }
         let dirtyError: unknown;
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging "{0}"…', msg.from), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Merging "{1}"…', repoName, msg.from), cancellable: false },
           async () => {
             try {
               await repo.merge(msg.from);
@@ -1406,12 +1428,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   const mergeMsg = `Merge branch '${msg.from}' into '${current.name}'`;
                   this.commitPanel?.prefillCommitMessage(mergeMsg, commitTarget);
                 }).catch(() => {});
-                const warning = t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
+                const warning = t('VersionDock [{0}]: Merge conflicts detected. Use the Merge Editor to resolve them.', repoName);
                 void vscode.window.showWarningMessage(warning, t('Open Merge List')).then(choice => {
                   if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
                 });
               } else {
-                this.showOperationError(e);
+                this.showOperationError(e, undefined, repoName);
               }
             }
           }
@@ -1446,7 +1468,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.refresh({ repoIds: [msg.repoId] });
             } catch (e2: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e2) });
-              this.showOperationError(e2);
+              this.showOperationError(e2, undefined, repoName);
             }
           }
         }
@@ -1456,6 +1478,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_REBASE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoMeta = this.getNonWorktreeRepos().find(m => m.id === msg.repoId);
+        const repoName = repoMeta?.name ?? repo.meta.name ?? msg.repoId;
         try {
           await repo.rebase(msg.onto);
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1466,7 +1490,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.refresh({ repoIds: [msg.repoId] });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e);
+          this.showOperationError(e, undefined, repoName);
         }
         break;
       }
@@ -1497,7 +1521,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             targetRef: target.branchName,
           });
         } catch (e: unknown) {
-          this.showOperationError(e, t('VersionDock: Cannot start compare'));
+          this.showOperationError(e, t('VersionDock: Cannot start compare'), meta.name);
         }
         break;
       }
@@ -1505,6 +1529,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_SHOW_WORKTREE_DIFF': {
         const target = await this.pickBranchTarget(msg.branches);
         if (!target) break;
+        const targetRepoName = this.manager.getRepoMeta(target.repoId)?.name || target.repoId;
         try {
           await this.commitPanel?.startWorktreeDiff(
             target.repoId,
@@ -1512,7 +1537,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             this.replyTarget.getStore() ?? 'sidebar',
           );
         } catch (e: unknown) {
-          this.showOperationError(e, t('VersionDock: Cannot open worktree diff'));
+          this.showOperationError(e, t('VersionDock: Cannot open worktree diff'), targetRepoName);
         }
         break;
       }
@@ -1567,7 +1592,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
         const confirm = await vscode.window.showWarningMessage(
-          t('Delete branch "{0}"?', msg.branchName), { modal: true }, t('Delete')
+          t('VersionDock [{0}]: Delete branch "{1}"?', repo.meta.name, msg.branchName), { modal: true }, t('Delete')
         );
         if (confirm !== t('Delete')) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
@@ -1580,7 +1605,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e);
+          this.showOperationError(e, undefined, repo.meta.name);
         }
         break;
       }
@@ -1602,7 +1627,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return !checkedOutIn.includes(meta?.name ?? id);
         });
         if (eligibleRepoIds.length === 0) {
-          vscode.window.showWarningMessage(t('VersionDock: Cannot delete "{0}" — it is currently checked out in all target repositories.', msg.branchName));
+          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name ?? msg.repoIds[0]) : undefined;
+          vscode.window.showWarningMessage(
+            singleName
+              ? t('VersionDock [{0}]: Cannot delete "{1}" — it is currently checked out.', singleName, msg.branchName)
+              : t('VersionDock: Cannot delete "{0}" — it is currently checked out in all target repositories.', msg.branchName)
+          );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Checked out' });
           return;
         }
@@ -1610,10 +1640,13 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ? ` (skipped in: ${checkedOutIn.join(', ')} — currently checked out)`
           : '';
         const repoCount = eligibleRepoIds.length;
+        const singleMeta = repoCount === 1 ? this.getNonWorktreeRepos().find(m => m.id === eligibleRepoIds[0]) : undefined;
         const confirm = await vscode.window.showWarningMessage(
-          repoCount === 1
-            ? t('Delete branch "{0}" in {1} repository?{2}', msg.branchName, repoCount, skippedMsg)
-            : t('Delete branch "{0}" in {1} repositories?{2}', msg.branchName, repoCount, skippedMsg),
+          singleMeta
+            ? t('VersionDock [{0}]: Delete branch "{1}"?{2}', singleMeta.name, msg.branchName, skippedMsg)
+            : (repoCount === 1
+                ? t('Delete branch "{0}" in {1} repository?{2}', msg.branchName, repoCount, skippedMsg)
+                : t('Delete branch "{0}" in {1} repositories?{2}', msg.branchName, repoCount, skippedMsg)),
           { modal: true }, t('Delete'), t('Force Delete')
         );
         if (!confirm) {
@@ -1622,6 +1655,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         const force = confirm === t('Force Delete');
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const repoId of eligibleRepoIds) {
           const repo = this.manager.getRepo(repoId);
           if (!repo) continue;
@@ -1629,13 +1663,21 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             await repo.deleteBranch(msg.branchName, force);
             const branches = await repo.getBranches();
             this.post({ type: 'LOG_REFS_UPDATE', repoId, branches });
+            succeededCount++;
           } catch (e: unknown) {
             const meta = this.getNonWorktreeRepos().find(m => m.id === repoId);
             errors.push(`${meta?.name ?? repoId}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          const singleName = eligibleRepoIds.length === 1 ? (this.manager.getRepoMeta(eligibleRepoIds[0])?.name ?? eligibleRepoIds[0]) : undefined;
+          vscode.window.showWarningMessage(
+            singleName
+              ? t('VersionDock [{0}]: {1}', singleName, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Deleted branch "{0}" in {1} repos, {2} failed: {3}', msg.branchName, succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('; ') });
         } else {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1645,8 +1687,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'LOG_FETCH_ALL': {
+        const metas = this.manager.getRepoMetas();
+        const title = metas.length === 1
+          ? t('VersionDock [{0}]: Fetching all', metas[0].name)
+          : t('VersionDock: Fetching all');
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Fetching all'), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title, cancellable: false },
           async () => { await this.manager.fetchAll(); }
         );
         this.manager.notifyBranchesChanged();
@@ -1657,6 +1703,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_FETCH_REPO': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           await repo.fetchAll();
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1672,7 +1720,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e);
+          this.showOperationError(e, undefined, repoName);
         }
         break;
       }
@@ -1680,9 +1728,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHERRY_PICK': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath);
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Cherry-picking commit {0}…', msg.hash.slice(0, 7)), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Cherry-picking commit {1}…', repoName, msg.hash.slice(0, 7)), cancellable: false },
             () => repo.cherryPick(msg.hash)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1697,7 +1746,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
             const choice = await vscode.window.showWarningMessage(
-              t('Cherry-pick of {0} has conflicts. Resolve them in the editor, then choose an action.', msg.hash.slice(0, 7)),
+              t('VersionDock [{0}]: Cherry-pick of {1} has conflicts. Resolve them in the editor, then choose an action.', repoName, msg.hash.slice(0, 7)),
               t('Continue'), t('Skip'), t('Abort')
             );
             if (choice === t('Continue')) {
@@ -1724,10 +1773,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 scopes: ['workingTree', 'unpushed', 'subtree'],
                 repoIds: [msg.repoId],
               });
-              vscode.window.showInformationMessage(t('VersionDock: Cherry-pick aborted. The repository has been restored.'));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Cherry-pick aborted. The repository has been restored.', repoName));
             }
           } else {
-            void showGitErrorMessage(t('VersionDock: Cherry-pick failed: {0}', errMsg), {
+            void showGitErrorMessage(t('VersionDock [{0}]: Cherry-pick failed: {1}', repoName, errMsg), {
+              repoName,
               onUnlocked: async () => {
                 await this.manager.getAllStatusesFresh();
                 this.refresh({ repoIds: [msg.repoId] });
@@ -1741,9 +1791,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_REVERT_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath);
         {
           const confirm = await vscode.window.showWarningMessage(
-            t('Revert commit {0}? This creates a new commit that undoes the changes.', msg.hash.slice(0, 7)),
+            t('VersionDock [{0}]: Revert commit {1}? This creates a new commit that undoes the changes.', repoName, msg.hash.slice(0, 7)),
             { modal: true }, t('Revert')
           );
           if (confirm !== t('Revert')) {
@@ -1753,7 +1804,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Reverting commit {0}…', msg.hash.slice(0, 7)), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Reverting commit {1}…', repoName, msg.hash.slice(0, 7)), cancellable: false },
             () => repo.revertCommit(msg.hash)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1768,7 +1819,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not revert')) {
             const choice = await vscode.window.showWarningMessage(
-              t('Revert of {0} has conflicts. Resolve them in the editor, then choose an action.', msg.hash.slice(0, 7)),
+              t('VersionDock [{0}]: Revert of {1} has conflicts. Resolve them in the editor, then choose an action.', repoName, msg.hash.slice(0, 7)),
               t('Continue'), t('Abort')
             );
             if (choice === t('Continue')) {
@@ -1787,10 +1838,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 scopes: ['workingTree', 'unpushed', 'subtree'],
                 repoIds: [msg.repoId],
               });
-              vscode.window.showInformationMessage(t('VersionDock: Revert aborted. The repository has been restored.'));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Revert aborted. The repository has been restored.', repoName));
             }
           } else {
-            void showGitErrorMessage(t('VersionDock: Revert failed: {0}', errMsg), {
+            void showGitErrorMessage(t('VersionDock [{0}]: Revert failed: {1}', repoName, errMsg), {
+              repoName,
               onUnlocked: async () => {
                 await this.manager.getAllStatusesFresh();
                 this.refresh({ repoIds: [msg.repoId] });
@@ -1804,9 +1856,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_RESET_TO': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const modeLabel = msg.mode === 'hard' ? t('Hard Reset (discard all changes)') : msg.mode === 'mixed' ? t('Mixed Reset (keep unstaged)') : t('Soft Reset (keep staged)');
         const confirm = await vscode.window.showWarningMessage(
-          t('Reset current branch to {0}? ({1})', msg.hash.slice(0, 7), modeLabel),
+          t('VersionDock [{0}]: Reset current branch to {1}? ({2})', repoName, msg.hash.slice(0, 7), modeLabel),
           { modal: true }, t('Reset')
         );
         if (confirm !== t('Reset')) {
@@ -1821,7 +1874,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          void showGitErrorMessage(t('VersionDock: Reset failed: {0}', String(e)), {
+          void showGitErrorMessage(t('VersionDock [{0}]: Reset failed: {1}', repoName, String(e)), {
+            repoName,
             onUnlocked: async () => {
               await this.manager.getAllStatusesFresh();
               this.refresh({ repoIds: [msg.repoId] });
@@ -1834,6 +1888,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CREATE_PATCH': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           const patch = await repo.createPatch(msg.hash);
           const uri = await vscode.window.showSaveDialog({
@@ -1842,12 +1897,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
           if (uri) {
             await vscode.workspace.fs.writeFile(uri, Buffer.from(patch, 'utf8'));
-            vscode.window.showInformationMessage(t('Patch saved to {0}', uri.fsPath));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Patch saved to {1}', repoName, uri.fsPath));
           }
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Create patch failed'));
+          this.showOperationError(e, t('VersionDock: Create patch failed'), repoName);
         }
         break;
       }
@@ -1855,9 +1910,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHERRY_PICK_MULTI': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name ?? msg.repoId;
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Cherry-picking {0} commits…', msg.hashes.length), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Cherry-picking {1} commits…', repoName, msg.hashes.length), cancellable: false },
             () => repo.cherryPickMulti(msg.hashes)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1869,7 +1925,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
             const choice = await vscode.window.showWarningMessage(
-              t('Cherry-pick has conflicts. Resolve them, then choose an action.'),
+              t('VersionDock [{0}]: Cherry-pick has conflicts. Resolve them, then choose an action.', repoName),
               t('Continue'), t('Skip'), t('Abort')
             );
             if (choice === t('Continue')) {
@@ -1886,7 +1942,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.cherryPickAbort();
             }
           } else {
-            this.showOperationError(errMsg, t('VersionDock: Cherry-pick failed'));
+            this.showOperationError(errMsg, t('VersionDock: Cherry-pick failed'), repoName);
           }
         }
         break;
@@ -1895,9 +1951,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_REVERT_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name ?? msg.repoId;
         {
           const confirm = await vscode.window.showWarningMessage(
-            t('Revert {0} commits? This creates new commits that undo the changes.', msg.hashes.length),
+            t('VersionDock [{0}]: Revert {1} commits? This creates new commits that undo the changes.', repoName, msg.hashes.length),
             { modal: true }, t('Revert')
           );
           if (confirm !== t('Revert')) {
@@ -1907,7 +1964,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Reverting {0} commits…', msg.hashes.length), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Reverting {1} commits…', repoName, msg.hashes.length), cancellable: false },
             () => repo.revertCommits(msg.hashes)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1919,7 +1976,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errMsg });
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not revert')) {
             const choice = await vscode.window.showWarningMessage(
-              t('Revert has conflicts. Resolve them, then choose an action.'),
+              t('VersionDock [{0}]: Revert has conflicts. Resolve them, then choose an action.', repoName),
               t('Continue'), t('Abort')
             );
             if (choice === t('Continue')) {
@@ -1931,7 +1988,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               await repo.revertAbort();
             }
           } else {
-            this.showOperationError(errMsg, t('VersionDock: Revert failed'));
+            this.showOperationError(errMsg, t('VersionDock: Revert failed'), repoName);
           }
         }
         break;
@@ -1940,8 +1997,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_DROP_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const confirm = await vscode.window.showWarningMessage(
-          t('Drop {0} commits? This rewrites history and cannot be undone.', msg.hashes.length),
+          t('VersionDock [{0}]: Drop {1} commits? This rewrites history and cannot be undone.', repoName, msg.hashes.length),
           { modal: true }, t('Drop')
         );
         if (confirm !== t('Drop')) {
@@ -1950,7 +2008,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Dropping {0} commits…', msg.hashes.length), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Dropping {1} commits…', repoName, msg.hashes.length), cancellable: false },
             () => repo.dropCommits(msg.oldestHash)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -1959,7 +2017,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Drop commits failed'));
+          this.showOperationError(e, t('VersionDock: Drop commits failed'), repoName);
         }
         break;
       }
@@ -1967,6 +2025,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CREATE_PATCH_MULTI': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           const folderUris = await vscode.window.showOpenDialog({
             canSelectFiles: false,
@@ -1985,11 +2044,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             const filePath = path.join(folderPath, `${hash.slice(0, 7)}.patch`);
             await vscode.workspace.fs.writeFile(vscode.Uri.file(filePath), Buffer.from(patch, 'utf8'));
           }
-          vscode.window.showInformationMessage(t('{0} patches saved to {1}', msg.hashes.length, folderPath));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: {1} patches saved to {2}', repoName, msg.hashes.length, folderPath));
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Create patches failed'));
+          this.showOperationError(e, t('VersionDock: Create patches failed'), repoName);
         }
         break;
       }
@@ -1997,8 +2056,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_DROP_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const confirm = await vscode.window.showWarningMessage(
-          t('Drop commit {0}? This rewrites history. Only drop unpushed commits — dropping a pushed commit will require a force push.', msg.hash.slice(0, 7)),
+          t('VersionDock [{0}]: Drop commit {1}? This rewrites history. Only drop unpushed commits — dropping a pushed commit will require a force push.', repoName, msg.hash.slice(0, 7)),
           { modal: true }, t('Drop')
         );
         if (confirm !== t('Drop')) {
@@ -2007,7 +2067,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Dropping commit {0}…', msg.hash.slice(0, 7)), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Dropping commit {1}…', repoName, msg.hash.slice(0, 7)), cancellable: false },
             () => repo.dropCommit(msg.hash)
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -2016,7 +2076,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Drop commit failed'));
+          this.showOperationError(e, t('VersionDock: Drop commit failed'), repoName);
         }
         break;
       }
@@ -2024,11 +2084,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_SQUASH_COMMITS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const squashValidation = await repo.canSquashCommitRange(msg.hashes);
         if (!squashValidation.ok || !squashValidation.oldestHash) {
           const reason = squashValidation.reason ?? t('Selected commits cannot be squashed.');
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: reason });
-          vscode.window.showWarningMessage(reason);
+          vscode.window.showWarningMessage(t('VersionDock [{0}]: {1}', repoName, reason));
           return;
         }
         const fullMessages = await Promise.all(msg.hashes.map(h => repo.getFullCommitMessage(h).then(m => m.trim())));
@@ -2053,24 +2114,24 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Squashing {0} commits…', squashValidation.hashes.length), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Squashing {1} commits…', repoName, squashValidation.hashes.length), cancellable: false },
             () => repo.squashCommits(squashValidation.hashes, result.message),
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
-          vscode.window.showInformationMessage(t('VersionDock: Squash completed.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Squash completed.', repoName));
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Squash failed'));
+          this.showOperationError(e, t('VersionDock: Squash failed'), repoName);
         }
         break;
       }
 
       case 'LOG_OPEN_AI_COMPOSER': {
         if (!this.aiCommitComposerProvider) {
-          vscode.window.showErrorMessage(t('AI Commit Composer is unavailable.'));
+          vscode.window.showErrorMessage(t('VersionDock: AI Commit Composer is unavailable.'));
           return;
         }
         this.aiCommitComposerProvider.openHistory(msg.repoId, msg.hashes);
@@ -2080,10 +2141,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_UNDO_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-          const confirm = await vscode.window.showWarningMessage(
-            t('Undo last commit? Changes will be moved back to the staged area.'),
-            { modal: true }, t('Undo Commit')
-          );
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
+        const confirm = await vscode.window.showWarningMessage(
+          t('VersionDock [{0}]: Undo last commit? Changes will be moved back to the staged area.', repoName),
+          { modal: true }, t('Undo Commit')
+        );
         if (confirm !== t('Undo Commit')) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
           return;
@@ -2096,7 +2158,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Undo commit failed'));
+          this.showOperationError(e, t('VersionDock: Undo commit failed'), repoName);
         }
         break;
       }
@@ -2104,6 +2166,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_EDIT_COMMIT_MESSAGE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const fullMessage = (await repo.getFullCommitMessage(msg.hash)).trim();
         const result = await openEditMessageEditor(
           this.extensionUri,
@@ -2125,17 +2188,17 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Updating commit message…'), cancellable: false },
+            { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating commit message…', repoName), cancellable: false },
             () => repo.rewordCommit(result.message),
           );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
           this.post({ type: 'LOG_REFRESH' });
           await this.manager.refreshStatusNow();
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
-          vscode.window.showInformationMessage(t('VersionDock: Commit message updated.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Commit message updated.', repoName));
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Edit commit message failed'));
+          this.showOperationError(e, t('VersionDock: Edit commit message failed'), repoName);
         }
         break;
       }
@@ -2143,6 +2206,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_NEW_BRANCH_FROM_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const shortRef = msg.hash.slice(0, 7);
         const branchName = await vscode.window.showInputBox({
           prompt: repo.kind === 'svn' ? t('Create SVN branch from revision {0}', shortRef) : t('Create new branch from {0}', shortRef),
@@ -2161,7 +2225,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Create branch failed'));
+          this.showOperationError(e, t('VersionDock: Create branch failed'), repoName);
         }
         break;
       }
@@ -2169,6 +2233,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CREATE_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const shortRef = msg.hash.slice(0, 7);
         const tagName = await vscode.window.showInputBox({
           prompt: repo.kind === 'svn' ? t('Create SVN tag from revision {0}', shortRef) : t('Tag name for commit {0}', shortRef),
@@ -2186,7 +2251,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Create tag failed'));
+          this.showOperationError(e, t('VersionDock: Create tag failed'), repoName);
         }
         break;
       }
@@ -2219,9 +2284,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_MANAGE_COMMIT_TAGS': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
-          const tags = await repo.getTagsForCommit(msg.hash).catch(() => [] as string[]);
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
+        const tags = await repo.getTagsForCommit(msg.hash).catch(() => [] as string[]);
         if (tags.length === 0) {
-          vscode.window.showInformationMessage(t('VersionDock: No tags on this commit.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: No tags on this commit.', repoName));
           return;
         }
         await this.showManageCommitTagsMenu(repo, msg.repoId, msg.hash, tags, msg.currentBranch);
@@ -2231,6 +2297,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_DELETE_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         try {
           await repo.deleteTag(msg.tagName);
           await this.refreshTags(msg.repoId, repo);
@@ -2238,7 +2305,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'LOG_REFRESH' });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Delete tag failed'));
+          this.showOperationError(e, t('VersionDock: Delete tag failed'), repoName);
         }
         break;
       }
@@ -2261,7 +2328,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return !checkedOutTagIn.includes(meta?.name ?? id);
         });
         if (eligibleRepoIds.length === 0) {
-          vscode.window.showWarningMessage(t('VersionDock: Cannot delete tag "{0}" — HEAD is detached on it in all target repositories.', msg.tagName));
+          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name ?? msg.repoIds[0]) : undefined;
+          vscode.window.showWarningMessage(
+            singleName
+              ? t('VersionDock [{0}]: Cannot delete tag "{1}" — HEAD is detached on it.', singleName, msg.tagName)
+              : t('VersionDock: Cannot delete tag "{0}" — HEAD is detached on it in all target repositories.', msg.tagName)
+          );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Checked out' });
           return;
         }
@@ -2269,11 +2341,14 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ? ` (skipped in: ${checkedOutTagIn.join(', ')} — HEAD detached on this tag)`
           : '';
         const repoCount = eligibleRepoIds.length;
+        const singleMeta = repoCount === 1 ? this.getNonWorktreeRepos().find(m => m.id === eligibleRepoIds[0]) : undefined;
         const choice = await (async (): Promise<DeleteTagChoice> => {
           const pick = await vscode.window.showWarningMessage(
-            repoCount === 1
-              ? t('Delete tag "{0}" in {1} repository?{2}', msg.tagName, repoCount, skippedMsg)
-              : t('Delete tag "{0}" in {1} repositories?{2}', msg.tagName, repoCount, skippedMsg),
+            singleMeta
+              ? t('VersionDock [{0}]: Delete tag "{1}"?{2}', singleMeta.name, msg.tagName, skippedMsg)
+              : (repoCount === 1
+                  ? t('Delete tag "{0}" in {1} repository?{2}', msg.tagName, repoCount, skippedMsg)
+                  : t('Delete tag "{0}" in {1} repositories?{2}', msg.tagName, repoCount, skippedMsg)),
             { modal: true }, t('Delete Local'), t('Delete on Remote'), t('Delete Local and Remote')
           );
           if (!pick) return null;
@@ -2286,19 +2361,28 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const repoId of eligibleRepoIds) {
           const repo = this.manager.getRepo(repoId);
           if (!repo) continue;
+          const meta = this.getNonWorktreeRepos().find(m => m.id === repoId);
           try {
-            await deleteTagWithRemoteOption(repo, msg.tagName, choice);
+            await deleteTagWithRemoteOption(repo, msg.tagName, choice, meta?.name ?? repoId);
             await this.refreshTags(repoId, repo);
+            succeededCount++;
           } catch (e: unknown) {
-            const meta = this.getNonWorktreeRepos().find(m => m.id === repoId);
             errors.push(`${meta?.name ?? repoId}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          const singleName = eligibleRepoIds.length === 1 ? (this.manager.getRepoMeta(eligibleRepoIds[0])?.name ?? eligibleRepoIds[0]) : undefined;
+          vscode.window.showWarningMessage(
+            singleName
+              ? t('VersionDock [{0}]: {1}', singleName, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Deleted tag "{0}" in {1} repos, {2} failed: {3}', msg.tagName, succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('; ') });
         } else {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
@@ -2310,16 +2394,17 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_PUSH_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing tag "{0}" to {1}…', msg.tagName, msg.remote), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', repoName, msg.tagName, msg.remote), cancellable: false },
           async () => {
             try {
               await repo.pushTag(msg.tagName, msg.remote);
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-              vscode.window.showInformationMessage(t('VersionDock: Tag "{0}" pushed to "{1}".', msg.tagName, msg.remote));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Tag "{1}" pushed to "{2}".', repoName, msg.tagName, msg.remote));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e, t('VersionDock: Push tag failed'));
+              this.showOperationError(e, t('VersionDock: Push tag failed'), repoName);
             }
           }
         );
@@ -2329,8 +2414,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHECKOUT_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out tag "{0}"…', msg.tagName), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Checking out tag "{1}"…', repoName, msg.tagName), cancellable: false },
           async () => {
             try {
               await repo.checkoutTag(msg.tagName);
@@ -2347,10 +2433,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               };
               this.post({ type: 'LOG_REFS_UPDATE', repoId: msg.repoId, branches: [...branches, detachedHeadEntry] });
               this.post({ type: 'LOG_REFRESH' });
-              vscode.window.showInformationMessage(t('VersionDock: Checked out tag "{0}" (detached HEAD).', msg.tagName));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Checked out tag "{1}" (detached HEAD).', repoName, msg.tagName));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e, t('VersionDock: Checkout tag failed'));
+              this.showOperationError(e, t('VersionDock: Checkout tag failed'), repoName);
             }
           }
         );
@@ -2360,8 +2446,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_MERGE_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Merging tag "{0}"…', msg.tagName), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Merging tag "{1}"…', repoName, msg.tagName), cancellable: false },
           async () => {
             try {
               await repo.mergeTag(msg.tagName);
@@ -2369,10 +2456,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.refresh({ repoIds: [msg.repoId] });
               await this.manager.refreshStatusNow();
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
-              vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}".', msg.tagName));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged tag "{1}".', repoName, msg.tagName));
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e, t('VersionDock: Merge tag failed'));
+              this.showOperationError(e, t('VersionDock: Merge tag failed'), repoName);
             }
           }
         );
@@ -2381,21 +2468,34 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'LOG_MERGE_TAG_MULTI': {
         const errors: string[] = [];
+        let succeededCount = 0;
         for (const repoId of msg.repoIds) {
           const repo = this.manager.getRepo(repoId);
           if (!repo) continue;
           try {
             await repo.mergeTag(msg.tagName);
+            succeededCount++;
           } catch (e: unknown) {
             const meta = this.getNonWorktreeRepos().find(m => m.id === repoId);
             errors.push(`${meta?.name ?? repoId}: ${String(e)}`);
           }
         }
         if (errors.length > 0) {
-          vscode.window.showWarningMessage(t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; ')));
+          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name ?? msg.repoIds[0]) : undefined;
+          vscode.window.showWarningMessage(
+            singleName
+              ? t('VersionDock [{0}]: {1}', singleName, errors.join('; '))
+              : succeededCount > 0
+                ? t('VersionDock: Merged tag "{0}" in {1} repos, {2} failed: {3}', msg.tagName, succeededCount, errors.length, errors.join('; '))
+                : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
+          );
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('; ') });
+        } else if (msg.repoIds.length === 1) {
+          const singleName = this.manager.getRepoMeta(msg.repoIds[0])?.name ?? msg.repoIds[0];
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged tag "{1}".', singleName, msg.tagName));
+          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         } else {
-          vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}" in {1} repositories.', msg.tagName, msg.repoIds.length));
+          vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}" in {1} repositories.', msg.tagName, succeededCount));
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
         }
         this.refresh({ repoIds: msg.repoIds });
@@ -2408,6 +2508,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
         type ModeItem = vscode.QuickPickItem & { mode: 'soft' | 'mixed' | 'hard' };
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const pick = await vscode.window.showQuickPick(
           [
             { label: `$(arrow-down) ${t('Soft')}`, description: t('Keep staged and unstaged changes'), mode: 'soft' as const },
@@ -2426,7 +2527,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
         } catch (e: unknown) {
           this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: reqId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Reset failed'));
+          this.showOperationError(e, t('VersionDock: Reset failed'), repoName);
         }
         break;
       }
@@ -2454,15 +2555,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (pushResult.success) {
           if (!pushResult.rebased && !pushResult.forced) {
             vscode.window.showInformationMessage(remotePick
-              ? t('VersionDock: Pushed to "{0}" successfully.', remotePick)
-              : t('VersionDock: Remote created and branch pushed successfully.'));
+              ? t('VersionDock [{0}]: Pushed to "{1}" successfully.', repoName, remotePick)
+              : t('VersionDock [{0}]: Remote created and branch pushed successfully.', repoName));
           }
           this.manager.notifyDataInvalidated({
             scopes: ['unpushed'],
             repoIds: [msg.repoId],
           });
         } else if (!pushResult.cancelled) {
-          this.showOperationError(pushResult.error, t('VersionDock: Push failed'));
+          this.showOperationError(pushResult.error, t('VersionDock: Push failed'), repoName);
         }
         this.refresh({ repoIds: [msg.repoId] });
         await this.manager.refreshStatusNow();
@@ -2472,8 +2573,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_PUSH_TAG_PICK': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         const remotes = await repo.getRemotes().catch(() => [] as string[]);
-        if (remotes.length === 0) { vscode.window.showWarningMessage(t('VersionDock: No remotes configured.')); return; }
+        if (remotes.length === 0) { vscode.window.showWarningMessage(t('VersionDock [{0}]: No remotes configured.', repoName)); return; }
         const remotePick = remotes.length === 1
           ? remotes[0]
           : (await vscode.window.showQuickPick(
@@ -2482,13 +2584,13 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             ) as { label: string; remote: string } | undefined)?.remote;
         if (!remotePick) return;
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Pushing tag "{0}" to {1}…', msg.tagName, remotePick), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', repoName, msg.tagName, remotePick), cancellable: false },
           async () => {
             try {
               await repo.pushTag(msg.tagName, remotePick);
-              vscode.window.showInformationMessage(t('VersionDock: Tag "{0}" pushed to "{1}".', msg.tagName, remotePick));
+              vscode.window.showInformationMessage(t('VersionDock [{0}]: Tag "{1}" pushed to "{2}".', repoName, msg.tagName, remotePick));
             } catch (e: unknown) {
-              this.showOperationError(e, t('VersionDock: Push tag failed'));
+              this.showOperationError(e, t('VersionDock: Push tag failed'), repoName);
             }
           }
         );
@@ -2518,6 +2620,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_CHECKOUT_COMMIT': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
+        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
         let target: string;
         if (msg.branchName) {
           type CheckoutItem = vscode.QuickPickItem & { value: 'branch' | 'revision' };
@@ -2535,7 +2638,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           target = msg.hash;
         }
         await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Checking out "{0}"…', target), cancellable: false },
+          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Checking out "{1}"…', repoName, target), cancellable: false },
           async () => {
             try {
               await repo.checkout(target);
@@ -2547,7 +2650,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e);
+              this.showOperationError(e, undefined, repoName);
             }
           }
         );
@@ -2613,7 +2716,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             files,
           );
           if (resources.length === 0) {
-            await vscode.window.showInformationMessage(t('No SVN file changes to open.'));
+            await vscode.window.showInformationMessage(t('VersionDock [{0}]: No SVN file changes to open.', this.manager.getRepoMeta(msg.repoId)?.name || msg.repoId));
             break;
           }
           await vscode.commands.executeCommand(
@@ -2685,7 +2788,13 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         }
         if (resources.length === 0) {
-          await vscode.window.showInformationMessage(t('No changed files'));
+          const singleRepoId = msg.groups.every(g => g.repoId === msg.groups[0]?.repoId) ? msg.groups[0]?.repoId : undefined;
+          const singleRepoName = singleRepoId ? (this.manager.getRepoMeta(singleRepoId)?.name ?? singleRepoId) : undefined;
+          await vscode.window.showInformationMessage(
+            singleRepoName
+              ? t('VersionDock [{0}]: No changed files', singleRepoName)
+              : t('VersionDock: No changed files')
+          );
           break;
         }
         await vscode.commands.executeCommand('vscode.changes', t('Aggregated commit selection'), resources);
@@ -2711,6 +2820,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     tags: string[],
     currentBranch: string,
   ): Promise<void> {
+    const repoName = this.manager.getRepoMeta(repoId)?.name || path.basename(repo.rootPath) || repoId;
     type TagListItem = vscode.QuickPickItem & { tagName: string | null };
 
     // Step 1: always show the tag list + "New Tag..." so the user picks a tag first
@@ -2739,7 +2849,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         await this.refreshTags(repoId, repo);
         this.refresh({ repoIds: [repoId] });
       } catch (e: unknown) {
-        this.showOperationError(e, t('VersionDock: Create tag failed'));
+        this.showOperationError(e, t('VersionDock: Create tag failed'), repoName);
       }
       return;
     }
@@ -2759,9 +2869,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           try {
             await repo.mergeTag(tagName);
             this.refresh({ repoIds: [repoId] });
-            vscode.window.showInformationMessage(t('VersionDock: Merged tag "{0}" into "{1}".', tagName, currentBranch));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged tag "{1}" into "{2}".', repoName, tagName, currentBranch));
           } catch (e: unknown) {
-            this.showOperationError(e, t('VersionDock: Merge tag failed'));
+            this.showOperationError(e, t('VersionDock: Merge tag failed'), repoName);
           }
         },
       },
@@ -2769,15 +2879,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       {
         label: `$(trash) ${t('Delete "{0}"', tagName)}`,
         action: async () => {
-          const choice = await confirmDeleteTag(t('Delete tag "{0}"?', tagName));
+          const choice = await confirmDeleteTag(t('VersionDock [{0}]: Delete tag "{1}"?', repoName, tagName));
           if (!choice) return;
           try {
-            await deleteTagWithRemoteOption(repo, tagName, choice);
+            await deleteTagWithRemoteOption(repo, tagName, choice, repoName);
             await this.refreshTags(repoId, repo);
             this.refresh({ repoIds: [repoId] });
-            vscode.window.showInformationMessage(t('VersionDock: Deleted tag "{0}".', tagName));
+            vscode.window.showInformationMessage(t('VersionDock [{0}]: Deleted tag "{1}".', repoName, tagName));
           } catch (e: unknown) {
-            this.showOperationError(e, t('VersionDock: Delete tag failed'));
+            this.showOperationError(e, t('VersionDock: Delete tag failed'), repoName);
           }
         },
       },
@@ -2799,10 +2909,11 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const matchingRemote = remoteName ? remotes.find(r => r.name === remoteName) : remotes[0];
     const remoteUrl = matchingRemote?.pushUrl || matchingRemote?.fetchUrl || '';
     const prInfo = remoteUrl ? buildPullRequestUrl(remoteUrl, targetBranch) : undefined;
+    const repoName = this.manager.getRepoMeta(repo.repoId)?.name || path.basename(repo.rootPath);
 
     if (prInfo) {
       const createPrLabel = t('Create Pull Request');
-      const msg = t('VersionDock: Branch "{0}" pushed to {1}.', targetBranch, prInfo.platform);
+      const msg = t('VersionDock [{0}]: Branch "{1}" pushed to {2}.', repoName, targetBranch, prInfo.platform);
       void vscode.window.showInformationMessage(msg, createPrLabel, t('Dismiss')).then(choice => {
         if (choice === createPrLabel) {
           void vscode.env.openExternal(vscode.Uri.parse(prInfo.url));
@@ -2810,7 +2921,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       });
     } else {
       const remoteLabel = remoteName ?? matchingRemote?.name ?? 'remote';
-      const msg = t('VersionDock: Branch "{0}" pushed successfully to "{1}".', targetBranch, remoteLabel);
+      const msg = t('VersionDock [{0}]: Branch "{1}" pushed successfully to "{2}".', repoName, targetBranch, remoteLabel);
       void vscode.window.showInformationMessage(msg);
     }
   }

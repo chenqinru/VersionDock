@@ -316,16 +316,16 @@ export class ProfileStatusBar implements vscode.Disposable {
         detail: info.rootUrl,
         action: async () => {
           await vscode.env.clipboard.writeText(info.url);
-          vscode.window.showInformationMessage(t('SVN repository URL copied.'));
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: SVN repository URL copied.', meta.name));
         },
       });
     }
 
     items.push(
       sep(t('ACTIONS')) as ActionItem,
-      { label: `$(account) ${t('Switch SVN Account…')}`, description: t('Enter another username and password for this authentication realm'), action: () => this.promptSvnAuthentication(service, status) },
-      { label: `$(refresh) ${t('Re-authenticate…')}`, description: t('Forget the current session account and enter credentials again'), action: async () => { await service.forgetSessionAuthentication(); await this.promptSvnAuthentication(service, status); } },
-      { label: `$(debug-disconnect) ${t('Forget Session Credentials')}`, description: t('Keep the system SVN cache, but forget credentials held by VersionDock'), action: () => this.forgetSvnSession(service) },
+      { label: `$(account) ${t('Switch SVN Account…')}`, description: t('Enter another username and password for this authentication realm'), action: () => this.promptSvnAuthentication(service, status, meta) },
+      { label: `$(refresh) ${t('Re-authenticate…')}`, description: t('Forget the current session account and enter credentials again'), action: async () => { await service.forgetSessionAuthentication(); await this.promptSvnAuthentication(service, status, meta); } },
+      { label: `$(debug-disconnect) ${t('Forget Session Credentials')}`, description: t('Keep the system SVN cache, but forget credentials held by VersionDock'), action: () => this.forgetSvnSession(service, meta) },
       { label: `$(trash) ${t('Clear Cached SVN Credentials…')}`, description: t('Remove matching credentials from the system SVN authentication cache'), action: () => this.clearSvnAuthentication(service, meta, status) },
       { label: `$(plug) ${t('Test SVN Connection')}`, description: t('Run svn info using the current account'), action: () => this.testSvnConnection(service, meta) },
     );
@@ -345,7 +345,7 @@ export class ProfileStatusBar implements vscode.Disposable {
     return t('No cached SVN credentials detected');
   }
 
-  private async promptSvnAuthentication(service: SvnService, status: SvnAuthenticationStatus): Promise<void> {
+  private async promptSvnAuthentication(service: SvnService, status: SvnAuthenticationStatus, meta?: RepoMeta): Promise<void> {
     const username = await vscode.window.showInputBox({
       title: t('Switch SVN Account'),
       prompt: t('SVN username for {0}', status.realm ?? status.authKey ?? service.rootPath),
@@ -374,27 +374,39 @@ export class ProfileStatusBar implements vscode.Disposable {
 
     try {
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t('VersionDock: Verifying SVN account…'), cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: meta ? t('VersionDock [{0}]: Verifying SVN account…', meta.name) : t('VersionDock: Verifying SVN account…'), cancellable: false },
         () => service.switchAuthentication(username, password, rememberPick.remember),
       );
       this.refresh();
-      vscode.window.showInformationMessage(t('VersionDock: SVN account switched to {0}.', username.trim()));
+      vscode.window.showInformationMessage(
+        meta
+          ? t('VersionDock [{0}]: SVN account switched to {1}.', meta.name, username.trim())
+          : t('VersionDock: SVN account switched to {0}.', username.trim())
+      );
     } catch (error: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock: SVN authentication failed: {0}', String(error)));
+      vscode.window.showErrorMessage(
+        meta
+          ? t('VersionDock [{0}]: SVN authentication failed: {1}', meta.name, String(error))
+          : t('VersionDock: SVN authentication failed: {0}', String(error))
+      );
     }
   }
 
-  private async forgetSvnSession(service: SvnService): Promise<void> {
+  private async forgetSvnSession(service: SvnService, meta?: RepoMeta): Promise<void> {
     await service.forgetSessionAuthentication();
     this.refresh();
-    vscode.window.showInformationMessage(t('VersionDock: SVN session credentials forgotten.'));
+    vscode.window.showInformationMessage(
+      meta
+        ? t('VersionDock [{0}]: SVN session credentials forgotten.', meta.name)
+        : t('VersionDock: SVN session credentials forgotten.')
+    );
   }
 
   private async clearSvnAuthentication(service: SvnService, meta: RepoMeta, status: SvnAuthenticationStatus): Promise<void> {
     const pattern = status.realm ?? status.authKey;
     const action = t('Clear Cached Credentials');
     const confirmed = await vscode.window.showWarningMessage(
-      t('Clear cached SVN credentials for {0}? This can affect other SVN clients using the same authentication realm.', pattern ?? meta.name),
+      t('VersionDock [{0}]: Clear cached SVN credentials for {1}? This can affect other SVN clients using the same authentication realm.', meta.name, pattern ?? meta.name),
       { modal: true },
       action,
     );
@@ -402,18 +414,18 @@ export class ProfileStatusBar implements vscode.Disposable {
     try {
       await service.clearCachedAuthentication();
       this.refresh();
-      vscode.window.showInformationMessage(t('VersionDock: Cached SVN credentials cleared for {0}.', pattern ?? meta.name));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: Cached SVN credentials cleared.', meta.name));
     } catch (error: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock: Failed to clear SVN credentials: {0}', String(error)));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: Failed to clear SVN credentials: {1}', meta.name, String(error)));
     }
   }
 
   private async testSvnConnection(service: SvnService, meta: RepoMeta): Promise<void> {
     try {
       const info = await service.testAuthentication();
-      vscode.window.showInformationMessage(t('VersionDock: SVN connection succeeded for {0}: {1}', meta.name, info.url));
+      vscode.window.showInformationMessage(t('VersionDock [{0}]: SVN connection succeeded: {1}', meta.name, info.url));
     } catch (error: unknown) {
-      vscode.window.showErrorMessage(t('VersionDock: SVN connection failed for {0}: {1}', meta.name, String(error)));
+      vscode.window.showErrorMessage(t('VersionDock [{0}]: SVN connection failed: {1}', meta.name, String(error)));
     }
   }
 

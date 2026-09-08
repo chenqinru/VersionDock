@@ -28,6 +28,7 @@ export interface PushTabProps {
   unpushedMap: Record<string, { loading: boolean; commits: UnpushedCommit[]; error?: string }>;
   incomingMap?: Record<string, IncomingRepoData>;
   onPush: (repoId: string) => void;
+  onPushMulti?: (repoIds: string[]) => void;
   onPushAll: () => void;
   onForcePush?: (repoId: string) => void;
   onForcePushMulti?: (repoIds: string[]) => void;
@@ -1930,6 +1931,7 @@ export function PushTab(props: Props) {
     unpushedMap,
     incomingMap,
     onPush,
+    onPushMulti,
     onForcePush,
     onForcePushMulti,
     onPushTags,
@@ -2256,6 +2258,8 @@ export function PushTab(props: Props) {
     if (pushableChecked.length === 0) return;
     if (pushableChecked.length === 1) {
       onPush(pushableChecked[0].repoId);
+    } else if (onPushMulti) {
+      onPushMulti(pushableChecked.map(repo => repo.repoId));
     } else {
       pushableChecked.forEach(repo => onPush(repo.repoId));
     }
@@ -2290,7 +2294,15 @@ export function PushTab(props: Props) {
     }
 
     // 每个仓库只执行它当前需要的操作，避免单向差异被扩大为先拉取再推送。
-    pushOnlyTargets.forEach(id => onPush(id));
+    if (pushOnlyTargets.length === 1) {
+      onPush(pushOnlyTargets[0]);
+    } else if (pushOnlyTargets.length > 1) {
+      if (onPushMulti) {
+        onPushMulti(pushOnlyTargets);
+      } else {
+        pushOnlyTargets.forEach(id => onPush(id));
+      }
+    }
 
     if (pullOnlyTargets.length === 1) {
       onPull?.(pullOnlyTargets[0], strategy);
