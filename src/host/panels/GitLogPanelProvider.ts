@@ -1241,8 +1241,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
 
+        const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
+        const isCurrent = !msg.branchName || msg.branchName === currentBranch?.name;
         let useRebase = false;
-        if (repo.kind !== 'svn') {
+        if (repo.kind !== 'svn' && isCurrent) {
           const updateMethod = vscode.workspace
             .getConfiguration('versiondock')
             .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
@@ -1278,9 +1280,6 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating…', repoName), cancellable: false },
             async () => {
               try {
-                const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
-                const isCurrent = !msg.branchName || msg.branchName === currentBranch?.name;
-
                 trackedResult = await this.updateSummaryService.run({
                   repoId: msg.repoId,
                   branchName: msg.branchName,

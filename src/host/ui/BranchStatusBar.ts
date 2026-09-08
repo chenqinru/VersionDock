@@ -2517,8 +2517,10 @@ export class BranchStatusBar implements vscode.Disposable {
     const repo = this.manager.getRepo(meta.id);
     if (!repo) return;
 
+    const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
+    const isCurrent = !branchName || branchName === currentBranch?.name;
     let useRebase = false;
-    if (meta.kind !== 'svn') {
+    if (meta.kind !== 'svn' && isCurrent) {
       const updateMethod = vscode.workspace
         .getConfiguration('versiondock')
         .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');
@@ -2550,8 +2552,6 @@ export class BranchStatusBar implements vscode.Disposable {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating…', meta.name), cancellable: false },
         async () => {
-          const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
-          const isCurrent = !branchName || branchName === currentBranch?.name;
           result = await this.updateSummaryService.run({
             repoId: meta.id,
             branchName,
@@ -2691,6 +2691,7 @@ export class BranchStatusBar implements vscode.Disposable {
         async () => {
           result = await this.updateSummaryService.run({
             repoId: meta.id,
+            summaryRef: 'FETCH_HEAD',
             execute: async target => {
               await target.pullFromRemote(remote, branch, useRebase);
               return `updated "${remoteBranch}" using ${useRebase ? 'rebase' : 'merge'}`;
@@ -2760,9 +2761,14 @@ export class BranchStatusBar implements vscode.Disposable {
   }
 
   private async updateBranchAllRepos(branchName: string, metas: RepoMeta[]): Promise<void> {
-    const hasGitRepos = metas.some(meta => meta.kind !== 'svn');
+    const currentGitBranches = await Promise.all(
+      metas
+        .filter(meta => meta.kind !== 'svn')
+        .map(async meta => this.manager.getRepo(meta.id)?.getCurrentBranch().catch(() => undefined)),
+    );
+    const hasCurrentGitRepos = currentGitBranches.some(current => current?.name === branchName);
     let useRebase = false;
-    if (hasGitRepos) {
+    if (hasCurrentGitRepos) {
       const updateMethod = vscode.workspace
         .getConfiguration('versiondock')
         .get<'rebase' | 'merge' | 'prompt'>('updateProject.method', 'rebase');

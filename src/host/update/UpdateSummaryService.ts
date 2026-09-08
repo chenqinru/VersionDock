@@ -26,6 +26,8 @@ export type TrackedUpdateResult = {
 export type UpdateTarget = {
   repoId: string;
   branchName?: string;
+  /** Git ref that represents the incoming tip after the update completes. */
+  summaryRef?: string;
   execute(repo: GitService): Promise<string>;
 };
 
@@ -101,6 +103,9 @@ export class UpdateSummaryService {
     if (trackingRequested) {
       try {
         snapshot = await repo.captureUpdateSnapshot(target.branchName);
+        if (snapshot?.kind === 'git' && target.summaryRef) {
+          snapshot = { ...snapshot, upstreamRef: target.summaryRef };
+        }
       } catch (error: unknown) {
         snapshotError = errorText(error);
         this.logger.warn('UpdateSummary', 'Failed to capture update snapshot', {

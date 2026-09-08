@@ -2090,6 +2090,7 @@
   "Type-Change Conflict": "Type-Change Conflict",
   "Resolve in Merge Editor": "Resolve in Merge Editor",
   "A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?": "A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?",
+  "Submodule conflict resolved in Git, but failed to clean up directory on disk: {0}": "Submodule conflict resolved in Git, but failed to clean up directory on disk: {0}",
   "Failed to open conflict in editor: {0}": "Failed to open conflict in editor: {0}",
   "Not updated": "Not updated",
   "{0} commit to update from {1}": "{0} commit to update from {1}",

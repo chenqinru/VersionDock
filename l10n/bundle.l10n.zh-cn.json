@@ -2090,6 +2090,7 @@
   "Type-Change Conflict": "类型变更冲突",
   "Resolve in Merge Editor": "在冲突编辑器中解决",
   "A nested submodule references a local path or file protocol. Do you want to allow local submodule operations and retry?": "嵌套子模块引用了本地路径或文件协议。是否允许本地子模块操作并重试？",
+  "Submodule conflict resolved in Git, but failed to clean up directory on disk: {0}": "子模块 Git 冲突已成功解决，但从磁盘删除目录失败：{0}",
   "Failed to open conflict in editor: {0}": "在编辑器中打开冲突失败：{0}",
   "Not updated": "未更新",
   "{0} commit to update from {1}": "{0} 个提交可从 {1} 更新",
