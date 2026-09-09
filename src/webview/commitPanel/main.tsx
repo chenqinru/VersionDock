@@ -1858,7 +1858,11 @@ export function CommitApp() {
   const showVcsBadges = gitRepos.length > 0 && gitRepos.length < repos.length;
   const gitRepoMetas = store.repoMetas.filter(meta => meta.kind !== 'svn');
   const visibleTabs = (repos.length > 0 && gitRepos.length === 0) ? SVN_ONLY_TABS : ALL_TABS;
-  const visibleRepoIds = new Set(repos.map(repo => repo.repoId));
+  const visibleRepoIds = useMemo(() => new Set(repos.map(repo => repo.repoId)), [repos]);
+  const visibleGitRepoMetas = useMemo(() => gitRepoMetas.filter(m => visibleRepoIds.has(m.id)), [gitRepoMetas, visibleRepoIds]);
+  const visibleSubmoduleRepos = useMemo(() => submoduleRepos.filter(r => visibleRepoIds.has(r.repoId)), [submoduleRepos, visibleRepoIds]);
+  const visibleWorktreeRepos = useMemo(() => worktreeRepos.filter(r => visibleRepoIds.has(r.repoId)), [worktreeRepos, visibleRepoIds]);
+  const visibleSubtreeEntries = useMemo(() => subtreeEntries.filter(e => visibleRepoIds.has(e.repoId)), [subtreeEntries, visibleRepoIds]);
   const multiRepo = repos.length >= 1;
 
   // ── Changes speed search ───────────────────────────────────────────────────
@@ -2747,20 +2751,16 @@ export function CommitApp() {
         const totalStashes = gitRepos.reduce((sum, repo) => (
           sum + (stashCountMap[repo.repoId] ?? stashMap[repo.repoId]?.length ?? 0)
         ), 0);
-        const totalSubmodules = submoduleRepos.reduce((sum, repo) => (
-          visibleRepoIds.has(repo.repoId) ? sum + repo.submodules.length : sum
+        const totalSubmodules = visibleSubmoduleRepos.reduce((sum, repo) => (
+          sum + repo.submodules.length
         ), 0);
-        const totalSubmoduleIssues = submoduleRepos.reduce((sum, repo) => (
-          visibleRepoIds.has(repo.repoId)
-            ? sum + repo.submodules.filter((s: SubmoduleItem) => !s.initialized || s.syncStatus === 'out-of-sync').length
-            : sum
+        const totalSubmoduleIssues = visibleSubmoduleRepos.reduce((sum, repo) => (
+          sum + repo.submodules.filter((s: SubmoduleItem) => !s.initialized || s.syncStatus === 'out-of-sync').length
         ), 0);
-        const totalWorktrees = worktreeRepos.reduce((sum, repo) => (
-          visibleRepoIds.has(repo.repoId) ? sum + repo.worktrees.length : sum
+        const totalWorktrees = visibleWorktreeRepos.reduce((sum, repo) => (
+          sum + repo.worktrees.length
         ), 0);
-        const totalSubtrees = subtreeEntries.reduce((sum, entry) => (
-          visibleRepoIds.has(entry.repoId) ? sum + 1 : sum
-        ), 0);
+        const totalSubtrees = visibleSubtreeEntries.length;
         const tabCounts: Record<TabId, number> = {
           changes: totalChanges,
           shelf: totalShelves,
@@ -3181,7 +3181,7 @@ export function CommitApp() {
             <PushTab
               isActive={activeTab === 'push'}
               repos={gitRepos}
-              repoMetas={gitRepoMetas}
+              repoMetas={visibleGitRepoMetas}
               iconTheme={store.iconTheme}
               unpushedMap={unpushedMap}
               incomingMap={incomingMap}
@@ -3229,7 +3229,7 @@ export function CommitApp() {
           <div style={{ display: activeTab === 'submodule' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
             <div style={css.repoList}>
               <SubmodulePanel
-                repos={submoduleRepos}
+                repos={visibleSubmoduleRepos}
                 loading={submoduleLoading}
                 initialLoaded={submoduleInitialLoaded}
                 error={submoduleError}
@@ -3259,7 +3259,7 @@ export function CommitApp() {
           <div style={{ display: activeTab === 'worktree' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
             <div style={css.repoList}>
               <WorktreePanel
-                repos={worktreeRepos}
+                repos={visibleWorktreeRepos}
                 loading={worktreeLoading}
                 error={worktreeError}
                 multiRepo={multiRepo}
@@ -3282,8 +3282,8 @@ export function CommitApp() {
           <div style={{ display: activeTab === 'subtree' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
             <div style={css.repoList}>
               <SubtreePanel
-                entries={subtreeEntries}
-                repoMetas={gitRepoMetas}
+                entries={visibleSubtreeEntries}
+                repoMetas={visibleGitRepoMetas}
                 loading={subtreeLoading}
                 activeOps={subtreeOps}
                 statuses={subtreeStatuses}

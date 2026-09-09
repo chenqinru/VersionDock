@@ -44,7 +44,7 @@
   "commands.openSvnGhostText.title": "Enable SVN ghost text",
   "commands.closeSvnGhostText.title": "Disable SVN ghost text",
   "commands.navigateToAnnotationCommit.title": "VersionDock: Navigate to Commit",
-  "commands.manageHiddenRepos.title": "VersionDock: Manage Hidden Repositories",
+  "commands.manageHiddenRepos.title": "Manage Repository Visibility...",
   "commands.manageProfiles.title": "VersionDock: Manage Version Control Accounts",
   "commands.switchProfile.title": "VersionDock: Switch Git Profile",
   "commands.submoduleInit.title": "VersionDock: Initialize Submodule",

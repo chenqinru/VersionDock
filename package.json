@@ -289,6 +289,7 @@
       {
         "command": "versiondock.manageHiddenRepos",
         "title": "%commands.manageHiddenRepos.title%",
+        "category": "VersionDock",
         "icon": "$(eye-closed)"
       },
       {
@@ -503,6 +504,11 @@
           "submenu": "versiondock.commitPanel.viewMode",
           "when": "view == versiondock.commitPanel",
           "group": "1_options@2"
+        },
+        {
+          "command": "versiondock.manageHiddenRepos",
+          "when": "view == versiondock.commitPanel && versiondock.isMultiRepo",
+          "group": "1_options@3"
         }
       ],
       "versiondock.commitPanel.expandMode": [

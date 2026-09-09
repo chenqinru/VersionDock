@@ -144,10 +144,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const initialFileViewMode = context.globalState.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
   void vscode.commands.executeCommand('setContext', 'versiondock.isTreeFileView', initialFileViewMode === 'tree');
   void vscode.commands.executeCommand('setContext', 'versiondock.isFlatFileView', initialFileViewMode === 'flat');
+  void vscode.commands.executeCommand('setContext', 'versiondock.isMultiRepo', false);
 
   const remoteRepositoryService = new RemoteRepositoryService(context, logger);
   const manager = new WorkspaceVcsManager(context, logger, remoteRepositoryService.publishMissingRemote);
   setMultiRepoProvider(() => manager.getRepoMetas().length > 1);
+  void vscode.commands.executeCommand('setContext', 'versiondock.isMultiRepo', manager.getRepoMetas().length > 1);
 
   // DEV ONLY: uncomment to reset the quickpick flag
   //context.globalState.update('hasShownViewModeQuickpick', false);

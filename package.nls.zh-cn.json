@@ -44,7 +44,7 @@
   "commands.openSvnGhostText.title": "开启 SVN 行内提示",
   "commands.closeSvnGhostText.title": "关闭 SVN 行内提示",
   "commands.navigateToAnnotationCommit.title": "VersionDock：跳转到提交",
-  "commands.manageHiddenRepos.title": "VersionDock：管理隐藏仓库",
+  "commands.manageHiddenRepos.title": "仓库可见性管理...",
   "commands.manageProfiles.title": "VersionDock：管理版本控制账户",
   "commands.switchProfile.title": "VersionDock：切换 Git 身份",
   "commands.submoduleInit.title": "VersionDock：初始化子模块",

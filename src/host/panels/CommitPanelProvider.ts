@@ -264,6 +264,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     void vscode.commands.executeCommand('setContext', 'versiondock.hasGitRepo', hasGitRepo);
     void vscode.commands.executeCommand('setContext', 'versiondock.hasSvnRepo', hasSvnRepo);
     void vscode.commands.executeCommand('setContext', 'versiondock.svnOnly', hasSvnRepo && !hasGitRepo);
+    void vscode.commands.executeCommand('setContext', 'versiondock.isMultiRepo', metas.length > 1);
   }
 
   constructor(
@@ -1319,24 +1320,34 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   async manageHiddenRepos(): Promise<void> {
-    const hidden = this.getHiddenRepoIds();
-    if (hidden.length === 0) {
-      vscode.window.showInformationMessage(t('VersionDock: No hidden repositories.'));
+    const allMetas = this.manager.getRepoMetas();
+    if (allMetas.length <= 1) {
+      vscode.window.showInformationMessage(t('VersionDock: Only one repository in current workspace.'));
       return;
     }
-    const allMetas = this.manager.getRepoMetas();
-    const items = hidden.map(id => {
-      const meta = allMetas.find(m => m.id === id);
-      return { label: `$(eye) ${meta?.name ?? id}`, repoId: id };
+    const hidden = this.getHiddenRepoIds();
+    const items: Array<vscode.QuickPickItem & { repoId: string }> = allMetas.map(meta => {
+      const isVisible = !hidden.includes(meta.id);
+      return {
+        label: meta.name,
+        description: meta.rootPath,
+        picked: isVisible,
+        repoId: meta.id,
+      };
     });
     const picked = await vscode.window.showQuickPick(items, {
-      placeHolder: t('Select repositories to show again'),
+      placeHolder: t('Select repositories to display in the panel (uncheck to hide)'),
       canPickMany: true,
-      title: t('Hidden Repositories'),
+      title: t('Manage Repository Visibility'),
     });
-    if (!picked || picked.length === 0) return;
-    const toUnhide = picked.map(p => p.repoId);
-    await this.setHiddenRepoIds(hidden.filter(id => !toUnhide.includes(id)));
+    if (!picked) return;
+    const visibleRepoIds = new Set(picked.map(p => p.repoId));
+    if (visibleRepoIds.size === 0) {
+      vscode.window.showWarningMessage(t('VersionDock: At least one repository must remain visible.'));
+      return;
+    }
+    const newHidden = allMetas.map(m => m.id).filter(id => !visibleRepoIds.has(id));
+    await this.setHiddenRepoIds(newHidden);
   }
 
   private getOrCreateChangelistService(): ChangelistService | undefined {
