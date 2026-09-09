@@ -1501,8 +1501,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private async refreshSubtreeList(options: SubtreeStatusRefreshOptions = {}): Promise<void> {
     if (options.force) {
-      // SWR: Invalidate remote hash cache to trigger fresh network query in background,
-      // but retain current status snapshot for zero-latency initial UI rendering.
+      // Invalidate remote hash cache on forced refresh to query live remote references.
       this.invalidateAllSubtreeRemoteCaches();
     } else if (options.forceEntryIds) {
       for (const id of options.forceEntryIds) {
