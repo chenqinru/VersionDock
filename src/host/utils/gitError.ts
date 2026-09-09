@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { t } from './l10n';
+import { t, formatRepoMessage } from './l10n';
 import { isPushRejectedError } from './pushProtection';
 
 export interface ShowGitErrorOptions {
@@ -22,11 +22,12 @@ export async function showGitErrorMessage(
 
   const formatMsg = (raw: string): string => {
     if (repoName) {
-      if (raw.startsWith('VersionDock [')) return raw;
-      const stripped = raw.replace(/^VersionDock:\s*/, '');
+      if (raw.startsWith('VersionDock [')) return formatRepoMessage(raw);
+      const stripped = raw.replace(/^VersionDock(?::|：)\s*/, '');
       return t('VersionDock [{0}]: {1}', repoName, stripped);
     }
-    return raw.startsWith('VersionDock') ? raw : t('VersionDock: {0}', raw);
+    const formatted = raw.startsWith('VersionDock') ? raw : t('VersionDock: {0}', raw);
+    return formatRepoMessage(formatted);
   };
 
   // Detect Git index.lock paths from "Git index is busy: <path>" or simple-git stderr

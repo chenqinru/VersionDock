@@ -12,7 +12,7 @@ import { ShelveDocumentProvider } from './utils/ShelveDocumentProvider';
 import { FileAnnotationController } from './ui/FileAnnotationController';
 import { GitProfileService } from './git/GitProfileService';
 import { ProfileStatusBar } from './ui/ProfileStatusBar';
-import { t } from './utils/l10n';
+import { t, setMultiRepoProvider } from './utils/l10n';
 import { VersionDockLogger } from './utils/Logger';
 import { AiProviderService } from './ai/AiProviderService';
 import { AiCommitMessageService } from './aiCommitMessage/AiCommitMessageService';
@@ -147,6 +147,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const remoteRepositoryService = new RemoteRepositoryService(context, logger);
   const manager = new WorkspaceVcsManager(context, logger, remoteRepositoryService.publishMissingRemote);
+  setMultiRepoProvider(() => manager.getRepoMetas().length > 1);
 
   // DEV ONLY: uncomment to reset the quickpick flag
   //context.globalState.update('hasShownViewModeQuickpick', false);
