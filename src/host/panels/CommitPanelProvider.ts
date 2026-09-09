@@ -5577,8 +5577,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const errMsg = String(e);
           if (errMsg.includes('CONFLICT') || errMsg.includes('could not apply')) {
             void vscode.window.showWarningMessage(
-              t('VersionDock [{0}]: Revert has conflicts. Resolve them in the Merge Editor, then commit or abort.', repoName),
-              t('Open Merge List')
+              t('VersionDock [{0}]: Revert has conflicts. Review and resolve them in the Conflicts panel, then commit or abort.', repoName),
+              t('Open Conflict List')
             ).then(choice => {
               if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
             });

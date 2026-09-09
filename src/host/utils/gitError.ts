@@ -97,8 +97,8 @@ export async function showGitErrorMessage(
   if (isConflict) {
     const resolveLabel = t('Resolve Conflicts');
     const diagnostic = repoName
-      ? t('VersionDock [{0}]: Merge conflicts detected. Use the Merge Editor to resolve them.', repoName)
-      : t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
+      ? t('VersionDock [{0}]: Merge conflicts detected. Review and resolve them in the Conflicts panel.', repoName)
+      : t('VersionDock: Merge conflicts detected. Review and resolve them in the Conflicts panel.');
     const action = await vscode.window.showErrorMessage(
       `${diagnostic}\n\n${message.replace(/^VersionDock(\s*\[[^\]]+\])?:\s*/, '')}`,
       resolveLabel,

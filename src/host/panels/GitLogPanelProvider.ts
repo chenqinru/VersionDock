@@ -1428,8 +1428,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   const mergeMsg = `Merge branch '${msg.from}' into '${current.name}'`;
                   this.commitPanel?.prefillCommitMessage(mergeMsg, commitTarget);
                 }).catch(() => {});
-                const warning = t('VersionDock [{0}]: Merge conflicts detected. Use the Merge Editor to resolve them.', repoName);
-                void vscode.window.showWarningMessage(warning, t('Open Merge List')).then(choice => {
+                const warning = t('VersionDock [{0}]: Merge conflicts detected. Review and resolve them in the Conflicts panel.', repoName);
+                void vscode.window.showWarningMessage(warning, t('Open Conflict List')).then(choice => {
                   if (choice) void vscode.commands.executeCommand('versiondock.openConflicts');
                 });
               } else {

@@ -76,14 +76,14 @@ async function maybeNotifyConflicts(manager: WorkspaceVcsManager, status: Worksp
     : undefined;
 
   const title = repoName
-    ? t('VersionDock [{0}]: Merge conflicts detected. Use the Merge Editor to resolve them.', repoName)
-    : t('VersionDock: Merge conflicts detected. Use the Merge Editor to resolve them.');
+    ? t('VersionDock [{0}]: Merge conflicts detected. Review and resolve them in the Conflicts panel.', repoName)
+    : t('VersionDock: Merge conflicts detected. Review and resolve them in the Conflicts panel.');
 
   const picked = await vscode.window.showWarningMessage(
     title,
-    t('Open Merge List'),
+    t('Open Conflict List'),
   );
-  if (picked === t('Open Merge List')) {
+  if (picked === t('Open Conflict List')) {
     await vscode.commands.executeCommand('versiondock.openConflicts');
   }
 }
