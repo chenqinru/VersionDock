@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import type { FileStatus } from '../../shared/types';
 import { FileIcon } from '../../shared/FileIcon';
 import { Codicon } from '../../shared/Codicon';
@@ -7,6 +7,7 @@ import type { WorktreeDiffState } from '../store/commitStore';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
 import { readableAccentColor } from '../../shared/branchColors';
+import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared/speedSearch';
 
 interface Props {
   state: WorktreeDiffState;
@@ -88,6 +89,40 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: FileStatus } | null>(null);
   const tree = useMemo(() => buildTree(state.files), [state.files]);
 
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
+  const savedCollapsedBeforeSearchRef = useRef<Set<string> | null>(null);
+
+  const speedSearch = useSpeedSearch<FileStatus>({
+    items: state.files,
+    getItemKey: f => f.path,
+    getItemPath: f => f.path,
+    getItemName: f => f.path.split('/').pop() ?? f.path,
+    containerRef: sidebarRef,
+    enabled: true,
+    onActiveChange: (item) => {
+      if (item) onSelectFile(item);
+    },
+    onExpandParents: (matchedItems) => {
+      if (!savedCollapsedBeforeSearchRef.current) {
+        savedCollapsedBeforeSearchRef.current = new Set(collapsed);
+      }
+      const nextCollapsed = new Set(collapsed);
+      for (const f of matchedItems) {
+        const parts = f.path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          nextCollapsed.delete(parts.slice(0, i).join('/'));
+        }
+      }
+      setCollapsed(nextCollapsed);
+    },
+    onRestoreCollapsed: () => {
+      if (savedCollapsedBeforeSearchRef.current) {
+        setCollapsed(savedCollapsedBeforeSearchRef.current);
+        savedCollapsedBeforeSearchRef.current = null;
+      }
+    },
+  });
+
   const toggleCollapsed = (key: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
@@ -141,54 +176,61 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
       </div>
 
       <div style={styles.content}>
-        <div className="versiondock-worktree-scroll" style={styles.sidebar}>
-          {contextMenu && (
-            <ContextMenu
-              x={contextMenu.x}
-              y={contextMenu.y}
-              items={FILE_CONTEXT_ITEMS}
-              onClose={() => setContextMenu(null)}
-              onSelect={(id) => {
-                if (id === 'diff') onSelectFile(contextMenu.file);
-                if (id === 'open') onOpenFile(contextMenu.file);
-              }}
-            />
-          )}
-          {state.loadingFiles ? (
-            <div style={styles.empty}>{t('Loading...')}</div>
-          ) : state.files.length === 0 ? (
-            <div style={styles.empty}>{t('No file differences between {0} and the working tree', state.baseRef)}</div>
-          ) : viewMode === 'tree' ? (
-            tree.map(node => (
-              <TreeNodeView
-                key={node.kind === 'dir' ? node.path : node.file.path}
-                node={node}
-                depth={0}
-                collapsed={collapsed}
-                iconTheme={iconTheme}
-                selectedPath={state.selectedFile?.path ?? null}
-                onToggle={toggleCollapsed}
-                onSelect={onSelectFile}
-                onContextMenu={(event, file) => {
-                  setContextMenu({ x: event.clientX, y: event.clientY, file });
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {speedSearch.isOpen && <SpeedSearchWidget speedSearch={speedSearch} />}
+          <div ref={sidebarRef} className="versiondock-worktree-scroll" style={styles.sidebar}>
+            {contextMenu && (
+              <ContextMenu
+                x={contextMenu.x}
+                y={contextMenu.y}
+                items={FILE_CONTEXT_ITEMS}
+                onClose={() => setContextMenu(null)}
+                onSelect={(id) => {
+                  if (id === 'diff') onSelectFile(contextMenu.file);
+                  if (id === 'open') onOpenFile(contextMenu.file);
                 }}
               />
-            ))
-          ) : (
-            state.files.map(file => (
-              <FileRow
-                key={file.path}
-                file={file}
-                depth={0}
-                iconTheme={iconTheme}
-                selected={state.selectedFile?.path === file.path}
-                onSelect={onSelectFile}
-                onContextMenu={(event, targetFile) => {
-                  setContextMenu({ x: event.clientX, y: event.clientY, file: targetFile });
-                }}
-              />
-            ))
-          )}
+            )}
+            {state.loadingFiles ? (
+              <div style={styles.empty}>{t('Loading...')}</div>
+            ) : state.files.length === 0 ? (
+              <div style={styles.empty}>{t('No file differences between {0} and the working tree', state.baseRef)}</div>
+            ) : viewMode === 'tree' ? (
+              tree.map(node => (
+                <TreeNodeView
+                  key={node.kind === 'dir' ? node.path : node.file.path}
+                  node={node}
+                  depth={0}
+                  collapsed={collapsed}
+                  iconTheme={iconTheme}
+                  selectedPath={state.selectedFile?.path ?? null}
+                  onToggle={toggleCollapsed}
+                  onSelect={onSelectFile}
+                  onContextMenu={(event, file) => {
+                    setContextMenu({ x: event.clientX, y: event.clientY, file });
+                  }}
+                  speedSearchQuery={speedSearch.query}
+                  activeSpeedSearchKey={speedSearch.activeKey}
+                />
+              ))
+            ) : (
+              state.files.map(file => (
+                <FileRow
+                  key={file.path}
+                  file={file}
+                  depth={0}
+                  iconTheme={iconTheme}
+                  selected={state.selectedFile?.path === file.path}
+                  onSelect={onSelectFile}
+                  onContextMenu={(event, targetFile) => {
+                    setContextMenu({ x: event.clientX, y: event.clientY, file: targetFile });
+                  }}
+                  speedSearchQuery={speedSearch.query}
+                  activeSpeedSearchKey={speedSearch.activeKey}
+                />
+              ))
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -204,6 +246,8 @@ function TreeNodeView({
   onToggle,
   onSelect,
   onContextMenu,
+  speedSearchQuery,
+  activeSpeedSearchKey,
 }: {
   node: TreeNode;
   depth: number;
@@ -213,6 +257,8 @@ function TreeNodeView({
   onToggle: (key: string) => void;
   onSelect: (file: FileStatus) => void;
   onContextMenu: (event: React.MouseEvent, file: FileStatus) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   if (node.kind === 'file') {
     return (
@@ -223,6 +269,8 @@ function TreeNodeView({
         selected={selectedPath === node.file.path}
         onSelect={onSelect}
         onContextMenu={onContextMenu}
+        speedSearchQuery={speedSearchQuery}
+        activeSpeedSearchKey={activeSpeedSearchKey}
       />
     );
   }
@@ -233,7 +281,9 @@ function TreeNodeView({
       <div className="versiondock-worktree-dir-row" style={{ ...styles.dirRow, paddingLeft: `${10 + depth * 18}px` }} onClick={() => onToggle(node.path)} title={node.path}>
         <Codicon name={isCollapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
         <FileIcon name={node.name} isFolder isOpen={!isCollapsed} theme={iconTheme} size={16} />
-        <span style={styles.dirName}>{node.name}</span>
+        <span style={styles.dirName}>
+          <HighlightedText text={node.name} query={speedSearchQuery} />
+        </span>
         <span style={styles.fileCountBadge}>{node.fileCount}</span>
       </div>
       {!isCollapsed && node.children.map(child => (
@@ -247,6 +297,8 @@ function TreeNodeView({
           onToggle={onToggle}
           onSelect={onSelect}
           onContextMenu={onContextMenu}
+          speedSearchQuery={speedSearchQuery}
+          activeSpeedSearchKey={activeSpeedSearchKey}
         />
       ))}
     </>
@@ -260,6 +312,8 @@ function FileRow({
   selected,
   onSelect,
   onContextMenu,
+  speedSearchQuery,
+  activeSpeedSearchKey,
 }: {
   file: FileStatus;
   depth: number;
@@ -267,15 +321,19 @@ function FileRow({
   selected: boolean;
   onSelect: (file: FileStatus) => void;
   onContextMenu: (event: React.MouseEvent, file: FileStatus) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
   const letter = STATUS_LETTERS[file.status] ?? 'M';
   const fileName = file.path.split('/').pop() ?? file.path;
   const dir = depth === 0 && file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '';
+  const isSpeedSearchActive = activeSpeedSearchKey === file.path;
 
   return (
     <div
       className="versiondock-worktree-file-row"
+      data-speed-search-key={file.path}
       data-selected={selected ? 'true' : 'false'}
       style={{ ...styles.fileRow(selected), paddingLeft: `${10 + depth * 18}px` }}
       onClick={() => onSelect(file)}
@@ -287,8 +345,14 @@ function FileRow({
     >
       <span style={styles.fileLeadingSpacer} />
       <FileIcon name={fileName} theme={iconTheme} size={16} />
-      <span style={styles.fileName(color)}>{fileName}</span>
-      {dir && <span style={styles.dirPath}>{dir}</span>}
+      <span style={styles.fileName(color)}>
+        <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+      </span>
+      {dir && (
+        <span style={styles.dirPath}>
+          <HighlightedText text={dir} query={speedSearchQuery} />
+        </span>
+      )}
       <span style={styles.fileMeta}>
         {(file.added != null || file.removed != null) && (
           <span style={styles.lineStats}>

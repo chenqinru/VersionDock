@@ -6,7 +6,7 @@ import { ChangelistView } from './components/ChangelistView';
 import { VscodeView } from './components/VscodeView';
 import { UnifiedCommitForm } from './components/UnifiedCommitForm';
 import { ContextMenu, type ContextMenuEntry } from './components/ContextMenu';
-import { ShelvePanel, getShelveExpansionKeys } from './components/ShelvePanel';
+import { ShelvePanel, getShelveExpansionKeys, shelveEntryKey, shelveDirKey } from './components/ShelvePanel';
 import { StashTab, type ExpansionCommand } from './components/StashTab';
 import { PushTab } from './components/PushTab';
 import { WorktreeDiffPanel } from './components/WorktreeDiffPanel';
@@ -15,12 +15,14 @@ import { SubtreePanel } from './components/SubtreePanel';
 import { SubmodulePanel } from './components/SubmodulePanel';
 import { getVsCodeApi } from '../shared/vscodeApi';
 import { Codicon } from '../shared/Codicon';
+import { SpeedSearchWidget, useSpeedSearch } from '../shared/speedSearch';
 import type { CommitToHostMsg, HostToCommitMsg, ShelveEntry, StashEntry, UnpushedCommit, PushCommitFile, IncomingCommit, SyncPullStrategy, WorktreeEntry, SubtreeEntry, SubtreeOp, SubtreePushStatus, RepoSubmodules, SubmoduleItem } from '../shared/msgTypes';
 import type { FileStatus } from '../shared/types';
 import { t } from '../shared/i18n';
 import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../shared/types';
 import { baseNameFromPath } from '../shared/pathUtils';
 import { branchInfoColor } from '../shared/branchColors';
+import { scopedKey } from '../shared/scopedKey';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -325,6 +327,7 @@ export function CommitApp() {
   const lastTabSyncAtRef = useRef<Partial<Record<TabId, number>>>({});
   const pendingSyncTimersRef = useRef<Partial<Record<TabId, ReturnType<typeof setTimeout>>>>({});
   const dirtyTabsRef = useRef<Set<TabId>>(new Set());
+  const inFlightStashRequestsRef = useRef<Set<string>>(new Set());
 
   const markTabDirty = useCallback((...tabs: TabId[]) => {
     for (const tab of tabs) {
@@ -1064,6 +1067,7 @@ export function CommitApp() {
         case 'STASH_FILES_RESULT':
           {
             const stashIdentity = msg.stashOid ?? msg.stashRef;
+            inFlightStashRequestsRef.current.delete(`${msg.repoId}:${stashIdentity}`);
             setStashFilesMap(prev => ({
               ...prev,
               [msg.repoId]: {
@@ -1078,6 +1082,7 @@ export function CommitApp() {
           if (!msg.ok) {
             if (msg.error && msg.error !== 'Cancelled') notifyError(msg.error, msg.repoId);
           } else {
+            inFlightStashRequestsRef.current.clear();
             // Reset cached files for affected repo
             setStashFilesMap(prev => {
               const next = { ...prev };
@@ -1394,6 +1399,7 @@ export function CommitApp() {
   // ── Stash files callback ──────────────────────────────────────────────────
   const requestStashFiles = useCallback((repoId: string, stashRef: string, stashOid?: string) => {
     const stashIdentity = stashOid ?? stashRef;
+    inFlightStashRequestsRef.current.add(`${repoId}:${stashIdentity}`);
     setStashFilesMap(prev => ({
       ...prev,
       [repoId]: {
@@ -1664,9 +1670,11 @@ export function CommitApp() {
     send({ type: 'COMMIT_OPEN_DIFF', repoId, filePath, staged: isStaged });
   }, [store, send, openSubmoduleDiffSummary]);
 
-  const allRepos = store.status?.repos ?? [];
-  const repos = hiddenRepoIds.length > 0 ? allRepos.filter(r => !hiddenRepoIds.includes(r.repoId)) : allRepos;
-  const metaMap = new Map(store.repoMetas.map(m => [m.id, m]));
+  const repos = useMemo(() => {
+    const all = store.status?.repos ?? [];
+    return hiddenRepoIds.length > 0 ? all.filter(r => !hiddenRepoIds.includes(r.repoId)) : all;
+  }, [store.status?.repos, hiddenRepoIds]);
+  const metaMap = useMemo(() => new Map(store.repoMetas.map(m => [m.id, m])), [store.repoMetas]);
   const requestCommitMessageHistory = useCallback(() => {
     const repoIds = repos.map(repo => repo.repoId);
     if (repoIds.length === 0) {
@@ -1685,8 +1693,8 @@ export function CommitApp() {
       }
     }, 15_000);
   }, [repos, send]);
-  const isSvnRepo = (repoId: string) => metaMap.get(repoId)?.kind === 'svn';
-  const gitRepos = repos.filter(repo => !isSvnRepo(repo.repoId));
+  const isSvnRepo = useCallback((repoId: string) => metaMap.get(repoId)?.kind === 'svn', [metaMap]);
+  const gitRepos = useMemo(() => repos.filter(repo => !isSvnRepo(repo.repoId)), [repos, isSvnRepo]);
   const totalToPush = gitRepos.reduce((sum, r) => {
     if (r.branch.upstream && !r.branch.isGone) return sum + (r.branch.aheadBehind?.ahead ?? 0);
     return sum + (unpushedMap[r.repoId]?.commits?.length ?? 0);
@@ -1701,6 +1709,264 @@ export function CommitApp() {
   const visibleTabs = (repos.length > 0 && gitRepos.length === 0) ? SVN_ONLY_TABS : ALL_TABS;
   const visibleRepoIds = new Set(repos.map(repo => repo.repoId));
   const multiRepo = repos.length >= 1;
+
+  // ── Changes speed search ───────────────────────────────────────────────────
+  const changesScrollContainerRef = useRef<HTMLDivElement>(null);
+  const savedCollapsedKeysBeforeSearchRef = useRef<Set<string> | null>(null);
+
+  interface ChangesSpeedSearchItem {
+    file: FileStatus;
+    staged?: boolean;
+    key: string;
+  }
+
+  const allChangesFiles = useMemo<ChangesSpeedSearchItem[]>(() => {
+    const list: ChangesSpeedSearchItem[] = [];
+    if (store.changesViewMode === 'vscode') {
+      for (const r of repos) {
+        for (const f of r.stagedFiles) {
+          list.push({
+            file: f,
+            staged: true,
+            key: scopedKey(f.repoId, 'staged', f.path),
+          });
+        }
+        for (const f of r.unstagedFiles) {
+          list.push({
+            file: f,
+            staged: false,
+            key: scopedKey(f.repoId, 'unstaged', f.path),
+          });
+        }
+      }
+    } else {
+      const seen = new Set<string>();
+      for (const r of repos) {
+        for (const f of [...r.stagedFiles, ...r.unstagedFiles]) {
+          const k = scopedKey(f.repoId, f.path);
+          if (!seen.has(k)) {
+            seen.add(k);
+            list.push({
+              file: f,
+              key: k,
+            });
+          }
+        }
+      }
+    }
+    return list;
+  }, [repos, store.changesViewMode]);
+
+  const changesSpeedSearch = useSpeedSearch<ChangesSpeedSearchItem>({
+    items: allChangesFiles,
+    getItemKey: item => item.key,
+    getItemPath: item => item.file.path,
+    getItemName: item => (item.file.path === '.' ? (metaMap.get(item.file.repoId)?.name ?? item.file.repoId) : (item.file.path.split('/').pop() ?? item.file.path)),
+    containerRef: changesScrollContainerRef,
+    enabled: activeTab === 'changes' && store.panelMode !== 'worktreeDiff',
+    onActiveChange: (item) => {
+      if (item) {
+        setSelectedFile(item.file);
+      }
+    },
+    onExpandParents: (matchedItems) => {
+      const currentCollapsed = useCommitStore.getState().collapsedKeys;
+      if (!savedCollapsedKeysBeforeSearchRef.current) {
+        savedCollapsedKeysBeforeSearchRef.current = new Set(currentCollapsed);
+      }
+      const nextCollapsed = new Set(currentCollapsed);
+      let changed = false;
+      const removeKey = (k: string) => {
+        if (nextCollapsed.has(k)) {
+          nextCollapsed.delete(k);
+          changed = true;
+        }
+      };
+      for (const item of matchedItems) {
+        const f = item.file;
+        removeKey(scopedKey('repo', f.repoId));
+        if (item.staged !== undefined) {
+          const section = item.staged ? 'staged' : 'unstaged';
+          removeKey(`vscode-section:${section}`);
+          removeKey(scopedKey('vscode-repo', section, f.repoId));
+          const parts = f.path.split('/');
+          for (let i = 1; i < parts.length; i++) {
+            const dirPath = parts.slice(0, i).join('/');
+            removeKey(scopedKey('vscode-dir', section, f.repoId, dirPath));
+          }
+        } else {
+          removeKey('vscode-section:staged');
+          removeKey('vscode-section:unstaged');
+          removeKey(scopedKey('vscode-repo', 'staged', f.repoId));
+          removeKey(scopedKey('vscode-repo', 'unstaged', f.repoId));
+          const parts = f.path.split('/');
+          for (let i = 1; i < parts.length; i++) {
+            const dirPath = parts.slice(0, i).join('/');
+            removeKey(scopedKey('tree-dir', f.repoId, dirPath));
+            removeKey(scopedKey('vscode-dir', 'staged', f.repoId, dirPath));
+            removeKey(scopedKey('vscode-dir', 'unstaged', f.repoId, dirPath));
+          }
+          for (const cl of store.changelists) {
+            removeKey(scopedKey('changelist', cl.id));
+            removeKey(scopedKey('changelist-repo', cl.id, f.repoId));
+          }
+          removeKey(scopedKey('changelist-repo', '', f.repoId));
+        }
+      }
+      if (changed) {
+        store.setCollapsedKeys(nextCollapsed);
+      }
+    },
+    onRestoreCollapsed: () => {
+      if (savedCollapsedKeysBeforeSearchRef.current) {
+        store.setCollapsedKeys(savedCollapsedKeysBeforeSearchRef.current);
+        savedCollapsedKeysBeforeSearchRef.current = null;
+      }
+    },
+  });
+
+  // ── Shelf Speed Search ──────────────────────────────────────────────────
+  interface ShelveSpeedSearchItem {
+    repoId: string;
+    shelveId: string;
+    path: string;
+    status: string;
+  }
+  const allShelveFiles = useMemo<ShelveSpeedSearchItem[]>(() => {
+    const list: ShelveSpeedSearchItem[] = [];
+    for (const repo of gitRepos) {
+      const shelves = shelveMap[repo.repoId] ?? [];
+      for (const entry of shelves) {
+        for (const file of entry.files) {
+          list.push({
+            repoId: repo.repoId,
+            shelveId: entry.id,
+            path: file.path,
+            status: file.status,
+          });
+        }
+      }
+    }
+    return list;
+  }, [gitRepos, shelveMap]);
+
+  const savedShelveCollapsedKeysRef = useRef<Set<string> | null>(null);
+  const shelveScrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const shelveSpeedSearch = useSpeedSearch<ShelveSpeedSearchItem>({
+    items: allShelveFiles,
+    getItemKey: item => scopedKey(item.repoId, item.shelveId, item.path),
+    getItemPath: item => item.path,
+    getItemName: item => item.path.split('/').pop() ?? item.path,
+    containerRef: shelveScrollContainerRef,
+    enabled: activeTab === 'shelf' && store.panelMode !== 'worktreeDiff',
+    onExpandParents: (matchedItems) => {
+      const currentExpanded = useCommitStore.getState().shelveCollapsedKeys;
+      if (!savedShelveCollapsedKeysRef.current) {
+        savedShelveCollapsedKeysRef.current = new Set(currentExpanded);
+      }
+      const nextExpanded = new Set(currentExpanded);
+      let changed = false;
+      for (const item of matchedItems) {
+        const entryK = shelveEntryKey(item.repoId, item.shelveId);
+        if (!nextExpanded.has(entryK)) {
+          nextExpanded.add(entryK);
+          changed = true;
+        }
+        const parts = item.path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          const dirK = shelveDirKey(item.repoId, item.shelveId, parts.slice(0, i).join('/'));
+          if (!nextExpanded.has(dirK)) {
+            nextExpanded.add(dirK);
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        store.setShelveCollapsedKeys(nextExpanded);
+      }
+    },
+    onRestoreCollapsed: () => {
+      if (savedShelveCollapsedKeysRef.current) {
+        store.setShelveCollapsedKeys(savedShelveCollapsedKeysRef.current);
+        savedShelveCollapsedKeysRef.current = null;
+      }
+    },
+  });
+
+  // ── Stash Speed Search ──────────────────────────────────────────────────
+  type StashSpeedSearchItem =
+    | {
+        kind: 'stash';
+        repoId: string;
+        stashRef: string;
+        message: string;
+        branch?: string;
+      }
+    | {
+        kind: 'file';
+        repoId: string;
+        stashRef: string;
+        path: string;
+        status: string;
+      };
+
+  const allStashItems = useMemo<StashSpeedSearchItem[]>(() => {
+    const list: StashSpeedSearchItem[] = [];
+    for (const repo of gitRepos) {
+      const stashes = stashMap[repo.repoId] ?? [];
+      const repoFilesMap = stashFilesMap[repo.repoId];
+      for (const entry of stashes) {
+        list.push({
+          kind: 'stash',
+          repoId: repo.repoId,
+          stashRef: entry.ref,
+          message: entry.message || entry.ref,
+          branch: entry.branch,
+        });
+        const stashIdentity = entry.oid ?? entry.ref;
+        const files = repoFilesMap?.[stashIdentity]?.files ?? entry.files ?? [];
+        for (const file of files) {
+          list.push({
+            kind: 'file',
+            repoId: repo.repoId,
+            stashRef: entry.ref,
+            path: file.path,
+            status: file.status,
+          });
+        }
+      }
+    }
+    return list;
+  }, [gitRepos, stashMap, stashFilesMap]);
+
+  const stashScrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const stashSpeedSearch = useSpeedSearch<StashSpeedSearchItem>({
+    items: allStashItems,
+    getItemKey: item => item.kind === 'stash' ? scopedKey(item.repoId, item.stashRef) : scopedKey(item.repoId, item.stashRef, item.path),
+    getItemPath: item => item.kind === 'stash' ? item.message : item.path,
+    getItemName: item => item.kind === 'stash' ? item.message : (item.path.split('/').pop() ?? item.path),
+    containerRef: stashScrollContainerRef,
+    enabled: activeTab === 'stash' && store.panelMode !== 'worktreeDiff',
+  });
+
+  // 当处于 Stash 页且开启搜索时，自动预取尚未加载文件列表的 Stash 项
+  useEffect(() => {
+    if (activeTab !== 'stash' || !stashSpeedSearch.isOpen || store.panelMode === 'worktreeDiff') return;
+    for (const repo of gitRepos) {
+      const stashes = stashMap[repo.repoId] ?? [];
+      const repoFilesMap = stashFilesMap[repo.repoId];
+      for (const entry of stashes) {
+        const stashIdentity = entry.oid ?? entry.ref;
+        const fileState = repoFilesMap?.[stashIdentity];
+        const reqKey = `${repo.repoId}:${stashIdentity}`;
+        if (!fileState?.files && !fileState?.loading && !inFlightStashRequestsRef.current.has(reqKey)) {
+          requestStashFiles(repo.repoId, entry.ref, entry.oid);
+        }
+      }
+    }
+  }, [activeTab, stashSpeedSearch.isOpen, store.panelMode, gitRepos, stashMap, stashFilesMap, requestStashFiles]);
 
   // ── Selection state for Select All / Invert button ───────────────────────
   const changesTotalFiles = repos.reduce((sum, r) => sum + r.stagedFiles.length + r.unstagedFiles.length, 0);
@@ -2405,10 +2671,13 @@ export function CommitApp() {
       <div style={css.main}>
 
         {visitedTabs.has('changes') && (
-          <div style={{ display: activeTab === 'changes' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <div style={{ display: activeTab === 'changes' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }}>
+            {activeTab === 'changes' && changesSpeedSearch.isOpen && (
+              <SpeedSearchWidget speedSearch={changesSpeedSearch} />
+            )}
 
           {/* File list */}
-          <div className="versiondock-commit-scroll-container" style={css.repoList}>
+          <div ref={changesScrollContainerRef} className="versiondock-commit-scroll-container" style={css.repoList}>
             {store.changesViewMode === 'vscode' ? (
               <VscodeView
                 repos={repos}
@@ -2453,6 +2722,8 @@ export function CommitApp() {
                 selectedRepos={vscodeSelectedRepos}
                 onToggleRepoSelection={toggleVscodeRepoSelection}
                 onOpenAllChanges={rid => send({ type: 'COMMIT_OPEN_ALL_CHANGES', repoId: rid } satisfies CommitToHostMsg)}
+                speedSearchQuery={changesSpeedSearch.query}
+                activeSpeedSearchKey={changesSpeedSearch.activeKey}
               />
             ) : store.changesViewMode === 'changelists' ? (
               <ChangelistView
@@ -2485,6 +2756,8 @@ export function CommitApp() {
                 iconTheme={store.iconTheme}
                 activeFolderPath={activeFolderPath}
                 ctxFile={ctxFile}
+                speedSearchQuery={changesSpeedSearch.query}
+                activeSpeedSearchKey={changesSpeedSearch.activeKey}
               />
             ) : (
               repos.map((repoStatus, idx) => {
@@ -2531,6 +2804,8 @@ export function CommitApp() {
                       iconTheme={store.iconTheme}
                       activeFolderPath={activeFolderPath}
                       ctxFile={ctxFile}
+                      speedSearchQuery={changesSpeedSearch.query}
+                      activeSpeedSearchKey={changesSpeedSearch.activeKey}
                     />
                 );
               })
@@ -2656,7 +2931,10 @@ export function CommitApp() {
 
         {visitedTabs.has('shelf') && (
           /* Shelf tab */
-          <div style={{ display: activeTab === 'shelf' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div ref={shelveScrollContainerRef} style={{ display: activeTab === 'shelf' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+            {activeTab === 'shelf' && shelveSpeedSearch.isOpen && (
+              <SpeedSearchWidget speedSearch={shelveSpeedSearch} />
+            )}
             <div style={css.repoList}>
               {gitRepos.map(repoStatus => {
                 const repoId = repoStatus.repoId;
@@ -2686,6 +2964,8 @@ export function CommitApp() {
                     onUnshelveFile={handleUnshelveFile}
                     onDrop={handleDropShelve}
                     onOpenFileDiff={handleOpenFileDiff}
+                    speedSearchQuery={shelveSpeedSearch.query}
+                    activeSpeedSearchKey={shelveSpeedSearch.activeKey}
                   />
                 );
               })}
@@ -2695,7 +2975,10 @@ export function CommitApp() {
 
         {visitedTabs.has('stash') && (
           /* Stash tab */
-          <div style={{ display: activeTab === 'stash' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div ref={stashScrollContainerRef} style={{ display: activeTab === 'stash' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+            {activeTab === 'stash' && stashSpeedSearch.isOpen && (
+              <SpeedSearchWidget speedSearch={stashSpeedSearch} />
+            )}
             <div style={css.repoList}>
               {gitRepos.map(repoStatus => {
                 const repoId = repoStatus.repoId;
@@ -2727,6 +3010,8 @@ export function CommitApp() {
                     expansionCommand={stashExpansionCommand}
                     stashFilesMap={stashFilesMap[repoId]}
                     onRequestStashFiles={requestStashFiles}
+                    speedSearchQuery={stashSpeedSearch.query}
+                    activeSpeedSearchKey={stashSpeedSearch.activeKey}
                   />
                 );
               })}
@@ -2736,8 +3021,9 @@ export function CommitApp() {
 
         {visitedTabs.has('push') && (
           /* Sync tab — manages its own scroll, footer anchored at bottom */
-          <div style={{ display: activeTab === 'push' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ display: activeTab === 'push' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0, position: 'relative' }}>
             <PushTab
+              isActive={activeTab === 'push'}
               repos={gitRepos}
               repoMetas={gitRepoMetas}
               iconTheme={store.iconTheme}

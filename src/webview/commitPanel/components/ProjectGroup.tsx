@@ -42,6 +42,8 @@ interface Props {
   iconTheme?: IconThemeData | null;
   activeFolderPath?: string | null;
   ctxFile?: { repoId: string; path: string } | null;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 export function ProjectGroup({
@@ -51,6 +53,7 @@ export function ProjectGroup({
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge,
   onBranchClick, onRepoContextMenu, onOpenAllChanges, iconTheme, activeFolderPath, ctxFile,
+  speedSearchQuery, activeSpeedSearchKey,
 }: Props) {
   const repoId = repoStatus.repoId;
   const repoCollapseKey = scopedKey('repo', repoId);
@@ -173,6 +176,8 @@ export function ProjectGroup({
               viewMode={viewMode}
               activeFolderPath={activeFolderPath}
               ctxFile={ctxFile}
+              speedSearchQuery={speedSearchQuery}
+              activeSpeedSearchKey={activeSpeedSearchKey}
             />
           ) : (
             <div style={styles.noChanges}>{t('No changes')}</div>

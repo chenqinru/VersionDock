@@ -10,6 +10,7 @@ import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
 import type { ExpansionCommand } from './StashTab';
+import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared/speedSearch';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
@@ -22,6 +23,7 @@ export interface IncomingRepoData {
 }
 
 export interface PushTabProps {
+  isActive?: boolean;
   repos: RepoStatus[];
   repoMetas: RepoMeta[];
   iconTheme?: IconThemeData | null;
@@ -63,6 +65,35 @@ export interface PushTabProps {
   selectionCommand?: { sequence: number; action: 'selectAll' | 'invert' };
   onSelectionChange?: (isAllSelected: boolean, hasSelectable: boolean) => void;
 }
+
+export interface RepoLoadedFiles {
+  pushViewMode?: PushViewMode;
+  filesByHash: Record<string, PushCommitFile[]>;
+  incomingFilesByHash: Record<string, PushCommitFile[]>;
+  aggregatedFiles: PushCommitFile[];
+  aggregatedIncomingFiles: PushCommitFile[];
+}
+
+export type PushSpeedSearchItem =
+  | {
+      kind: 'commit';
+      key: string;
+      repoId: string;
+      hash: string;
+      shortHash: string;
+      message: string;
+      author: string;
+      isIncoming: boolean;
+    }
+  | {
+      kind: 'file';
+      key: string;
+      repoId: string;
+      commitHash?: string;
+      path: string;
+      file: PushCommitFile;
+      isIncoming: boolean;
+    };
 
 type Props = PushTabProps;
 
@@ -435,7 +466,7 @@ function IncomingCommitContextMenu({ state, onCherryPick, onCreateBranch, onView
   );
 }
 
-function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingFiles, fileViewMode, iconTheme, onToggle, onSelect, onContextMenu, onFileViewModeChange: _onFileViewModeChange, onOpenFile, onOpenInLog, onUndoCommit, isIncoming, showDirectionBadge = true, potentialConflicts }: {
+function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingFiles, fileViewMode, iconTheme, onToggle, onSelect, onContextMenu, onFileViewModeChange: _onFileViewModeChange, onOpenFile, onOpenInLog, onUndoCommit, isIncoming, showDirectionBadge = true, potentialConflicts, speedSearchQuery, activeSpeedSearchKey }: {
   commit: UnpushedCommit | IncomingCommit;
   repoId: string;
   isHead: boolean;
@@ -455,10 +486,15 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   isIncoming?: boolean;
   showDirectionBadge?: boolean;
   potentialConflicts?: Set<string>;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const fullMessage = commit.fullMessage || (commit.body ? `${commit.message}\n\n${commit.body}` : commit.message);
   const messageTitle = getCommitMessageTitle(fullMessage, commit.message);
+  const commitKey = isIncoming ? `push:incoming:${repoId}:${commit.hash}` : `push:commit:${repoId}:${commit.hash}`;
+  const isSpeedSearchActive = activeSpeedSearchKey === commitKey;
+
   let background = 'transparent';
   if (selected) background = 'var(--vscode-list-inactiveSelectionBackground)';
   else if (hovered) background = 'var(--vscode-list-hoverBackground)';
@@ -475,6 +511,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
     <div style={styles.commitCard(expanded, selected)}>
       <div
         data-commit-row="true"
+        data-speed-search-key={commitKey}
         role="button"
         tabIndex={0}
         style={{ ...styles.commitRow, background }}
@@ -498,10 +535,14 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
               <Codicon name={isIncoming ? 'arrow-down' : 'arrow-up'} style={{ fontSize: '11px' }} />
             </span>
           )}
-          <span style={styles.commitHash}>{commit.shortHash}</span>
+          <span style={styles.commitHash}>
+            <HighlightedText text={commit.shortHash} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+          </span>
         </div>
         <div style={styles.commitInfo}>
-          <span style={styles.commitMessage} title={fullMessage}>{messageTitle}</span>
+          <span style={styles.commitMessage} title={fullMessage}>
+            <HighlightedText text={messageTitle} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+          </span>
           <span style={styles.commitMeta}>
             <span style={styles.commitMetaText}>
               {commit.author} · {formatDate(commit.date)}
@@ -548,6 +589,9 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
             iconTheme={iconTheme}
             potentialConflicts={potentialConflicts}
             onOpenFile={onOpenFile}
+            speedSearchQuery={speedSearchQuery}
+            activeSpeedSearchKey={activeSpeedSearchKey}
+            itemKeyPrefix={`push:file:${repoId}:${isIncoming ? 'in' : 'out'}:${commit.hash}`}
           />
         </div>
       )}
@@ -555,22 +599,60 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   );
 }
 
-function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potentialConflicts }: {
+function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potentialConflicts, speedSearchQuery, activeSpeedSearchKey, itemKeyPrefix }: {
   files: PushCommitFile[];
   loading: boolean;
   viewMode: PushFileViewMode;
   iconTheme?: IconThemeData | null;
   onOpenFile: (file: PushCommitFile) => void;
   potentialConflicts?: Set<string>;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  itemKeyPrefix?: string;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const savedCollapsedBeforeSearchRef = useRef<Record<string, boolean> | null>(null);
+  const lastExpandedQueryRef = useRef<string | null>(null);
+  const collapsedRef = useRef(collapsed);
+  collapsedRef.current = collapsed;
 
   useEffect(() => {
     setCollapsed({});
   }, [files]);
 
+  useEffect(() => {
+    const trimmed = speedSearchQuery?.trim().toLowerCase() ?? '';
+    if (trimmed) {
+      if (lastExpandedQueryRef.current !== trimmed) {
+        lastExpandedQueryRef.current = trimmed;
+        if (!savedCollapsedBeforeSearchRef.current) {
+          savedCollapsedBeforeSearchRef.current = { ...collapsedRef.current };
+        }
+        setCollapsed(prev => {
+          const next = { ...prev };
+          for (const f of files) {
+            const fileName = fileNameOf(f.path).toLowerCase();
+            if (f.path.toLowerCase().includes(trimmed) || fileName.includes(trimmed)) {
+              const parts = f.path.split('/');
+              for (let i = 1; i < parts.length; i++) {
+                next[parts.slice(0, i).join('/')] = false;
+              }
+            }
+          }
+          return next;
+        });
+      }
+    } else if (lastExpandedQueryRef.current !== null) {
+      lastExpandedQueryRef.current = null;
+      if (savedCollapsedBeforeSearchRef.current) {
+        setCollapsed(savedCollapsedBeforeSearchRef.current);
+        savedCollapsedBeforeSearchRef.current = null;
+      }
+    }
+  }, [speedSearchQuery, files]);
+
   return (
-    <div style={styles.fileListRoot}>
+    <div style={{ ...styles.fileListRoot, position: 'relative' }}>
       {loading ? (
         <div style={styles.loadingRow}>{t('Loading files...')}</div>
       ) : files.length === 0 ? (
@@ -587,6 +669,9 @@ function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potenti
               potentialConflicts={potentialConflicts}
               onToggle={key => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }))}
               onOpenFile={onOpenFile}
+              speedSearchQuery={speedSearchQuery}
+              activeSpeedSearchKey={activeSpeedSearchKey}
+              itemKeyPrefix={itemKeyPrefix}
             />
           ))}
         </div>
@@ -600,6 +685,9 @@ function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potenti
               iconTheme={iconTheme}
               isPotentialConflict={potentialConflicts?.has(file.path)}
               onOpenFile={onOpenFile}
+              speedSearchQuery={speedSearchQuery}
+              activeSpeedSearchKey={activeSpeedSearchKey}
+              itemKeyPrefix={itemKeyPrefix}
             />
           ))}
         </div>
@@ -608,7 +696,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potenti
   );
 }
 
-function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenFile, potentialConflicts }: {
+function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenFile, potentialConflicts, speedSearchQuery, activeSpeedSearchKey, itemKeyPrefix }: {
   node: FileTreeNode;
   depth: number;
   collapsed: Record<string, boolean>;
@@ -616,6 +704,9 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
   onToggle: (key: string) => void;
   onOpenFile: (file: PushCommitFile) => void;
   potentialConflicts?: Set<string>;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  itemKeyPrefix?: string;
 }) {
   if (node.kind === 'file') {
     return (
@@ -625,6 +716,9 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
         iconTheme={iconTheme}
         isPotentialConflict={potentialConflicts?.has(node.file.path)}
         onOpenFile={onOpenFile}
+        speedSearchQuery={speedSearchQuery}
+        activeSpeedSearchKey={activeSpeedSearchKey}
+        itemKeyPrefix={itemKeyPrefix}
       />
     );
   }
@@ -635,7 +729,9 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
       <div style={styles.dirRow(depth)} onClick={() => onToggle(node.path)} title={node.path}>
         <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.folderChevron} />
         <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
-        <span style={styles.folderName}>{node.name}</span>
+        <span style={styles.folderName}>
+          <HighlightedText text={node.name} query={speedSearchQuery} />
+        </span>
         <span style={styles.fileCountBadge}>{node.fileCount}</span>
       </div>
       {open && node.children.map(child => (
@@ -648,26 +744,35 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
           potentialConflicts={potentialConflicts}
           onToggle={onToggle}
           onOpenFile={onOpenFile}
+          speedSearchQuery={speedSearchQuery}
+          activeSpeedSearchKey={activeSpeedSearchKey}
+          itemKeyPrefix={itemKeyPrefix}
         />
       ))}
     </div>
   );
 }
 
-function PushFileRow({ file, depth, iconTheme, onOpenFile, isPotentialConflict }: {
+function PushFileRow({ file, depth, iconTheme, onOpenFile, isPotentialConflict, speedSearchQuery, activeSpeedSearchKey, itemKeyPrefix }: {
   file: PushCommitFile;
   depth: number;
   iconTheme?: IconThemeData | null;
   onOpenFile: (file: PushCommitFile) => void;
   isPotentialConflict?: boolean;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  itemKeyPrefix?: string;
 }) {
   const [hovered, setHovered] = useState(false);
   const fileName = fileNameOf(file.path);
   const dir = directoryOf(file.path);
   const color = statusColor(file.status);
+  const itemKey = itemKeyPrefix ? `${itemKeyPrefix}:${file.path}` : file.path;
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
 
   return (
     <div
+      data-speed-search-key={itemKey}
       style={styles.fileRow(depth, hovered)}
       title={isPotentialConflict ? `${file.path} (${t('Potential conflict: this file has local uncommitted modifications')})` : file.path}
       onClick={() => onOpenFile(file)}
@@ -677,7 +782,9 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile, isPotentialConflict }
     >
       <FileIcon name={fileName} theme={iconTheme} size={ICON_SIZE} />
       <div style={styles.fileNameGroup}>
-        <span style={styles.fileName(color)}>{fileName}</span>
+        <span style={styles.fileName(color)}>
+          <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+        </span>
         {isPotentialConflict && (
           <span
             title={t('Potential conflict: this file has local uncommitted modifications')}
@@ -686,7 +793,11 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile, isPotentialConflict }
             <Codicon name="warning" style={{ fontSize: '11px' }} />
           </span>
         )}
-        {depth === 0 && dir && <span style={styles.dirPath}>{dir}</span>}
+        {depth === 0 && dir && (
+          <span style={styles.dirPath}>
+            <HighlightedText text={dir} query={speedSearchQuery} />
+          </span>
+        )}
       </div>
       <div style={styles.fileStats}>
         {typeof file.added === 'number' || typeof file.removed === 'number' ? (
@@ -708,6 +819,10 @@ function AggregatedChangesView({
   iconTheme,
   onOpenFile,
   potentialConflicts,
+  speedSearchQuery,
+  activeSpeedSearchKey,
+  repoId,
+  isIncoming,
 }: {
   files: PushCommitFile[];
   loading: boolean;
@@ -715,6 +830,10 @@ function AggregatedChangesView({
   iconTheme?: IconThemeData | null;
   onOpenFile: (file: PushCommitFile) => void;
   potentialConflicts?: Set<string>;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  repoId: string;
+  isIncoming?: boolean;
 }) {
   return (
     <div style={{ borderTop: '1px solid var(--vscode-panel-border)', paddingBottom: '6px' }}>
@@ -725,6 +844,9 @@ function AggregatedChangesView({
         iconTheme={iconTheme}
         potentialConflicts={potentialConflicts}
         onOpenFile={onOpenFile}
+        speedSearchQuery={speedSearchQuery}
+        activeSpeedSearchKey={activeSpeedSearchKey}
+        itemKeyPrefix={`push:agg:${repoId}:${isIncoming ? 'in' : 'out'}`}
       />
     </div>
   );
@@ -764,6 +886,10 @@ function RepoSection({
   onToggleExpanded,
   expansionCommand,
   externalFileViewMode,
+  speedSearchQuery,
+  activeSpeedSearchKey,
+  activeCommit,
+  onFilesLoaded,
 }: {
   repoStatus: RepoStatus;
   repoMeta: RepoMeta | undefined;
@@ -798,6 +924,10 @@ function RepoSection({
   onToggleExpanded?: () => void;
   expansionCommand?: ExpansionCommand;
   externalFileViewMode?: PushFileViewMode;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  activeCommit?: { hash: string; isIncoming: boolean } | null;
+  onFilesLoaded?: (repoId: string, files: RepoLoadedFiles) => void;
 }) {
   const [internalExpanded, setInternalExpanded] = useState(true);
   const expanded = isExpanded !== undefined ? isExpanded : internalExpanded;
@@ -816,6 +946,13 @@ function RepoSection({
   const [filesByHash, setFilesByHash] = useState<Record<string, PushCommitFile[]>>({});
   const filesByHashRef = useRef(filesByHash);
   filesByHashRef.current = filesByHash;
+  const inFlightCommitHashesRef = useRef<Set<string>>(new Set());
+  const inFlightIncomingHashesRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    inFlightCommitHashesRef.current.clear();
+    inFlightIncomingHashesRef.current.clear();
+  }, [repoStatus.repoId]);
 
   useEffect(() => {
     if (!expansionCommand || expansionCommand.sequence === 0) return;
@@ -839,6 +976,26 @@ function RepoSection({
   const [loadingAggregatedIncomingFiles, setLoadingAggregatedIncomingFiles] = useState(false);
   const [multiSelectIncomingHashes, setMultiSelectIncomingHashes] = useState<Set<string>>(new Set());
   const [incomingCtxMenu, setIncomingCtxMenu] = useState<IncomingCommitCtxMenuState | null>(null);
+
+  const lastAutoExpandedCommitRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!speedSearchQuery) {
+      lastAutoExpandedCommitRef.current = null;
+      return;
+    }
+    if (!activeCommit || !activeCommit.hash) return;
+
+    const commitKey = `${activeCommit.isIncoming ? 'in' : 'out'}:${activeCommit.hash}`;
+    if (lastAutoExpandedCommitRef.current !== commitKey) {
+      lastAutoExpandedCommitRef.current = commitKey;
+      if (activeCommit.isIncoming) {
+        setExpandedIncomingHash(activeCommit.hash);
+      } else {
+        setExpandedCommitHash(activeCommit.hash);
+      }
+    }
+  }, [speedSearchQuery, activeCommit]);
 
   const rawName = repoMeta?.name ?? baseNameFromPath(repoStatus.repoId) ?? repoStatus.repoId;
   const isWorktree = repoMeta?.isWorktree;
@@ -1078,6 +1235,45 @@ function RepoSection({
     return () => { active = false; };
   }, [directionFilter, incomingCommits, onRequestCommitFiles, onRequestIncomingAggregatedDiff, onRequestIncomingCommitFiles, pushViewMode, repoStatus.repoId]);
 
+  // 当开启搜索时，在 commits 模式下预取当前方向可视提交的文件，确保完整索引
+  useEffect(() => {
+    if (!speedSearchQuery || pushViewMode !== 'commits') return;
+    if (directionFilter === 'all' || directionFilter === 'outgoing') {
+      for (const c of commits) {
+        if (!filesByHash[c.hash] && loadingCommitHash !== c.hash && !inFlightCommitHashesRef.current.has(c.hash)) {
+          inFlightCommitHashesRef.current.add(c.hash);
+          void onRequestCommitFiles(repoStatus.repoId, c.hash)
+            .then(fetched => {
+              setFilesByHash(prev => ({ ...prev, [c.hash]: fetched }));
+            })
+            .catch(() => {
+              setFilesByHash(prev => ({ ...prev, [c.hash]: [] }));
+            })
+            .finally(() => {
+              inFlightCommitHashesRef.current.delete(c.hash);
+            });
+        }
+      }
+    }
+    if ((directionFilter === 'all' || directionFilter === 'incoming') && onRequestIncomingCommitFiles) {
+      for (const c of incomingCommits) {
+        if (!incomingFilesByHash[c.hash] && loadingIncomingHash !== c.hash && !inFlightIncomingHashesRef.current.has(c.hash)) {
+          inFlightIncomingHashesRef.current.add(c.hash);
+          void onRequestIncomingCommitFiles(repoStatus.repoId, c.hash)
+            .then(fetched => {
+              setIncomingFilesByHash(prev => ({ ...prev, [c.hash]: fetched }));
+            })
+            .catch(() => {
+              setIncomingFilesByHash(prev => ({ ...prev, [c.hash]: [] }));
+            })
+            .finally(() => {
+              inFlightIncomingHashesRef.current.delete(c.hash);
+            });
+        }
+      }
+    }
+  }, [speedSearchQuery, pushViewMode, directionFilter, commits, incomingCommits, filesByHash, incomingFilesByHash, loadingCommitHash, loadingIncomingHash, onRequestCommitFiles, onRequestIncomingCommitFiles, repoStatus.repoId]);
+
   const toggleCommitSelection = (hash: string) => {
     setMultiSelectHashes(prev => {
       const next = new Set(prev);
@@ -1220,6 +1416,16 @@ function RepoSection({
       setMultiSelectIncomingHashes(new Set());
     }
   };
+
+  useEffect(() => {
+    onFilesLoaded?.(repoStatus.repoId, {
+      pushViewMode,
+      filesByHash,
+      incomingFilesByHash,
+      aggregatedFiles,
+      aggregatedIncomingFiles,
+    });
+  }, [repoStatus.repoId, pushViewMode, filesByHash, incomingFilesByHash, aggregatedFiles, aggregatedIncomingFiles, onFilesLoaded]);
 
   return (
     <div style={styles.repoRoot}>
@@ -1382,6 +1588,10 @@ function RepoSection({
                 iconTheme={iconTheme}
                 potentialConflicts={potentialConflicts}
                 onOpenFile={file => onOpenIncomingAggregatedFile?.(repoStatus.repoId, file)}
+                speedSearchQuery={speedSearchQuery}
+                activeSpeedSearchKey={activeSpeedSearchKey}
+                repoId={repoStatus.repoId}
+                isIncoming={true}
               />
             ) : directionFilter === 'outgoing' ? (
               <AggregatedChangesView
@@ -1390,6 +1600,10 @@ function RepoSection({
                 fileViewMode={fileViewMode}
                 iconTheme={iconTheme}
                 onOpenFile={file => onOpenAggregatedFile(repoStatus.repoId, commits[commits.length - 1]?.hash, file)}
+                speedSearchQuery={speedSearchQuery}
+                activeSpeedSearchKey={activeSpeedSearchKey}
+                repoId={repoStatus.repoId}
+                isIncoming={false}
               />
             ) : (
               /* directionFilter === 'all' */
@@ -1407,6 +1621,10 @@ function RepoSection({
                       iconTheme={iconTheme}
                       potentialConflicts={potentialConflicts}
                       onOpenFile={file => onOpenIncomingAggregatedFile?.(repoStatus.repoId, file)}
+                      speedSearchQuery={speedSearchQuery}
+                      activeSpeedSearchKey={activeSpeedSearchKey}
+                      repoId={repoStatus.repoId}
+                      isIncoming={true}
                     />
                   </div>
                 )}
@@ -1422,6 +1640,10 @@ function RepoSection({
                       fileViewMode={fileViewMode}
                       iconTheme={iconTheme}
                       onOpenFile={file => onOpenAggregatedFile(repoStatus.repoId, commits[commits.length - 1]?.hash, file)}
+                      speedSearchQuery={speedSearchQuery}
+                      activeSpeedSearchKey={activeSpeedSearchKey}
+                      repoId={repoStatus.repoId}
+                      isIncoming={false}
                     />
                   </div>
                 )}
@@ -1454,6 +1676,8 @@ function RepoSection({
                       isIncoming
                       showDirectionBadge={true}
                       potentialConflicts={commit.potentialConflictPaths ? new Set(commit.potentialConflictPaths) : undefined}
+                      speedSearchQuery={speedSearchQuery}
+                      activeSpeedSearchKey={activeSpeedSearchKey}
                       onToggle={() => {
                         setMultiSelectIncomingHashes(new Set());
                         setExpandedIncomingHash(current => current === commit.hash ? null : commit.hash);
@@ -1506,6 +1730,8 @@ function RepoSection({
                       fileViewMode={fileViewMode}
                       iconTheme={iconTheme}
                       showDirectionBadge={true}
+                      speedSearchQuery={speedSearchQuery}
+                      activeSpeedSearchKey={activeSpeedSearchKey}
                       onToggle={() => {
                         setMultiSelectHashes(new Set());
                         setExpandedCommitHash(current => current === commit.hash ? null : commit.hash);
@@ -1551,6 +1777,8 @@ function RepoSection({
                           isIncoming
                           showDirectionBadge={true}
                           potentialConflicts={item.commit.potentialConflictPaths ? new Set(item.commit.potentialConflictPaths) : undefined}
+                          speedSearchQuery={speedSearchQuery}
+                          activeSpeedSearchKey={activeSpeedSearchKey}
                           onToggle={() => {
                             setMultiSelectIncomingHashes(new Set());
                             setExpandedIncomingHash(current => current === item.commit.hash ? null : item.commit.hash);
@@ -1577,6 +1805,8 @@ function RepoSection({
                           fileViewMode={fileViewMode}
                           iconTheme={iconTheme}
                           showDirectionBadge={true}
+                          speedSearchQuery={speedSearchQuery}
+                          activeSpeedSearchKey={activeSpeedSearchKey}
                           onToggle={() => {
                             setMultiSelectHashes(new Set());
                             setExpandedCommitHash(current => current === item.commit.hash ? null : item.commit.hash);
@@ -1927,6 +2157,7 @@ function SplitDropItem({
 
 export function PushTab(props: Props) {
   const {
+    isActive,
     repos,
     repoMetas,
     iconTheme,
@@ -1970,30 +2201,13 @@ export function PushTab(props: Props) {
   const isSingleRepo = repos.length === 1;
   const [checked, setChecked] = useState<Set<string>>(() => new Set<string>());
 
-  const [collapsedRepoIds, setCollapsedRepoIds] = useState<Set<string>>(() => new Set<string>());
-
-  useEffect(() => {
-    if (!expansionCommand || expansionCommand.sequence === 0) return;
-    if (expansionCommand.expanded) {
-      setCollapsedRepoIds(new Set());
-    } else {
-      setCollapsedRepoIds(new Set(repos.map(r => r.repoId)));
-    }
-  }, [expansionCommand, repos]);
-
-  const toggleRepoExpanded = useCallback((repoId: string) => {
-    setCollapsedRepoIds(prev => {
-      const next = new Set(prev);
-      if (next.has(repoId)) {
-        next.delete(repoId);
-      } else {
-        next.add(repoId);
-      }
-      const allCollapsed = next.size === repos.length;
-      onExpansionChange?.(!allCollapsed);
-      return next;
+  const [repoLoadedFiles, setRepoLoadedFiles] = useState<Record<string, RepoLoadedFiles>>({});
+  const handleFilesLoaded = useCallback((repoId: string, files: RepoLoadedFiles) => {
+    setRepoLoadedFiles(prev => {
+      if (prev[repoId] === files) return prev;
+      return { ...prev, [repoId]: files };
     });
-  }, [repos.length, onExpansionChange]);
+  }, []);
 
   const [repoDirectionFilters, setRepoDirectionFilters] = useState<Record<string, DirectionFilter>>({});
 
@@ -2029,6 +2243,189 @@ export function PushTab(props: Props) {
     const filter = repoDirectionFilters[repoId] ?? 'all';
     return filter === 'all' || filter === 'incoming';
   }, [repoDirectionFilters]);
+
+  const allSpeedSearchItems = useMemo<PushSpeedSearchItem[]>(() => {
+    const items: PushSpeedSearchItem[] = [];
+
+    for (const repo of repos) {
+      const repoId = repo.repoId;
+      const dirFilter: DirectionFilter = repoDirectionFilters[repoId] ?? 'all';
+      if (dirFilter === 'none') continue;
+
+      const isOutgoing = dirFilter === 'all' || dirFilter === 'outgoing';
+      const isIncoming = dirFilter === 'all' || dirFilter === 'incoming';
+
+      const unpushed = unpushedMap[repoId];
+      const incoming = incomingMap?.[repoId];
+      const filesInfo = repoLoadedFiles[repoId];
+      const mode = filesInfo?.pushViewMode ?? 'commits';
+
+      if (mode === 'changes') {
+        // 聚合变更视图：只索引匹配方向的聚合文件
+        if (filesInfo) {
+          if (isOutgoing) {
+            for (const f of filesInfo.aggregatedFiles) {
+              items.push({
+                kind: 'file',
+                key: `push:agg:${repoId}:out:${f.path}`,
+                repoId,
+                path: f.path,
+                file: f,
+                isIncoming: false,
+              });
+            }
+          }
+          if (isIncoming) {
+            for (const f of filesInfo.aggregatedIncomingFiles) {
+              items.push({
+                kind: 'file',
+                key: `push:agg:${repoId}:in:${f.path}`,
+                repoId,
+                path: f.path,
+                file: f,
+                isIncoming: true,
+              });
+            }
+          }
+        }
+      } else {
+        // 提交列表视图：索引匹配方向的提交项及其实际已加载的文件
+        // 1. Commits (Outgoing)
+        if (isOutgoing && unpushed?.commits) {
+          for (const c of unpushed.commits) {
+            items.push({
+              kind: 'commit',
+              key: `push:commit:${repoId}:${c.hash}`,
+              repoId,
+              hash: c.hash,
+              shortHash: c.shortHash,
+              message: c.message,
+              author: c.author,
+              isIncoming: false,
+            });
+          }
+        }
+
+        // 2. Commits (Incoming)
+        if (isIncoming && incoming?.commits) {
+          for (const c of incoming.commits) {
+            items.push({
+              kind: 'commit',
+              key: `push:incoming:${repoId}:${c.hash}`,
+              repoId,
+              hash: c.hash,
+              shortHash: c.shortHash,
+              message: c.message,
+              author: c.author,
+              isIncoming: true,
+            });
+          }
+        }
+
+        // 3. Commit files
+        if (filesInfo) {
+          if (isOutgoing) {
+            for (const [hash, files] of Object.entries(filesInfo.filesByHash)) {
+              for (const f of files) {
+                items.push({
+                  kind: 'file',
+                  key: `push:file:${repoId}:out:${hash}:${f.path}`,
+                  repoId,
+                  commitHash: hash,
+                  path: f.path,
+                  file: f,
+                  isIncoming: false,
+                });
+              }
+            }
+          }
+          if (isIncoming) {
+            for (const [hash, files] of Object.entries(filesInfo.incomingFilesByHash)) {
+              for (const f of files) {
+                items.push({
+                  kind: 'file',
+                  key: `push:file:${repoId}:in:${hash}:${f.path}`,
+                  repoId,
+                  commitHash: hash,
+                  path: f.path,
+                  file: f,
+                  isIncoming: true,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return items;
+  }, [repos, repoDirectionFilters, unpushedMap, incomingMap, repoLoadedFiles]);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  const speedSearch = useSpeedSearch<PushSpeedSearchItem>({
+    items: allSpeedSearchItems,
+    getItemKey: item => item.key,
+    getItemPath: item => item.kind === 'commit' ? `${item.shortHash} ${item.message}` : item.path,
+    getItemName: item => item.kind === 'commit' ? item.message : fileNameOf(item.path),
+    containerRef: listRef,
+    enabled: isActive ?? true,
+  });
+
+  const [collapsedRepoIds, setCollapsedRepoIds] = useState<Set<string>>(() => new Set<string>());
+
+  const lastAutoExpandedRepoIdRef = useRef<string | null>(null);
+
+  // 当搜索匹配到折叠的仓库时，自动展开该仓库（仅当活跃命中仓库切换时自动展开一次，避免用户手动收起时循环强制展开）
+  useEffect(() => {
+    if (!speedSearch.query) {
+      lastAutoExpandedRepoIdRef.current = null;
+      return;
+    }
+    const matchedRepoId = speedSearch.activeItem?.repoId;
+    if (!matchedRepoId) return;
+
+    if (lastAutoExpandedRepoIdRef.current !== matchedRepoId) {
+      lastAutoExpandedRepoIdRef.current = matchedRepoId;
+      setCollapsedRepoIds(prev => {
+        if (!prev.has(matchedRepoId)) return prev;
+        const next = new Set(prev);
+        next.delete(matchedRepoId);
+        return next;
+      });
+    }
+  }, [speedSearch.query, speedSearch.activeItem]);
+
+  const getActiveCommitForRepo = useCallback((repoId: string): { hash: string; isIncoming: boolean } | null => {
+    const item = speedSearch.activeItem;
+    if (!item || item.repoId !== repoId) return null;
+    const hash = item.kind === 'commit' ? item.hash : item.commitHash;
+    if (!hash) return null;
+    return { hash, isIncoming: item.isIncoming };
+  }, [speedSearch.activeItem]);
+
+  useEffect(() => {
+    if (!expansionCommand || expansionCommand.sequence === 0) return;
+    if (expansionCommand.expanded) {
+      setCollapsedRepoIds(new Set());
+    } else {
+      setCollapsedRepoIds(new Set(repos.map(r => r.repoId)));
+    }
+  }, [expansionCommand, repos]);
+
+  const toggleRepoExpanded = useCallback((repoId: string) => {
+    setCollapsedRepoIds(prev => {
+      const next = new Set(prev);
+      if (next.has(repoId)) {
+        next.delete(repoId);
+      } else {
+        next.add(repoId);
+      }
+      const allCollapsed = next.size === repos.length;
+      onExpansionChange?.(!allCollapsed);
+      return next;
+    });
+  }, [repos.length, onExpansionChange]);
 
   const repoHasUpstream = useCallback((repo: RepoStatus) => !!repo.branch.upstream && !repo.branch.isGone, []);
 
@@ -2253,7 +2650,13 @@ export function PushTab(props: Props) {
 
     return (
       <div style={css.root}>
-        <div style={css.list}>
+        {speedSearch.isOpen && (
+          <SpeedSearchWidget
+            speedSearch={speedSearch}
+            placeholder={t('Search files or commits...')}
+          />
+        )}
+        <div ref={listRef} style={css.list}>
           <RepoSection
             key={solo.repoId}
             repoStatus={solo}
@@ -2289,6 +2692,10 @@ export function PushTab(props: Props) {
             onToggleExpanded={() => toggleRepoExpanded(solo.repoId)}
             expansionCommand={expansionCommand}
             externalFileViewMode={viewMode}
+            speedSearchQuery={speedSearch.query}
+            activeSpeedSearchKey={speedSearch.activeKey}
+            activeCommit={getActiveCommitForRepo(solo.repoId)}
+            onFilesLoaded={handleFilesLoaded}
           />
         </div>
         <div style={css.footer}>
@@ -2510,7 +2917,13 @@ export function PushTab(props: Props) {
 
   return (
     <div style={css.root}>
-      <div style={css.list}>
+      {speedSearch.isOpen && (
+        <SpeedSearchWidget
+          speedSearch={speedSearch}
+          placeholder={t('Search files or commits...')}
+        />
+      )}
+      <div ref={listRef} style={css.list}>
         {repos.map(repoStatus => (
           <RepoSection
             key={repoStatus.repoId}
@@ -2546,6 +2959,10 @@ export function PushTab(props: Props) {
             onToggleExpanded={() => toggleRepoExpanded(repoStatus.repoId)}
             expansionCommand={expansionCommand}
             externalFileViewMode={viewMode}
+            speedSearchQuery={speedSearch.query}
+            activeSpeedSearchKey={speedSearch.activeKey}
+            activeCommit={getActiveCommitForRepo(repoStatus.repoId)}
+            onFilesLoaded={handleFilesLoaded}
           />
         ))}
       </div>
@@ -2626,7 +3043,7 @@ const ctxStyles = {
 };
 
 const css = {
-  root: { display: 'flex', flexDirection: 'column' as const, flex: 1, height: '100%', minHeight: 0, overflow: 'hidden' },
+  root: { display: 'flex', flexDirection: 'column' as const, flex: 1, height: '100%', minHeight: 0, overflow: 'hidden', position: 'relative' as const },
   list: { flex: 1, overflowY: 'auto' as const, minHeight: 0 },
   footer: {
     flexShrink: 0,

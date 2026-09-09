@@ -10,6 +10,7 @@ import { baseNameFromPath } from '../../shared/pathUtils';
 import { branchInfoColor, readableAccentColor } from '../../shared/branchColors';
 import { scopedKey } from '../../shared/scopedKey';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { HighlightedText } from '../../shared/speedSearch';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,8 @@ interface Props {
   selectedRepos: Set<string>;
   onToggleRepoSelection: (repoId: string) => void;
   onOpenAllChanges?: (repoId: string) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 // ── Tree helpers (same logic as FileTree) ─────────────────────────────────
@@ -129,11 +132,15 @@ interface FileRowProps {
   onStage: (file: FileStatus) => void;
   onUnstage: (file: FileStatus) => void;
   kind?: 'git' | 'svn';
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
-function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, onSelect, onContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, kind }: FileRowProps) {
+function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, onSelect, onContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, kind, speedSearchQuery, activeSpeedSearchKey }: FileRowProps) {
+  const itemKey = scopedKey(file.repoId, staged ? 'staged' : 'unstaged', file.path);
   const isSelected = selectedFile?.repoId === file.repoId && selectedFile.path === file.path;
   const isCtxActive = !isSelected && ctxFile?.repoId === file.repoId && ctxFile.path === file.path;
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
   const letter = STATUS_LETTERS[file.status] ?? 'M';
   const fileName = file.path.split('/').pop() ?? file.path;
@@ -145,6 +152,7 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
 
   return (
     <div
+      data-speed-search-key={itemKey}
       style={{ ...rowStyle(isSelected, isCtxActive, hovered), paddingLeft: `${BASE_PAD + depth * LEVEL_PAD}px` }}
       onClick={isSubmodule ? undefined : () => onSelect(file)}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e, file); }}
@@ -154,8 +162,14 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
     >
       <FileIcon name={fileName} theme={iconTheme} size={ICON_SIZE} />
       <div style={fileNameGroupStyle}>
-        <span style={{ ...fileNameStyle, color }}>{fileName}</span>
-        {depth === 0 && dir && <span style={dirPathStyle} title={dir}>{dir}</span>}
+        <span style={{ ...fileNameStyle, color }}>
+          <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+        </span>
+        {depth === 0 && dir && (
+          <span style={dirPathStyle} title={dir}>
+            <HighlightedText text={dir} query={speedSearchQuery} />
+          </span>
+        )}
       </div>
       <div style={rowActionsStyle}>
         {hovered && <>
@@ -225,9 +239,11 @@ interface DirNodeProps {
   onStageFolder: (files: FileStatus[]) => void;
   onUnstageFolder: (files: FileStatus[]) => void;
   kind?: 'git' | 'svn';
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
-function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, onSelect, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, onStageFolder, onUnstageFolder, kind }: DirNodeProps) {
+function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, onSelect, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, onStageFolder, onUnstageFolder, kind, speedSearchQuery, activeSpeedSearchKey }: DirNodeProps) {
   const collapseKey = scopedKey('vscode-dir', staged ? 'staged' : 'unstaged', repoId, node.path);
   const open = !isCollapsed(collapseKey);
   const allFiles = node.files;
@@ -236,7 +252,7 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
   const isSvn = kind === 'svn';
   const canAddToSvn = isSvn && !staged && allFiles.some(file => file.status === 'untracked');
 
-  const childProps = { depth: depth + 1, staged, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, repoId, onSelect, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, onStageFolder, onUnstageFolder, kind };
+  const childProps = { depth: depth + 1, staged, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, repoId, onSelect, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, onUnstage, onStageFolder, onUnstageFolder, kind, speedSearchQuery, activeSpeedSearchKey };
 
   return (
     <div>
@@ -249,7 +265,9 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
         <div style={treeDirInnerStyle} onClick={() => toggleCollapsed(collapseKey)} title={node.path}>
           <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', flexShrink: 0 }} />
           <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
-          <span style={folderNameStyle}>{node.name}</span>
+          <span style={folderNameStyle}>
+            <HighlightedText text={node.name} query={speedSearchQuery} />
+          </span>
         </div>
         <div style={rowActionsStyle}>
           {hovered && <>
@@ -283,7 +301,7 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
       {open && node.children.map((child) =>
         child.kind === 'dir'
           ? <VscodeDirNode key={child.path} node={child} {...childProps} />
-          : <VscodeFileRow key={child.file.path} file={child.file} depth={depth + 1} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelect} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
+          : <VscodeFileRow key={child.file.path} file={child.file} depth={depth + 1} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelect} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
       )}
     </div>
   );
@@ -325,9 +343,11 @@ interface RepoSubGroupProps {
   mainWorktreePath?: string;
   kind?: 'git' | 'svn';
   showVcsBadge: boolean;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
-function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewMode, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStageFiles, onUnstageFiles, onRepoContextMenu, onBranchClick, onOpenChanges, isFirst = false, repoSelected, onToggleRepoSelection, singleRepo, isSubmodule, submodulePath, isWorktree, mainWorktreePath, kind, showVcsBadge }: RepoSubGroupProps) {
+function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewMode, selectedFile, ctxFile, iconTheme, isCollapsed, toggleCollapsed, activeFolderPath, onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStageFiles, onUnstageFiles, onRepoContextMenu, onBranchClick, onOpenChanges, isFirst = false, repoSelected, onToggleRepoSelection, singleRepo, isSubmodule, submodulePath, isWorktree, mainWorktreePath, kind, showVcsBadge, speedSearchQuery, activeSpeedSearchKey }: RepoSubGroupProps) {
   const repoId = repoStatus.repoId;
   const collapseKey = scopedKey('vscode-repo', staged ? 'staged' : 'unstaged', repoId);
   const isEmpty = files.length === 0;
@@ -349,12 +369,12 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
     if (viewMode === 'tree') {
       return treeNodes.map((node) =>
         node.kind === 'dir'
-          ? <VscodeDirNode key={node.path} node={node} depth={0} staged={staged} repoId={repoId} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} isCollapsed={isCollapsed} toggleCollapsed={toggleCollapsed} activeFolderPath={activeFolderPath} onSelect={onSelectFile} onContextMenu={onContextMenu} onFolderContextMenu={(e, fp, fs) => onFolderContextMenu(e, repoId, fp, fs)} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} onStageFolder={onStageFolder} onUnstageFolder={onUnstageFolder} kind={kind} />
-          : <VscodeFileRow key={node.file.path} file={node.file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
+          ? <VscodeDirNode key={node.path} node={node} depth={0} staged={staged} repoId={repoId} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} isCollapsed={isCollapsed} toggleCollapsed={toggleCollapsed} activeFolderPath={activeFolderPath} onSelect={onSelectFile} onContextMenu={onContextMenu} onFolderContextMenu={(e, fp, fs) => onFolderContextMenu(e, repoId, fp, fs)} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} onStageFolder={onStageFolder} onUnstageFolder={onUnstageFolder} kind={kind} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
+          : <VscodeFileRow key={node.file.path} file={node.file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
       );
     }
     return files.map((file) =>
-      <VscodeFileRow key={file.path} file={file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} />
+      <VscodeFileRow key={file.path} file={file} depth={0} staged={staged} selectedFile={selectedFile} ctxFile={ctxFile} iconTheme={iconTheme} onSelect={onSelectFile} onContextMenu={onContextMenu} onOpenFile={onOpenFile} onRollback={onRollback} onResolveMerge={onResolveMerge} onStage={onStage} onUnstage={onUnstage} kind={kind} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
     );
   };
 
@@ -530,6 +550,7 @@ export function VscodeView({
   onStageFiles, onUnstageFiles, onStageAll, onUnstageAll, onStageAllMulti, onUnstageAllMulti,
   onRepoContextMenu, onBranchClick, onOpenStagedChanges, onOpenUnstagedChanges, iconTheme, activeFolderPath,
   selectedRepos, onToggleRepoSelection, onOpenAllChanges,
+  speedSearchQuery, activeSpeedSearchKey,
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
   const STAGED_COLLAPSE_KEY = 'vscode-section:staged';
@@ -633,6 +654,8 @@ export function VscodeView({
             mainWorktreePath={meta?.mainWorktreePath}
             kind={meta?.kind}
             showVcsBadge={showVcsBadges}
+            speedSearchQuery={speedSearchQuery}
+            activeSpeedSearchKey={activeSpeedSearchKey}
           />
         );
       })}
@@ -703,6 +726,8 @@ export function VscodeView({
             mainWorktreePath={meta?.mainWorktreePath}
             kind={meta?.kind}
             showVcsBadge={showVcsBadges}
+            speedSearchQuery={speedSearchQuery}
+            activeSpeedSearchKey={activeSpeedSearchKey}
           />
         );
       })}

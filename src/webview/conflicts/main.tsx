@@ -9,6 +9,7 @@ import { scopedKey } from '../shared/scopedKey';
 import { nativeCheckboxBorderStyle } from '../shared/nativeCheckboxStyle';
 import { readableAccentColor } from '../shared/branchColors';
 import type { ConflictsToHostMsg, ConflictListFile, HostToConflictsMsg, IconThemeData } from '../../host/types/messages';
+import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../shared/speedSearch';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -134,6 +135,47 @@ function App() {
   const [lastSelectedKey, setLastSelectedKey] = useState<string | null>(null);
   const [iconTheme, setIconTheme] = useState<IconThemeData | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const treeScrollerRef = React.useRef<HTMLDivElement | null>(null);
+  const savedCollapsedBeforeSearchRef = React.useRef<Record<string, boolean> | null>(null);
+
+  const speedSearch = useSpeedSearch<ConflictListFile>({
+    items: files,
+    getItemKey: fileKey,
+    getItemPath: f => f.path,
+    getItemName: f => f.path === '.' ? t('Repository root') : (f.path.split('/').pop() ?? f.path),
+    containerRef: treeScrollerRef,
+    enabled: files.length > 0,
+    onActiveChange: (item) => {
+      if (item) {
+        const key = fileKey(item);
+        setSelectedKeys([key]);
+        setLastSelectedKey(key);
+      }
+    },
+    onExpandParents: (matchedItems) => {
+      if (!savedCollapsedBeforeSearchRef.current) {
+        savedCollapsedBeforeSearchRef.current = { ...collapsed };
+      }
+      const nextCollapsed = { ...collapsed };
+      for (const f of matchedItems) {
+        const repoPath = `repo:${encodeURIComponent(f.repoId)}`;
+        nextCollapsed[repoPath] = false;
+        const parts = f.path.split('/');
+        for (let i = 0; i < parts.length - 1; i++) {
+          const dirPath = `${repoPath}/${parts.slice(0, i + 1).join('/')}`;
+          nextCollapsed[dirPath] = false;
+        }
+      }
+      setCollapsed(nextCollapsed);
+    },
+    onRestoreCollapsed: () => {
+      if (savedCollapsedBeforeSearchRef.current) {
+        setCollapsed(savedCollapsedBeforeSearchRef.current);
+        savedCollapsedBeforeSearchRef.current = null;
+      }
+    },
+  });
 
   const send = useCallback((msg: ConflictsToHostMsg) => {
     getVsCodeApi().postMessage(msg);
@@ -263,12 +305,13 @@ function App() {
       ) : (
         <div style={styles.body}>
           <div style={styles.table} onContextMenu={event => event.preventDefault()}>
+            {speedSearch.isOpen && <SpeedSearchWidget speedSearch={speedSearch} />}
             <div style={styles.tableHeader}>
               <span style={styles.nameHeader}>{t('Name')}</span>
               <span style={styles.statusHeader}>{t('Current')}</span>
               <span style={styles.statusHeader}>{t('Incoming')}</span>
             </div>
-            <div style={styles.treeScroller}>
+            <div ref={treeScrollerRef} style={styles.treeScroller}>
               {groupByDir
                 ? tree.map(node => (
                     <TreeRow
@@ -281,10 +324,22 @@ function App() {
                       onToggle={path => setCollapsed(prev => ({ ...prev, [path]: !prev[path] }))}
                       onSelect={selectFile}
                       onOpen={openMergeEditor}
+                      speedSearchQuery={speedSearch.query}
+                      activeSpeedSearchKey={speedSearch.activeKey}
                     />
                   ))
                 : visibleFiles.map(file => (
-                    <FileRow key={fileKey(file)} file={file} depth={0} selected={selectedKeySet.has(fileKey(file))} iconTheme={iconTheme} onSelect={selectFile} onOpen={openMergeEditor} />
+                    <FileRow
+                      key={fileKey(file)}
+                      file={file}
+                      depth={0}
+                      selected={selectedKeySet.has(fileKey(file))}
+                      iconTheme={iconTheme}
+                      onSelect={selectFile}
+                      onOpen={openMergeEditor}
+                      speedSearchQuery={speedSearch.query}
+                      activeSpeedSearchKey={speedSearch.activeKey}
+                    />
                 ))}
             </div>
           </div>
@@ -299,7 +354,7 @@ function App() {
   );
 }
 
-function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, onSelect, onOpen }: {
+function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, onSelect, onOpen, speedSearchQuery, activeSpeedSearchKey }: {
   node: TreeNode;
   depth: number;
   collapsed: Record<string, boolean>;
@@ -308,9 +363,11 @@ function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, on
   onToggle: (path: string) => void;
   onSelect: (file: ConflictListFile, event: React.MouseEvent) => void;
   onOpen: (file: ConflictListFile) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   if (node.kind === 'file') {
-    return <FileRow file={node.file} depth={depth} selected={selectedKeys.has(fileKey(node.file))} iconTheme={iconTheme} onSelect={onSelect} onOpen={onOpen} />;
+    return <FileRow file={node.file} depth={depth} selected={selectedKeys.has(fileKey(node.file))} iconTheme={iconTheme} onSelect={onSelect} onOpen={onOpen} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />;
   }
   const open = !collapsed[node.path];
   const rowStyle = node.isRepoRoot ? styles.repoRootRow : styles.dirRow;
@@ -321,30 +378,37 @@ function TreeRow({ node, depth, collapsed, selectedKeys, iconTheme, onToggle, on
         {node.isRepoRoot
           ? <span style={styles.repoRootDot(node.repoColor ? readableAccentColor(node.repoColor) : 'var(--vscode-foreground)')} />
           : <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={16} />}
-        <span style={node.isRepoRoot ? styles.repoRootName : styles.dirName}>{node.isRepoRoot ? node.name.toUpperCase() : node.name}</span>
+        <span style={node.isRepoRoot ? styles.repoRootName : styles.dirName}>
+          <HighlightedText text={node.isRepoRoot ? node.name.toUpperCase() : node.name} query={speedSearchQuery} />
+        </span>
         <span style={styles.dirCount}>{node.count}</span>
       </div>
       {open && node.children.map(child => (
-        <TreeRow key={child.kind === 'dir' ? child.path : fileKey(child.file)} node={child} depth={depth + 1} collapsed={collapsed} selectedKeys={selectedKeys} iconTheme={iconTheme} onToggle={onToggle} onSelect={onSelect} onOpen={onOpen} />
+        <TreeRow key={child.kind === 'dir' ? child.path : fileKey(child.file)} node={child} depth={depth + 1} collapsed={collapsed} selectedKeys={selectedKeys} iconTheme={iconTheme} onToggle={onToggle} onSelect={onSelect} onOpen={onOpen} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
       ))}
     </div>
   );
 }
 
-function FileRow({ file, depth, selected, iconTheme, onSelect, onOpen }: {
+function FileRow({ file, depth, selected, iconTheme, onSelect, onOpen, speedSearchQuery, activeSpeedSearchKey }: {
   file: ConflictListFile;
   depth: number;
   selected: boolean;
   iconTheme: IconThemeData | null;
   onSelect: (file: ConflictListFile, event: React.MouseEvent) => void;
   onOpen: (file: ConflictListFile) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
+  const itemKey = fileKey(file);
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
   const fileName = file.path === '.' ? t('Repository root') : file.path.split('/').pop() ?? file.path;
   const dir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
   const displayDir = dir ? `${file.repoName}/${dir}` : file.repoName;
   return (
     <div
       className="versiondock-conflicts-file-row"
+      data-speed-search-key={itemKey}
       data-selected={selected ? 'true' : 'false'}
       style={{ ...styles.fileRow(selected), paddingLeft: TREE_BASE_PAD + depth * TREE_LEVEL_PAD }}
       onClick={event => onSelect(file, event)}
@@ -353,11 +417,17 @@ function FileRow({ file, depth, selected, iconTheme, onSelect, onOpen }: {
     >
       <span style={styles.fileSpacer} />
       <FileIcon name={fileName} isFolder={file.nodeKind === 'directory'} isOpen={file.nodeKind === 'directory'} theme={iconTheme} size={16} />
-      <span style={styles.fileName}>{fileName}</span>
+      <span style={styles.fileName}>
+        <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+      </span>
       {file.conflictType && file.conflictType !== 'text' && (
         <span style={styles.conflictKind}>{conflictTypeLabel(file)}</span>
       )}
-      {depth === 0 && <span style={styles.dirPath}>{displayDir}</span>}
+      {depth === 0 && (
+        <span style={styles.dirPath}>
+          <HighlightedText text={displayDir} query={speedSearchQuery} />
+        </span>
+      )}
       <StatusCell status={file.currentStatus} first />
       <StatusCell status={file.incomingStatus} />
     </div>
@@ -389,7 +459,7 @@ const styles = {
   warning: { padding: '6px 12px', color: 'var(--vscode-inputValidation-warningForeground, var(--vscode-editorWarning-foreground, #cca700))', background: 'var(--vscode-inputValidation-warningBackground, var(--vscode-editorWarning-background, rgba(204, 167, 0, 0.12)))', borderBottom: '1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground, #cca700))', fontSize: 12 },
   empty: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--vscode-descriptionForeground)' },
   body: { flex: 1, display: 'flex', minHeight: 0 },
-  table: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' as const },
+  table: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' as const, position: 'relative' as const },
   tableHeader: { minHeight: 28, display: 'flex', alignItems: 'center', borderBottom: '1px solid var(--vscode-panel-border)', padding: '4px 10px 4px 12px', fontSize: 12, fontWeight: 600, color: 'var(--vscode-descriptionForeground)' },
   nameHeader: { flex: 1, minWidth: 0 },
   statusHeader: { width: 86, textAlign: 'center' as const, flexShrink: 0 },

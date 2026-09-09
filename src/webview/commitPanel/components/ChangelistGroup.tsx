@@ -49,6 +49,8 @@ interface Props {
   iconTheme?: IconThemeData | null;
   activeFolderPath?: string | null;
   ctxFile?: { repoId: string; path: string } | null;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 export function ChangelistGroup({
@@ -57,6 +59,7 @@ export function ChangelistGroup({
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
   onOpenFile, onRollback, onResolveMerge, onHeaderContextMenu, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, ctxFile,
+  speedSearchQuery, activeSpeedSearchKey,
 }: Props) {
   const collapseKey = scopedKey('changelist', changelist.id);
   const collapsed = isCollapsed(collapseKey);
@@ -157,6 +160,8 @@ export function ChangelistGroup({
                 activeFolderPath={activeFolderPath}
                 changelistId={changelist.id}
                 ctxFile={ctxFile}
+                speedSearchQuery={speedSearchQuery}
+                activeSpeedSearchKey={activeSpeedSearchKey}
               />
             )))
           }
@@ -203,6 +208,8 @@ interface RepoSubGroupProps {
   ctxFile?: { repoId: string; path: string } | null;
   isFirst?: boolean;
   defaultCollapsed?: boolean;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 function RepoSubGroup({
@@ -211,6 +218,7 @@ function RepoSubGroup({
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
   onOpenFile, onRollback, onResolveMerge, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, changelistId, ctxFile, isFirst = false, defaultCollapsed = false,
+  speedSearchQuery, activeSpeedSearchKey,
 }: RepoSubGroupProps) {
   const collapseKey = scopedKey('changelist-repo', changelistId ?? '', repoId);
   // When defaultCollapsed, the key's presence means "user explicitly opened it"
@@ -324,6 +332,8 @@ function RepoSubGroup({
           basePad={multiRepo && !singleRepo ? 36 : 24}
           activeFolderPath={activeFolderPath}
           ctxFile={ctxFile}
+          speedSearchQuery={speedSearchQuery}
+          activeSpeedSearchKey={activeSpeedSearchKey}
         />
       )}
       <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />

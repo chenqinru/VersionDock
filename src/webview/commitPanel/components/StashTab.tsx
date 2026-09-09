@@ -8,6 +8,8 @@ import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
 import { branchColor, readableAccentColor } from '../../shared/branchColors';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
+import { scopedKey } from '../../shared/scopedKey';
+import { HighlightedText, matchSpeedSearchItem } from '../../shared/speedSearch';
 
 interface Props {
   repoId: string;
@@ -28,6 +30,8 @@ interface Props {
   expansionCommand: ExpansionCommand;
   stashFilesMap?: Record<string, { loading: boolean; files?: StashEntry['files']; error?: string }>;
   onRequestStashFiles?: (repoId: string, stashRef: string, stashOid?: string) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 export interface ExpansionCommand {
@@ -131,15 +135,19 @@ function collectDirPaths(nodes: TreeNode[], paths: string[] = []): string[] {
 
 // ── File row ──────────────────────────────────────────────────────────────────
 
-function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff }: {
+function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, speedSearchQuery, activeSpeedSearchKey }: {
   file: StashFile;
   repoId: string;
   entry: StashEntry;
   depth?: number;
   onOpenFileDiff: Props['onOpenFileDiff'];
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const iconTheme = useCommitStore(s => s.iconTheme);
+  const itemKey = scopedKey(repoId, entry.ref, file.path);
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
   const fname = file.path.split('/').pop() ?? file.path;
   const dir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
@@ -148,6 +156,7 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff }: {
 
   return (
     <div
+      data-speed-search-key={itemKey}
       style={{
         display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
         gap: '3px', paddingLeft, paddingRight: '8px', cursor: 'pointer',
@@ -159,9 +168,13 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff }: {
       title={t('{0} — click to open diff', file.path)}
     >
       <FileIcon name={fname} theme={iconTheme} size={ICON_SIZE} />
-      <span style={{ color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{fname}</span>
+      <span style={{ color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+        <HighlightedText text={fname} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+      </span>
       {depth === 0 && dir && (
-        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>{dir}</span>
+        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>
+          <HighlightedText text={dir} query={speedSearchQuery} />
+        </span>
       )}
       <span style={{ fontSize: '10px', fontWeight: 'bold', color, flexShrink: 0, width: '12px', textAlign: 'center' }}>{letter}</span>
     </div>
@@ -170,7 +183,7 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff }: {
 
 // ── Tree directory node ───────────────────────────────────────────────────────
 
-function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, toggleDir }: {
+function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, toggleDir, speedSearchQuery, activeSpeedSearchKey }: {
   node: TreeDir;
   depth: number;
   repoId: string;
@@ -178,6 +191,8 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
   onOpenFileDiff: Props['onOpenFileDiff'];
   openDirs: Set<string>;
   toggleDir: (path: string) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const iconTheme = useCommitStore(s => s.iconTheme);
@@ -205,14 +220,16 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
         >
           <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', width: '12px', flexShrink: 0 }} />
           <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <HighlightedText text={node.name} query={speedSearchQuery} />
+          </span>
           <span style={{ fontSize: '10px', color: 'var(--vscode-descriptionForeground)', flexShrink: 0 }}>{fc}</span>
         </div>
       </div>
       {open && node.children.map(child =>
         child.kind === 'dir'
-          ? <TreeDirNode key={child.path} node={child} depth={depth + 1} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} openDirs={openDirs} toggleDir={toggleDir} />
-          : <FileRow key={child.file.path} file={child.file} repoId={repoId} entry={entry} depth={depth + 1} onOpenFileDiff={onOpenFileDiff} />
+          ? <TreeDirNode key={child.path} node={child} depth={depth + 1} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} openDirs={openDirs} toggleDir={toggleDir} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
+          : <FileRow key={child.file.path} file={child.file} repoId={repoId} entry={entry} depth={depth + 1} onOpenFileDiff={onOpenFileDiff} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
       )}
     </div>
   );
@@ -220,7 +237,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
 
 // ── Single stash entry row ────────────────────────────────────────────────────
 
-function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileDiff, expansionCommand, stashFilesMap, onRequestStashFiles }: {
+function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileDiff, expansionCommand, stashFilesMap, onRequestStashFiles, speedSearchQuery, activeSpeedSearchKey }: {
   entry: StashEntry;
   repoId: string;
   viewMode: ViewMode;
@@ -231,6 +248,8 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   expansionCommand: ExpansionCommand;
   stashFilesMap?: Props['stashFilesMap'];
   onRequestStashFiles?: Props['onRequestStashFiles'];
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -254,14 +273,63 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
     [treeNodes],
   );
 
-  // Sync with expand/collapse all
+  const stashEntryKey = scopedKey(repoId, entry.ref);
+  const isStashEntryActive = activeSpeedSearchKey === stashEntryKey;
+
+  const matchedFiles = React.useMemo(() => {
+    if (!speedSearchQuery) return [];
+    return files.filter(f => matchSpeedSearchItem(f.path, speedSearchQuery).matched);
+  }, [files, speedSearchQuery]);
+
+  const savedExpandedBeforeSearch = React.useRef<boolean | null>(null);
+  const savedOpenDirsBeforeSearch = React.useRef<Set<string> | null>(null);
+  const expandedRef = React.useRef(expanded);
+  expandedRef.current = expanded;
+  const openDirsRef = React.useRef(openDirs);
+  openDirsRef.current = openDirs;
+
   React.useEffect(() => {
+    if (speedSearchQuery) {
+      if (savedExpandedBeforeSearch.current === null) {
+        savedExpandedBeforeSearch.current = expandedRef.current;
+        savedOpenDirsBeforeSearch.current = new Set(openDirsRef.current);
+      }
+      if (matchedFiles.length > 0) {
+        setExpanded(true);
+        const dirsToOpen = new Set<string>();
+        for (const f of matchedFiles) {
+          const parts = f.path.split('/');
+          for (let i = 1; i < parts.length; i++) {
+            dirsToOpen.add(parts.slice(0, i).join('/'));
+          }
+        }
+        setOpenDirs(prev => new Set([...prev, ...dirsToOpen]));
+      }
+    } else {
+      if (savedExpandedBeforeSearch.current !== null) {
+        setExpanded(savedExpandedBeforeSearch.current);
+        savedExpandedBeforeSearch.current = null;
+      }
+      if (savedOpenDirsBeforeSearch.current !== null) {
+        setOpenDirs(savedOpenDirsBeforeSearch.current);
+        savedOpenDirsBeforeSearch.current = null;
+      }
+    }
+  }, [speedSearchQuery, matchedFiles]);
+
+  // Sync with expand/collapse all (only when sequence > 0 and changed)
+  const lastExpansionSeqRef = React.useRef(expansionCommand?.sequence ?? 0);
+  React.useEffect(() => {
+    if (!expansionCommand || expansionCommand.sequence === 0) return;
+    if (expansionCommand.sequence === lastExpansionSeqRef.current) return;
+    lastExpansionSeqRef.current = expansionCommand.sequence;
+
     setExpanded(expansionCommand.expanded);
     setOpenDirs(expansionCommand.expanded ? new Set(allDirPaths) : new Set());
     if (expansionCommand.expanded && !fileState?.files && files.length === 0) {
       onRequestStashFiles?.(repoId, entry.ref, entry.oid);
     }
-  }, [allDirPaths, entry.oid, entry.ref, expansionCommand.expanded, expansionCommand.sequence, fileState?.files, files.length, onRequestStashFiles, repoId]);
+  }, [allDirPaths, entry.oid, entry.ref, expansionCommand, fileState?.files, files.length, onRequestStashFiles, repoId]);
 
   const toggleDir = (path: string) => {
     setOpenDirs(prev => {
@@ -284,12 +352,13 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
     <div style={row.root}>
       {/* Header */}
       <div
+        data-speed-search-key={stashEntryKey}
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
+        onClick={handleToggleExpand}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
-        onDoubleClick={() => onPop(repoId, entry.ref)}
-        title={t('{0} — double-click to pop', entry.ref)}
+        title={entry.ref}
       >
         <button data-action-btn="" style={row.chevronBtn} onClick={handleToggleExpand}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px' }} />
@@ -298,7 +367,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
         <div style={row.info}>
           <span style={row.name}>
             <span style={row.message} title={fullMessage}>
-              {messageTitle}
+              <HighlightedText text={messageTitle} query={speedSearchQuery} isActive={isStashEntryActive} />
             </span>
             {entry.branch && (
               <span style={row.branchBadge(branchColor(entry.branch))} title={entry.branch}>
@@ -346,12 +415,12 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
           ) : viewMode === 'tree' && treeNodes ? (
             treeNodes.map(node =>
               node.kind === 'dir'
-                ? <TreeDirNode key={node.path} node={node} depth={0} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} openDirs={openDirs} toggleDir={toggleDir} />
-                : <FileRow key={node.file.path} file={node.file} repoId={repoId} entry={entry} depth={0} onOpenFileDiff={onOpenFileDiff} />
+                ? <TreeDirNode key={node.path} node={node} depth={0} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} openDirs={openDirs} toggleDir={toggleDir} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
+                : <FileRow key={node.file.path} file={node.file} repoId={repoId} entry={entry} depth={0} onOpenFileDiff={onOpenFileDiff} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
             )
           ) : (
             files.map(f => (
-              <FileRow key={f.path} file={f} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} />
+              <FileRow key={f.path} file={f} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
             ))
           )}
         </div>
@@ -384,6 +453,8 @@ export function StashTab({
   expansionCommand,
   stashFilesMap,
   onRequestStashFiles,
+  speedSearchQuery,
+  activeSpeedSearchKey,
 }: Props) {
   const projectColor = readableAccentColor(repoColor);
   return (
@@ -424,6 +495,8 @@ export function StashTab({
             expansionCommand={expansionCommand}
             stashFilesMap={stashFilesMap}
             onRequestStashFiles={onRequestStashFiles}
+            speedSearchQuery={speedSearchQuery}
+            activeSpeedSearchKey={activeSpeedSearchKey}
           />
         ))
       )}

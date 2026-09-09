@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FileStatus, GitFileStatus } from '../../shared/types';
-import type { ViewMode } from '../store/commitStore';
+import { useCommitStore, type ViewMode } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
 import { t } from '../../shared/i18n';
 import { scopedKey } from '../../shared/scopedKey';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
+import { HighlightedText } from '../../shared/speedSearch';
 
 interface Props {
   repoId: string;
@@ -22,6 +23,7 @@ interface Props {
   isFileSelected: (repoId: string, path: string) => boolean;
   isCollapsed: (key: string) => boolean;
   toggleCollapsed: (key: string) => void;
+  collapsedKeys?: Set<string>;
   onContextMenu: (e: React.MouseEvent, file: FileStatus) => void;
   onFolderContextMenu: (e: React.MouseEvent, repoId: string, folderPath: string, files: FileStatus[]) => void;
   onOpenFile: (file: FileStatus) => void;
@@ -31,6 +33,8 @@ interface Props {
   basePad?: number;
   activeFolderPath?: string | null;
   ctxFile?: { repoId: string; path: string } | null;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 const STATUS_COLORS: Record<GitFileStatus, string> = {
@@ -122,6 +126,7 @@ function flattenVisibleTree(
   nodes: TreeNode[],
   repoId: string,
   isCollapsed: (key: string) => boolean,
+  collapsedKeys?: Set<string>,
   depth = 0,
 ): FlatTreeItem[] {
   const result: FlatTreeItem[] = [];
@@ -131,8 +136,9 @@ function flattenVisibleTree(
     } else {
       const collapseKey = scopedKey('tree-dir', repoId, node.path);
       result.push({ kind: 'dir', node, depth, path: node.path, key: collapseKey });
-      if (!isCollapsed(collapseKey)) {
-        result.push(...flattenVisibleTree(node.children, repoId, isCollapsed, depth + 1));
+      const collapsed = collapsedKeys ? collapsedKeys.has(collapseKey) : isCollapsed(collapseKey);
+      if (!collapsed) {
+        result.push(...flattenVisibleTree(node.children, repoId, isCollapsed, collapsedKeys, depth + 1));
       }
     }
   }
@@ -169,13 +175,13 @@ type SharedProps = Pick<Props,
   'repoId' | 'repoName' | 'repoRootPath' | 'selectedFile' | 'ctxFile' | 'onSelect' | 'onToggleFile' | 'onSetFiles' |
   'isFileSelected' | 'isCollapsed' | 'toggleCollapsed' | 'onContextMenu' |
   'onFolderContextMenu' | 'onOpenFile' | 'onRollback' | 'onResolveMerge' | 'iconTheme' |
-  'activeFolderPath'
+  'activeFolderPath' | 'speedSearchQuery' | 'activeSpeedSearchKey'
 > & { basePad: number };
 
 // ── Directory row (single row, no recursion) ───────────────────────────────
 
 function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number } & SharedProps) {
-  const { repoId, isCollapsed, toggleCollapsed, isFileSelected, onSetFiles, onRollback, onFolderContextMenu, iconTheme, basePad, activeFolderPath } = shared;
+  const { repoId, isCollapsed, toggleCollapsed, isFileSelected, onSetFiles, onRollback, onFolderContextMenu, iconTheme, basePad, activeFolderPath, speedSearchQuery } = shared;
   const collapseKey = scopedKey('tree-dir', repoId, node.path);
   const open = !isCollapsed(collapseKey);
   const allFiles = node.files;
@@ -191,6 +197,7 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={(e) => { e.preventDefault(); onFolderContextMenu(e, repoId, node.path, allFiles); }}
+      onClick={() => toggleCollapsed(collapseKey)}
     >
       <Checkbox
         checked={allSelected}
@@ -198,10 +205,12 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
         onChange={() => onSetFiles(repoId, allFiles.map(f => f.path), !allSelected)}
         onClick={(e) => e.stopPropagation()}
       />
-      <div style={styles.treeDirInner} onClick={() => toggleCollapsed(collapseKey)} title={node.path}>
+      <div style={styles.treeDirInner} title={node.path}>
         <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.folderChevron} />
         <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
-        <span style={styles.folderName}>{node.name}</span>
+        <span style={styles.folderName}>
+          <HighlightedText text={node.name} query={speedSearchQuery} />
+        </span>
       </div>
       <div style={styles.rowActions}>
         {hovered && (
@@ -223,9 +232,11 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
 // ── Single file row ────────────────────────────────────────────────────────
 
 function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: number } & SharedProps) {
-  const { repoId, repoName, repoRootPath, selectedFile, ctxFile, onSelect, onToggleFile, isFileSelected, onContextMenu, onOpenFile, onRollback, onResolveMerge, iconTheme, basePad } = shared;
+  const { repoId, repoName, repoRootPath, selectedFile, ctxFile, onSelect, onToggleFile, isFileSelected, onContextMenu, onOpenFile, onRollback, onResolveMerge, iconTheme, basePad, speedSearchQuery, activeSpeedSearchKey } = shared;
+  const itemKey = scopedKey(repoId, file.path);
   const isSelected = selectedFile?.repoId === file.repoId && selectedFile.path === file.path;
   const isCtxActive = !isSelected && ctxFile?.repoId === file.repoId && ctxFile.path === file.path;
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
   const checked = isFileSelected(repoId, file.path);
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
   const letter = STATUS_LETTERS[file.status] ?? 'M';
@@ -241,6 +252,7 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
 
   return (
     <div
+      data-speed-search-key={itemKey}
       style={{ ...styles.row(isSelected, isCtxActive, hovered), paddingLeft: `${basePad + depth * LEVEL_PAD}px` }}
       onClick={isSubmodule || isRepoRootChange ? undefined : () => onSelect(file)}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, file); }}
@@ -259,8 +271,14 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
         <FileIcon name={fileName} theme={iconTheme} size={ICON_SIZE} />
       )}
       <div style={styles.fileNameGroup}>
-        <span style={styles.fileName(color)}>{fileName}</span>
-        {depth === 0 && dir && <span style={styles.dirPath} title={dir}>{dir}</span>}
+        <span style={styles.fileName(color)}>
+          <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+        </span>
+        {depth === 0 && dir && (
+          <span style={styles.dirPath} title={dir}>
+            <HighlightedText text={dir} query={speedSearchQuery} />
+          </span>
+        )}
       </div>
       <div style={styles.rowActions}>
         {hovered && !isSubmodule && <>
@@ -302,9 +320,11 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
 
 // ── Public component ───────────────────────────────────────────────────────
 
-export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath }: Props) {
+export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, collapsedKeys: propCollapsedKeys, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath, speedSearchQuery, activeSpeedSearchKey }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+  const storeCollapsedKeys = useCommitStore(s => s.collapsedKeys);
+  const activeCollapsedKeys = propCollapsedKeys ?? storeCollapsedKeys;
 
   const nodes = useMemo(() => viewMode === 'tree' ? buildTree(files) : [], [files, viewMode]);
 
@@ -317,8 +337,8 @@ export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, sel
         key: `${file.repoId}-${file.path}`,
       }));
     }
-    return flattenVisibleTree(nodes, repoId, isCollapsed, 0);
-  }, [files, isCollapsed, nodes, repoId, viewMode]);
+    return flattenVisibleTree(nodes, repoId, isCollapsed, activeCollapsedKeys, 0);
+  }, [files, isCollapsed, nodes, repoId, viewMode, activeCollapsedKeys]);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -341,7 +361,7 @@ export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, sel
 
   if (files.length === 0) return null;
 
-  const shared: SharedProps = { repoId, repoName, repoRootPath, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, basePad, activeFolderPath };
+  const shared: SharedProps = { repoId, repoName, repoRootPath, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, basePad, activeFolderPath, speedSearchQuery, activeSpeedSearchKey };
 
   if (shouldVirtualize) {
     const virtualItems = virtualizer.getVirtualItems();
@@ -462,6 +482,8 @@ const styles = {
     color: 'var(--vscode-foreground)',
     paddingRight: '8px',
     gap: '0',
+    cursor: 'pointer',
+    userSelect: 'none' as const,
   } as React.CSSProperties,
   treeDirInner: {
     display: 'flex',

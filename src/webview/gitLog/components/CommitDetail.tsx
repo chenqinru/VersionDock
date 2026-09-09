@@ -15,6 +15,7 @@ import type { LogViewFileEntry } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
 import { isSameHistoryFilePath } from '../utils/historyPath';
 import { readableAccentColor } from '../../shared/branchColors';
+import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared/speedSearch';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -324,7 +325,7 @@ function flattenCommitDetailTree(
   return result;
 }
 
-function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, onFileContextMenu, iconTheme }: {
+function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, onFileContextMenu, iconTheme, speedSearchQuery, activeSpeedSearchKey }: {
   node: TreeNode;
   depth: number;
   selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
@@ -332,6 +333,8 @@ function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, o
   onOpen: (file: LogViewFileEntry) => void;
   onFileContextMenu: (event: React.MouseEvent, file: LogViewFileEntry) => void;
   iconTheme?: IconThemeData | null;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const file = node.file!;
   const isRepoRootChange = file.path === '.';
@@ -340,9 +343,12 @@ function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, o
   const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
   const displayName = isRepoRootChange ? node.repoName ?? file.repoId : node.name;
   const indent = depth * 14;
+  const itemKey = file.comparisonBaseHash ? scopedKey(file.repoId, file.commitHash, file.comparisonBaseHash, file.path) : scopedKey(file.repoId, file.commitHash, file.path);
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
 
   return (
     <div
+      data-speed-search-key={itemKey}
       style={styles.fileRow(isSelected)}
       className="versiondock-detail-row"
       data-selected={isSelected}
@@ -359,7 +365,9 @@ function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, o
       ) : (
         <FileIcon name={node.name} theme={iconTheme} size={14} style={styles.fileIconBase} />
       )}
-      <span style={styles.fileName(statusColor, isSelected)}>{displayName}</span>
+      <span style={styles.fileName(statusColor, isSelected)}>
+        <HighlightedText text={displayName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+      </span>
       {isOpeningDiff && (
         <Codicon name="loading~spin" style={{ fontSize: '12px', marginLeft: '6px', color: 'var(--vscode-progressBar-background)' }} />
       )}
@@ -374,13 +382,14 @@ function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, o
   );
 }
 
-function SingleTreeDirRow({ node, depth, open, onToggle, onDirectoryContextMenu, iconTheme }: {
+function SingleTreeDirRow({ node, depth, open, onToggle, onDirectoryContextMenu, iconTheme, speedSearchQuery }: {
   node: TreeNode;
   depth: number;
   open: boolean;
   onToggle: () => void;
   onDirectoryContextMenu: (event: React.MouseEvent, node: TreeNode) => void;
   iconTheme?: IconThemeData | null;
+  speedSearchQuery?: string;
 }) {
   const folderBaseName = node.name.includes('/') ? node.name.split('/').pop()! : node.name;
   const isRepoRoot = !!node.isRepoRoot;
@@ -405,13 +414,29 @@ function SingleTreeDirRow({ node, depth, open, onToggle, onDirectoryContextMenu,
       ) : (
         <FileIcon name={folderBaseName} isFolder isOpen={open} theme={iconTheme} size={16} style={styles.folderIconBase} />
       )}
-      <span style={isRepoRoot ? styles.repoRootName : styles.dirName}>{isRepoRoot ? node.name.toUpperCase() : node.name}</span>
+      <span style={isRepoRoot ? styles.repoRootName : styles.dirName}>
+        <HighlightedText text={isRepoRoot ? node.name.toUpperCase() : node.name} query={speedSearchQuery} />
+      </span>
       <span style={styles.fileCountBadge}>{node.fileCount}</span>
     </div>
   );
 }
 
-function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirectoryContextMenu, allExpanded, iconTheme }: {
+function TreeDir({
+  node,
+  depth,
+  selectedFile,
+  onOpen,
+  onFileContextMenu,
+  onDirectoryContextMenu,
+  allExpanded,
+  iconTheme,
+  speedSearchQuery,
+  activeSpeedSearchKey,
+  dirKeyPrefix,
+  collapsedDirs,
+  onToggleDir,
+}: {
   node: TreeNode;
   depth: number;
   selectedFile: { repoId: string; path: string; status: string; commitHash?: string } | null;
@@ -420,9 +445,25 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
   onDirectoryContextMenu: (event: React.MouseEvent, node: TreeNode) => void;
   allExpanded: boolean | null;
   iconTheme?: IconThemeData | null;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  dirKeyPrefix?: string;
+  collapsedDirs?: Record<string, boolean>;
+  onToggleDir?: (dirKey: string) => void;
 }) {
   const [localOpen, setLocalOpen] = useState(true);
-  const open = allExpanded !== null ? allExpanded : localOpen;
+  const collapseKey = dirKeyPrefix ? scopedKey(dirKeyPrefix, node.fullPath) : node.fullPath;
+  const open = collapsedDirs && collapsedDirs[collapseKey] !== undefined
+    ? !collapsedDirs[collapseKey]
+    : (allExpanded !== null ? allExpanded : localOpen);
+
+  const handleToggle = () => {
+    if (onToggleDir) {
+      onToggleDir(collapseKey);
+    } else if (allExpanded === null) {
+      setLocalOpen(current => !current);
+    }
+  };
 
   if (node.file) {
     return (
@@ -433,6 +474,8 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
         onOpen={onOpen}
         onFileContextMenu={onFileContextMenu}
         iconTheme={iconTheme}
+        speedSearchQuery={speedSearchQuery}
+        activeSpeedSearchKey={activeSpeedSearchKey}
       />
     );
   }
@@ -443,9 +486,10 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
         node={node}
         depth={depth}
         open={open}
-        onToggle={() => { if (allExpanded === null) setLocalOpen(current => !current); }}
+        onToggle={handleToggle}
         onDirectoryContextMenu={onDirectoryContextMenu}
         iconTheme={iconTheme}
+        speedSearchQuery={speedSearchQuery}
       />
       {open && Array.from(node.children.values())
         .sort((left, right) => {
@@ -464,6 +508,11 @@ function TreeDir({ node, depth, selectedFile, onOpen, onFileContextMenu, onDirec
             onDirectoryContextMenu={onDirectoryContextMenu}
             allExpanded={allExpanded}
             iconTheme={iconTheme}
+            speedSearchQuery={speedSearchQuery}
+            activeSpeedSearchKey={activeSpeedSearchKey}
+            dirKeyPrefix={dirKeyPrefix}
+            collapsedDirs={collapsedDirs}
+            onToggleDir={onToggleDir}
           />
         ))}
     </>
@@ -485,6 +534,11 @@ function MergeParentChangeGroup({
   onOpen,
   onFileContextMenu,
   onDirectoryContextMenu,
+  speedSearchQuery,
+  activeSpeedSearchKey,
+  allExpanded,
+  collapsedDirs,
+  onToggleDir,
 }: {
   change: MergeParentChange;
   files: LogViewFileEntry[] | undefined;
@@ -500,6 +554,11 @@ function MergeParentChangeGroup({
   onOpen: (file: LogViewFileEntry) => void;
   onFileContextMenu: (event: React.MouseEvent, file: LogViewFileEntry) => void;
   onDirectoryContextMenu: (event: React.MouseEvent, node: TreeNode) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
+  allExpanded?: boolean | null;
+  collapsedDirs?: Record<string, boolean>;
+  onToggleDir?: (dirKey: string) => void;
 }) {
   const tree = useMemo(() => buildTree(files ?? [], repoNameById, repoRootPathById, repoColorById, false), [files, repoColorById, repoNameById, repoRootPathById]);
   const visibleTreeChildren = useMemo(() => (
@@ -542,8 +601,13 @@ function MergeParentChangeGroup({
               onOpen={onOpen}
               onFileContextMenu={onFileContextMenu}
               onDirectoryContextMenu={onDirectoryContextMenu}
-              allExpanded={null}
+              allExpanded={allExpanded ?? null}
               iconTheme={iconTheme}
+              speedSearchQuery={speedSearchQuery}
+              activeSpeedSearchKey={activeSpeedSearchKey}
+              dirKeyPrefix={scopedKey('merge-dir', change.hash)}
+              collapsedDirs={collapsedDirs}
+              onToggleDir={onToggleDir}
             />
           ))}
           {!loading && viewMode === 'flat' && files?.map(file => {
@@ -552,9 +616,12 @@ function MergeParentChangeGroup({
             const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
             const fileName = file.path.split('/').pop() ?? file.path;
             const dir = file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '';
+            const itemKey = file.comparisonBaseHash ? scopedKey(file.repoId, file.commitHash, file.comparisonBaseHash, file.path) : scopedKey(file.repoId, file.commitHash, file.path);
+            const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
             return (
               <div
-                key={scopedKey(file.repoId, file.commitHash, file.comparisonBaseHash ?? '', file.path)}
+                key={itemKey}
+                data-speed-search-key={itemKey}
                 style={styles.mergeParentFileRow(isSelected)}
                 className="versiondock-detail-row"
                 data-selected={isSelected}
@@ -566,8 +633,14 @@ function MergeParentChangeGroup({
                 }}
               >
                 <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
-                <span style={styles.fileName(statusColor, isSelected)}>{fileName}</span>
-                {dir && <span style={styles.dirPath}>{dir}</span>}
+                <span style={styles.fileName(statusColor, isSelected)}>
+                  <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+                </span>
+                {dir && (
+                  <span style={styles.dirPath}>
+                    <HighlightedText text={dir} query={speedSearchQuery} />
+                  </span>
+                )}
                 {(file.added != null || file.removed != null) && (
                   <span style={styles.lineStats}>
                     {file.added != null && <span style={styles.added}>+{file.added}</span>}
@@ -687,6 +760,137 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     estimateSize: () => 22,
     overscan: 10,
     enabled: shouldVirtualize,
+  });
+
+  const showMergeParentChanges = !isMultiCommitSelection && mergeParentChanges.length > 0;
+  const savedCollapsedDirsBeforeSearchRef = useRef<Record<string, boolean> | null>(null);
+  const savedExpandedMergeParentKeysRef = useRef<Set<string> | null>(null);
+
+  const allDetailFiles = useMemo(() => {
+    const list = [...activeFiles];
+    if (showMergeParentChanges) {
+      for (const files of Object.values(mergeParentFilesByKey)) {
+        if (files) {
+          for (const f of files) {
+            list.push(f);
+          }
+        }
+      }
+    }
+    return list;
+  }, [activeFiles, showMergeParentChanges, mergeParentFilesByKey]);
+
+  const speedSearch = useSpeedSearch<LogViewFileEntry>({
+    items: allDetailFiles,
+    getItemKey: f => f.comparisonBaseHash ? scopedKey(f.repoId, f.commitHash, f.comparisonBaseHash, f.path) : scopedKey(f.repoId, f.commitHash, f.path),
+    getItemPath: f => f.path,
+    getItemName: f => f.path === '.' ? (repoNameById[f.repoId] ?? f.repoId) : (f.path.split('/').pop() ?? f.path),
+    containerRef: fileListRef,
+    enabled: allDetailFiles.length > 0,
+    onActiveChange: (item) => {
+      if (item) {
+        if (shouldVirtualize) {
+          const itemKey = item.comparisonBaseHash ? scopedKey(item.repoId, item.commitHash, item.comparisonBaseHash, item.path) : scopedKey(item.repoId, item.commitHash, item.path);
+          if (viewMode === 'tree') {
+            const idx = flatTreeItems.findIndex(ti => {
+              if (ti.kind !== 'file' || !ti.node.file) return false;
+              const f = ti.node.file;
+              const key = f.comparisonBaseHash ? scopedKey(f.repoId, f.commitHash, f.comparisonBaseHash, f.path) : scopedKey(f.repoId, f.commitHash, f.path);
+              return key === itemKey;
+            });
+            if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'auto' });
+          } else {
+            const idx = activeFiles.findIndex(f => {
+              const key = f.comparisonBaseHash ? scopedKey(f.repoId, f.commitHash, f.comparisonBaseHash, f.path) : scopedKey(f.repoId, f.commitHash, f.path);
+              return key === itemKey;
+            });
+            if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'auto' });
+          }
+        }
+      }
+    },
+    onExpandParents: (matchedItems) => {
+      setCollapsedDirs(current => {
+        if (!savedCollapsedDirsBeforeSearchRef.current) {
+          savedCollapsedDirsBeforeSearchRef.current = { ...current };
+        }
+        let changed = false;
+        const nextCollapsed = { ...current };
+        for (const f of matchedItems) {
+          if (f.comparisonBaseHash) {
+            const parts = f.path.split('/');
+            for (let i = 1; i < parts.length; i++) {
+              const dirPath = parts.slice(0, i).join('/');
+              const dirKey = scopedKey('merge-dir', f.comparisonBaseHash, dirPath);
+              if (nextCollapsed[dirKey] !== false) {
+                nextCollapsed[dirKey] = false;
+                changed = true;
+              }
+            }
+          } else if (showRepoGrouping) {
+            const repoName = repoNameById[f.repoId] ?? f.repoId;
+            const repoKey = scopedKey(f.repoId, repoName);
+            if (nextCollapsed[repoKey] !== false) {
+              nextCollapsed[repoKey] = false;
+              changed = true;
+            }
+            const parts = f.path.split('/');
+            let accumulated = repoName;
+            for (let i = 0; i < parts.length - 1; i++) {
+              accumulated = `${accumulated}/${parts[i]}`;
+              if (nextCollapsed[accumulated] !== false) {
+                nextCollapsed[accumulated] = false;
+                changed = true;
+              }
+            }
+          } else {
+            const parts = f.path.split('/');
+            for (let i = 1; i < parts.length; i++) {
+              const dirPath = parts.slice(0, i).join('/');
+              if (nextCollapsed[dirPath] !== false) {
+                nextCollapsed[dirPath] = false;
+                changed = true;
+              }
+            }
+          }
+        }
+        return changed ? nextCollapsed : current;
+      });
+
+      if (showMergeParentChanges && commit) {
+        if (!savedExpandedMergeParentKeysRef.current) {
+          savedExpandedMergeParentKeysRef.current = new Set(expandedMergeParentKeys);
+        }
+        for (const f of matchedItems) {
+          for (const parentChange of mergeParentChanges) {
+            const parentKey = scopedKey(commit.repoId, commit.hash, parentChange.hash);
+            const parentFiles = mergeParentFilesByKey[parentKey];
+            if (parentFiles?.some(pf => pf.path === f.path && pf.comparisonBaseHash === parentChange.hash)) {
+              setExpandedMergeParentKeys(prev => {
+                if (prev.has(parentKey)) return prev;
+                const next = new Set(prev).add(parentKey);
+                const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
+                getVsCodeApi().setState({ ...currentState, expandedMergeParentKeys: Array.from(next) });
+                return next;
+              });
+            }
+          }
+        }
+      }
+    },
+    onRestoreCollapsed: () => {
+      if (savedCollapsedDirsBeforeSearchRef.current) {
+        setCollapsedDirs(savedCollapsedDirsBeforeSearchRef.current);
+        savedCollapsedDirsBeforeSearchRef.current = null;
+      }
+      if (savedExpandedMergeParentKeysRef.current) {
+        const restored = savedExpandedMergeParentKeysRef.current;
+        savedExpandedMergeParentKeysRef.current = null;
+        setExpandedMergeParentKeys(restored);
+        const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
+        getVsCodeApi().setState({ ...currentState, expandedMergeParentKeys: Array.from(restored) });
+      }
+    },
   });
 
   useEffect(() => {
@@ -1109,27 +1313,22 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
         };
       }),
     } satisfies LogToHostMsg);
-  }, [activeFiles, commit, commits, fullCommitMessages, isMultiCommitSelection, loadingFiles]);
+  }, [activeFiles, commit, commits, fullCommitMessages, isMultiCommitSelection, loadingFiles, mergeParentChanges]);
 
-  const toggleMergeParentChange = useCallback((parentChange: MergeParentChange) => {
+  const inFlightParentRequestsRef = useRef<Set<string>>(new Set());
+
+  const fetchMergeParentFiles = useCallback((parentHash: string) => {
     if (!commit || isMultiCommitSelection) return;
-    const parentKey = scopedKey(commit.repoId, commit.hash, parentChange.hash);
-    const isExpanded = expandedMergeParentKeys.has(parentKey);
-    setExpandedMergeParentKeys(current => {
-      const next = new Set(current);
-      if (next.has(parentKey)) next.delete(parentKey);
-      else next.add(parentKey);
-      const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
-      getVsCodeApi().setState({ ...currentState, expandedMergeParentKeys: Array.from(next) });
-      return next;
-    });
-    if (isExpanded || mergeParentFilesByKey[parentKey] || loadingMergeParentKeys.has(parentKey)) {
+    const parentKey = scopedKey(commit.repoId, commit.hash, parentHash);
+    if (mergeParentFilesByKey[parentKey] || loadingMergeParentKeys.has(parentKey) || inFlightParentRequestsRef.current.has(parentKey)) {
       return;
     }
 
+    inFlightParentRequestsRef.current.add(parentKey);
     setLoadingMergeParentKeys(current => new Set(current).add(parentKey));
     const requestId = generateId();
     pendingRef.current.set(requestId, (msg) => {
+      inFlightParentRequestsRef.current.delete(parentKey);
       if (msg.type === 'LOG_MERGE_PARENT_FILES_RESULT') {
         setMergeParentFilesByKey(current => {
           const next = {
@@ -1138,7 +1337,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
               ...file,
               repoId: commit.repoId,
               commitHash: commit.hash,
-              comparisonBaseHash: parentChange.hash,
+              comparisonBaseHash: parentHash,
             })),
           };
           const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
@@ -1157,9 +1356,44 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       requestId,
       repoId: commit.repoId,
       hash: commit.hash,
-      parentHash: parentChange.hash,
+      parentHash,
     } satisfies LogToHostMsg);
-  }, [commit, expandedMergeParentKeys, isMultiCommitSelection, loadingMergeParentKeys, mergeParentFilesByKey]);
+  }, [commit, isMultiCommitSelection, loadingMergeParentKeys, mergeParentFilesByKey]);
+
+  const toggleMergeParentChange = useCallback((parentChange: MergeParentChange) => {
+    if (!commit || isMultiCommitSelection) return;
+    const parentKey = scopedKey(commit.repoId, commit.hash, parentChange.hash);
+    const isExpanded = expandedMergeParentKeys.has(parentKey);
+    setExpandedMergeParentKeys(current => {
+      const next = new Set(current);
+      if (next.has(parentKey)) next.delete(parentKey);
+      else next.add(parentKey);
+      const currentState = getVsCodeApi().getState<Record<string, unknown>>() ?? {};
+      getVsCodeApi().setState({ ...currentState, expandedMergeParentKeys: Array.from(next) });
+      return next;
+    });
+    if (!isExpanded && !mergeParentFilesByKey[parentKey]) {
+      fetchMergeParentFiles(parentChange.hash);
+    }
+  }, [commit, expandedMergeParentKeys, fetchMergeParentFiles, isMultiCommitSelection, mergeParentFilesByKey]);
+
+  // 当开启搜索且当前选中合并提交时，自动预取尚未加载文件列表的 parent
+  useEffect(() => {
+    if (!speedSearch.isOpen || !showMergeParentChanges || !commit) return;
+    for (const parentChange of mergeParentChanges) {
+      const parentKey = scopedKey(commit.repoId, commit.hash, parentChange.hash);
+      if (!mergeParentFilesByKey[parentKey] && !loadingMergeParentKeys.has(parentKey) && !inFlightParentRequestsRef.current.has(parentKey)) {
+        fetchMergeParentFiles(parentChange.hash);
+      }
+    }
+  }, [speedSearch.isOpen, showMergeParentChanges, commit, mergeParentChanges, mergeParentFilesByKey, loadingMergeParentKeys, fetchMergeParentFiles]);
+
+  const handleToggleDir = useCallback((dirKey: string) => {
+    setCollapsedDirs(prev => {
+      const currentOpen = isDetailDirOpen(dirKey, allExpanded, prev);
+      return { ...prev, [dirKey]: currentOpen };
+    });
+  }, [allExpanded]);
 
   const handleSectionResizeMouseDown = useCallback((event: React.MouseEvent) => {
     event.preventDefault();
@@ -1187,7 +1421,6 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const selectedTimeRange = commits.length > 0
     ? `${formatDateTime(commits[commits.length - 1].authorDate)} - ${formatDateTime(commits[0].authorDate)}`
     : '';
-  const showMergeParentChanges = !isMultiCommitSelection && mergeParentChanges.length > 0;
   const showNoMergeConflicts = !isMultiCommitSelection && (commit?.parents.length ?? 0) >= 2 && activeFiles.length === 0;
   const showFileContextMenu = (event: React.MouseEvent, file: LogViewFileEntry) => {
     setContextMenu({
@@ -1247,135 +1480,155 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
           />
         )}
 
-        <div ref={fileListRef} style={styles.fileList}>
-          {activeLoadingFiles && <div style={styles.loading}>{t('Loading files...')}</div>}
-          {!activeLoadingFiles && activeFiles.length === 0 && !showMergeParentChanges && !showNoMergeConflicts && <div style={styles.loading}>{t('No changed files')}</div>}
-          {!activeLoadingFiles && showNoMergeConflicts && <div style={styles.noMergeConflicts}>{t('No merge conflicts')}</div>}
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {speedSearch.isOpen && <SpeedSearchWidget speedSearch={speedSearch} />}
+          <div ref={fileListRef} style={styles.fileList}>
+            {activeLoadingFiles && <div style={styles.loading}>{t('Loading files...')}</div>}
+            {!activeLoadingFiles && activeFiles.length === 0 && !showMergeParentChanges && !showNoMergeConflicts && <div style={styles.loading}>{t('No changed files')}</div>}
+            {!activeLoadingFiles && showNoMergeConflicts && <div style={styles.noMergeConflicts}>{t('No merge conflicts')}</div>}
 
-          {!activeLoadingFiles && (() => {
-            const renderFlatFileItem = (file: LogViewFileEntry) => {
-              const isRepoRootChange = file.path === '.';
-              const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
-              const status = normalizeStatus(file.status);
-              const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
-              const fileName = isRepoRootChange ? repoNameById[file.repoId] ?? file.repoId : (file.path.split('/').pop() ?? file.path);
-              const dir = isRepoRootChange ? repoRootPathById[file.repoId] ?? fileName : (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '');
-              return (
-                <div
-                  key={scopedKey(file.repoId, file.commitHash, file.path)}
-                  style={styles.fileRow(isSelected)}
-                  className="versiondock-detail-row"
-                  data-selected={isSelected}
-                  onClick={isRepoRootChange ? undefined : () => handleOpenDiff(file)}
-                  onContextMenu={isRepoRootChange ? undefined : (event => {
-                    event.preventDefault();
-                    showFileContextMenu(event, file);
-                  })}
-                  title={isRepoRootChange ? dir : `${file.path}\n${t('Click to open diff')}`}
-                >
-                  <div style={{ width: 4, flexShrink: 0 }} />
-                  {isRepoRootChange ? (
-                    <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
-                  ) : (
-                    <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
-                  )}
-                  <span style={styles.fileName(statusColor, isSelected)}>{fileName}</span>
-                  {openingDiffPath === file.path && (
-                    <Codicon name="loading~spin" style={{ fontSize: '12px', marginLeft: '6px', color: 'var(--vscode-progressBar-background)' }} />
-                  )}
-                  {dir && <span style={styles.dirPath}>{dir}</span>}
-                  {showRepoGrouping && <span style={styles.repoPill}>{repoNameById[file.repoId] ?? file.repoId}</span>}
-                  {(file.added != null || file.removed != null) && (
-                    <span style={styles.lineStats}>
-                      {file.added != null && <span style={styles.added}>+{file.added}</span>}
-                      {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
-                    </span>
-                  )}
-                  <span style={styles.statusLetter(statusColor)}>{status}</span>
-                </div>
-              );
-            };
-
-            const renderTreeItem = (item: FlatDetailItem) => {
-              if (item.kind === 'file') {
+            {!activeLoadingFiles && (() => {
+              const renderFlatFileItem = (file: LogViewFileEntry) => {
+                const isRepoRootChange = file.path === '.';
+                const isSelected = selectedFile?.repoId === file.repoId && selectedFile?.path === file.path;
+                const status = normalizeStatus(file.status);
+                const statusColor = STATUS_COLORS[status] ?? 'var(--vscode-foreground)';
+                const fileName = isRepoRootChange ? repoNameById[file.repoId] ?? file.repoId : (file.path.split('/').pop() ?? file.path);
+                const dir = isRepoRootChange ? repoRootPathById[file.repoId] ?? fileName : (file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '');
+                const itemKey = scopedKey(file.repoId, file.commitHash, file.path);
+                const isSpeedSearchActive = speedSearch.activeKey === itemKey;
                 return (
-                  <SingleTreeFileRow
+                  <div
+                    key={itemKey}
+                    data-speed-search-key={itemKey}
+                    style={styles.fileRow(isSelected)}
+                    className="versiondock-detail-row"
+                    data-selected={isSelected}
+                    onClick={isRepoRootChange ? undefined : () => handleOpenDiff(file)}
+                    onContextMenu={isRepoRootChange ? undefined : (event => {
+                      event.preventDefault();
+                      showFileContextMenu(event, file);
+                    })}
+                    title={isRepoRootChange ? dir : `${file.path}\n${t('Click to open diff')}`}
+                  >
+                    <div style={{ width: 4, flexShrink: 0 }} />
+                    {isRepoRootChange ? (
+                      <Codicon name="repo" style={{ fontSize: '14px', flexShrink: 0 }} />
+                    ) : (
+                      <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
+                    )}
+                    <span style={styles.fileName(statusColor, isSelected)}>
+                      <HighlightedText text={fileName} query={speedSearch.query} isActive={isSpeedSearchActive} />
+                    </span>
+                    {openingDiffPath === file.path && (
+                      <Codicon name="loading~spin" style={{ fontSize: '12px', marginLeft: '6px', color: 'var(--vscode-progressBar-background)' }} />
+                    )}
+                    {dir && (
+                      <span style={styles.dirPath}>
+                        <HighlightedText text={dir} query={speedSearch.query} />
+                      </span>
+                    )}
+                    {showRepoGrouping && <span style={styles.repoPill}>{repoNameById[file.repoId] ?? file.repoId}</span>}
+                    {(file.added != null || file.removed != null) && (
+                      <span style={styles.lineStats}>
+                        {file.added != null && <span style={styles.added}>+{file.added}</span>}
+                        {file.removed != null && <span style={styles.removed}>-{file.removed}</span>}
+                      </span>
+                    )}
+                    <span style={styles.statusLetter(statusColor)}>{status}</span>
+                  </div>
+                );
+              };
+
+              const renderTreeItem = (item: FlatDetailItem) => {
+                if (item.kind === 'file') {
+                  return (
+                    <SingleTreeFileRow
+                      key={item.key}
+                      node={item.node}
+                      depth={item.depth}
+                      selectedFile={selectedFile}
+                      isOpeningDiff={openingDiffPath === item.node.file?.path}
+                      onOpen={handleOpenDiff}
+                      onFileContextMenu={showFileContextMenu}
+                      iconTheme={iconTheme}
+                      speedSearchQuery={speedSearch.query}
+                      activeSpeedSearchKey={speedSearch.activeKey}
+                    />
+                  );
+                }
+                return (
+                  <SingleTreeDirRow
                     key={item.key}
                     node={item.node}
                     depth={item.depth}
-                    selectedFile={selectedFile}
-                    isOpeningDiff={openingDiffPath === item.node.file?.path}
-                    onOpen={handleOpenDiff}
-                    onFileContextMenu={showFileContextMenu}
+                    open={item.open}
+                    onToggle={() => handleToggleDir(item.node.fullPath)}
+                    onDirectoryContextMenu={showDirectoryContextMenu}
                     iconTheme={iconTheme}
+                    speedSearchQuery={speedSearch.query}
                   />
                 );
+              };
+
+              if (shouldVirtualize) {
+                const virtualItems = virtualizer.getVirtualItems();
+                return (
+                  <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+                    {virtualItems.map((virtualRow) => (
+                      <div
+                        key={virtualRow.index}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: '22px',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        {viewMode === 'tree'
+                          ? renderTreeItem(flatTreeItems[virtualRow.index])
+                          : renderFlatFileItem(activeFiles[virtualRow.index])}
+                      </div>
+                    ))}
+                  </div>
+                );
               }
+
+              return viewMode === 'tree'
+                ? flatTreeItems.map(item => renderTreeItem(item))
+                : activeFiles.map(file => renderFlatFileItem(file));
+            })()}
+
+            {!activeLoadingFiles && showMergeParentChanges && mergeParentChanges.map(parentChange => {
+              const parentKey = commit ? scopedKey(commit.repoId, commit.hash, parentChange.hash) : parentChange.hash;
               return (
-                <SingleTreeDirRow
-                  key={item.key}
-                  node={item.node}
-                  depth={item.depth}
-                  open={item.open}
-                  onToggle={() => setCollapsedDirs(prev => ({ ...prev, [item.node.fullPath]: item.open }))}
-                  onDirectoryContextMenu={showDirectoryContextMenu}
+                <MergeParentChangeGroup
+                  key={parentKey}
+                  change={parentChange}
+                  files={mergeParentFilesByKey[parentKey]}
+                  loading={loadingMergeParentKeys.has(parentKey)}
+                  expanded={expandedMergeParentKeys.has(parentKey)}
+                  viewMode={viewMode}
+                  repoNameById={repoNameById}
+                  repoRootPathById={repoRootPathById}
+                  repoColorById={repoColorById}
+                  selectedFile={selectedFile}
                   iconTheme={iconTheme}
+                  onToggle={() => toggleMergeParentChange(parentChange)}
+                  onOpen={handleOpenDiff}
+                  onFileContextMenu={showFileContextMenu}
+                  onDirectoryContextMenu={showDirectoryContextMenu}
+                  speedSearchQuery={speedSearch.query}
+                  activeSpeedSearchKey={speedSearch.activeKey}
+                  allExpanded={allExpanded}
+                  collapsedDirs={collapsedDirs}
+                  onToggleDir={handleToggleDir}
                 />
               );
-            };
-
-            if (shouldVirtualize) {
-              const virtualItems = virtualizer.getVirtualItems();
-              return (
-                <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-                  {virtualItems.map((virtualRow) => (
-                    <div
-                      key={virtualRow.index}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: '22px',
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      {viewMode === 'tree'
-                        ? renderTreeItem(flatTreeItems[virtualRow.index])
-                        : renderFlatFileItem(activeFiles[virtualRow.index])}
-                    </div>
-                  ))}
-                </div>
-              );
-            }
-
-            return viewMode === 'tree'
-              ? flatTreeItems.map(item => renderTreeItem(item))
-              : activeFiles.map(file => renderFlatFileItem(file));
-          })()}
-
-          {!activeLoadingFiles && showMergeParentChanges && mergeParentChanges.map(parentChange => {
-            const parentKey = commit ? scopedKey(commit.repoId, commit.hash, parentChange.hash) : parentChange.hash;
-            return (
-              <MergeParentChangeGroup
-                key={parentKey}
-                change={parentChange}
-                files={mergeParentFilesByKey[parentKey]}
-                loading={loadingMergeParentKeys.has(parentKey)}
-                expanded={expandedMergeParentKeys.has(parentKey)}
-                viewMode={viewMode}
-                repoNameById={repoNameById}
-                repoRootPathById={repoRootPathById}
-                repoColorById={repoColorById}
-                selectedFile={selectedFile}
-                iconTheme={iconTheme}
-                onToggle={() => toggleMergeParentChange(parentChange)}
-                onOpen={handleOpenDiff}
-                onFileContextMenu={showFileContextMenu}
-                onDirectoryContextMenu={showDirectoryContextMenu}
-              />
-            );
-          })}
+            })}
+          </div>
         </div>
       </div>
 

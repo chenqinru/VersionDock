@@ -1526,7 +1526,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .commit-summary-refs { margin-top: 6px; }
 
     /* ── Right panel ── */
-    .right-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .right-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
     .file-toolbar {
       display: flex; align-items: center; gap: 4px;
       padding: 4px 8px;
@@ -1602,6 +1602,74 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       border-radius: 8px; padding: 0 5px; flex-shrink: 0; margin-left: auto;
     }
 
+    /* Speed search */
+    .speed-search-widget {
+      position: absolute;
+      top: 36px;
+      right: 16px;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      background: var(--vscode-editorWidget-background, #252526);
+      border: 1px solid var(--vscode-widget-border, #454545);
+      font-size: 12px;
+    }
+    .speed-search-input {
+      background: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #cccccc);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 2px;
+      padding: 2px 6px;
+      font-size: 12px;
+      outline: none;
+      width: 140px;
+    }
+    .speed-search-input:focus {
+      border-color: var(--vscode-focusBorder, #007fd4);
+    }
+    .speed-search-count {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground, #888888);
+      white-space: nowrap;
+      min-width: 36px;
+    }
+    .speed-search-btn {
+      background: none;
+      border: none;
+      color: var(--vscode-foreground, #cccccc);
+      cursor: pointer;
+      padding: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 2px;
+      opacity: 0.75;
+    }
+    .speed-search-btn:hover {
+      opacity: 1;
+      background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+    }
+    mark.speed-search-highlight {
+      background-color: #ffd600;
+      color: #000000;
+      font-weight: 600;
+      border-radius: 2px;
+      padding: 0 2px;
+    }
+    .file-row.speed-search-active mark.speed-search-highlight {
+      background-color: #ff9100;
+      color: #000000;
+      font-weight: 700;
+    }
+    .file-row.speed-search-active {
+      background: var(--vscode-list-activeSelectionBackground, rgba(255, 255, 255, 0.1)) !important;
+      outline: 1px solid var(--vscode-list-focusOutline, #007fd4);
+    }
+
     /* Context menu */
     .ctx-menu {
       position: fixed;
@@ -1673,6 +1741,13 @@ ${leftPanelContent}
         <button class="tb-btn" id="btnCollapseAll" title="${escHtml(t('Collapse all'))}" style="display:none"><span class="codicon codicon-collapse-all"></span></button>
         <button class="tb-btn active" id="btnTree" title="${escHtml(t('Tree view'))}"><span class="codicon codicon-list-tree"></span></button>
         <button class="tb-btn" id="btnFlat" title="${escHtml(t('Flat list'))}"><span class="codicon codicon-list-flat"></span></button>
+      </div>
+      <div class="speed-search-widget" id="speedSearchWidget" style="display: none;">
+        <input type="text" class="speed-search-input" id="speedSearchInput" placeholder="${escHtml(t('Search files...'))}" />
+        <span class="speed-search-count" id="speedSearchCount">0/0</span>
+        <button class="speed-search-btn" id="speedSearchPrev" title="${escHtml(t('Previous match (Shift+Enter / Up)'))}"><span class="codicon codicon-arrow-up"></span></button>
+        <button class="speed-search-btn" id="speedSearchNext" title="${escHtml(t('Next match (Enter / Down)'))}"><span class="codicon codicon-arrow-down"></span></button>
+        <button class="speed-search-btn" id="speedSearchClose" title="${escHtml(t('Close (Escape)'))}"><span class="codicon codicon-close"></span></button>
       </div>
       <div class="file-list" id="fileList"></div>
     </div>
@@ -2357,17 +2432,236 @@ ${leftPanelContent}
       vscode.postMessage({ type: 'getMergeParentFiles', hash: __d.hash, parentHash, requestId });
     }
 
+    // ── Speed search ──
+    const speedSearchWidget = document.getElementById('speedSearchWidget');
+    const speedSearchInput = document.getElementById('speedSearchInput');
+    const speedSearchCount = document.getElementById('speedSearchCount');
+    const speedSearchPrevBtn = document.getElementById('speedSearchPrev');
+    const speedSearchNextBtn = document.getElementById('speedSearchNext');
+    const speedSearchCloseBtn = document.getElementById('speedSearchClose');
+
+    let speedSearchOpen = false;
+    let speedSearchQuery = '';
+    let speedSearchMatches = [];
+    let speedSearchActiveIndex = -1;
+    let speedSearchActiveKey = null;
+    let speedSearchSnapshot = null;
+
+    function getMatchSegments(text, query) {
+      if (!query) return [{ text, isMatch: false }];
+      const lowerText = text.toLowerCase();
+      const lowerQuery = query.toLowerCase();
+      const segments = [];
+      let lastIndex = 0;
+      let matchIndex = lowerText.indexOf(lowerQuery, lastIndex);
+      while (matchIndex !== -1) {
+        if (matchIndex > lastIndex) {
+          segments.push({ text: text.slice(lastIndex, matchIndex), isMatch: false });
+        }
+        segments.push({ text: text.slice(matchIndex, matchIndex + lowerQuery.length), isMatch: true });
+        lastIndex = matchIndex + lowerQuery.length;
+        matchIndex = lowerText.indexOf(lowerQuery, lastIndex);
+      }
+      if (lastIndex < text.length) {
+        segments.push({ text: text.slice(lastIndex), isMatch: false });
+      }
+      return segments;
+    }
+
+    function highlightText(text, query) {
+      if (!query) return escText(text);
+      const segments = getMatchSegments(text, query);
+      return segments.map(seg => {
+        if (seg.isMatch) {
+          return '<mark class="speed-search-highlight">' + escText(seg.text) + '</mark>';
+        }
+        return escText(seg.text);
+      }).join('');
+    }
+
+    function matchSpeedSearchItem(filePath, query) {
+      if (!query) return false;
+      const trimmed = query.trim();
+      if (!trimmed) return false;
+      const normalizedQuery = trimmed.toLowerCase();
+      const normalizedPath = filePath.toLowerCase();
+      const fileName = filePath.includes('/') ? filePath.slice(filePath.lastIndexOf('/') + 1) : filePath;
+      const normalizedFileName = fileName.toLowerCase();
+
+      if (normalizedQuery.includes('/')) {
+        return normalizedPath.includes(normalizedQuery);
+      }
+      if (normalizedFileName.includes(normalizedQuery)) {
+        return true;
+      }
+      return normalizedPath.includes(normalizedQuery);
+    }
+
+    function getAllSearchableFiles() {
+      const items = [];
+      for (const f of FILES) {
+        const rowKey = (f.repoId ? f.repoId + ':' : '') + f.path;
+        items.push({
+          id: rowKey,
+          label: f.path.includes('/') ? f.path.split('/').pop() : f.path,
+          path: f.path,
+          repoId: f.repoId || __d.repoId,
+          repoName: f.repoName || __d.repoName,
+          repoColor: f.repoColor || __d.repoColor,
+          fromHash: null,
+        });
+      }
+      for (const parent of MERGE_PARENT_CHANGES) {
+        if (expandedMergeParentHashes.has(parent.hash)) {
+          const pFiles = mergeParentFiles(parent);
+          if (pFiles) {
+            for (const f of pFiles) {
+              const rowKey = parent.hash + ':' + (f.repoId ? f.repoId + ':' : '') + f.path;
+              items.push({
+                id: rowKey,
+                label: f.path.includes('/') ? f.path.split('/').pop() : f.path,
+                path: f.path,
+                repoId: f.repoId || __d.repoId,
+                repoName: f.repoName || __d.repoName,
+                repoColor: f.repoColor || __d.repoColor,
+                fromHash: parent.hash,
+              });
+            }
+          }
+        }
+      }
+      return items;
+    }
+
+    function expandAncestorsForFile(item) {
+      const groupByRepo = __d.showRepoGrouping;
+      const scopePrefix = item.fromHash ? 'merge-parent-' + item.fromHash + ':' : '';
+      const parts = groupByRepo ? [item.repoName || __d.repoName, ...item.path.split('/')] : item.path.split('/');
+      let acc = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        const isRepoRoot = groupByRepo && i === 0;
+        acc = acc ? acc + '/' + p : p;
+        const key = scopePrefix + (isRepoRoot ? ((item.repoId || __d.repoId) + ':' + p) : ((item.repoId || __d.repoId) + ':' + acc));
+        dirOpen.set(key, true);
+      }
+    }
+
+    function updateSpeedSearch() {
+      const query = speedSearchQuery.trim();
+      const allFiles = getAllSearchableFiles();
+      if (!query) {
+        speedSearchMatches = [];
+        speedSearchActiveIndex = -1;
+        speedSearchActiveKey = null;
+        speedSearchCount.textContent = '0/0';
+        if (speedSearchSnapshot) {
+          dirOpen.clear();
+          for (const [k, v] of speedSearchSnapshot) dirOpen.set(k, v);
+          speedSearchSnapshot = null;
+        }
+        render();
+        return;
+      }
+
+      if (!speedSearchSnapshot) {
+        speedSearchSnapshot = new Map(dirOpen);
+      }
+
+      const matches = [];
+      for (const item of allFiles) {
+        if (matchSpeedSearchItem(item.path, query)) {
+          matches.push(item);
+        }
+      }
+      speedSearchMatches = matches;
+
+      if (matches.length > 0) {
+        for (const item of matches) {
+          expandAncestorsForFile(item);
+        }
+        let nextIndex = 0;
+        if (speedSearchActiveKey) {
+          const found = matches.findIndex(m => m.id === speedSearchActiveKey);
+          if (found !== -1) nextIndex = found;
+        }
+        speedSearchActiveIndex = nextIndex;
+        speedSearchActiveKey = matches[nextIndex].id;
+        speedSearchCount.textContent = (nextIndex + 1) + '/' + matches.length;
+      } else {
+        speedSearchActiveIndex = -1;
+        speedSearchActiveKey = null;
+        speedSearchCount.textContent = '0/0';
+      }
+
+      render();
+      if (speedSearchActiveKey) {
+        scrollToActiveMatch(speedSearchActiveKey);
+      }
+    }
+
+    function scrollToActiveMatch(key) {
+      document.querySelectorAll('.file-row.speed-search-active').forEach(el => el.classList.remove('speed-search-active'));
+      if (!key) return;
+      const row = document.querySelector('.file-row[data-search-key="' + CSS.escape(key) + '"]');
+      if (row) {
+        row.classList.add('speed-search-active');
+        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+
+    function speedSearchNext() {
+      if (speedSearchMatches.length === 0) return;
+      const nextIndex = (speedSearchActiveIndex + 1) % speedSearchMatches.length;
+      speedSearchActiveIndex = nextIndex;
+      speedSearchActiveKey = speedSearchMatches[nextIndex].id;
+      speedSearchCount.textContent = (nextIndex + 1) + '/' + speedSearchMatches.length;
+      scrollToActiveMatch(speedSearchActiveKey);
+    }
+
+    function speedSearchPrev() {
+      if (speedSearchMatches.length === 0) return;
+      const prevIndex = (speedSearchActiveIndex - 1 + speedSearchMatches.length) % speedSearchMatches.length;
+      speedSearchActiveIndex = prevIndex;
+      speedSearchActiveKey = speedSearchMatches[prevIndex].id;
+      speedSearchCount.textContent = (prevIndex + 1) + '/' + speedSearchMatches.length;
+      scrollToActiveMatch(speedSearchActiveKey);
+    }
+
+    function openSpeedSearch(initialChar) {
+      speedSearchOpen = true;
+      speedSearchWidget.style.display = 'flex';
+      if (initialChar !== undefined) {
+        speedSearchInput.value = initialChar;
+        speedSearchQuery = initialChar;
+        updateSpeedSearch();
+      } else {
+        speedSearchInput.select();
+      }
+      speedSearchInput.focus();
+    }
+
+    function closeSpeedSearch() {
+      speedSearchOpen = false;
+      speedSearchWidget.style.display = 'none';
+      speedSearchInput.value = '';
+      speedSearchQuery = '';
+      updateSpeedSearch();
+    }
+
     // ── Tree rendering ──
     function renderTreeNode(node, depth, buf) {
       if (node.file) {
         const f = node.file;
         const status = normalizeStatus(f.status);
         const col = statusColor(status);
+        const rowKey = (f.fromHash ? f.fromHash + ':' : '') + (f.repoId ? f.repoId + ':' : '') + f.path;
+        const isActive = speedSearchActiveKey === rowKey;
         buf.push(
-          '<div class="file-row"' + fileDatasetAttrs(f, status) + ' title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
+          '<div class="file-row' + (isActive ? ' speed-search-active' : '') + '"' + fileDatasetAttrs(f, status) + ' data-search-key="' + escAttr(rowKey) + '" title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
           '<div class="row-indent" style="width:' + (depth * 14 + 18) + 'px"></div>' +
           fileIconHtml(node.name) +
-          '<span class="row-name" style="color:' + col + '">' + escText(node.name) + '</span>' +
+          '<span class="row-name" style="color:' + col + '">' + highlightText(node.name, speedSearchQuery) + '</span>' +
           '<span class="row-tail">' +
           statsHtml(f) +
           '<span class="row-status" style="color:' + col + '">' + escText(status) + '</span>' +
@@ -2383,7 +2677,7 @@ ${leftPanelContent}
           '<div class="row-indent" style="width:0px"></div>' +
           '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:10px;width:14px;flex-shrink:0;"></span>' +
           '<span style="width:8px;height:8px;border-radius:50%;background:color-mix(in srgb, ' + escAttr(node.repoColor || __d.repoColor || '#4ec9b0') + ' 70%, var(--vscode-foreground));flex-shrink:0;"></span>' +
-          '<span class="dir-name" style="font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">' + escText(node.name) + '</span>' +
+          '<span class="dir-name" style="font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">' + highlightText(node.name, speedSearchQuery) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
           '</div>'
         );
@@ -2394,7 +2688,7 @@ ${leftPanelContent}
           '<div class="row-indent" style="width:' + (depth * 14) + 'px"></div>' +
           '<span class="codicon ' + (open ? 'codicon-chevron-down' : 'codicon-chevron-right') + '" style="font-size:10px;width:14px;flex-shrink:0;"></span>' +
           folderIconHtml(folderBase, open) +
-          '<span class="dir-name">' + escText(node.name) + '</span>' +
+          '<span class="dir-name">' + highlightText(node.name, speedSearchQuery) + '</span>' +
           '<span class="dir-badge">' + node.fileCount + '</span>' +
           '</div>'
         );
@@ -2416,12 +2710,14 @@ ${leftPanelContent}
         const col  = statusColor(status);
         const name = f.path.includes('/') ? f.path.split('/').pop() : f.path;
         const dir  = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
+        const rowKey = (f.fromHash ? f.fromHash + ':' : '') + (f.repoId ? f.repoId + ':' : '') + f.path;
+        const isActive = speedSearchActiveKey === rowKey;
         buf.push(
-          '<div class="file-row"' + fileDatasetAttrs(f, status) + ' title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
+          '<div class="file-row' + (isActive ? ' speed-search-active' : '') + '"' + fileDatasetAttrs(f, status) + ' data-search-key="' + escAttr(rowKey) + '" title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
           '<div class="row-indent" style="width:4px"></div>' +
           fileIconHtml(name) +
-          '<span class="row-name" style="color:' + col + '">' + escText(name) + '</span>' +
-          (dir ? '<span class="row-dir">' + escText(dir) + '</span>' : '') +
+          '<span class="row-name" style="color:' + col + '">' + highlightText(name, speedSearchQuery) + '</span>' +
+          (dir ? '<span class="row-dir">' + highlightText(dir, speedSearchQuery) + '</span>' : '') +
           '<span class="row-tail">' +
           statsHtml(f) +
           '<span class="row-status" style="color:' + col + '">' + escText(status) + '</span>' +
@@ -2499,6 +2795,11 @@ ${leftPanelContent}
       }
       for (const parent of MERGE_PARENT_CHANGES) buf.push(renderMergeParentGroup(parent));
       listEl.innerHTML = buf.join('');
+      if (speedSearchActiveKey) {
+        requestAnimationFrame(() => {
+          scrollToActiveMatch(speedSearchActiveKey);
+        });
+      }
     }
 
     // ── Event delegation on file list ──
@@ -2548,6 +2849,85 @@ ${leftPanelContent}
       document.getElementById('btnTree')?.classList.remove('active');
     }
     render();
+
+    // ── Speed search events ──
+    speedSearchInput.addEventListener('input', e => {
+      speedSearchQuery = e.target.value;
+      updateSpeedSearch();
+    });
+    speedSearchPrevBtn.addEventListener('click', speedSearchPrev);
+    speedSearchNextBtn.addEventListener('click', speedSearchNext);
+    speedSearchCloseBtn.addEventListener('click', closeSpeedSearch);
+
+    window.addEventListener('keydown', e => {
+      const isFindShortcut =
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        (e.key === 'f' || e.key === 'F' || e.code === 'KeyF');
+
+      if (isFindShortcut) {
+        e.preventDefault();
+        e.stopPropagation();
+        openSpeedSearch();
+        return;
+      }
+
+      if (e.isComposing || e.defaultPrevented) return;
+
+      const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+      if (isInput) {
+        if (e.target === speedSearchInput) {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            closeSpeedSearch();
+          } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (e.shiftKey) speedSearchPrev();
+            else speedSearchNext();
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            speedSearchNext();
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            speedSearchPrev();
+          }
+        }
+        return;
+      }
+
+      if (e.target.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) {
+        return;
+      }
+
+      if (!ctxMenu.classList.contains('hidden')) {
+        return;
+      }
+
+      if (e.key === 'Escape' && speedSearchOpen) {
+        e.preventDefault();
+        closeSpeedSearch();
+        return;
+      }
+
+      if (speedSearchOpen) {
+        if (e.key === 'ArrowDown' || e.key === 'Enter') {
+          e.preventDefault();
+          if (e.shiftKey && e.key === 'Enter') speedSearchPrev();
+          else speedSearchNext();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          speedSearchPrev();
+          return;
+        }
+      }
+
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && e.key !== ' ') {
+        e.preventDefault();
+        openSpeedSearch(e.key);
+      }
+    }, true);
 
     // ── Author avatars (Gravatar / GitHub) — matches the Git log avatar rules ──
     try {

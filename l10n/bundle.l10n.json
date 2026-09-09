@@ -2477,5 +2477,10 @@
   "Apply and delete": "Apply and delete",
   "Apply and keep": "Apply and keep",
   "Unshelve (apply and delete)": "Unshelve (apply and delete)",
-  "Apply (keep shelve)": "Apply (keep shelve)"
+  "Apply (keep shelve)": "Apply (keep shelve)",
+  "Search files...": "Search files...",
+  "Search files or commits...": "Search files or commits...",
+  "Previous match (Shift+Enter / Up)": "Previous match (Shift+Enter / Up)",
+  "Next match (Enter / Down)": "Next match (Enter / Down)",
+  "Close (Escape)": "Close (Escape)"
 }

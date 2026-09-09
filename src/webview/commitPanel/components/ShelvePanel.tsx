@@ -9,6 +9,7 @@ import { t } from '../../shared/i18n';
 import { scopedKey } from '../../shared/scopedKey';
 import { branchColor, readableAccentColor } from '../../shared/branchColors';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
+import { HighlightedText } from '../../shared/speedSearch';
 
 interface Props {
   repoId: string;
@@ -27,6 +28,8 @@ interface Props {
   onUnshelveFile: (repoId: string, shelveId: string, filePath: string) => void;
   onDrop: (repoId: string, shelveId: string) => void;
   onOpenFileDiff: (repoId: string, shelveId: string, filePath: string) => void;
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }
 
 const SHELVE_CTX_ITEMS: ContextMenuEntry[] = [
@@ -73,11 +76,11 @@ interface TreeDir { kind: 'dir'; name: string; path: string; children: TreeNode[
 interface TreeFile { kind: 'file'; name: string; file: ShelfFile }
 type TreeNode = TreeDir | TreeFile;
 
-function shelveEntryKey(repoId: string, shelveId: string): string {
+export function shelveEntryKey(repoId: string, shelveId: string): string {
   return scopedKey('shelve', repoId, shelveId);
 }
 
-function shelveDirKey(repoId: string, shelveId: string, dirPath: string): string {
+export function shelveDirKey(repoId: string, shelveId: string, dirPath: string): string {
   return scopedKey('shelve-dir', repoId, shelveId, dirPath);
 }
 
@@ -129,16 +132,20 @@ function collapseSingleChildDirs(nodes: TreeNode[]): TreeNode[] {
 
 // ── File row (shared between flat and tree) ───────────────────────────────────
 
-function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFile }: {
+function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFile, speedSearchQuery, activeSpeedSearchKey }: {
   file: ShelfFile;
   repoId: string;
   entry: ShelveEntry;
   depth?: number;
   onOpenFileDiff: Props['onOpenFileDiff'];
   onUnshelveFile: Props['onUnshelveFile'];
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const iconTheme = useCommitStore(s => s.iconTheme);
+  const itemKey = scopedKey(repoId, entry.id, file.path);
+  const isSpeedSearchActive = activeSpeedSearchKey === itemKey;
   const fname = file.path.split('/').pop() ?? file.path;
   const dir = file.path.includes('/') ? file.path.split('/').slice(0, -1).join('/') : '';
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
@@ -147,6 +154,7 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
 
   return (
     <div
+      data-speed-search-key={itemKey}
       style={{
         display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
         gap: '3px', paddingLeft, paddingRight: '8px', cursor: 'pointer',
@@ -158,9 +166,13 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
       title={t('{0} — click to open diff', file.path)}
     >
       <FileIcon name={fname} theme={iconTheme} size={ICON_SIZE} />
-      <span style={{ color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{fname}</span>
+      <span style={{ color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+        <HighlightedText text={fname} query={speedSearchQuery} isActive={isSpeedSearchActive} />
+      </span>
       {depth === 0 && dir && (
-        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>{dir}</span>
+        <span style={{ fontSize: '11px', color: 'var(--vscode-descriptionForeground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, maxWidth: '80px' }}>
+          <HighlightedText text={dir} query={speedSearchQuery} />
+        </span>
       )}
       {hovered ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: '1px', marginLeft: 'auto', flexShrink: 0 }}>
@@ -182,13 +194,15 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
 
 // ── Tree directory node ───────────────────────────────────────────────────────
 
-function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFile }: {
+function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFile, speedSearchQuery, activeSpeedSearchKey }: {
   node: TreeDir;
   depth: number;
   repoId: string;
   entry: ShelveEntry;
   onOpenFileDiff: Props['onOpenFileDiff'];
   onUnshelveFile: Props['onUnshelveFile'];
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const { isShelveCollapsed, toggleShelveCollapsed, iconTheme } = useCommitStore();
@@ -226,14 +240,16 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
         >
           <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '12px', width: '12px', flexShrink: 0 }} />
           <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
-          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <HighlightedText text={node.name} query={speedSearchQuery} />
+          </span>
           <span style={{ fontSize: '10px', color: 'var(--vscode-descriptionForeground)', flexShrink: 0 }}>{fileCount}</span>
         </div>
       </div>
       {open && node.children.map(child =>
         child.kind === 'dir'
-          ? <TreeDirNode key={child.path} node={child} depth={depth + 1} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
-          : <FileRow key={child.file.path} file={child.file} repoId={repoId} entry={entry} depth={depth + 1} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
+          ? <TreeDirNode key={child.path} node={child} depth={depth + 1} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
+          : <FileRow key={child.file.path} file={child.file} repoId={repoId} entry={entry} depth={depth + 1} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
       )}
     </div>
   );
@@ -241,7 +257,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
 
 // ── Single shelve row ─────────────────────────────────────────────────────────
 
-function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff }: {
+function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff, speedSearchQuery, activeSpeedSearchKey }: {
   entry: ShelveEntry;
   repoId: string;
   viewMode: ViewMode;
@@ -250,6 +266,8 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onU
   onUnshelveFile: Props['onUnshelveFile'];
   onDrop: Props['onDrop'];
   onOpenFileDiff: Props['onOpenFileDiff'];
+  speedSearchQuery?: string;
+  activeSpeedSearchKey?: string | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -266,11 +284,11 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onU
       {/* Header */}
       <div
         style={{ ...rowStyle.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
+        onClick={() => toggleShelveCollapsed(entryKey)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
-        onDoubleClick={() => onUnshelve(repoId, entry.id)}
-        title={t('{0} — double-click to unshelve', entry.name)}
+        title={entry.name}
       >
         <button data-action-btn="" style={rowStyle.chevronBtn} onClick={e => { e.stopPropagation(); toggleShelveCollapsed(entryKey); }}>
           <Codicon name={expanded ? 'chevron-down' : 'chevron-right'} style={{ fontSize: '11px' }} />
@@ -314,11 +332,11 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onU
           {viewMode === 'tree' && treeNodes
             ? treeNodes.map(node =>
                 node.kind === 'dir'
-                  ? <TreeDirNode key={node.path} node={node} depth={0} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
-                  : <FileRow key={node.file.path} file={node.file} repoId={repoId} entry={entry} depth={0} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
+                  ? <TreeDirNode key={node.path} node={node} depth={0} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
+                  : <FileRow key={node.file.path} file={node.file} repoId={repoId} entry={entry} depth={0} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
               )
             : entry.files.map(f => (
-                <FileRow key={f.path} file={f} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} />
+                <FileRow key={f.path} file={f} repoId={repoId} entry={entry} onOpenFileDiff={onOpenFileDiff} onUnshelveFile={onUnshelveFile} speedSearchQuery={speedSearchQuery} activeSpeedSearchKey={activeSpeedSearchKey} />
               ))
           }
         </div>
@@ -382,7 +400,7 @@ const rowStyle = {
 
 // ── Public component ──────────────────────────────────────────────────────────
 
-export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff }: Props) {
+export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff, speedSearchQuery, activeSpeedSearchKey }: Props) {
   const projectColor = readableAccentColor(repoColor);
 
   return (
@@ -423,6 +441,8 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, worktreeBr
             onUnshelveFile={onUnshelveFile}
             onDrop={onDrop}
             onOpenFileDiff={onOpenFileDiff}
+            speedSearchQuery={speedSearchQuery}
+            activeSpeedSearchKey={activeSpeedSearchKey}
           />
         ))
       )}

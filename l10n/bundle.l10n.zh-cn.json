@@ -2477,5 +2477,10 @@
   "Apply and delete": "应用并删除",
   "Apply and keep": "应用并保留",
   "Unshelve (apply and delete)": "取消搁置（应用并删除）",
-  "Apply (keep shelve)": "应用（保留搁置）"
+  "Apply (keep shelve)": "应用（保留搁置）",
+  "Search files...": "搜索文件...",
+  "Search files or commits...": "搜索文件或提交...",
+  "Previous match (Shift+Enter / Up)": "上一个匹配项 (Shift+Enter / Up)",
+  "Next match (Enter / Down)": "下一个匹配项 (Enter / Down)",
+  "Close (Escape)": "关闭 (Escape)"
 }

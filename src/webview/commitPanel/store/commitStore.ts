@@ -104,6 +104,8 @@ export interface CommitState {
   getSelectedRepos: () => string[];
   isCollapsed: (key: string) => boolean;
   toggleCollapsed: (key: string) => void;
+  setCollapsedKeys: (keys: Set<string>) => void;
+  setShelveCollapsedKeys: (keys: Set<string>) => void;
   expandAll: () => void;
   collapseAll: () => void;
 }
@@ -299,6 +301,9 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   shelveExpandAll: (keys) => {
     set({ shelveCollapsedKeys: new Set(keys) });
   },
+  setShelveCollapsedKeys: (keys) => {
+    set({ shelveCollapsedKeys: new Set(keys) });
+  },
   shelveCollapseAll: () => {
     // Collapsing = removing from the expanded set = empty set
     set({ shelveCollapsedKeys: new Set() });
@@ -391,6 +396,7 @@ export const useCommitStore = create<CommitState>((set, get) => ({
     if (next.has(key)) next.delete(key); else next.add(key);
     return { collapsedKeys: next };
   }),
+  setCollapsedKeys: (keys: Set<string>) => set({ collapsedKeys: new Set(keys) }),
   expandAll: () => set({ collapsedKeys: new Set() }),
   collapseAll: () => {
     const { status, changesViewMode, changelists } = get();
