@@ -178,6 +178,8 @@ export type HostToCommitMsg =
   | { type: 'STASH_SHOW_RESULT'; requestId: string; diff: string; error?: string }
   | { type: 'STASH_OP_RESULT'; requestId: string; repoId: string; op: 'apply' | 'pop' | 'drop' | 'push'; ok: boolean; error?: string }
   | { type: 'PUSH_UNPUSHED_RESULT'; requestId?: string; repoId?: string; commits?: UnpushedCommit[]; repos?: Array<{ repoId: string; commits: UnpushedCommit[]; error?: string }>; error?: string }
+  | { type: 'PUSH_SYNC_COUNTS_RESULT'; requestId?: string; counts: Record<string, { unpushed: number; incoming: number }> }
+  | { type: 'PUSH_COMMITS_STATS_UPDATE'; repoId: string; stats: Record<string, { filesChanged: number; additions: number; deletions: number }>; kind?: 'outgoing' | 'incoming' }
   | { type: 'PUSH_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
   | { type: 'PUSH_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
   | { type: 'PUSH_SQUASH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
@@ -280,6 +282,7 @@ export type CommitToHostMsg =
   | { type: 'STASH_POP'; requestId: string; repoId: string; stashRef: string }
   | { type: 'STASH_DROP'; requestId: string; repoId: string; stashRef: string }
   | { type: 'STASH_OPEN_FILE_DIFF'; repoId: string; stashRef: string; filePath: string }
+  | { type: 'PUSH_GET_SYNC_COUNTS'; requestId: string; repoIds?: string[] }
   | { type: 'PUSH_GET_UNPUSHED'; requestId: string; repoId: string }
   | { type: 'PUSH_GET_COMMIT_FILES'; requestId: string; repoId: string; hash: string }
   | { type: 'PUSH_GET_AGGREGATED_DIFF'; requestId: string; repoId: string; oldestHash?: string }

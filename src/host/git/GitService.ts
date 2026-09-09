@@ -463,6 +463,8 @@ export class GitService {
   private pendingPullAutoStash: PullAutoStash | undefined;
   // Set immediately after a tag checkout, cleared when VS Code API confirms the update.
   private _pendingDetachedTag: string | undefined;
+  // Cache of commit hash -> diff stats (immutable commit properties)
+  private commitStatsCache = new Map<string, { filesChanged: number; additions: number; deletions: number }>();
   // Cache of { lastCommit: string; splitHash: string } keyed by prefix
   private subtreeSplitCache = new Map<string, { lastCommit: string; splitHash: string }>();
   // Lock to sequence expensive subtree split executions and prevent CPU exhaustion
@@ -959,6 +961,20 @@ export class GitService {
             if (tracking.isGone !== undefined) {
               isGone = tracking.isGone;
             }
+          }
+        } catch { /* ignore fallback */ }
+      }
+
+      if (!isDetached && upstream && (aheadBehind === undefined || (aheadBehind.ahead === 0 && aheadBehind.behind === 0))) {
+        try {
+          const [aheadRaw, behindRaw] = await Promise.all([
+            this.git.raw(['rev-list', '--count', '@{u}..HEAD']).catch(() => ''),
+            this.git.raw(['rev-list', '--count', 'HEAD..@{u}']).catch(() => ''),
+          ]);
+          const ahead = parseInt(aheadRaw.trim(), 10);
+          const behind = parseInt(behindRaw.trim(), 10);
+          if (!isNaN(ahead) && !isNaN(behind)) {
+            aheadBehind = { ahead, behind };
           }
         } catch { /* ignore fallback */ }
       }
@@ -1839,6 +1855,80 @@ export class GitService {
       return parseInt(raw.trim(), 10) || 0;
     } catch {
       return 0;
+    }
+  }
+
+  async getIncomingCount(): Promise<number> {
+    try {
+      const tracking = (await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '')).trim();
+      if (!tracking) return 0;
+      const raw = await this.git.raw(['rev-list', '--count', `HEAD..${tracking}`]);
+      return parseInt(raw.trim(), 10) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async getSyncCounts(): Promise<{ unpushed: number; incoming: number }> {
+    const [unpushed, incoming] = await Promise.all([
+      this.getUnpushedCount(),
+      this.getIncomingCount(),
+    ]);
+    return { unpushed, incoming };
+  }
+
+  private parseCommitShortStats(raw: string): Record<string, { filesChanged: number; additions: number; deletions: number }> {
+    const result: Record<string, { filesChanged: number; additions: number; deletions: number }> = {};
+    for (const block of raw.split('\x1E')) {
+      if (!block.trim()) continue;
+      const lines = block.trim().split('\n');
+      const hash = lines[0]?.trim();
+      if (!hash) continue;
+      const statLine = lines.find(l => l.includes('changed'));
+      if (statLine) {
+        const files = statLine.match(/(\d+) files? changed/);
+        const ins = statLine.match(/(\d+) insertion/);
+        const del = statLine.match(/(\d+) deletion/);
+        const stat = {
+          filesChanged: files ? parseInt(files[1], 10) : 0,
+          additions: ins ? parseInt(ins[1], 10) : 0,
+          deletions: del ? parseInt(del[1], 10) : 0,
+        };
+        result[hash] = stat;
+        this.commitStatsCache.set(hash, stat);
+      }
+    }
+    return result;
+  }
+
+  async getUnpushedCommitsStats(): Promise<Record<string, { filesChanged: number; additions: number; deletions: number }>> {
+    try {
+      const raw = await this.git.raw(['log', '@{u}..HEAD', '--format=%x1E%H', '--shortstat']);
+      return this.parseCommitShortStats(raw);
+    } catch {
+      try {
+        const remotes = await this.git.getRemotes();
+        let raw: string;
+        if (remotes.length === 0) {
+          raw = await this.git.raw(['log', 'HEAD', '--max-count=100', '--format=%x1E%H', '--shortstat']);
+        } else {
+          raw = await this.git.raw(['log', 'HEAD', '--not', '--remotes', '--format=%x1E%H', '--shortstat']);
+        }
+        return this.parseCommitShortStats(raw);
+      } catch {
+        return {};
+      }
+    }
+  }
+
+  async getIncomingCommitsStats(): Promise<Record<string, { filesChanged: number; additions: number; deletions: number }>> {
+    try {
+      const tracking = (await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '')).trim();
+      if (!tracking) return {};
+      const raw = await this.git.raw(['log', `HEAD..${tracking}`, '--format=%x1E%H', '--shortstat']);
+      return this.parseCommitShortStats(raw);
+    } catch {
+      return {};
     }
   }
 
@@ -5195,14 +5285,21 @@ export class GitService {
           author,
           date,
         };
-        const statLine = statText.split('\n').find(l => l.includes('changed'));
-        if (statLine) {
-          const files = statLine.match(/(\d+) files? changed/);
-          const ins = statLine.match(/(\d+) insertion/);
-          const del = statLine.match(/(\d+) deletion/);
-          commit.filesChanged = files ? parseInt(files[1], 10) : 0;
-          commit.additions = ins ? parseInt(ins[1], 10) : 0;
-          commit.deletions = del ? parseInt(del[1], 10) : 0;
+        const cachedStat = this.commitStatsCache.get(hash);
+        if (cachedStat) {
+          commit.filesChanged = cachedStat.filesChanged;
+          commit.additions = cachedStat.additions;
+          commit.deletions = cachedStat.deletions;
+        } else {
+          const statLine = statText.split('\n').find(l => l.includes('changed'));
+          if (statLine) {
+            const files = statLine.match(/(\d+) files? changed/);
+            const ins = statLine.match(/(\d+) insertion/);
+            const del = statLine.match(/(\d+) deletion/);
+            commit.filesChanged = files ? parseInt(files[1], 10) : 0;
+            commit.additions = ins ? parseInt(ins[1], 10) : 0;
+            commit.deletions = del ? parseInt(del[1], 10) : 0;
+          }
         }
         commits.push(commit);
       }
@@ -5210,7 +5307,7 @@ export class GitService {
     };
 
     const logArgs = (range: string[]): string[] =>
-      ['log', ...range, `--format=${FORMAT}`, '--shortstat'];
+      ['log', ...range, `--format=${FORMAT}`];
 
     try {
       // Fast path: upstream is configured
@@ -5299,7 +5396,7 @@ export class GitService {
     const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F`;
 
     const logArgs = (range: string[]): string[] =>
-      ['log', ...range, `--format=${FORMAT}`, '--shortstat'];
+      ['log', ...range, `--format=${FORMAT}`];
 
     const tracking = await this.git.raw(['rev-parse', '--verify', '@{u}']).catch(() => '');
     if (!tracking.trim()) return [];
@@ -5332,14 +5429,21 @@ export class GitService {
         date,
         parents,
       };
-      const statLine = statText.split('\n').find(l => l.includes('changed'));
-      if (statLine) {
-        const files = statLine.match(/(\d+) files? changed/);
-        const ins = statLine.match(/(\d+) insertion/);
-        const del = statLine.match(/(\d+) deletion/);
-        commit.filesChanged = files ? parseInt(files[1], 10) : 0;
-        commit.additions = ins ? parseInt(ins[1], 10) : 0;
-        commit.deletions = del ? parseInt(del[1], 10) : 0;
+      const cachedStat = this.commitStatsCache.get(hash);
+      if (cachedStat) {
+        commit.filesChanged = cachedStat.filesChanged;
+        commit.additions = cachedStat.additions;
+        commit.deletions = cachedStat.deletions;
+      } else {
+        const statLine = statText.split('\n').find(l => l.includes('changed'));
+        if (statLine) {
+          const files = statLine.match(/(\d+) files? changed/);
+          const ins = statLine.match(/(\d+) insertion/);
+          const del = statLine.match(/(\d+) deletion/);
+          commit.filesChanged = files ? parseInt(files[1], 10) : 0;
+          commit.additions = ins ? parseInt(ins[1], 10) : 0;
+          commit.deletions = del ? parseInt(del[1], 10) : 0;
+        }
       }
       commits.push(commit);
     }

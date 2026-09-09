@@ -53,6 +53,28 @@ function mergeCommitMessageHistory(...groups: string[][]): string[] {
   }).slice(0, COMMIT_MESSAGE_HISTORY_LIMIT);
 }
 
+function mergeCommitStats<T extends UnpushedCommit>(newCommits: T[], oldCommits?: T[]): T[] {
+  if (!oldCommits || oldCommits.length === 0) return newCommits;
+  const statsMap = new Map<string, Pick<UnpushedCommit, 'filesChanged' | 'additions' | 'deletions'>>();
+  for (const c of oldCommits) {
+    if (c.filesChanged !== undefined) {
+      statsMap.set(c.hash, {
+        filesChanged: c.filesChanged,
+        additions: c.additions,
+        deletions: c.deletions,
+      });
+    }
+  }
+  if (statsMap.size === 0) return newCommits;
+  return newCommits.map(c => {
+    if (c.filesChanged === undefined) {
+      const stat = statsMap.get(c.hash);
+      if (stat) return { ...c, ...stat };
+    }
+    return c;
+  });
+}
+
 // ── Context menu items ────────────────────────────────────────────────────────
 
 const IS_MAC = navigator.userAgent.includes('Mac');
@@ -444,6 +466,7 @@ export function CommitApp() {
   // ── Push / unpushed & incoming state ───────────────────────────────────────
   const [unpushedMap, setUnpushedMap] = useState<Record<string, { loading: boolean; commits: UnpushedCommit[]; error?: string }>>({});
   const [incomingMap, setIncomingMap] = useState<Record<string, { loading: boolean; commits: IncomingCommit[]; error?: string }>>({});
+  const [syncCountsMap, setSyncCountsMap] = useState<Record<string, { unpushed: number; incoming: number }>>({});
 
   // ── Shelve name prompt (triggered by context menu or commit bar button) ────
   const [shelvePrompt, setShelvePrompt] = useState<{
@@ -675,6 +698,10 @@ export function CommitApp() {
     send({ type: 'SYNC_GET_INCOMING', requestId: generateId(), repoId });
   }, [send]);
 
+  const requestSyncCounts = useCallback((repoIds?: string[]) => {
+    send({ type: 'PUSH_GET_SYNC_COUNTS', requestId: generateId(), repoIds });
+  }, [send]);
+
   const requestSubtreeList = useCallback((force = false, checkStatuses = false) => {
     const now = Date.now();
     if (checkStatuses) {
@@ -857,6 +884,9 @@ export function CommitApp() {
             requestStashCount(r.repoId);
             requestShelveList(r.repoId, true);
           });
+          if (currentGitRepos.length > 0) {
+            requestSyncCounts(currentGitRepos.map(r => r.repoId));
+          }
 
           const currentTab = activeTabRef.current;
           if (!isManualRefresh && currentTab !== 'changes') {
@@ -1112,22 +1142,101 @@ export function CommitApp() {
           }
           break;
 
+        case 'PUSH_SYNC_COUNTS_RESULT':
+          if (msg.counts) {
+            setSyncCountsMap(prev => ({
+              ...prev,
+              ...msg.counts,
+            }));
+            for (const [repoId, item] of Object.entries(msg.counts)) {
+              if (item.unpushed > 0) {
+                requestUnpushedCommits(repoId, true);
+              }
+              if (item.incoming > 0) {
+                requestIncomingCommits(repoId, true);
+              }
+            }
+          }
+          break;
+
         case 'PUSH_UNPUSHED_RESULT':
           if (msg.repos) {
             setUnpushedMap(prev => {
               const next = { ...prev };
               for (const item of msg.repos!) {
-                next[item.repoId] = { loading: false, commits: item.commits, error: item.error };
+                const merged = mergeCommitStats(item.commits ?? [], prev[item.repoId]?.commits);
+                next[item.repoId] = { loading: false, commits: merged, error: item.error };
+              }
+              return next;
+            });
+            setSyncCountsMap(prev => {
+              const next = { ...prev };
+              for (const item of msg.repos!) {
+                next[item.repoId] = {
+                  unpushed: (item.commits ?? []).length,
+                  incoming: prev[item.repoId]?.incoming ?? 0,
+                };
               }
               return next;
             });
             dirtyTabsRef.current.delete('push');
           } else if (msg.repoId) {
-            setUnpushedMap(prev => ({
+            const count = (msg.commits ?? []).length;
+            setUnpushedMap(prev => {
+              const merged = mergeCommitStats(msg.commits ?? [], prev[msg.repoId!]?.commits);
+              return {
+                ...prev,
+                [msg.repoId!]: { loading: false, commits: merged, error: msg.error },
+              };
+            });
+            setSyncCountsMap(prev => ({
               ...prev,
-              [msg.repoId!]: { loading: false, commits: msg.commits ?? [], error: msg.error },
+              [msg.repoId!]: {
+                unpushed: count,
+                incoming: prev[msg.repoId!]?.incoming ?? 0,
+              },
             }));
             dirtyTabsRef.current.delete('push');
+          }
+          break;
+
+        case 'PUSH_COMMITS_STATS_UPDATE':
+          if (msg.repoId && msg.stats) {
+            const { repoId, stats, kind } = msg;
+            if (!kind || kind === 'outgoing') {
+              setUnpushedMap(prev => {
+                const current = prev[repoId];
+                if (!current || !current.commits || current.commits.length === 0) return prev;
+                let changed = false;
+                const newCommits = current.commits.map(c => {
+                  const stat = stats[c.hash];
+                  if (stat && (c.filesChanged !== stat.filesChanged || c.additions !== stat.additions || c.deletions !== stat.deletions)) {
+                    changed = true;
+                    return { ...c, ...stat };
+                  }
+                  return c;
+                });
+                if (!changed) return prev;
+                return { ...prev, [repoId]: { ...current, commits: newCommits } };
+              });
+            }
+            if (!kind || kind === 'incoming') {
+              setIncomingMap(prev => {
+                const current = prev[repoId];
+                if (!current || !current.commits || current.commits.length === 0) return prev;
+                let changed = false;
+                const newCommits = current.commits.map(c => {
+                  const stat = stats[c.hash];
+                  if (stat && (c.filesChanged !== stat.filesChanged || c.additions !== stat.additions || c.deletions !== stat.deletions)) {
+                    changed = true;
+                    return { ...c, ...stat };
+                  }
+                  return c;
+                });
+                if (!changed) return prev;
+                return { ...prev, [repoId]: { ...current, commits: newCommits } };
+              });
+            }
           }
           break;
 
@@ -1147,15 +1256,37 @@ export function CommitApp() {
             setIncomingMap(prev => {
               const next = { ...prev };
               for (const item of msg.repos!) {
-                next[item.repoId] = { loading: false, commits: item.commits ?? [], error: item.error };
+                const merged = mergeCommitStats(item.commits ?? [], prev[item.repoId]?.commits);
+                next[item.repoId] = { loading: false, commits: merged, error: item.error };
+              }
+              return next;
+            });
+            setSyncCountsMap(prev => {
+              const next = { ...prev };
+              for (const item of msg.repos!) {
+                next[item.repoId] = {
+                  unpushed: prev[item.repoId]?.unpushed ?? 0,
+                  incoming: (item.commits ?? []).length,
+                };
               }
               return next;
             });
             dirtyTabsRef.current.delete('push');
           } else if (msg.repoId) {
-            setIncomingMap(prev => ({
+            const count = (msg.commits ?? []).length;
+            setIncomingMap(prev => {
+              const merged = mergeCommitStats(msg.commits ?? [], prev[msg.repoId!]?.commits);
+              return {
+                ...prev,
+                [msg.repoId!]: { loading: false, commits: merged, error: msg.error },
+              };
+            });
+            setSyncCountsMap(prev => ({
               ...prev,
-              [msg.repoId!]: { loading: false, commits: msg.commits ?? [], error: msg.error },
+              [msg.repoId!]: {
+                unpushed: prev[msg.repoId!]?.unpushed ?? 0,
+                incoming: count,
+              },
             }));
             dirtyTabsRef.current.delete('push');
           }
@@ -1708,13 +1839,21 @@ export function CommitApp() {
   const isSvnRepo = useCallback((repoId: string) => metaMap.get(repoId)?.kind === 'svn', [metaMap]);
   const gitRepos = useMemo(() => repos.filter(repo => !isSvnRepo(repo.repoId)), [repos, isSvnRepo]);
   const totalToPush = gitRepos.reduce((sum, r) => {
-    if (r.branch.upstream && !r.branch.isGone) return sum + (r.branch.aheadBehind?.ahead ?? 0);
-    return sum + (unpushedMap[r.repoId]?.commits?.length ?? 0);
+    const syncCount = syncCountsMap[r.repoId]?.unpushed;
+    if (r.branch.upstream && !r.branch.isGone) {
+      const ahead = r.branch.aheadBehind?.ahead;
+      if (ahead !== undefined && ahead > 0) return sum + ahead;
+      if (syncCount !== undefined) return sum + syncCount;
+      return sum + (ahead ?? unpushedMap[r.repoId]?.commits?.length ?? 0);
+    }
+    return sum + (syncCount ?? unpushedMap[r.repoId]?.commits?.length ?? 0);
   }, 0);
   const totalToPull = gitRepos.reduce((sum, r) => {
-    const behind = r.branch.aheadBehind?.behind ?? 0;
-    if (behind > 0) return sum + behind;
-    return sum + (incomingMap[r.repoId]?.commits?.length ?? 0);
+    const behind = r.branch.aheadBehind?.behind;
+    const syncCount = syncCountsMap[r.repoId]?.incoming;
+    if (behind !== undefined && behind > 0) return sum + behind;
+    if (syncCount !== undefined) return sum + syncCount;
+    return sum + (behind ?? incomingMap[r.repoId]?.commits?.length ?? 0);
   }, 0);
   const showVcsBadges = gitRepos.length > 0 && gitRepos.length < repos.length;
   const gitRepoMetas = store.repoMetas.filter(meta => meta.kind !== 'svn');
@@ -2011,23 +2150,27 @@ export function CommitApp() {
   }, [activeTab, visibleTabs, switchTab]);
 
   // Keep unpushed-commit counts fresh for repos without upstream so the Sync tab badge
-  // shows the correct number even before the tab is opened. Upstream repos are live via aheadBehind.ahead.
-  // Full refresh on every status update is intentionally avoided to prevent visual noise.
+  // shows the correct number even before the tab is opened.
   const noUpstreamKey = gitRepos.filter(r => !r.branch.upstream || r.branch.isGone).map(r => r.repoId).join('\0');
   useEffect(() => {
     if (!noUpstreamKey) return;
-    noUpstreamKey.split('\0').forEach(id => requestUnpushedCommits(id, true));
-  }, [noUpstreamKey, requestUnpushedCommits]);
+    requestSyncCounts(noUpstreamKey.split('\0'));
+  }, [noUpstreamKey, requestSyncCounts]);
 
   const gitRepoKey = gitRepos.map(repo => repo.repoId).join('\0');
   useEffect(() => {
     if (!gitRepoKey) return;
     const bootstrappedRepoIds = tabCountBootstrappedRepoIdsRef.current;
+    const newRepoIds: string[] = [];
     for (const repoId of gitRepoKey.split('\0')) {
       if (bootstrappedRepoIds.has(repoId)) continue;
       bootstrappedRepoIds.add(repoId);
+      newRepoIds.push(repoId);
       requestStashCount(repoId);
       requestShelveList(repoId, true);
+    }
+    if (newRepoIds.length > 0) {
+      requestSyncCounts(newRepoIds);
     }
     if (!tabCountWorktreeRequestedRef.current) {
       tabCountWorktreeRequestedRef.current = true;
@@ -2041,7 +2184,7 @@ export function CommitApp() {
       tabCountSubmoduleRequestedRef.current = true;
       requestSubmoduleList(true);
     }
-  }, [gitRepoKey, requestShelveList, requestStashCount, requestSubtreeList, requestWorktreeList, requestSubmoduleList]);
+  }, [gitRepoKey, requestShelveList, requestStashCount, requestSyncCounts, requestSubtreeList, requestWorktreeList, requestSubmoduleList]);
 
   // ── Context menu handlers ─────────────────────────────────────────────────
 
