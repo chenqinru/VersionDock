@@ -59,6 +59,7 @@ type SubtreeStatusRefreshOptions = {
   forceEntryIds?: Set<string>;
   notifyStatusUpdates?: boolean;
   skipStatuses?: boolean;
+  background?: boolean;
 };
 type SvnIgnoreRepo = {
   addIgnoreEntry(entryPath: string): Promise<SvnIgnoreUpdateResult>;
@@ -1489,12 +1490,29 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     await this.getSubtreeStore()?.update(SUBTREE_STATE_KEY, entries);
   }
 
+  private invalidateAllSubtreeRemoteCaches(): void {
+    for (const meta of this.manager.getRepoMetas()) {
+      const repo = this.manager.getRepo(meta.id);
+      if (repo && repo.kind === 'git') {
+        (repo as GitService).invalidateSubtreeRemoteCache();
+      }
+    }
+  }
+
   private async refreshSubtreeList(options: SubtreeStatusRefreshOptions = {}): Promise<void> {
     if (options.force) {
-      this.invalidateSubtreeStatus(undefined, { remote: true });
+      // SWR: Invalidate remote hash cache to trigger fresh network query in background,
+      // but retain current status snapshot for zero-latency initial UI rendering.
+      this.invalidateAllSubtreeRemoteCaches();
     } else if (options.forceEntryIds) {
       for (const id of options.forceEntryIds) {
-        this.invalidateSubtreeStatus(id, { remote: true });
+        const entry = this.findSubtreeEntry(id);
+        if (entry) {
+          const repo = this.manager.getRepo(entry.repoId);
+          if (repo && repo.kind === 'git') {
+            (repo as GitService).invalidateSubtreeRemoteCache(entry.repository);
+          }
+        }
       }
     }
     const entries = this.getSubtreeEntries();
@@ -5519,6 +5537,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
+          if (this.isSubtreeTabActive()) {
+            void this.refreshSubtreeList({ force: false });
+          }
           await this.manager.refreshStatusNow();
           vscode.window.showInformationMessage(t('VersionDock [{0}]: Squash completed.', repoName));
         } catch (e: unknown) {
@@ -5546,6 +5567,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
+          if (this.isSubtreeTabActive()) {
+            void this.refreshSubtreeList({ force: false });
+          }
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
           this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('VersionDock [{0}]: Drop failed: {1}', repoName, String(e)) });
@@ -5572,6 +5596,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
+          if (this.isSubtreeTabActive()) {
+            void this.refreshSubtreeList({ force: false });
+          }
           await this.manager.refreshStatusNow();
         } catch (e: unknown) {
           const errMsg = String(e);
@@ -5621,6 +5648,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
+          if (this.isSubtreeTabActive()) {
+            void this.refreshSubtreeList({ force: false });
+          }
           await this.manager.refreshStatusNow();
           vscode.window.showInformationMessage(t('VersionDock [{0}]: Commit message updated.', repoName));
         } catch (e: unknown) {
@@ -7065,7 +7095,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.post({ type: 'COMMIT_REFRESH_START' });
     const refreshSubtrees = Boolean(options.refreshSubtrees ?? this.isSubtreeTabActive());
     if (refreshSubtrees) {
-      this.invalidateSubtreeStatus(undefined, { remote: true });
       const entries = this.getSubtreeEntries();
       const initialStatuses: Record<string, SubtreePushStatus> = {};
       for (const entry of entries) {

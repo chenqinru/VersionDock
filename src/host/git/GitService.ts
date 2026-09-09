@@ -465,6 +465,8 @@ export class GitService {
   private _pendingDetachedTag: string | undefined;
   // Cache of { lastCommit: string; splitHash: string } keyed by prefix
   private subtreeSplitCache = new Map<string, { lastCommit: string; splitHash: string }>();
+  // Lock to sequence expensive subtree split executions and prevent CPU exhaustion
+  private subtreeSplitLock: Promise<unknown> = Promise.resolve();
   // Cache of remote ref lookup results keyed by `${repository}\0${refspec}`
   private subtreeRemoteHashCache = new Map<string, {
     result: { hash?: string; ref?: string; unreachable?: boolean; notFound?: boolean; error?: string };
@@ -2304,6 +2306,34 @@ export class GitService {
     return [ref, `refs/heads/${ref}`, `refs/tags/${ref}`];
   }
 
+  async getLastCommitChangedPaths(): Promise<string[]> {
+    try {
+      const output = await this.git.raw(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']);
+      return output.split('\n').map(line => line.trim()).filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  private async getTreeHash(ref: string): Promise<string | undefined> {
+    try {
+      const hash = (await this.git.raw(['rev-parse', '--verify', `${ref}^{tree}`])).trim().toLowerCase();
+      return /^[0-9a-f]{40}$/.test(hash) ? hash : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async getSubtreePrefixTreeHash(prefix: string, commit = 'HEAD'): Promise<string | undefined> {
+    try {
+      const cleanPrefix = this.normalizeRepoPath(prefix);
+      const hash = (await this.git.raw(['rev-parse', '--verify', `${commit}:${cleanPrefix}`])).trim().toLowerCase();
+      return /^[0-9a-f]{40}$/.test(hash) ? hash : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async getSubtreePrefixLastCommit(prefix: string): Promise<string> {
     try {
       const output = await this.git.raw(['log', '-1', '--format=%H', 'HEAD', '--', prefix]);
@@ -2322,16 +2352,23 @@ export class GitService {
       }
     }
 
-    const splitOutput = await this.rawPathSafe(['subtree', 'split', this.subtreePrefixArg(prefix)]);
-    const splitHash = this.parseSubtreeSplitHash(splitOutput);
-    if (!splitHash) {
-      throw new Error(t('Cannot determine subtree split commit.'));
-    }
+    // Sequence heavy subtree splits to avoid CPU/IO starvation
+    const executeSplit = async (): Promise<string> => {
+      const splitOutput = await this.rawPathSafe(['subtree', 'split', this.subtreePrefixArg(prefix)]);
+      const splitHash = this.parseSubtreeSplitHash(splitOutput);
+      if (!splitHash) {
+        throw new Error(t('Cannot determine subtree split commit.'));
+      }
 
-    if (lastCommit) {
-      this.subtreeSplitCache.set(prefix, { lastCommit, splitHash });
-    }
-    return splitHash;
+      if (lastCommit) {
+        this.subtreeSplitCache.set(prefix, { lastCommit, splitHash });
+      }
+      return splitHash;
+    };
+
+    const nextTask = this.subtreeSplitLock.then(executeSplit, executeSplit);
+    this.subtreeSplitLock = nextTask.then(() => {}, () => {});
+    return nextTask;
   }
 
   private async getSubtreeRemoteHash(
@@ -2477,17 +2514,33 @@ export class GitService {
     refspec: string,
     options?: { forceRemote?: boolean },
   ): Promise<SubtreePushStatus> {
-    const [splitHash, remote] = await Promise.all([
-      this.getSubtreeSplitHashFast(prefix),
-      this.getSubtreeRemoteHash(repository, refspec, options),
-    ]);
-
     const normalizedRef = this.normalizeSubtreeRemoteRef(refspec);
+
+    // 1. Fetch remote ref query (or cached result)
+    const remote = await this.getSubtreeRemoteHash(repository, refspec, options);
 
     if (remote.unreachable) {
       const localTrackingHash = await this.getSubtreeLocalTrackingHash(repository, refspec);
       if (localTrackingHash) {
         const unavailableError = t('Unable to reach remote repository; status is based on the last fetched remote reference.');
+
+        // Fast-path: Check tree equality with local tracking commit
+        const [prefixTree, localTrackingTree] = await Promise.all([
+          this.getSubtreePrefixTreeHash(prefix),
+          this.getTreeHash(localTrackingHash),
+        ]);
+        if (prefixTree && localTrackingTree && prefixTree === localTrackingTree) {
+          return {
+            aheadCount: 0,
+            hasUpdates: false,
+            remoteRef: normalizedRef,
+            splitHash: localTrackingHash,
+            remoteHash: localTrackingHash,
+            error: unavailableError,
+          };
+        }
+
+        const splitHash = await this.getSubtreeSplitHashFast(prefix);
         if (localTrackingHash === splitHash) {
           return {
             aheadCount: 0,
@@ -2511,12 +2564,12 @@ export class GitService {
 
       return {
         remoteRef: normalizedRef,
-        splitHash,
         error: t('Unable to reach remote repository.'),
       };
     }
 
     if (remote.notFound || !remote.hash) {
+      const splitHash = await this.getSubtreeSplitHashFast(prefix).catch(() => undefined);
       return {
         aheadCount: undefined,
         hasUpdates: true,
@@ -2524,6 +2577,24 @@ export class GitService {
         splitHash,
       };
     }
+
+    // 2. Fast-path: Check tree equality directly (2ms, skips expensive split completely)
+    const [prefixTree, remoteTree] = await Promise.all([
+      this.getSubtreePrefixTreeHash(prefix),
+      this.getTreeHash(remote.hash),
+    ]);
+    if (prefixTree && remoteTree && prefixTree === remoteTree) {
+      return {
+        aheadCount: 0,
+        hasUpdates: false,
+        remoteRef: remote.ref,
+        splitHash: remote.hash,
+        remoteHash: remote.hash,
+      };
+    }
+
+    // 3. Tree differs: calculate synthetic split hash and ahead commits
+    const splitHash = await this.getSubtreeSplitHashFast(prefix);
 
     if (remote.hash === splitHash) {
       return {
