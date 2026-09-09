@@ -2028,8 +2028,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   /** Like getAllStatuses but forces VSCode's git extension to re-read from disk first. */
-  async getAllStatusesFresh(): Promise<WorkspaceStatus> {
-    if (this.statusUpdateSuppressionDepth > 0 && this.lastPublishedStatus) return this.lastPublishedStatus;
+  async getAllStatusesFresh(options?: { bypassSuppression?: boolean }): Promise<WorkspaceStatus> {
+    if (!options?.bypassSuppression && this.statusUpdateSuppressionDepth > 0 && this.lastPublishedStatus) return this.lastPublishedStatus;
     const results = await Promise.allSettled(
       Array.from(this.repos.values()).map(r => r.getStatusFresh())
     );
@@ -2042,9 +2042,12 @@ export class WorkspaceGitManager implements vscode.Disposable {
     };
   }
 
-  async refreshStatusNow(context?: StatusChangeContext): Promise<WorkspaceStatus> {
+  async refreshStatusNow(
+    context?: StatusChangeContext,
+    options: { bypassSuppression?: boolean } = { bypassSuppression: true },
+  ): Promise<WorkspaceStatus> {
     const generation = this.repositoryGeneration;
-    const status = await this.getAllStatusesFresh();
+    const status = await this.getAllStatusesFresh(options);
     if (this.disposed || generation !== this.repositoryGeneration) return status;
     this.statusStabilizationSignature = undefined;
     this.publishStatus(status, context);

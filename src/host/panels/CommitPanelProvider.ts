@@ -951,9 +951,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.postSidebarWhenReady({ type: 'COMMIT_SWITCH_TAB', tab });
   }
 
-  /** Reads fresh status after a stage/unstage op. simple-git reads directly from the git index so it's always accurate once the op completes. */
+  /** Reads fresh status after a stage/unstage/commit op. Uses refreshStatusNow with suppression bypass to immediately publish fresh state. */
   private async refreshStatusAfterOp(): Promise<WorkspaceStatus> {
-    return this.manager.getAllStatusesFresh();
+    return this.manager.refreshStatusNow(undefined, { bypassSuppression: true });
   }
 
   private async pickSvnIgnorePath(
@@ -2839,7 +2839,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             durationMs: Date.now() - startedAt,
           });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
-          const status = await this.manager.getAllStatusesFresh();
+          const status = await this.refreshStatusAfterOp();
           this.invalidateSubtreeStatus(undefined, { remote: false });
           void this.broadcastUnpushedCommits();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -3139,7 +3139,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 this.logProvider?.refresh({ repoIds: Array.from(committedRepoIds) });
               }
             }
-            const status = await this.manager.getAllStatusesFresh();
+            const status = await this.refreshStatusAfterOp();
             this.invalidateSubtreeStatus(undefined, { remote: false });
             void this.broadcastUnpushedCommits();
             this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -3228,7 +3228,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             });
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
           }
-          const status = await this.manager.getAllStatusesFresh();
+          const status = await this.refreshStatusAfterOp();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
           this.postChangelistsUpdate(status);
           for (const repoId of affectedRepoIds) {
@@ -3313,7 +3313,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             });
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
           }
-          const status = await this.manager.getAllStatusesFresh();
+          const status = await this.refreshStatusAfterOp();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
           this.postChangelistsUpdate(status);
           for (const repoId of affectedRepoIds) {
@@ -3774,7 +3774,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         try {
           await repo.discardFile(msg.path);
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
-          const status = await this.manager.getAllStatusesFresh();
+          const status = await this.refreshStatusAfterOp();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
