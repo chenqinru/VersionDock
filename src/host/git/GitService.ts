@@ -4053,6 +4053,26 @@ export class GitService {
 
       entries.push({ ref, oid: oid || undefined, index, message, fullMessage, date, branch, files: [] });
     }
+
+    const limit = 8;
+    const executing = new Set<Promise<void>>();
+    for (const entry of entries) {
+      const p = (async () => {
+        try {
+          entry.files = await this.getStashFiles(entry.oid ?? entry.ref);
+        } catch {
+          entry.files = [];
+        }
+      })();
+      executing.add(p);
+      const clean = () => executing.delete(p);
+      p.then(clean, clean);
+      if (executing.size >= limit) {
+        await Promise.race(executing);
+      }
+    }
+    await Promise.all(executing);
+
     return entries;
   }
 

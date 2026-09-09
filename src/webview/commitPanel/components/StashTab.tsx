@@ -377,11 +377,9 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
             )}
           </span>
           <span style={row.meta}>
-            {files.length > 0 && (
-              <span style={row.fileCount}>
-                {files.length === 1 ? t('{0} file', files.length) : t('{0} files', files.length)}
-              </span>
-            )}
+            <span style={row.fileCount}>
+              {files.length === 1 ? t('{0} file', files.length) : t('{0} files', files.length)}
+            </span>
             <span style={row.date}>{formatDate(entry.date)}</span>
           </span>
         </div>
