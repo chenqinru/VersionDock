@@ -102,6 +102,8 @@
   "No files selected": "No files selected",
   "Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.": "Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.",
   "Amend last commit": "Amend last commit",
+  "Amend last commit for {0}": "Amend last commit for {0}",
+  "Amend active for {0} (click to cancel)": "Amend active for {0} (click to cancel)",
   "Generating commit message…": "Generating commit message…",
   "Commit message (Cmd+Enter to commit)": "Commit message (Cmd+Enter to commit)",
   "Generate commit message with AI": "Generate commit message with AI",

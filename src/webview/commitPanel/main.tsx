@@ -906,15 +906,27 @@ export function CommitApp() {
           {
             const committedMessage = pendingCommitMessagesRef.current.get(msg.requestId);
             pendingCommitMessagesRef.current.delete(msg.requestId);
-            if (msg.ok && committedMessage) {
-              successfulCommitMessagesRef.current = mergeCommitMessageHistory(
-                [committedMessage],
-                successfulCommitMessagesRef.current,
-              );
-              setCommitMessageHistory(prev => mergeCommitMessageHistory(
-                successfulCommitMessagesRef.current,
-                prev,
-              ));
+            if (msg.ok) {
+              if (msg.repoId) {
+                store.setAmend(msg.repoId, false);
+              } else {
+                const currentAmends = useCommitStore.getState().amendFlags;
+                for (const rId of Object.keys(currentAmends)) {
+                  if (currentAmends[rId]) {
+                    store.setAmend(rId, false);
+                  }
+                }
+              }
+              if (committedMessage) {
+                successfulCommitMessagesRef.current = mergeCommitMessageHistory(
+                  [committedMessage],
+                  successfulCommitMessagesRef.current,
+                );
+                setCommitMessageHistory(prev => mergeCommitMessageHistory(
+                  successfulCommitMessagesRef.current,
+                  prev,
+                ));
+              }
             }
           }
           if (!msg.ok && msg.error && msg.error !== 'Cancelled' && !msg.handled) {
@@ -2507,7 +2519,8 @@ export function CommitApp() {
           if (meta?.kind === 'svn') {
             return selectedSet.has(r.repoId) && [...r.stagedFiles, ...r.unstagedFiles].length > 0;
           }
-          return r.stagedFiles.length > 0 && selectedSet.has(r.repoId);
+          const isAmended = freshState.amendFlags[r.repoId] ?? false;
+          return (r.stagedFiles.length > 0 || isAmended) && selectedSet.has(r.repoId);
         })
         .map(r => {
           const meta = metaMap.get(r.repoId);
@@ -2549,7 +2562,7 @@ export function CommitApp() {
         const stagedAfter = new Set(repoStatus.stagedFiles.map(f => f.path));
         for (const p of r.filesToUnstage) stagedAfter.delete(p);
         for (const p of r.filesToStage) stagedAfter.add(p);
-        return stagedAfter.size > 0;
+        return stagedAfter.size > 0 || r.amend;
       });
     if (targets.length === 0) return;
     store.setLoading(true);

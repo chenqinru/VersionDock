@@ -2024,6 +2024,27 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     } catch { /* ignore */ }
   }
 
+  private async broadcastIncomingCommits(repoIds?: string[], requestId?: string): Promise<void> {
+    try {
+      const allMetas = this.manager.getRepoMetas();
+      const targetMetas = repoIds && repoIds.length > 0
+        ? allMetas.filter(m => repoIds.includes(m.id))
+        : allMetas;
+      const gitRepos = targetMetas.flatMap(meta => {
+        const repo = this.manager.getRepo(meta.id);
+        return repo && repo.kind !== 'svn' ? [{ id: meta.id, repo: repo as GitService }] : [];
+      });
+      await Promise.all(gitRepos.map(async ({ id, repo }) => {
+        try {
+          const commits = await repo.getIncomingCommits();
+          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: requestId ?? '', repoId: id, commits });
+        } catch (e: unknown) {
+          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: requestId ?? '', repoId: id, commits: [], error: String(e) });
+        }
+      }));
+    } catch { /* ignore */ }
+  }
+
   private async handleDataInvalidated(event: DataInvalidationEvent): Promise<void> {
     const scopes = new Set(event.scopes);
     if (scopes.has('workspace')) {
@@ -3487,10 +3508,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }, 'sync', t('Updating…'));
 
         if (pushResult.success) {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
-          if (!pushResult.rebased && !pushResult.forced) {
-            void this.notifyPushSuccess(repo, undefined, msg.remote);
-          }
           this.logger?.info('Git', 'Push completed', {
             repoId: msg.repoId,
             requestId: msg.requestId,
@@ -3501,11 +3518,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
           this.invalidateSubtreeStatus(undefined, { remote: false });
-          void this.broadcastUnpushedCommits();
+          await this.broadcastUnpushedCommits([msg.repoId]);
           if (this.isSubtreeTabActive()) {
             void this.refreshSubtreeList({ force: false });
           }
-          await this.manager.refreshStatusNow();
+          await this.refreshStatusAfterOp();
+          if (!pushResult.rebased && !pushResult.forced) {
+            void this.notifyPushSuccess(repo, undefined, msg.remote);
+          }
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
         } else if (pushResult.cancelled) {
           this.logger?.info('Git', 'Push cancelled', {
             repoId: msg.repoId,
@@ -3720,6 +3741,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               const finalMessage = details.length > 0 && summaryHeader !== details.join('\n')
                 ? `${summaryHeader}\n\n${details.join('\n')}`
                 : summaryHeader;
+
+              this.logProvider?.refresh({ repoIds: msg.targets.map(t => t.repoId) });
+              this.invalidateSubtreeStatus(undefined, { remote: false });
+              await this.broadcastUnpushedCommits(msg.targets.map(t => t.repoId));
+              if (this.isSubtreeTabActive()) {
+                void this.refreshSubtreeList({ force: false });
+              }
+              await this.refreshStatusAfterOp();
+
               this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: finalMessage });
             }
           } else {
@@ -3728,6 +3758,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               requestId: msg.requestId,
               durationMs: Date.now() - startedAt,
             });
+
+            this.logProvider?.refresh({ repoIds: msg.targets.map(t => t.repoId) });
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            await this.broadcastUnpushedCommits(msg.targets.map(t => t.repoId));
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
+            await this.refreshStatusAfterOp();
+
             this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
             if (succeededRepoIds.length === 1) {
               const singleRepo = this.manager.getRepo(succeededRepoIds[0]);
@@ -3738,14 +3777,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               vscode.window.showInformationMessage(t('VersionDock: Commits pushed successfully across {0} repositories.', succeededRepoIds.length));
             }
           }
-
-          this.logProvider?.refresh({ repoIds: msg.targets.map(t => t.repoId) });
-          this.invalidateSubtreeStatus(undefined, { remote: false });
-          void this.broadcastUnpushedCommits();
-          if (this.isSubtreeTabActive()) {
-            void this.refreshSubtreeList({ force: false });
-          }
-          await this.manager.refreshStatusNow();
         };
 
         await this.manager.runWithStatusUpdatesSuppressed(async () => {
@@ -4901,11 +4932,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 }
               },
             );
+
+            this.logProvider?.refresh({ repoIds: [msg.repoId] });
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            await this.broadcastUnpushedCommits([msg.repoId]);
+            if (repo.kind !== 'svn') {
+              const gitRepo = repo as GitService;
+              const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
+              this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
+            }
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
+            this.manager.notifyBranchesChanged();
+            await this.refreshStatusAfterOp();
+            this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           }, 'sync', t('Updating…'));
 
-          await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
-          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           if (trackedResult) {
             await this.updateSummaryService?.notify([trackedResult]);
           }
@@ -4995,11 +5038,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 }
               },
             );
+            this.logProvider?.refresh({ repoIds: msg.repoIds });
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            await this.broadcastUnpushedCommits(msg.repoIds);
+            await this.broadcastIncomingCommits(msg.repoIds, msg.requestId);
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
+            this.manager.notifyBranchesChanged();
+            await this.refreshStatusAfterOp();
+            this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
           }, 'sync', t('Updating…'));
 
-          await this.manager.refreshStatusNow();
-          this.manager.notifyBranchesChanged();
-          this.post({ type: 'SYNC_PULL_RESULT', requestId: msg.requestId, ok: !hasError, error: hasError ? firstError : undefined });
           if (trackedResults && trackedResults.length > 0) {
             await this.updateSummaryService?.notify(trackedResults);
           }
@@ -5037,8 +5087,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
 
           let trackedResult: TrackedUpdateResult | undefined;
-          if (shouldUpdate) {
-            await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            if (shouldUpdate) {
               await vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
@@ -5070,65 +5120,64 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   }
                 },
               );
-            }, 'sync', t('Updating…'));
-            await this.manager.refreshStatusNow();
-            this.manager.notifyBranchesChanged();
-          }
+              this.manager.notifyBranchesChanged();
+            }
 
-          const status = await repo.getStatus?.();
-          if (status && status.conflictCount && status.conflictCount > 0) {
-            const resolveBtn = t('Resolve Conflicts');
-            const conflictMsg = t('VersionDock [{0}]: Sync stopped due to merge conflicts. Please resolve conflicts before pushing.', repoName);
-            void vscode.window.showWarningMessage(
-              conflictMsg,
-              resolveBtn,
-            ).then(choice => {
-              if (choice === resolveBtn) {
-                void vscode.commands.executeCommand('versiondock.openConflicts');
+            const status = await repo.getStatus?.();
+            if (status && status.conflictCount && status.conflictCount > 0) {
+              const resolveBtn = t('Resolve Conflicts');
+              const conflictMsg = t('VersionDock [{0}]: Sync stopped due to merge conflicts. Please resolve conflicts before pushing.', repoName);
+              void vscode.window.showWarningMessage(
+                conflictMsg,
+                resolveBtn,
+              ).then(choice => {
+                if (choice === resolveBtn) {
+                  void vscode.commands.executeCommand('versiondock.openConflicts');
+                }
+              });
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: conflictMsg, repoId: msg.repoId });
+              if (trackedResult) {
+                await this.updateSummaryService?.notify([trackedResult]);
               }
+              return;
+            }
+
+            const pushResult = await runPushWithProtection(repo, {
+              repoName,
+              remote: msg.remote,
+              logger: this.logger,
+              beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
             });
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: conflictMsg, repoId: msg.repoId });
-            if (trackedResult) {
-              await this.updateSummaryService?.notify([trackedResult]);
-            }
-            return;
-          }
 
-          const pushResult = await runPushWithProtection(repo, {
-            repoName,
-            remote: msg.remote,
-            logger: this.logger,
-            beforePush: () => this.checkUnpushedSubmodules(msg.repoId),
-          });
-
-          if (pushResult.success) {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
-            this.logProvider?.refresh({ repoIds: [msg.repoId] });
-            this.invalidateSubtreeStatus(undefined, { remote: false });
-            void this.broadcastUnpushedCommits();
-            if (this.isSubtreeTabActive()) {
-              void this.refreshSubtreeList({ force: false });
+            if (pushResult.success) {
+              this.logProvider?.refresh({ repoIds: [msg.repoId] });
+              this.invalidateSubtreeStatus(undefined, { remote: false });
+              await this.broadcastUnpushedCommits([msg.repoId]);
+              if (repo.kind !== 'svn') {
+                const gitRepo = repo as GitService;
+                const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
+                this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
+              }
+              if (this.isSubtreeTabActive()) {
+                void this.refreshSubtreeList({ force: false });
+              }
+              await this.refreshStatusAfterOp();
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
+              if (trackedResult) {
+                await this.updateSummaryService?.notify([trackedResult]);
+              }
+            } else if (pushResult.cancelled) {
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
+              if (trackedResult) {
+                await this.updateSummaryService?.notify([trackedResult]);
+              }
+            } else {
+              this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: pushResult.error ? String(pushResult.error) : t('Push failed'), repoId: msg.repoId });
+              if (trackedResult) {
+                await this.updateSummaryService?.notify([trackedResult]);
+              }
             }
-            await this.manager.refreshStatusNow();
-            if (repo.kind !== 'svn') {
-              const gitRepo = repo as GitService;
-              const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
-              this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
-            }
-            if (trackedResult) {
-              await this.updateSummaryService?.notify([trackedResult]);
-            }
-          } else if (pushResult.cancelled) {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
-            if (trackedResult) {
-              await this.updateSummaryService?.notify([trackedResult]);
-            }
-          } else {
-            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: pushResult.error ? String(pushResult.error) : t('Push failed'), repoId: msg.repoId });
-            if (trackedResult) {
-              await this.updateSummaryService?.notify([trackedResult]);
-            }
-          }
+          }, 'sync', t('Syncing…'));
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
@@ -5168,8 +5217,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
 
           let trackedResults: TrackedUpdateResult[] | undefined;
-          if (reposToUpdate.length > 0) {
-            await this.manager.runWithStatusUpdatesSuppressed(async () => {
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            if (reposToUpdate.length > 0) {
               await vscode.window.withProgress(
                 {
                   location: vscode.ProgressLocation.Notification,
@@ -5240,68 +5289,70 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   }
                 },
               );
-            }, 'sync', t('Updating…'));
-            await this.manager.refreshStatusNow();
-            this.manager.notifyBranchesChanged();
-          }
+              this.manager.notifyBranchesChanged();
+            }
 
-          if (pulledRepoIds.length > 0) {
-            await vscode.window.withProgress(
-              {
-                location: vscode.ProgressLocation.Notification,
-                title: pulledRepoIds.length === 1
-                  ? t('VersionDock [{0}]: Pushing changes…', this.manager.getRepoMeta(pulledRepoIds[0])?.name || '')
-                  : t('VersionDock: Pushing {0} repositories…', pulledRepoIds.length),
-                cancellable: false,
-              },
-              async pushProgress => {
-                const totalPush = pulledRepoIds.length;
-                for (let i = 0; i < totalPush; i++) {
-                  const repoId = pulledRepoIds[i];
-                  const repo = this.manager.getRepo(repoId);
-                  if (!repo) continue;
-                  const status = await repo.getStatus?.();
-                  if (status && status.conflictCount && status.conflictCount > 0) {
-                    continue;
-                  }
-                  const repoMeta = this.manager.getRepoMeta(repoId);
-                  const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
-                  pushProgress.report({
-                    message: totalPush > 1 ? `(${i + 1}/${totalPush}) ${repoName}` : repoName,
-                    increment: totalPush > 0 ? 100 / totalPush : undefined,
-                  });
-                  const pushResult = await runPushWithProtection(repo, {
-                    repoName,
-                    logger: this.logger,
-                    silentOnSuccess: totalPush > 1,
-                    suppressProgress: totalPush > 1,
-                    beforePush: () => this.checkUnpushedSubmodules(repoId),
-                  });
-                  if (!pushResult.success) {
-                    hasError = true;
-                    if (pushResult.cancelled) {
-                      errors.push(`${repoName} (Push): ${t('Push cancelled')}`);
-                    } else {
-                      errors.push(`${repoName} (Push): ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
+            if (pulledRepoIds.length > 0) {
+              await vscode.window.withProgress(
+                {
+                  location: vscode.ProgressLocation.Notification,
+                  title: pulledRepoIds.length === 1
+                    ? t('VersionDock [{0}]: Pushing changes…', this.manager.getRepoMeta(pulledRepoIds[0])?.name || '')
+                    : t('VersionDock: Pushing {0} repositories…', pulledRepoIds.length),
+                  cancellable: false,
+                },
+                async pushProgress => {
+                  const totalPush = pulledRepoIds.length;
+                  for (let i = 0; i < totalPush; i++) {
+                    const repoId = pulledRepoIds[i];
+                    const repo = this.manager.getRepo(repoId);
+                    if (!repo) continue;
+                    const status = await repo.getStatus?.();
+                    if (status && status.conflictCount && status.conflictCount > 0) {
+                      continue;
+                    }
+                    const repoMeta = this.manager.getRepoMeta(repoId);
+                    const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
+                    pushProgress.report({
+                      message: totalPush > 1 ? `(${i + 1}/${totalPush}) ${repoName}` : repoName,
+                      increment: totalPush > 0 ? 100 / totalPush : undefined,
+                    });
+                    const pushResult = await runPushWithProtection(repo, {
+                      repoName,
+                      logger: this.logger,
+                      silentOnSuccess: totalPush > 1,
+                      suppressProgress: totalPush > 1,
+                      beforePush: () => this.checkUnpushedSubmodules(repoId),
+                    });
+                    if (!pushResult.success) {
+                      hasError = true;
+                      if (pushResult.cancelled) {
+                        errors.push(`${repoName} (Push): ${t('Push cancelled')}`);
+                      } else {
+                        errors.push(`${repoName} (Push): ${pushResult.error ? String(pushResult.error) : t('Push failed')}`);
+                      }
                     }
                   }
-                }
-              },
-            );
-          }
-          this.logProvider?.refresh({ repoIds: msg.repoIds });
-          this.invalidateSubtreeStatus(undefined, { remote: false });
-          void this.broadcastUnpushedCommits();
-          if (this.isSubtreeTabActive()) {
-            void this.refreshSubtreeList({ force: false });
-          }
-          await this.manager.refreshStatusNow();
-          this.post({
-            type: 'COMMIT_OP_RESULT',
-            requestId: msg.requestId,
-            ok: !hasError,
-            error: hasError ? errors.join('\n') : undefined,
-          });
+                },
+              );
+            }
+
+            this.logProvider?.refresh({ repoIds: msg.repoIds });
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            await this.broadcastUnpushedCommits(msg.repoIds);
+            await this.broadcastIncomingCommits(msg.repoIds, msg.requestId);
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
+            await this.refreshStatusAfterOp();
+            this.post({
+              type: 'COMMIT_OP_RESULT',
+              requestId: msg.requestId,
+              ok: !hasError,
+              error: hasError ? errors.join('\n') : undefined,
+            });
+          }, 'sync', t('Syncing…'));
+
           if (trackedResults && trackedResults.length > 0) {
             await this.updateSummaryService?.notify(trackedResults);
           }
@@ -5642,7 +5693,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Updating commit message…', repoName), cancellable: false },
             () => repo.rewordCommit(result.message),
           );
-          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
           this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
           this.logProvider?.refresh({ repoIds: [msg.repoId] });
@@ -5651,6 +5701,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             void this.refreshSubtreeList({ force: false });
           }
           await this.manager.refreshStatusNow();
+          this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           vscode.window.showInformationMessage(t('VersionDock [{0}]: Commit message updated.', repoName));
         } catch (e: unknown) {
           this.post({ type: 'PUSH_EDIT_MSG_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('VersionDock [{0}]: Edit commit message failed: {1}', repoName, String(e)) });
@@ -5672,16 +5723,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         );
         if (confirm !== t('Undo Commit')) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId }); return; }
         try {
-          await repo.undoCommit();
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
-          this.invalidateSubtreeStatus(undefined, { remote: false });
-          this.logProvider?.refresh({ repoIds: [msg.repoId] });
-          if (this.isSubtreeTabActive()) {
-            void this.refreshSubtreeList({ force: false });
-          }
-          await this.manager.refreshStatusNow();
-          const commits = await repo.getUnpushedCommits();
-          this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          await this.manager.runWithStatusUpdatesSuppressed(async () => {
+            await repo.undoCommit();
+            this.invalidateSubtreeStatus(undefined, { remote: false });
+            this.logProvider?.refresh({ repoIds: [msg.repoId] });
+            if (this.isSubtreeTabActive()) {
+              void this.refreshSubtreeList({ force: false });
+            }
+            const commits = await repo.getUnpushedCommits();
+            this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+            await this.refreshStatusAfterOp();
+            this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
+          }, 'commit', t('Undoing commit…'));
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }

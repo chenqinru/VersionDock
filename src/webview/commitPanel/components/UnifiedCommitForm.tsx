@@ -221,6 +221,85 @@ function DropItem({ icon, label, itemStyle, onSelect }: { icon: string; label: s
   );
 }
 
+function canRepoAmend(
+  repo: RepoStatus,
+  kind?: string,
+  unpushed?: { loading: boolean; commits: UnpushedCommit[]; error?: string },
+): boolean {
+  if (kind === 'svn') return false;
+  return (
+    (repo.branch.aheadBehind?.ahead ?? 0) > 0
+    || (
+      !repo.branch.upstream
+      && !!unpushed
+      && !unpushed.loading
+      && !unpushed.error
+      && unpushed.commits.length > 0
+    )
+  );
+}
+
+function PillAmendButton({
+  active,
+  color,
+  displayName,
+  onClick,
+}: {
+  active: boolean;
+  color: string;
+  displayName: string;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const title = active
+    ? t('Amend active for {0} (click to cancel)', displayName)
+    : t('Amend last commit for {0}', displayName);
+
+  return (
+    <button
+      data-action-btn=""
+      type="button"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '2px',
+        padding: '0 4px',
+        height: '14px',
+        lineHeight: '14px',
+        borderRadius: '7px',
+        fontSize: '9.5px',
+        boxSizing: 'border-box',
+        cursor: 'pointer',
+        userSelect: 'none',
+        transition: 'all 0.12s ease',
+        border: active
+          ? `1px solid ${color}`
+          : hovered
+            ? `1px solid ${color}80`
+            : `1px solid transparent`,
+        background: active
+          ? `${color}38`
+          : hovered
+            ? 'rgba(255, 255, 255, 0.16)'
+            : 'rgba(255, 255, 255, 0.08)',
+        color: active ? color : 'inherit',
+        opacity: active ? 1 : hovered ? 0.9 : 0.65,
+        fontWeight: active ? 600 : 400,
+      }}
+      title={title}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+    >
+      <Codicon name="history" style={{ fontSize: '9px', lineHeight: 1 }} />
+      <span>{t('Amend')}</span>
+    </button>
+  );
+}
+
 export function UnifiedCommitForm({
   message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags, unpushedMap,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
@@ -255,18 +334,9 @@ export function UnifiedCommitForm({
   const amendTarget = commitTargets.length === 1 ? commitTargets[0] : null;
   const amendRepoId = amendTarget?.repoId;
   const unpushed = amendRepoId ? unpushedMap[amendRepoId] : undefined;
-  const showAmend = amendTarget !== null
-    && metaMap.get(amendTarget.repoId)?.kind !== 'svn'
-    && (
-      (amendTarget.branch.aheadBehind?.ahead ?? 0) > 0
-      || (
-        !amendTarget.branch.upstream
-        && !!unpushed
-        && !unpushed.loading
-        && !unpushed.error
-        && unpushed.commits.length > 0
-      )
-    );
+  const showAmend = !multiRepo
+    && amendTarget !== null
+    && canRepoAmend(amendTarget, metaMap.get(amendTarget.repoId)?.kind, unpushed);
   const amend = amendFlags[amendRepoId ?? ''] ?? false;
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -466,15 +536,17 @@ export function UnifiedCommitForm({
               const meta = metaMap.get(r.repoId);
               const color = readableAccentColor(meta?.color ?? '#4ec9b0');
               const rawName = meta?.name ?? baseNameFromPath(r.repoId) ?? r.repoId;
-              const repoStatus = repoStatuses.find(rs => rs.repoId === r.repoId);
+              const repoStatus = repoStatuses.find(rs => rs.repoId === r.repoId) ?? r;
               const wtBranch = meta?.isWorktree && repoStatus
                 ? (repoStatus.branch?.detachedTag ?? repoStatus.branch?.detachedHash ?? repoStatus.branch?.name)
                 : undefined;
               const displayName = wtBranch
                 ? `${baseNameFromPath(meta?.mainWorktreePath) ?? rawName} (${wtBranch})`
                 : rawName;
+              const isAmended = amendFlags[r.repoId] ?? false;
+              const repoCanAmend = canRepoAmend(repoStatus, meta?.kind, unpushedMap[r.repoId]);
               return (
-                <span key={r.repoId} style={styles.targetPill(color)}>
+                <span key={r.repoId} style={styles.targetPill(color, isAmended)}>
                   <button
                     data-action-btn=""
                     style={styles.pillRemove(color)}
@@ -485,6 +557,14 @@ export function UnifiedCommitForm({
                   </button>
                   {displayName}
                   <span style={styles.pillCount}>{r.selectedCount}</span>
+                  {repoCanAmend && (
+                    <PillAmendButton
+                      active={isAmended}
+                      color={color}
+                      displayName={displayName}
+                      onClick={() => onAmendToggle(r.repoId)}
+                    />
+                  )}
                 </span>
               );
             })
@@ -779,7 +859,7 @@ const styles = {
     fontSize: '11px',
     color: 'var(--vscode-descriptionForeground)',
   },
-  targetPill: (color: string): React.CSSProperties => ({
+  targetPill: (color: string, isAmended = false): React.CSSProperties => ({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '3px',
@@ -787,9 +867,10 @@ const styles = {
     borderRadius: '10px',
     fontSize: '11px',
     lineHeight: '16px',
-    background: color + '28',
+    background: color + (isAmended ? '3d' : '28'),
     color,
-    border: `1px solid ${color}60`,
+    border: `1px solid ${isAmended ? color : color + '60'}`,
+    boxShadow: isAmended ? `0 0 0 1px ${color}50` : undefined,
   }),
   pillCount: {
     background: 'rgba(255,255,255,0.15)',

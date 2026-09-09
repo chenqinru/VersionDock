@@ -102,6 +102,8 @@
   "No files selected": "未选择文件",
   "Modify the last commit instead of creating a new one. Rewrites history — avoid on shared branches.": "修改上一次提交而不是创建新提交。会重写历史，请避免在共享分支上使用。",
   "Amend last commit": "修订上一次提交",
+  "Amend last commit for {0}": "修订 {0} 的上一次提交",
+  "Amend active for {0} (click to cancel)": "{0} 已启用修订（点击取消）",
   "Generating commit message…": "正在生成提交信息…",
   "Commit message (Cmd+Enter to commit)": "提交信息（Cmd+Enter 提交）",
   "Generate commit message with AI": "使用 AI 生成提交信息",
