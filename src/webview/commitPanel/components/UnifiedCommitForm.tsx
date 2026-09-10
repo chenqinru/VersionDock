@@ -57,7 +57,7 @@ interface Props {
   onStash: () => void;
   onPush: (repoId: string) => void;
   onPushAll: () => void;
-  onAutopilot: () => void;
+  onAutopilot: (userPrompt?: string) => void;
   onStopAutopilot: () => void;
   onOpenComposer: () => void;
   onOpenCodeReview: () => void;
@@ -107,6 +107,18 @@ function persistTextareaHeight(height: number): void {
     // The webview may not allow localStorage; in-memory state still works.
   }
 }
+
+const dropItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  padding: '5px 12px',
+  fontSize: '12px',
+  cursor: 'pointer',
+  color: 'var(--vscode-menu-foreground)',
+  userSelect: 'none',
+  whiteSpace: 'nowrap',
+};
 
 function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, fullWidth, dropdownAlign = 'left', items, onMainClick }: DropdownButtonProps) {
   const [open, setOpen] = useState(false);
@@ -158,13 +170,6 @@ function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, f
     whiteSpace: 'nowrap',
     padding: 0,
     outline: 'none',
-  };
-
-  const dropItemStyle: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: '8px',
-    padding: '5px 12px', fontSize: '12px', cursor: 'pointer',
-    color: 'var(--vscode-menu-foreground)',
-    userSelect: 'none',
   };
 
   return (
@@ -374,6 +379,26 @@ export function UnifiedCommitForm({
   const resizeDragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
   const [resizingTextarea, setResizingTextarea] = useState(false);
   const [messageHistoryOpen, setMessageHistoryOpen] = useState(false);
+
+  useEffect(() => {
+    if (!message) {
+      historyIndexRef.current = -1;
+      historyDraftRef.current = '';
+      appliedHistoryMessageRef.current = null;
+    }
+  }, [message]);
+
+  const handleAutopilot = useCallback(() => {
+    if (generatingMessage) {
+      onStopAutopilot();
+      return;
+    }
+    if (commitTargets.length === 0 || loading) {
+      return;
+    }
+    const draft = message.trim();
+    onAutopilot(draft ? draft : undefined);
+  }, [generatingMessage, onStopAutopilot, commitTargets.length, loading, message, onAutopilot]);
 
   messageRef.current = message;
 
@@ -877,7 +902,7 @@ export function UnifiedCommitForm({
         <button
           data-action-btn=""
           style={styles.autopilotBtn(generatingMessage, commitTargets.length === 0 || loading)}
-          onClick={generatingMessage ? onStopAutopilot : onAutopilot}
+          onClick={handleAutopilot}
           disabled={!generatingMessage && (commitTargets.length === 0 || loading)}
           title={generatingMessage
             ? t('Stop generating commit message')

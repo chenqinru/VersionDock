@@ -989,15 +989,20 @@ export function CommitApp() {
                 }
               }
             }
-            if (msg.ok && committedMessage) {
-              successfulCommitMessagesRef.current = mergeCommitMessageHistory(
-                [committedMessage],
-                successfulCommitMessagesRef.current,
-              );
-              setCommitMessageHistory(prev => mergeCommitMessageHistory(
-                successfulCommitMessagesRef.current,
-                prev,
-              ));
+            const isCommitOp = committedMessage !== undefined;
+            const commitSucceeded = (msg.ok || (msg.committedRepoIds && msg.committedRepoIds.length > 0)) && isCommitOp;
+            if (commitSucceeded) {
+              store.setCommitMessage('');
+              if (committedMessage) {
+                successfulCommitMessagesRef.current = mergeCommitMessageHistory(
+                  [committedMessage],
+                  successfulCommitMessagesRef.current,
+                );
+                setCommitMessageHistory(prev => mergeCommitMessageHistory(
+                  successfulCommitMessagesRef.current,
+                  prev,
+                ));
+              }
             }
           }
           if (!msg.ok && msg.error && msg.error !== 'Cancelled' && !msg.handled) {
@@ -2594,7 +2599,7 @@ export function CommitApp() {
     return { repoIds: selectedTargets.map(target => target.repoId), targets: selectedTargets };
   }, [vscodeSelectedRepos]);
 
-  const doAutopilot = useCallback(() => {
+  const doAutopilot = useCallback((userPrompt?: string) => {
     if (generatingMessage) return;
     const selection = buildGenerateMessageSelection();
     if (selection.repoIds.length === 0 && selection.targets.length === 0) return;
@@ -2602,7 +2607,7 @@ export function CommitApp() {
     activeGenerateRequestIdRef.current = requestId;
     store.setCommitMessage('');
     setGeneratingMessage(true);
-    send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, ...selection });
+    send({ type: 'COMMIT_GENERATE_MESSAGE', requestId, userPrompt, ...selection });
   }, [buildGenerateMessageSelection, generatingMessage, send, store]);
 
   const stopAutopilot = useCallback(() => {

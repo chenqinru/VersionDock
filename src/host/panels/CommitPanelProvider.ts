@@ -1056,9 +1056,44 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return filesByPath;
   }
 
+  private isLockfilePath(filePath: string): boolean {
+    const base = path.basename(filePath).toLowerCase();
+    return (
+      base === 'package-lock.json' ||
+      base === 'pnpm-lock.yaml' ||
+      base === 'yarn.lock' ||
+      base === 'cargo.lock' ||
+      base === 'go.sum' ||
+      base === 'composer.lock'
+    );
+  }
+
+  private getCommitContextFilePriority(filePath: string): number {
+    if (this.isLockfilePath(filePath)) return 4;
+    const ext = path.extname(filePath).toLowerCase();
+    if (/^\.(ts|tsx|js|jsx|vue|svelte|py|go|rs|java|c|cpp|cc|h|hpp|cs|php|rb|swift|kt|dart|scala|m|mm)$/.test(ext)) {
+      return 1;
+    }
+    if (/^\.(css|scss|sass|less|html|htm|sh|bash|zsh|sql|graphql)$/.test(ext)) {
+      return 2;
+    }
+    return 3;
+  }
+
+  private extractSemanticBranchIntent(branchName: string | undefined): string | undefined {
+    if (!branchName) return undefined;
+    const trimmed = branchName.trim();
+    const normalized = trimmed.toLowerCase();
+    const trivial = new Set(['main', 'master', 'dev', 'develop', 'release', 'trunk', 'head', 'detached', 'test']);
+    if (trivial.has(normalized)) return undefined;
+    if (/^[0-9a-f]{7,40}$/i.test(trimmed)) return undefined;
+    return trimmed;
+  }
+
   private async buildAiCommitMessageContext(
     targets: CommitGenerateMessageTarget[] | undefined,
     repoIds: string[] | undefined,
+    userPrompt: string | undefined,
     cancellationToken: vscode.CancellationToken,
   ): Promise<AiCommitMessageGenerationContext> {
     throwIfCancellationRequested(cancellationToken);
@@ -1079,6 +1114,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const includedRepoIds = new Set<string>();
     const includedRepoRootPaths = new Set<string>();
     const vcsKinds = new Set<'git' | 'svn'>();
+    const candidateBranchIntents: string[] = [];
+    let totalAdditions = 0;
+    let totalDeletions = 0;
 
     for (const target of normalizedTargets) {
       throwIfCancellationRequested(cancellationToken);
@@ -1089,9 +1127,18 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const repoMeta = repoMetas.get(status.repoId);
       const repoName = repoMeta?.name ?? path.basename(status.repoId);
       const vcsKind = service.kind === 'svn' ? 'SVN' : 'Git';
+      const branchName = status.branch.name;
+      const branchIntent = this.extractSemanticBranchIntent(branchName);
+      if (branchIntent && !candidateBranchIntents.includes(branchIntent)) {
+        candidateBranchIntents.push(branchIntent);
+      }
+
       const filesByPath = this.mergeAiFileStatuses(status);
-      const files = target.paths.map(filePath => filesByPath.get(filePath)).filter((file): file is FileStatus => !!file);
-      if (files.length === 0) continue;
+      const rawFiles = target.paths.map(filePath => filesByPath.get(filePath)).filter((file): file is FileStatus => !!file);
+      if (rawFiles.length === 0) continue;
+      // 核心业务代码排在前面，锁文件排在最后
+      const files = [...rawFiles].sort((a, b) => this.getCommitContextFilePriority(a.path) - this.getCommitContextFilePriority(b.path));
+
       includedRepoIds.add(status.repoId);
       includedRepoRootPaths.add(repoMeta?.rootPath ?? service.rootPath);
       vcsKinds.add(service.kind === 'svn' ? 'svn' : 'git');
@@ -1106,6 +1153,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           ...(includeUnstaged ? [{ label: 'working' as const, diff: () => service.getUnstagedDiff(status.repoId, file.path) }] : []),
         ];
         const isSensitive = isSensitivePath(file.path);
+        const isLock = this.isLockfilePath(file.path);
         const sources: typeof groupEntries[number]['sources'] = [];
         for (const source of diffSources) {
           throwIfCancellationRequested(cancellationToken);
@@ -1136,9 +1184,36 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             sources.push({ label: source.label, diff: sanitizedDiff });
             continue;
           }
+
           const diff = await source.diff().catch(() => null);
           throwIfCancellationRequested(cancellationToken);
-          sources.push({ label: source.label, diff });
+
+          if (diff) {
+            const { added, removed } = countDiffChanges(diff);
+            totalAdditions += added;
+            totalDeletions += removed;
+          }
+
+          if (isLock && diff) {
+            // 依赖锁定文件（如 package-lock.json）不展开大块 diff，保留极简摘要以节约 token 并避免冲淡核心代码
+            const compactLockDiff: FileDiff = {
+              ...diff,
+              hunks: [{
+                header: '@@ dependency lockfile @@',
+                oldStart: 0,
+                oldLines: 0,
+                newStart: 0,
+                newLines: 0,
+                lines: [{
+                  type: 'context',
+                  content: '[dependency lockfile diff omitted to prioritize core logic]',
+                }],
+              }],
+            };
+            sources.push({ label: source.label, diff: compactLockDiff });
+          } else {
+            sources.push({ label: source.label, diff });
+          }
         }
         if (!sources.length) continue;
         const sourceSummary = sources.map(source => (
@@ -1180,18 +1255,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const text = context.text;
     if (!text) throw new Error(t('No changes to generate a commit message from.'));
 
-    let totalAdditions = 0;
-    let totalDeletions = 0;
-    for (const group of preparedGroups) {
-      for (const entry of group.entries) {
-        for (const source of entry.sources) {
-          const { added, removed } = countDiffChanges(source.diff);
-          totalAdditions += added;
-          totalDeletions += removed;
-        }
-      }
-    }
-
     return {
       text,
       repoRootPaths: Array.from(includedRepoRootPaths),
@@ -1200,6 +1263,8 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       fileCount: context.includedEntryCount,
       totalAdditions,
       totalDeletions,
+      userPrompt,
+      branchIntent: candidateBranchIntents.length === 1 ? candidateBranchIntents[0] : undefined,
       contextCharCount: text.length,
       truncated: context.truncated,
     };
@@ -1208,10 +1273,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private async generateCommitMessage(
     targets: CommitGenerateMessageTarget[] | undefined,
     repoIds: string[] | undefined,
+    userPrompt: string | undefined,
     requestId: string,
     cancellationToken: vscode.CancellationToken,
   ): Promise<string> {
-    const context = await this.buildAiCommitMessageContext(targets, repoIds, cancellationToken);
+    const context = await this.buildAiCommitMessageContext(targets, repoIds, userPrompt, cancellationToken);
     return this.generateCommitMessageFromContext(
       context,
       requestId,
@@ -4415,7 +4481,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const cancellationSource = new vscode.CancellationTokenSource();
         this.activeCommitMessageGenerations.set(msg.requestId, cancellationSource);
         try {
-          const message = await this.generateCommitMessage(msg.targets, msg.repoIds, msg.requestId, cancellationSource.token);
+          const message = await this.generateCommitMessage(msg.targets, msg.repoIds, msg.userPrompt, msg.requestId, cancellationSource.token);
           throwIfCancellationRequested(cancellationSource.token);
           this.post({ type: 'COMMIT_GENERATE_MESSAGE_RESULT', requestId: msg.requestId, repoId: singleRepoId, message });
         } catch (e: unknown) {

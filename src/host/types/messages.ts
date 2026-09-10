@@ -267,7 +267,7 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_OPEN_MERGE_EDITOR'; repoId: string; filePath: string }
   | { type: 'COMMIT_ACCEPT_OURS'; requestId: string; repoId: string; filePath: string }
   | { type: 'COMMIT_ACCEPT_THEIRS'; requestId: string; repoId: string; filePath: string }
-  | { type: 'COMMIT_GENERATE_MESSAGE'; requestId: string; repoIds?: string[]; targets?: CommitGenerateMessageTarget[] }
+  | { type: 'COMMIT_GENERATE_MESSAGE'; requestId: string; repoIds?: string[]; targets?: CommitGenerateMessageTarget[]; userPrompt?: string }
   | { type: 'COMMIT_CANCEL_GENERATE_MESSAGE'; requestId: string }
   | { type: 'COMMIT_OPEN_AI_COMPOSER'; candidates: ComposerWorkingCandidate[] }
   | { type: 'COMMIT_OPEN_AI_REVIEW'; candidates: CodeReviewCandidate[] }

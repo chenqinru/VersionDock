@@ -10,6 +10,8 @@ export interface AiCommitMessageGenerationContext {
   fileCount: number;
   totalAdditions?: number;
   totalDeletions?: number;
+  userPrompt?: string;
+  branchIntent?: string;
   contextCharCount: number;
   truncated: boolean;
 }

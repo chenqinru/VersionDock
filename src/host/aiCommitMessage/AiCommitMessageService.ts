@@ -89,7 +89,17 @@ export class AiCommitMessageService {
         ? `【改动规模感知】本次属于轻量/微小改动${statsNote}。请严格仅输出 1 行 Header，严禁输出任何 Body 正文，切勿拆解凑数！`
         : `【改动规模感知】本次改动涉及多处或较大规模${statsNote}。若 Header 足以自解释则无需正文；若确需说明，至多提供 1~3 条精炼要点，严禁空洞套话。`;
 
-      return `# 任务\n\n${scaleInstruction}\n\n## ${vcsLabel} 变更上下文\n\n基于以下变更 Diff 生成提交信息：\n\n\`\`\`diff\n${context.text}\n\`\`\``;
+      const promptSections: string[] = ['# 任务'];
+      if (context.userPrompt?.trim()) {
+        promptSections.push(`【用户核心意图指示】用户为本次提交提供了核心意图/草稿：“${context.userPrompt.trim()}”。你必须以该意图为准心，将其与实际代码变更紧密结合并进行规范化润色，确保提交主题精准切中该意图！`);
+      }
+      if (context.branchIntent?.trim()) {
+        promptSections.push(`【开发分支意图】当前开发分支为 "${context.branchIntent.trim()}"，该分支名称代表了本次开发的主要任务目标，请以此作为理解变更方向的重要依据。`);
+      }
+      promptSections.push(scaleInstruction);
+      promptSections.push(`## ${vcsLabel} 变更上下文\n\n基于以下变更 Diff 生成提交信息：\n\n\`\`\`diff\n${context.text}\n\`\`\``);
+
+      return promptSections.join('\n\n');
     }
 
     const statsNote = hasLineStats
@@ -99,6 +109,16 @@ export class AiCommitMessageService {
       ? `[Scale Guidance] This is a small/atomic change ${statsNote}. Output only a single Header line. Strictly DO NOT output any Body text or bullet points!`
       : `[Scale Guidance] This is a substantial change ${statsNote}. If the Header is self-explanatory, do not output a Body; if details are needed, provide at most 1 to 3 concise bullets. Avoid generic fluff.`;
 
-    return `# Task\n\n${scaleInstruction}\n\n## ${vcsLabel} Change Context\n\nGenerate a commit message from the following change diff:\n\n\`\`\`diff\n${context.text}\n\`\`\``;
+    const promptSections: string[] = ['# Task'];
+    if (context.userPrompt?.trim()) {
+      promptSections.push(`[User Intent Anchor] The user provided the following core draft/intent for this commit: "${context.userPrompt.trim()}". You MUST anchor to this intent as the primary goal, aligning it with code changes to formulate an accurate and professional commit message!`);
+    }
+    if (context.branchIntent?.trim()) {
+      promptSections.push(`[Branch Context] The current development branch is "${context.branchIntent.trim()}", which reflects the primary objective of this work. Use it as directional guidance when interpreting diffs.`);
+    }
+    promptSections.push(scaleInstruction);
+    promptSections.push(`## ${vcsLabel} Change Context\n\nGenerate a commit message from the following change diff:\n\n\`\`\`diff\n${context.text}\n\`\`\``);
+
+    return promptSections.join('\n\n');
   }
 }
