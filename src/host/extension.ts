@@ -219,6 +219,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const branchStatusBar = new BranchStatusBar(manager, () => {
     vscode.commands.executeCommand('versiondock.commitPanel.focus');
   }, logger, updateSummaryService);
+  commitPanel.setBranchStatusBar(branchStatusBar);
 
   const profileStatusBar = new ProfileStatusBar(profileService, manager, logger);
 

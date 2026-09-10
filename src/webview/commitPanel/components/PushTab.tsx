@@ -870,7 +870,7 @@ function RepoSection({
   onRequestIncomingAggregatedDiff,
   onOpenIncomingAggregatedFile,
   onOpenIncomingCommitFile,
-  onFetch: _onFetch,
+  onFetch,
   onSquash,
   onDropCommits,
   onRevertCommits,
@@ -1505,8 +1505,22 @@ function RepoSection({
             <Codicon name={worktreeBranch ? 'repo-clone' : repoStatus.branch.detachedTag ? 'tag' : repoStatus.branch.detachedHash ? 'git-commit' : 'git-branch'} style={{ fontSize: '10px', flexShrink: 0 }} />
             <span style={styles.branchName}>{branchLabel}</span>
           </span>
-          {(commitCount > 0 || canTogglePushView || incomingCount > 0 || !hasUpstream) && (
+          {(commitCount > 0 || canTogglePushView || incomingCount > 0 || !hasUpstream || Boolean(onFetch)) && (
             <div style={styles.repoRightGroup}>
+              {onFetch && (
+                <button
+                  type="button"
+                  data-action-btn=""
+                  style={styles.repoModeButton(false, hovered, false)}
+                  title={t('Fetch remote changes')}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onFetch(repoStatus.repoId);
+                  }}
+                >
+                  <Codicon name="cloud-download" />
+                </button>
+              )}
               <button
                 type="button"
                 data-action-btn=""
@@ -2221,6 +2235,7 @@ export function PushTab(props: Props) {
     onSync,
     onSyncMulti,
     onFetch,
+    onFetchAll,
     onOpenInLog,
     onUndoCommit,
     onRequestCommitFiles,
@@ -2683,14 +2698,26 @@ export function PushTab(props: Props) {
           />
         );
       }
+      if (canPull && canPush) {
+        return (
+          <SplitDropdownButton
+            fullWidth
+            enabled
+            icon="sync"
+            label={syncLabel}
+            items={[]}
+            onMainClick={() => onSync?.(solo.repoId)}
+          />
+        );
+      }
       return (
         <SplitDropdownButton
           fullWidth
-          enabled={canPull && canPush}
-          icon="sync"
-          label={syncLabel}
+          enabled={Boolean(onFetch)}
+          icon="cloud-download"
+          label={t('Fetch')}
           items={[]}
-          onMainClick={() => onSync?.(solo.repoId)}
+          onMainClick={() => onFetch?.(solo.repoId)}
         />
       );
     };
@@ -2950,14 +2977,27 @@ export function PushTab(props: Props) {
       syncLabel = hasChecked ? formatSyncLabel(totalBehind, totalAhead) : t('Sync');
     }
 
+    if (hasChecked && hasPullTargets && hasPushTargets) {
+      return (
+        <SplitDropdownButton
+          fullWidth
+          enabled
+          icon="sync"
+          label={syncLabel}
+          items={[]}
+          onMainClick={() => handleSync()}
+        />
+      );
+    }
+
     return (
       <SplitDropdownButton
         fullWidth
-        enabled={hasChecked && hasPullTargets && hasPushTargets}
-        icon="sync"
-        label={syncLabel}
+        enabled={Boolean(onFetchAll || onFetch)}
+        icon="cloud-download"
+        label={t('Fetch All')}
         items={[]}
-        onMainClick={() => handleSync()}
+        onMainClick={() => onFetchAll ? onFetchAll() : checkedRepos.forEach(r => onFetch?.(r.repoId))}
       />
     );
   };

@@ -34,6 +34,7 @@ type WorktreeListener = (repoId: string) => void;
 export type InvalidationScope =
   | 'workingTree' // Changes 变更列表、文件状态、冲突状态
   | 'unpushed'    // Push 列表与未推送提交
+  | 'incoming'    // Sync 传入提交与落后状态
   | 'stash'       // Stash 列表与数量角标
   | 'shelf'       // Shelf 列表
   | 'subtree'     // Subtree 本地衍生状态
@@ -366,6 +367,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private pendingBranchChangeOptions: BranchChangeOptions | undefined;
   private autoRefreshTimer: NodeJS.Timeout | null = null;
   private autoFetchTimer: NodeJS.Timeout | null = null;
+  private lastAutoFetchTimestamp = 0;
+  private gitApiRepoStateListeners: vscode.Disposable[] = [];
+  private static readonly FOCUS_AUTO_FETCH_COOLDOWN_MS = 3 * 60 * 1000;
   /** Watchers for .git creation under workspace folders — rebuilt when folders/settings change. */
   private gitInitWatchers: vscode.Disposable[] = [];
   private prevHeads = new Map<string, string>();      // repoId → branch name
@@ -390,6 +394,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
     private readonly publishMissingRemote?: PublishMissingRemote,
   ) {
     this.globalListeners.push(
+      // Window focus change → intelligently trigger silent auto-fetch if cooldown elapsed
+      vscode.window.onDidChangeWindowState((e) => {
+        if (e.focused) {
+          this.handleWindowFocus();
+        }
+      }),
+
       // Workspace folder changes → rebuild everything and push fresh status to listeners
       vscode.workspace.onDidChangeWorkspaceFolders(() => { this.reinitialize(); this.scheduleRefresh(); }),
 
@@ -501,12 +512,31 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private attachGitApiRepoListeners(): void {
     const gitApi = getVscodeGitApi();
     if (!gitApi) return;
+
+    const bindRepoListeners = () => {
+      this.gitApiRepoStateListeners.forEach(d => d.dispose());
+      this.gitApiRepoStateListeners = [];
+
+      for (const repo of gitApi.repositories) {
+        this.gitApiRepoStateListeners.push(
+          repo.state.onDidChange(() => {
+            this.scheduleRefresh();
+            this.scheduleBranchRefresh();
+          })
+        );
+      }
+    };
+
+    bindRepoListeners();
+
     this.globalListeners.push(
       gitApi.onDidOpenRepository(() => {
+        bindRepoListeners();
         this.reinitialize();
         this.scheduleRefresh();
       }),
       gitApi.onDidCloseRepository(() => {
+        bindRepoListeners();
         this.reinitialize();
         this.scheduleRefresh();
       }),
@@ -1329,6 +1359,20 @@ export class WorkspaceGitManager implements vscode.Disposable {
     this.autoRefreshTimer = setInterval(() => this.scheduleRefresh(), intervalMs);
   }
 
+  private handleWindowFocus(): void {
+    const focusAutoFetchEnabled = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<boolean>('git.autoFetchOnFocus', true);
+    if (!focusAutoFetchEnabled) return;
+
+    const now = Date.now();
+    if (now - this.lastAutoFetchTimestamp < WorkspaceGitManager.FOCUS_AUTO_FETCH_COOLDOWN_MS) {
+      return;
+    }
+
+    void this.autoFetchSilently();
+  }
+
   private setupAutoFetchTimer(): void {
     if (this.autoFetchTimer) {
       clearInterval(this.autoFetchTimer);
@@ -1349,6 +1393,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private async autoFetchSilently(): Promise<void> {
     const repos = Array.from(this.repos.values()).filter(r => r.kind !== 'svn');
     if (repos.length === 0) return;
+    this.lastAutoFetchTimestamp = Date.now();
     try {
       await Promise.allSettled(repos.map(repo => repo.fetchAll()));
       this.scheduleRefresh();
@@ -2325,6 +2370,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
       this.autoFetchTimer = null;
     }
     this.gitInitWatchers.forEach(d => d.dispose());
+    this.gitApiRepoStateListeners.forEach(d => d.dispose());
+    this.gitApiRepoStateListeners = [];
     this.globalListeners.forEach(d => d.dispose());
     this.globalListeners = [];
   }

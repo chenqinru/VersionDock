@@ -1355,9 +1355,7 @@ export function CommitApp() {
           if (msg.partial) {
             // 部分成功已由 Host 侧弹出警告，Webview 不重复弹出 Fetch completed
           } else if (msg.ok) {
-            const currentGitRepos = (useCommitStore.getState().status?.repos ?? []).filter(r => useCommitStore.getState().repoMetas.find(m => m.id === r.repoId)?.kind !== 'svn');
-            const targetRepoId = msg.repoId ?? (currentGitRepos.length === 1 ? currentGitRepos[0].repoId : undefined);
-            notifyInfo(t('Fetch completed.'), targetRepoId);
+            // 完成通知由 Host 侧统一弹出系统级提示（与状态栏一致），此处不再重复弹出
           } else if (msg.error) {
             notifyError(msg.error, msg.repoId);
           }

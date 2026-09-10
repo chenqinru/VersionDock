@@ -1982,6 +1982,7 @@
   "Incoming (Pull)": "待更新",
   "Incoming (Update)": "待更新",
   "Fetch": "获取",
+  "Fetch remote changes": "抓取远程更改",
   "Fetch all remotes": "获取所有远程分支与标记",
   "Commits": "提交",
   "Checking unpushed commits…": "正在检查待推送提交…",

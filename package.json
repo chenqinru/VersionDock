@@ -862,6 +862,12 @@
             "maximum": 1440,
             "description": "%configuration.git.autoFetchInterval.description%"
           },
+          "versiondock.git.autoFetchOnFocus": {
+            "order": 30.5,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.git.autoFetchOnFocus.description%"
+          },
           "versiondock.fetchOnStartup": {
             "order": 31,
             "type": "boolean",

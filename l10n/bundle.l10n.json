@@ -1982,6 +1982,7 @@
   "Incoming (Pull)": "Incoming",
   "Incoming (Update)": "Incoming",
   "Fetch": "Fetch",
+  "Fetch remote changes": "Fetch remote changes",
   "Fetch all remotes": "Fetch all remotes",
   "Commits": "Commits",
   "Checking unpushed commits…": "Checking unpushed commits…",

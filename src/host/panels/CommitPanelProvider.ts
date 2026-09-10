@@ -38,6 +38,7 @@ import { isRemoteRepositoryCancelled } from '../remote/types';
 import { runPushWithProtection } from '../utils/pushProtection';
 import { withGitPushProgress } from '../utils/pushProgress';
 import type { UpdateSummaryService, TrackedUpdateResult } from '../update/UpdateSummaryService';
+import type { BranchStatusBar } from '../ui/BranchStatusBar';
 import { checkCommitSafety, isSensitivePath } from '../utils/commitSafetyCheck';
 import { sanitizeBranchName, validateBranchNameInput, getBranchCleanCharacter } from '../utils/branchNameSanitizer';
 import { buildPullRequestUrl } from '../utils/prUrlHelper';
@@ -98,6 +99,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private aiCommitComposerProvider?: AiCommitComposerProvider;
   private aiCodeReviewProvider?: AiCodeReviewProvider;
   private changelistService?: ChangelistService;
+  private branchStatusBar?: BranchStatusBar;
   private badgeController?: import('../ui/BadgeController').BadgeController;
   private readonly replyTarget = new AsyncLocalStorage<'sidebar' | 'undocked'>();
   private readonly managerListeners: vscode.Disposable[] = [];
@@ -168,6 +170,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.removePendingSidebarMessage(message);
       throw error;
     }
+  }
+
+  setBranchStatusBar(statusBar: BranchStatusBar): void {
+    this.branchStatusBar = statusBar;
   }
 
   setMergeEditorProvider(provider: MergeEditorProvider): void {
@@ -356,6 +362,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           void this.refreshSubtreeList({ force: false });
         }
         void this.broadcastUnpushedCommits();
+        void this.broadcastIncomingCommits();
       }
       void postAllBranches().catch(error => {
         this.logger?.error('CommitPanel', 'Failed to refresh branches', error);
@@ -2181,8 +2188,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         suppressedRepoIds: event.repoIds,
       });
     }
-    if (scopes.has('unpushed')) {
+    if (scopes.has('unpushed') || scopes.has('incoming')) {
       void this.broadcastUnpushedCommits(event.repoIds);
+      void this.broadcastIncomingCommits(event.repoIds);
     }
     if (scopes.has('subtree')) {
       this.invalidateSubtreeStatus(undefined, { remote: event.force ?? false });
@@ -5043,48 +5051,100 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: t('Repo not found') });
           return;
         }
+        const repoMeta = this.manager.getRepoMeta(msg.repoId);
+        const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
+        const progressTitle = t('VersionDock [{0}]: Fetching all remotes…', repoName);
+
+        const fetchRepoOp = async () => {
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: progressTitle,
+              cancellable: false,
+            },
+            async () => {
+              await (repo as GitService).fetchSingleRepo();
+              await this.manager.refreshStatusNow();
+              const commits = await (repo as GitService).getIncomingCommits();
+              this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+              if (commits.length > 0) {
+                this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'incoming');
+              }
+              this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
+            }
+          );
+          vscode.window.showInformationMessage(t('VersionDock [{0}]: Fetch complete.', repoName));
+        };
+
         try {
-          await (repo as GitService).fetchSingleRepo();
-          await this.manager.refreshStatusNow();
-          const commits = await (repo as GitService).getIncomingCommits();
-          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
-          if (commits.length > 0) {
-            this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'incoming');
+          if (this.branchStatusBar) {
+            await this.branchStatusBar.withOperationProgress(fetchRepoOp, 'sync', repoName);
+          } else {
+            await fetchRepoOp();
           }
-          this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
         } catch (e: unknown) {
           this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: false, error: String(e) });
+          vscode.window.showErrorMessage(t('VersionDock [{0}]: Fetch failed — {1}', repoName, String(e)));
         }
         break;
       }
 
       case 'SYNC_FETCH_ALL': {
-        try {
-          const gitRepos = this.manager.getRepoMetas().filter(m => m.kind !== 'svn');
-          const errors: string[] = [];
-          await Promise.all(gitRepos.map(async m => {
-            const repo = this.manager.getRepo(m.id);
-            if (repo && repo.kind !== 'svn') {
-              try {
-                await (repo as GitService).fetchAll();
-              } catch (err) {
-                errors.push(`${m.name || m.id}: ${String(err)}`);
+        const allMetas = this.manager.getRepoMetas();
+        const gitRepos = allMetas.filter(m => m.kind !== 'svn');
+        const progressTitle = allMetas.length === 1
+          ? t('VersionDock [{0}]: Fetching all remotes…', allMetas[0].name)
+          : t('VersionDock: Fetching all remotes…');
+
+        const fetchAllOp = async () => {
+          await vscode.window.withProgress(
+            {
+              location: vscode.ProgressLocation.Notification,
+              title: progressTitle,
+              cancellable: false,
+            },
+            async () => {
+              const errors: string[] = [];
+              await Promise.all(gitRepos.map(async m => {
+                const repo = this.manager.getRepo(m.id);
+                if (repo && repo.kind !== 'svn') {
+                  try {
+                    await (repo as GitService).fetchAll();
+                  } catch (err) {
+                    errors.push(`${m.name || m.id}: ${String(err)}`);
+                  }
+                }
+              }));
+              await this.manager.refreshStatusNow();
+              this.manager.notifyBranchesChanged();
+
+              if (errors.length === gitRepos.length && gitRepos.length > 0) {
+                this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
+                if (gitRepos.length === 1) {
+                  vscode.window.showErrorMessage(t('VersionDock [{0}]: Fetch failed — {1}', this.manager.getRepoMeta(gitRepos[0].id)?.name ?? gitRepos[0].id, errors[0]));
+                } else {
+                  vscode.window.showErrorMessage(t('VersionDock: Fetch failed for all repositories:\n{0}', errors.join('\n')));
+                }
+              } else if (errors.length > 0) {
+                this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, partial: true, error: errors.join('\n') });
+                vscode.window.showWarningMessage(t('VersionDock: Fetch partially succeeded. Some repositories failed:\n{0}', errors.join('\n')));
+              } else {
+                this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: true });
+                if (allMetas.length === 1) {
+                  vscode.window.showInformationMessage(t('VersionDock [{0}]: Fetch complete.', allMetas[0].name));
+                } else {
+                  vscode.window.showInformationMessage(t('VersionDock: Fetch complete.'));
+                }
               }
             }
-          }));
-          await this.manager.refreshStatusNow();
-          if (errors.length === gitRepos.length && gitRepos.length > 0) {
-            this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n') });
-            if (gitRepos.length === 1) {
-              vscode.window.showErrorMessage(t('VersionDock [{0}]: Fetch failed — {1}', this.manager.getRepoMeta(gitRepos[0].id)?.name ?? gitRepos[0].id, errors[0]));
-            } else {
-              vscode.window.showErrorMessage(t('VersionDock: Fetch failed for all repositories:\n{0}', errors.join('\n')));
-            }
-          } else if (errors.length > 0) {
-            this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, partial: true, error: errors.join('\n') });
-            vscode.window.showWarningMessage(t('VersionDock: Fetch partially succeeded. Some repositories failed:\n{0}', errors.join('\n')));
+          );
+        };
+
+        try {
+          if (this.branchStatusBar) {
+            await this.branchStatusBar.withOperationProgress(fetchAllOp, 'sync');
           } else {
-            this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: true });
+            await fetchAllOp();
           }
         } catch (e: unknown) {
           this.post({ type: 'SYNC_FETCH_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
