@@ -653,22 +653,31 @@ function useClampedPosition(x: number, y: number) {
   return { ref, pos };
 }
 
-function useDismissOnBlur(onClose: () => void) {
-  useLayoutEffect(() => {
+function useContextMenuDismiss(menuRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
+  useEffect(() => {
+    const outsideHandler = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
     const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     const blurHandler = () => onClose();
     const visibilityHandler = () => {
       if (document.visibilityState !== 'visible') onClose();
     };
+    document.addEventListener('mousedown', outsideHandler, true);
     document.addEventListener('keydown', keyHandler);
     document.addEventListener('visibilitychange', visibilityHandler);
     window.addEventListener('blur', blurHandler);
+    window.addEventListener('pagehide', blurHandler);
     return () => {
+      document.removeEventListener('mousedown', outsideHandler, true);
       document.removeEventListener('keydown', keyHandler);
       document.removeEventListener('visibilitychange', visibilityHandler);
       window.removeEventListener('blur', blurHandler);
+      window.removeEventListener('pagehide', blurHandler);
     };
-  }, [onClose]);
+  }, [menuRef, onClose]);
 }
 
 type MenuItem = { icon: string; label: string; action: () => void; danger?: boolean } | { sep: true };
@@ -722,7 +731,7 @@ function TagContextMenu({ mergedTag, x, y, isSvn, canDelete, onClose, onCheckout
   onDelete: () => void;
 }) {
   const { ref, pos } = useClampedPosition(x, y);
-  useDismissOnBlur(onClose);
+  useContextMenuDismiss(ref, onClose);
   const items: MenuItem[] = [
     { icon: 'arrow-right', label: isSvn ? t('Switch to "{0}"', mergedTag.name) : t('Checkout "{0}"', mergedTag.name), action: onCheckout },
     { sep: true },
@@ -734,12 +743,9 @@ function TagContextMenu({ mergedTag, x, y, isSvn, canDelete, onClose, onCheckout
   ];
 
   return (
-    <>
-      <div style={styles.backdrop} onClick={onClose} />
-      <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)}>
-        {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
-      </div>
-    </>
+    <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)} onContextMenu={e => e.preventDefault()}>
+      {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
+    </div>
   );
 }
 
@@ -761,7 +767,7 @@ function ContextMenu({ merged, x, y, isSvn, isRemote, canDelete, canCompare, onC
   onPush: () => void;
 }) {
   const { ref, pos } = useClampedPosition(x, y);
-  useDismissOnBlur(onClose);
+  useContextMenuDismiss(ref, onClose);
   const items: MenuItem[] = [
     { icon: 'arrow-right', label: isSvn ? t("Switch to '{0}'", merged.baseName) : t("Checkout '{0}'", merged.baseName), action: onCheckout },
     { sep: true },
@@ -781,12 +787,9 @@ function ContextMenu({ merged, x, y, isSvn, isRemote, canDelete, canCompare, onC
   ];
 
   return (
-    <>
-      <div style={styles.backdrop} onClick={onClose} />
-      <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)}>
-        {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
-      </div>
-    </>
+    <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)} onContextMenu={e => e.preventDefault()}>
+      {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
+    </div>
   );
 }
 
@@ -1052,11 +1055,6 @@ const styles = {
     color: PULL_COLOR,
     fontWeight: 600,
   } as React.CSSProperties,
-  backdrop: {
-    position: 'fixed' as const,
-    inset: 0,
-    zIndex: 100,
-  },
   contextMenu: (x: number, y: number) => ({
     position: 'fixed' as const,
     left: x,

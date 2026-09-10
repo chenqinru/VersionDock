@@ -381,9 +381,6 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                 const multiSelected = isInSelection && selectedHashes.length > 1
                   ? commits.filter(c => selectedHashSet.has(getCommitKey(c.repoId, c.hash)))
                   : [];
-                if (!isInSelection) {
-                  onSelect(commit, 'single');
-                }
                 setContextMenu({ commit, x: e.clientX, y: e.clientY, multiSelected });
               }}
             >
@@ -918,18 +915,27 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
   }, [x, y]);
 
   useEffect(() => {
+    const outsideHandler = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
     const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     const blurHandler = () => onClose();
     const visibilityHandler = () => {
       if (document.visibilityState !== 'visible') onClose();
     };
+    document.addEventListener('mousedown', outsideHandler, true);
     document.addEventListener('keydown', keyHandler);
     document.addEventListener('visibilitychange', visibilityHandler);
     window.addEventListener('blur', blurHandler);
+    window.addEventListener('pagehide', blurHandler);
     return () => {
+      document.removeEventListener('mousedown', outsideHandler, true);
       document.removeEventListener('keydown', keyHandler);
       document.removeEventListener('visibilitychange', visibilityHandler);
       window.removeEventListener('blur', blurHandler);
+      window.removeEventListener('pagehide', blurHandler);
     };
   }, [onClose]);
 
@@ -964,217 +970,206 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
 
   if (isMulti) {
     return (
-      <>
-        <div style={ctxStyles.backdrop} onClick={onClose} />
-        <div ref={menuRef} style={ctxStyles.menu(menuPos.left, menuPos.top)}>
-          <div style={ctxStyles.header}>{multiSelected.length === 1 ? t('{0} commit selected', multiSelected.length) : t('{0} commits selected', multiSelected.length)}</div>
-          <div style={ctxStyles.separator} />
-          <div
-            data-context-menu-item=""
-            style={ctxStyles.item}
-            onClick={() => send({
-              type: 'LOG_OPEN_AI_EXPLANATION_MULTI',
-              commits: sortedNewestFirst.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
-            })}
-          >
-            <Codicon name="sparkle-filled" style={ctxStyles.icon} />
-            <span>{t('AI Explain')}</span>
-          </div>
-          <div style={ctxStyles.separator} />
-          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_PATCH_MULTI', requestId: generateId(), repoId, hashes: multiSelected.map(c => c.hash) })}>
-            <Codicon name="diff" style={ctxStyles.icon} />
-            <span>{t('Create Patch...')}</span>
-          </div>
-          {!isSvn && (
-            <>
-              <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHERRY_PICK_MULTI', requestId: generateId(), repoId, hashes: sortedOldestFirst.map(c => c.hash) })}>
-                <Codicon name="git-commit" style={ctxStyles.icon} />
-                <span>{t('Cherry-Pick All')}</span>
-              </div>
-              <div style={ctxStyles.separator} />
-              <div style={ctxStyles.itemDisabled}>
-                <Codicon name="history" style={ctxStyles.icon} />
-                <span>{t('Reset Current Branch to Here')}</span>
-              </div>
-              <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_REVERT_COMMITS', requestId: generateId(), repoId, hashes: sortedNewestFirst.map(c => c.hash) })}>
-                <Codicon name="discard" style={ctxStyles.icon} />
-                <span>{t('Revert Commits')}</span>
-              </div>
-            </>
-          )}
-          {allUnpushed && (
-            <>
-              <div style={ctxStyles.separator} />
-              <div
-                data-context-menu-item=""
-                style={ctxStyles.aiComposerItem}
-                onClick={() => send({
-                  type: 'LOG_OPEN_AI_COMPOSER',
-                  repoId,
-                  hashes: sortedNewestFirst.map(selectedCommit => selectedCommit.hash),
-                })}
-              >
-                <AiCommitComposerIcon style={ctxStyles.icon} />
-                <span>{t('AI Reorganize Commits')}</span>
-              </div>
-              <div
-                data-context-menu-item=""
-                style={{ ...ctxStyles.item, color: 'var(--vscode-errorForeground)' }}
-                onClick={() => send({ type: 'LOG_DROP_COMMITS', requestId: generateId(), repoId, hashes: multiSelected.map(c => c.hash), oldestHash })}
-              >
-                <Codicon name="trash" style={ctxStyles.icon} />
-                <span>{t('Drop Commits')}</span>
-              </div>
-              <div data-context-menu-item="" style={ctxStyles.item} onClick={() => onSquash(multiSelected)}>
-                <Codicon name="fold-down" style={ctxStyles.icon} />
-                <span>{t('Squash {0} Commits...', multiSelected.length)}</span>
-              </div>
-            </>
-          )}
-        </div>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <div style={ctxStyles.backdrop} onClick={onClose} />
-      <div ref={menuRef} style={ctxStyles.menu(menuPos.left, menuPos.top)}>
-        <div data-context-menu-item="" style={ctxStyles.item} onClick={copyHash}>
-          <Codicon name="copy" style={ctxStyles.icon} />
-          <span>{t('Copy Revision Number')}</span>
-        </div>
+      <div ref={menuRef} style={ctxStyles.menu(menuPos.left, menuPos.top)} onContextMenu={e => e.preventDefault()}>
+        <div style={ctxStyles.header}>{multiSelected.length === 1 ? t('{0} commit selected', multiSelected.length) : t('{0} commits selected', multiSelected.length)}</div>
+        <div style={ctxStyles.separator} />
         <div
           data-context-menu-item=""
           style={ctxStyles.item}
-          onClick={() => multiSelected.length > 1
-            ? send({
-              type: 'LOG_OPEN_AI_EXPLANATION_MULTI',
-              commits: sortedNewestFirst.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
-            })
-            : send({ type: 'LOG_OPEN_AI_EXPLANATION', repoId: commit.repoId, hash: commit.hash })}
+          onClick={() => send({
+            type: 'LOG_OPEN_AI_EXPLANATION_MULTI',
+            commits: sortedNewestFirst.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
+          })}
         >
           <Codicon name="sparkle-filled" style={ctxStyles.icon} />
           <span>{t('AI Explain')}</span>
         </div>
         <div style={ctxStyles.separator} />
-        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_NEW_BRANCH_FROM_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
-          <Codicon name="git-branch" style={ctxStyles.icon} />
-          <span>{t('New Branch...')}</span>
-        </div>
-        {tagsFromRefs.length === 0 ? (
-          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_TAG', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
-            <Codicon name="tag" style={ctxStyles.icon} />
-            <span>{t('New Tag...')}</span>
-          </div>
-        ) : (
-          <div
-            data-context-menu-item=""
-            style={ctxStyles.item}
-            onClick={() => {
-              const currentBranch = currentBranchByRepo[commit.repoId] ?? '';
-              send({ type: 'LOG_MANAGE_COMMIT_TAGS', repoId: commit.repoId, hash: commit.hash, currentBranch } satisfies LogToHostMsg);
-            }}
-          >
-            <Codicon name="tag" style={ctxStyles.icon} />
-            <span>{t('Manage Tags...')}</span>
-          </div>
-        )}
-        <div style={ctxStyles.separator} />
-        {checkoutTarget ? (
-          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHECKOUT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, branchName: checkoutTarget })}>
-            <Codicon name="arrow-right" style={ctxStyles.icon} />
-            <span>{t('Checkout...')}</span>
-          </div>
-        ) : (
-          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHECKOUT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
-            <Codicon name="arrow-right" style={ctxStyles.icon} />
-            <span>{isSvn ? t('Update to Revision') : t('Checkout Revision')}</span>
-          </div>
-        )}
-        {branchOptionsTarget && (
-          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_SHOW_BRANCH_OPTIONS', repoId: commit.repoId, branchName: branchOptionsTarget })}>
-            <Codicon name="git-branch" style={ctxStyles.icon} />
-            <span>{t('Branch options...')}</span>
-          </div>
-        )}
-        <div style={ctxStyles.separator} />
-        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_PATCH', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_PATCH_MULTI', requestId: generateId(), repoId, hashes: multiSelected.map(c => c.hash) })}>
           <Codicon name="diff" style={ctxStyles.icon} />
           <span>{t('Create Patch...')}</span>
         </div>
         {!isSvn && (
           <>
-            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHERRY_PICK', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHERRY_PICK_MULTI', requestId: generateId(), repoId, hashes: sortedOldestFirst.map(c => c.hash) })}>
               <Codicon name="git-commit" style={ctxStyles.icon} />
-              <span>{t('Cherry-Pick')}</span>
+              <span>{t('Cherry-Pick All')}</span>
             </div>
+            <div style={ctxStyles.separator} />
+            <div style={ctxStyles.itemDisabled}>
+              <Codicon name="history" style={ctxStyles.icon} />
+              <span>{t('Reset Current Branch to Here')}</span>
+            </div>
+            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_REVERT_COMMITS', requestId: generateId(), repoId, hashes: sortedNewestFirst.map(c => c.hash) })}>
+              <Codicon name="discard" style={ctxStyles.icon} />
+              <span>{t('Revert Commits')}</span>
+            </div>
+          </>
+        )}
+        {allUnpushed && (
+          <>
             <div style={ctxStyles.separator} />
             <div
               data-context-menu-item=""
-              style={ctxStyles.item}
-              onClick={() => send({ type: 'LOG_RESET_TO_PICK', repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg)}
+              style={ctxStyles.aiComposerItem}
+              onClick={() => send({
+                type: 'LOG_OPEN_AI_COMPOSER',
+                repoId,
+                hashes: sortedNewestFirst.map(selectedCommit => selectedCommit.hash),
+              })}
             >
-              <Codicon name="history" style={ctxStyles.icon} />
-              <span>{t('Reset Current Branch to Here...')}</span>
+              <AiCommitComposerIcon style={ctxStyles.icon} />
+              <span>{t('AI Reorganize Commits')}</span>
             </div>
-            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_REVERT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
-              <Codicon name="discard" style={ctxStyles.icon} />
-              <span>{t('Revert Commit')}</span>
-            </div>
-          </>
-        )}
-        {commit.unpushed && isHead && (
-          <>
-            <div style={ctxStyles.separator} />
-            {!isSvn && (
-              <div
-                data-context-menu-item=""
-                style={ctxStyles.aiComposerItem}
-                onClick={() => send({
-                  type: 'LOG_OPEN_AI_COMPOSER',
-                  repoId: commit.repoId,
-                  hashes: [commit.hash],
-                })}
-              >
-                <AiCommitComposerIcon style={ctxStyles.icon} />
-                <span>{t('AI Reorganize Commits')}</span>
-              </div>
-            )}
-            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_EDIT_COMMIT_MESSAGE', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, currentMessage: commit.message })}>
-              <Codicon name="edit" style={ctxStyles.icon} />
-              <span>{t('Edit Commit Message')}</span>
-            </div>
-            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_UNDO_COMMIT', requestId: generateId(), repoId: commit.repoId })}>
-              <Codicon name="arrow-left" style={ctxStyles.icon} />
-              <span>{t('Undo Commit')}</span>
-            </div>
-          </>
-        )}
-        {commit.unpushed && (
-          <>
-            <div style={ctxStyles.separator} />
             <div
               data-context-menu-item=""
               style={{ ...ctxStyles.item, color: 'var(--vscode-errorForeground)' }}
-              onClick={() => send({ type: 'LOG_DROP_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}
+              onClick={() => send({ type: 'LOG_DROP_COMMITS', requestId: generateId(), repoId, hashes: multiSelected.map(c => c.hash), oldestHash })}
             >
               <Codicon name="trash" style={ctxStyles.icon} />
-              <span>{t('Drop Commit')}</span>
+              <span>{t('Drop Commits')}</span>
+            </div>
+            <div data-context-menu-item="" style={ctxStyles.item} onClick={() => onSquash(multiSelected)}>
+              <Codicon name="fold-down" style={ctxStyles.icon} />
+              <span>{t('Squash {0} Commits...', multiSelected.length)}</span>
             </div>
           </>
         )}
       </div>
-    </>
+    );
+  }
+
+  return (
+    <div ref={menuRef} style={ctxStyles.menu(menuPos.left, menuPos.top)} onContextMenu={e => e.preventDefault()}>
+      <div data-context-menu-item="" style={ctxStyles.item} onClick={copyHash}>
+        <Codicon name="copy" style={ctxStyles.icon} />
+        <span>{t('Copy Revision Number')}</span>
+      </div>
+      <div
+        data-context-menu-item=""
+        style={ctxStyles.item}
+        onClick={() => multiSelected.length > 1
+          ? send({
+            type: 'LOG_OPEN_AI_EXPLANATION_MULTI',
+            commits: sortedNewestFirst.map(selectedCommit => ({ repoId: selectedCommit.repoId, hash: selectedCommit.hash })),
+          })
+          : send({ type: 'LOG_OPEN_AI_EXPLANATION', repoId: commit.repoId, hash: commit.hash })}
+      >
+        <Codicon name="sparkle-filled" style={ctxStyles.icon} />
+        <span>{t('AI Explain')}</span>
+      </div>
+      <div style={ctxStyles.separator} />
+      <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_NEW_BRANCH_FROM_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+        <Codicon name="git-branch" style={ctxStyles.icon} />
+        <span>{t('New Branch...')}</span>
+      </div>
+      {tagsFromRefs.length === 0 ? (
+        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_TAG', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+          <Codicon name="tag" style={ctxStyles.icon} />
+          <span>{t('New Tag...')}</span>
+        </div>
+      ) : (
+        <div
+          data-context-menu-item=""
+          style={ctxStyles.item}
+          onClick={() => {
+            const currentBranch = currentBranchByRepo[commit.repoId] ?? '';
+            send({ type: 'LOG_MANAGE_COMMIT_TAGS', repoId: commit.repoId, hash: commit.hash, currentBranch } satisfies LogToHostMsg);
+          }}
+        >
+          <Codicon name="tag" style={ctxStyles.icon} />
+          <span>{t('Manage Tags...')}</span>
+        </div>
+      )}
+      <div style={ctxStyles.separator} />
+      {checkoutTarget ? (
+        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHECKOUT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, branchName: checkoutTarget })}>
+          <Codicon name="arrow-right" style={ctxStyles.icon} />
+          <span>{t('Checkout...')}</span>
+        </div>
+      ) : (
+        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHECKOUT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+          <Codicon name="arrow-right" style={ctxStyles.icon} />
+          <span>{isSvn ? t('Update to Revision') : t('Checkout Revision')}</span>
+        </div>
+      )}
+      {branchOptionsTarget && (
+        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_SHOW_BRANCH_OPTIONS', repoId: commit.repoId, branchName: branchOptionsTarget })}>
+          <Codicon name="git-branch" style={ctxStyles.icon} />
+          <span>{t('Branch options...')}</span>
+        </div>
+      )}
+      <div style={ctxStyles.separator} />
+      <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_PATCH', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+        <Codicon name="diff" style={ctxStyles.icon} />
+        <span>{t('Create Patch...')}</span>
+      </div>
+      {!isSvn && (
+        <>
+          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CHERRY_PICK', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+            <Codicon name="git-commit" style={ctxStyles.icon} />
+            <span>{t('Cherry-Pick')}</span>
+          </div>
+          <div style={ctxStyles.separator} />
+          <div
+            data-context-menu-item=""
+            style={ctxStyles.item}
+            onClick={() => send({ type: 'LOG_RESET_TO_PICK', repoId: commit.repoId, hash: commit.hash } satisfies LogToHostMsg)}
+          >
+            <Codicon name="history" style={ctxStyles.icon} />
+            <span>{t('Reset Current Branch to Here...')}</span>
+          </div>
+          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_REVERT_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+            <Codicon name="discard" style={ctxStyles.icon} />
+            <span>{t('Revert Commit')}</span>
+          </div>
+        </>
+      )}
+      {commit.unpushed && isHead && (
+        <>
+          <div style={ctxStyles.separator} />
+          {!isSvn && (
+            <div
+              data-context-menu-item=""
+              style={ctxStyles.aiComposerItem}
+              onClick={() => send({
+                type: 'LOG_OPEN_AI_COMPOSER',
+                repoId: commit.repoId,
+                hashes: [commit.hash],
+              })}
+            >
+              <AiCommitComposerIcon style={ctxStyles.icon} />
+              <span>{t('AI Reorganize Commits')}</span>
+            </div>
+          )}
+          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_EDIT_COMMIT_MESSAGE', requestId: generateId(), repoId: commit.repoId, hash: commit.hash, currentMessage: commit.message })}>
+            <Codicon name="edit" style={ctxStyles.icon} />
+            <span>{t('Edit Commit Message')}</span>
+          </div>
+          <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_UNDO_COMMIT', requestId: generateId(), repoId: commit.repoId })}>
+            <Codicon name="arrow-left" style={ctxStyles.icon} />
+            <span>{t('Undo Commit')}</span>
+          </div>
+        </>
+      )}
+      {commit.unpushed && (
+        <>
+          <div style={ctxStyles.separator} />
+          <div
+            data-context-menu-item=""
+            style={{ ...ctxStyles.item, color: 'var(--vscode-errorForeground)' }}
+            onClick={() => send({ type: 'LOG_DROP_COMMIT', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}
+          >
+            <Codicon name="trash" style={ctxStyles.icon} />
+            <span>{t('Drop Commit')}</span>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
 const ctxStyles = {
-  backdrop: {
-    position: 'fixed' as const,
-    inset: 0,
-    zIndex: 200,
-  },
   menu: (x: number, y: number): React.CSSProperties => ({
     position: 'fixed' as const,
     left: x,
