@@ -7,6 +7,7 @@ import { CommitPromptManager } from './CommitPromptManager';
 import type {
   AiCommitMessageGenerateOptions,
   AiCommitMessageGenerateResult,
+  AiCommitMessageGenerationContext,
 } from './types';
 
 function cleanCommitMessage(raw: string): string {
@@ -51,7 +52,7 @@ export class AiCommitMessageService {
     throwIfCancelled(options.cancellationToken);
     const promptResolution = await this.commitPromptManager.resolve(options.context.repoRootPaths);
     throwIfCancelled(options.cancellationToken);
-    const userMessage = this.buildUserMessage(options.context.text, options.context.vcsKinds);
+    const userMessage = this.buildUserMessage(options.context);
     const maxOutputTokens = calculateCommitMessageOutputTokens(`${promptResolution.prompt}\n${userMessage}`);
 
     const result = await this.aiProviderService.generate({
@@ -72,11 +73,32 @@ export class AiCommitMessageService {
     };
   }
 
-  private buildUserMessage(context: string, vcsKinds: Array<'git' | 'svn'>): string {
-    const vcsLabel = vcsKinds.length > 1 ? 'Git/SVN' : (vcsKinds[0] ?? 'VCS').toUpperCase();
-    if (vscode.env.language.toLowerCase().startsWith('zh')) {
-      return `# 任务\n\n## ${vcsLabel} 变更上下文\n\n基于以下变更 Diff 生成一条提交信息：\n\n\`\`\`diff\n${context}\n\`\`\``;
+  private buildUserMessage(context: AiCommitMessageGenerationContext): string {
+    const vcsLabel = context.vcsKinds.length > 1 ? 'Git/SVN' : (context.vcsKinds[0] ?? 'VCS').toUpperCase();
+    const isZh = vscode.env.language.toLowerCase().startsWith('zh');
+
+    const totalLines = (context.totalAdditions ?? 0) + (context.totalDeletions ?? 0);
+    const hasLineStats = context.totalAdditions !== undefined || context.totalDeletions !== undefined;
+    const isSmallChange = context.fileCount <= 2 && (hasLineStats ? totalLines <= 25 : true);
+
+    if (isZh) {
+      const statsNote = hasLineStats
+        ? `（共 ${context.fileCount} 个文件，+${context.totalAdditions ?? 0}/-${context.totalDeletions ?? 0} 行）`
+        : `（共 ${context.fileCount} 个文件）`;
+      const scaleInstruction = isSmallChange
+        ? `【改动规模感知】本次属于轻量/微小改动${statsNote}。请严格仅输出 1 行 Header，严禁输出任何 Body 正文，切勿拆解凑数！`
+        : `【改动规模感知】本次改动涉及多处或较大规模${statsNote}。若 Header 足以自解释则无需正文；若确需说明，至多提供 1~3 条精炼要点，严禁空洞套话。`;
+
+      return `# 任务\n\n${scaleInstruction}\n\n## ${vcsLabel} 变更上下文\n\n基于以下变更 Diff 生成提交信息：\n\n\`\`\`diff\n${context.text}\n\`\`\``;
     }
-    return `# Task\n\n## ${vcsLabel} Change Context\n\nGenerate one commit message from the following change diff:\n\n\`\`\`diff\n${context}\n\`\`\``;
+
+    const statsNote = hasLineStats
+      ? `(${context.fileCount} file(s), +${context.totalAdditions ?? 0}/-${context.totalDeletions ?? 0} lines)`
+      : `(${context.fileCount} file(s))`;
+    const scaleInstruction = isSmallChange
+      ? `[Scale Guidance] This is a small/atomic change ${statsNote}. Output only a single Header line. Strictly DO NOT output any Body text or bullet points!`
+      : `[Scale Guidance] This is a substantial change ${statsNote}. If the Header is self-explanatory, do not output a Body; if details are needed, provide at most 1 to 3 concise bullets. Avoid generic fluff.`;
+
+    return `# Task\n\n${scaleInstruction}\n\n## ${vcsLabel} Change Context\n\nGenerate a commit message from the following change diff:\n\n\`\`\`diff\n${context.text}\n\`\`\``;
   }
 }

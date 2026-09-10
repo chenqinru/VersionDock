@@ -301,12 +301,16 @@ export class AiCommitComposerProvider implements vscode.Disposable {
     if (estimateTokenCount(text) > getContextTokenBudget(maxInputTokens)) {
       throw new Error(t('AI Commit Composer context is too large. Select fewer changes and try again.'));
     }
+    const totalAdditions = units.reduce((sum, unit) => sum + unit.added, 0);
+    const totalDeletions = units.reduce((sum, unit) => sum + unit.removed, 0);
     return {
       text,
       repoRootPaths: [this.manager.getRepo(source.repoId)?.rootPath ?? ''],
       vcsKinds: [source.vcsKind],
       repositoryCount: 1,
       fileCount: new Set(units.map(unit => unit.filePath)).size,
+      totalAdditions,
+      totalDeletions,
       contextCharCount: text.length,
       truncated: false,
     };

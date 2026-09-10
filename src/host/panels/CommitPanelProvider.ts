@@ -31,7 +31,7 @@ import { generateHistoricalCommitMessage } from '../aiCommitMessage/generateHist
 import type { AiCommitComposerProvider } from './AiCommitComposerProvider';
 import type { AiCodeReviewProvider } from './AiCodeReviewProvider';
 import type { CodeReviewDiffSource } from '../aiCodeReview/types';
-import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
+import { buildDiffDetailBlocks, formatDiffStats, countDiffChanges } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
@@ -1179,12 +1179,27 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const context = buildFairContext(['# Change summary'], groups, contextTokenBudget);
     const text = context.text;
     if (!text) throw new Error(t('No changes to generate a commit message from.'));
+
+    let totalAdditions = 0;
+    let totalDeletions = 0;
+    for (const group of preparedGroups) {
+      for (const entry of group.entries) {
+        for (const source of entry.sources) {
+          const { added, removed } = countDiffChanges(source.diff);
+          totalAdditions += added;
+          totalDeletions += removed;
+        }
+      }
+    }
+
     return {
       text,
       repoRootPaths: Array.from(includedRepoRootPaths),
       vcsKinds: Array.from(vcsKinds),
       repositoryCount: includedRepoIds.size,
       fileCount: context.includedEntryCount,
+      totalAdditions,
+      totalDeletions,
       contextCharCount: text.length,
       truncated: context.truncated,
     };

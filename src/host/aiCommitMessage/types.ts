@@ -8,6 +8,8 @@ export interface AiCommitMessageGenerationContext {
   vcsKinds: Array<'git' | 'svn'>;
   repositoryCount: number;
   fileCount: number;
+  totalAdditions?: number;
+  totalDeletions?: number;
   contextCharCount: number;
   truncated: boolean;
 }

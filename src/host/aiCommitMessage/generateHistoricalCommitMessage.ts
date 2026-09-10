@@ -4,7 +4,7 @@ import type { GitService } from '../git/GitService';
 import type { FileDiff } from '../types/git';
 import type { VersionDockLogger } from '../utils/Logger';
 import { t } from '../utils/l10n';
-import { buildDiffDetailBlocks, formatDiffStats } from '../ai/diffContext';
+import { buildDiffDetailBlocks, formatDiffStats, countDiffChanges } from '../ai/diffContext';
 import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup } from '../ai/fairContext';
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import type { AiCommitMessageService } from './AiCommitMessageService';
@@ -76,12 +76,25 @@ async function buildContext(
     throw new Error(t('AI prompt exceeds the configured input limit of {0} tokens.', maxInputTokens));
   }
   const text = context.text;
+
+  let totalAdditions = 0;
+  let totalDeletions = 0;
+  for (const group of preparedGroups) {
+    for (const entry of group.entries) {
+      const { added, removed } = countDiffChanges(entry.diff);
+      totalAdditions += added;
+      totalDeletions += removed;
+    }
+  }
+
   return {
     text,
     repoRootPaths: [repo.rootPath],
     vcsKinds: ['git'],
     repositoryCount: 1,
     fileCount: context.includedEntryCount,
+    totalAdditions,
+    totalDeletions,
     contextCharCount: text.length,
     truncated: context.truncated,
   };
