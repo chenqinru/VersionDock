@@ -4103,9 +4103,32 @@ export class GitService {
         fullMessage,
         date,
         branch,
-        files: cachedFiles ? [...cachedFiles] : [],
+        files: cachedFiles ? [...cachedFiles] : undefined,
       });
     }
+
+    // 与 Shelve 保持一致：确保每个 stash 条目在列表返回时携带完整的 files 数据。
+    // 已缓存在内存中的条目直接复用，未缓存的条目并发查询并存入缓存。
+    const limit = 8;
+    const executing = new Set<Promise<void>>();
+    for (const entry of entries) {
+      if (entry.files !== undefined) continue;
+      const stashId = entry.oid ?? entry.ref;
+      const p = (async () => {
+        try {
+          entry.files = await this.getStashFiles(stashId);
+        } catch {
+          entry.files = [];
+        }
+      })();
+      executing.add(p);
+      const clean = () => executing.delete(p);
+      p.then(clean, clean);
+      if (executing.size >= limit) {
+        await Promise.race(executing);
+      }
+    }
+    await Promise.all(executing);
 
     return entries;
   }

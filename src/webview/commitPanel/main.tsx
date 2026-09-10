@@ -2175,7 +2175,7 @@ export function CommitApp() {
         const stashIdentity = entry.oid ?? entry.ref;
         const fileState = repoFilesMap?.[stashIdentity];
         const reqKey = `${repo.repoId}:${stashIdentity}`;
-        if (!fileState?.files && !fileState?.loading && !inFlightStashRequestsRef.current.has(reqKey)) {
+        if (!fileState?.files && (!entry.files || entry.files.length === 0) && !fileState?.loading && !inFlightStashRequestsRef.current.has(reqKey)) {
           requestStashFiles(repo.repoId, entry.ref, entry.oid);
         }
       }

@@ -262,6 +262,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   const stashIdentity = entry.oid ?? entry.ref;
   const fileState = stashFilesMap?.[stashIdentity];
   const files = React.useMemo(() => fileState?.files ?? entry.files ?? [], [entry.files, fileState?.files]);
+  const hasLoadedFiles = fileState?.files !== undefined || entry.files !== undefined;
   const filesLoading = Boolean(fileState?.loading);
 
   const treeNodes = React.useMemo(
@@ -326,10 +327,10 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
 
     setExpanded(expansionCommand.expanded);
     setOpenDirs(expansionCommand.expanded ? new Set(allDirPaths) : new Set());
-    if (expansionCommand.expanded && !fileState?.files && files.length === 0) {
+    if (expansionCommand.expanded && !fileState?.files && (!entry.files || entry.files.length === 0)) {
       onRequestStashFiles?.(repoId, entry.ref, entry.oid);
     }
-  }, [allDirPaths, entry.oid, entry.ref, expansionCommand, fileState?.files, files.length, onRequestStashFiles, repoId]);
+  }, [allDirPaths, entry.files, entry.oid, entry.ref, expansionCommand, fileState?.files, onRequestStashFiles, repoId]);
 
   const toggleDir = (path: string) => {
     setOpenDirs(prev => {
@@ -343,7 +344,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
     e.stopPropagation();
     const nextExpanded = !expanded;
     setExpanded(nextExpanded);
-    if (nextExpanded && !fileState?.files && files.length === 0) {
+    if (nextExpanded && !fileState?.files && (!entry.files || entry.files.length === 0)) {
       onRequestStashFiles?.(repoId, entry.ref, entry.oid);
     }
   };
@@ -377,9 +378,11 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
             )}
           </span>
           <span style={row.meta}>
-            <span style={row.fileCount}>
-              {files.length === 1 ? t('{0} file', files.length) : t('{0} files', files.length)}
-            </span>
+            {hasLoadedFiles && (
+              <span style={row.fileCount}>
+                {files.length === 1 ? t('{0} file', files.length) : t('{0} files', files.length)}
+              </span>
+            )}
             <span style={row.date}>{formatDate(entry.date)}</span>
           </span>
         </div>
