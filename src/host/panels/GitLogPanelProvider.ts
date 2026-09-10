@@ -739,7 +739,18 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private getCachedFilteredBranches(repos = this.getVisibleRepos()): BranchInfo[] {
     const ids = new Set(repos.map(r => r.id));
     const all = this.manager.getCachedBranches();
-    return all.filter(b => ids.has(b.repoId));
+    const result = all.filter(b => ids.has(b.repoId));
+    const presentRepoIds = new Set(result.map(b => b.repoId));
+    for (const repoMeta of repos) {
+      if (!presentRepoIds.has(repoMeta.id)) {
+        const repo = this.manager.getRepo(repoMeta.id);
+        const cachedBranch = (repo as { getCachedBranch?: () => BranchInfo | undefined })?.getCachedBranch?.();
+        if (cachedBranch) {
+          result.push(cachedBranch);
+        }
+      }
+    }
+    return result;
   }
 
   private async refreshTags(

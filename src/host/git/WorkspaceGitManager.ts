@@ -2115,6 +2115,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
         if (repoStatus.branch) fromStatus.push(repoStatus.branch);
       }
     }
+    const foundRepoIds = new Set(fromStatus.map(b => b.repoId));
+    for (const repo of this.repos.values()) {
+      if (!foundRepoIds.has(repo.repoId)) {
+        const cached = (repo as { getCachedBranch?: () => BranchInfo | undefined }).getCachedBranch?.();
+        if (cached) fromStatus.push(cached);
+      }
+    }
     return fromStatus;
   }
 

@@ -410,9 +410,9 @@ export class SvnService extends GitService {
 
   protected override runStatusSensitiveOperation<T>(operation: () => Promise<T>, kind: import('../git/GitService').StatusOperationKind, label?: string): Promise<T> {
     this.invalidateStatusCache();
-    this.clearLogHistoryCache();
-    this.clearBranchesCache();
-    this.clearTagsCache();
+    if (kind === 'commit' || kind === 'sync' || kind === 'checkout' || kind === 'merge' || kind === 'cherry-pick') {
+      this.clearLogHistoryCache();
+    }
     return super.runStatusSensitiveOperation(async () => {
       try {
         return await operation();
@@ -910,9 +910,6 @@ export class SvnService extends GitService {
     this.incomingStateTask = undefined;
     this.incomingStateTaskUrl = undefined;
     this.invalidateStatusCache();
-    this.clearLogHistoryCache();
-    this.clearBranchesCache();
-    this.clearTagsCache();
   }
 
   private async getRemoteHeadRevision(): Promise<number | undefined> {
@@ -1581,6 +1578,23 @@ export class SvnService extends GitService {
       aheadBehind: behind > 0 ? { ahead: 0, behind } : undefined,
       detachedTag: ref.detachedTag,
       lastCommitHash: effectiveRevision !== undefined ? `r${effectiveRevision}` : undefined,
+    };
+  }
+
+  getCachedBranch(): BranchInfo | undefined {
+    if (!this.infoCache) return undefined;
+    const info = this.infoCache.info;
+    const ref = this.displayRef(info);
+    const localRevision = this.incomingStateCache?.localRevision ?? this.getEffectiveLocalRevision(info);
+    return {
+      repoId: this.repoId,
+      name: ref.name,
+      fullName: info.url,
+      isHead: true,
+      isRemote: false,
+      upstream: info.rootUrl,
+      detachedTag: ref.detachedTag,
+      lastCommitHash: localRevision !== undefined ? `r${localRevision}` : undefined,
     };
   }
 
@@ -2835,6 +2849,7 @@ export class SvnService extends GitService {
         this.localRevisionMetadataMtimeMs = this.getWorkingCopyMetadataMtime();
       }
       this.clearIncomingStateCache();
+      this.clearLogHistoryCache();
       this.blameCache.clear();
       if (this.pendingMerge) {
         const remainingStatuses = await this.parseSvnStatus().catch(() => []);
@@ -2855,6 +2870,7 @@ export class SvnService extends GitService {
       this.localRevisionFloor = undefined;
       this.localRevisionFloorTask = undefined;
       this.clearIncomingStateCache();
+      this.clearLogHistoryCache();
       this.blameCache.clear();
       return output;
     }, 'sync', 'svn update');
@@ -2912,6 +2928,7 @@ export class SvnService extends GitService {
     if (info.rootUrl === targetUrl) throw new Error(t('New SVN repository URL is the same as the current URL.'));
     await this.svn(['switch', '--relocate', info.rootUrl, targetUrl]);
     this.clearIncomingStateCache();
+    this.clearLogHistoryCache();
     this.blameCache.clear();
     this.repositoryUrlCache = undefined;
     SvnService.authKeyByRootPath.delete(this.rootPath);
@@ -2933,6 +2950,7 @@ export class SvnService extends GitService {
       this.localRevisionFloor = Number(revision);
       this.localRevisionFloorTask = undefined;
       this.clearIncomingStateCache();
+      this.clearLogHistoryCache();
       this.blameCache.clear();
       return;
     }
@@ -2942,6 +2960,7 @@ export class SvnService extends GitService {
     this.localRevisionFloor = undefined;
     this.localRevisionFloorTask = undefined;
     this.clearIncomingStateCache();
+    this.clearLogHistoryCache();
     this.blameCache.clear();
     this.repositoryUrlCache = undefined;
   }
