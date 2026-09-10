@@ -690,6 +690,9 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const containingBranchesCacheRef = useRef<Map<string, ContainingBranches>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   const infoSectionRef = useRef<HTMLDivElement>(null);
+  const inFlightParentRequestsRef = useRef<Set<string>>(new Set());
+  const activeCommitKeyRef = useRef<string | null>(null);
+  activeCommitKeyRef.current = commit ? scopedKey(commit.repoId, commit.hash) : null;
 
   const repoNameById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.name])), [repos]);
   const repoRootPathById = useMemo(() => Object.fromEntries(repos.map(repo => [repo.id, repo.rootPath])), [repos]);
@@ -786,7 +789,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     getItemPath: f => f.path,
     getItemName: f => f.path === '.' ? (repoNameById[f.repoId] ?? f.repoId) : (f.path.split('/').pop() ?? f.path),
     containerRef: fileListRef,
-    enabled: allDetailFiles.length > 0,
+    enabled: allDetailFiles.length > 0 || (Boolean(showMergeParentChanges) && mergeParentChanges.length > 0),
     onActiveChange: (item) => {
       if (item) {
         if (shouldVirtualize) {
@@ -1046,6 +1049,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
       setExpandedMergeParentKeys(new Set());
       setMergeParentFilesByKey({});
       setLoadingMergeParentKeys(new Set());
+      inFlightParentRequestsRef.current.clear();
       setLoadingBranches(false);
       return;
     }
@@ -1053,6 +1057,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     setExpandedMergeParentKeys(new Set());
     setMergeParentFilesByKey({});
     setLoadingMergeParentKeys(new Set());
+    inFlightParentRequestsRef.current.clear();
 
     const cacheKey = scopedKey(commit.repoId, commit.hash);
     const cached = containingBranchesCacheRef.current.get(cacheKey);
@@ -1069,8 +1074,10 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     pendingRequests.set(branchesRequestId, (msg) => {
       if (msg.type !== 'LOG_COMMIT_BRANCHES_RESULT') return;
       containingBranchesCacheRef.current.set(cacheKey, msg.branches);
-      setContainingBranches(msg.branches);
-      setLoadingBranches(false);
+      if (activeCommitKeyRef.current === cacheKey) {
+        setContainingBranches(msg.branches);
+        setLoadingBranches(false);
+      }
     });
     getVsCodeApi().postMessage({
       type: 'LOG_REQUEST_COMMIT_BRANCHES',
@@ -1315,11 +1322,12 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     } satisfies LogToHostMsg);
   }, [activeFiles, commit, commits, fullCommitMessages, isMultiCommitSelection, loadingFiles, mergeParentChanges]);
 
-  const inFlightParentRequestsRef = useRef<Set<string>>(new Set());
-
   const fetchMergeParentFiles = useCallback((parentHash: string) => {
     if (!commit || isMultiCommitSelection) return;
-    const parentKey = scopedKey(commit.repoId, commit.hash, parentHash);
+    const targetRepoId = commit.repoId;
+    const targetCommitHash = commit.hash;
+    const targetCommitKey = scopedKey(targetRepoId, targetCommitHash);
+    const parentKey = scopedKey(targetRepoId, targetCommitHash, parentHash);
     if (mergeParentFilesByKey[parentKey] || loadingMergeParentKeys.has(parentKey) || inFlightParentRequestsRef.current.has(parentKey)) {
       return;
     }
@@ -1329,14 +1337,17 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     const requestId = generateId();
     pendingRef.current.set(requestId, (msg) => {
       inFlightParentRequestsRef.current.delete(parentKey);
+      if (activeCommitKeyRef.current !== targetCommitKey) {
+        return;
+      }
       if (msg.type === 'LOG_MERGE_PARENT_FILES_RESULT') {
         setMergeParentFilesByKey(current => {
           const next = {
             ...current,
             [parentKey]: msg.files.map(file => ({
               ...file,
-              repoId: commit.repoId,
-              commitHash: commit.hash,
+              repoId: targetRepoId,
+              commitHash: targetCommitHash,
               comparisonBaseHash: parentHash,
             })),
           };
@@ -1354,8 +1365,8 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
     getVsCodeApi().postMessage({
       type: 'LOG_REQUEST_MERGE_PARENT_FILES',
       requestId,
-      repoId: commit.repoId,
-      hash: commit.hash,
+      repoId: targetRepoId,
+      hash: targetCommitHash,
       parentHash,
     } satisfies LogToHostMsg);
   }, [commit, isMultiCommitSelection, loadingMergeParentKeys, mergeParentFilesByKey]);

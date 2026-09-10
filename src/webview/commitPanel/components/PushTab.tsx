@@ -948,10 +948,14 @@ function RepoSection({
   filesByHashRef.current = filesByHash;
   const inFlightCommitHashesRef = useRef<Set<string>>(new Set());
   const inFlightIncomingHashesRef = useRef<Set<string>>(new Set());
+  const activePrefetchCountRef = useRef(0);
+  const scheduleNextPrefetchRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     inFlightCommitHashesRef.current.clear();
     inFlightIncomingHashesRef.current.clear();
+    activePrefetchCountRef.current = 0;
+    scheduleNextPrefetchRef.current = () => {};
   }, [repoStatus.repoId]);
 
   useEffect(() => {
@@ -971,6 +975,8 @@ function RepoSection({
   // Incoming state
   const [expandedIncomingHash, setExpandedIncomingHash] = useState<string | null>(null);
   const [incomingFilesByHash, setIncomingFilesByHash] = useState<Record<string, PushCommitFile[]>>({});
+  const incomingFilesByHashRef = useRef(incomingFilesByHash);
+  incomingFilesByHashRef.current = incomingFilesByHash;
   const [loadingIncomingHash, setLoadingIncomingHash] = useState<string | null>(null);
   const [aggregatedIncomingFiles, setAggregatedIncomingFiles] = useState<PushCommitFile[]>([]);
   const [loadingAggregatedIncomingFiles, setLoadingAggregatedIncomingFiles] = useState(false);
@@ -1235,44 +1241,85 @@ function RepoSection({
     return () => { active = false; };
   }, [directionFilter, incomingCommits, onRequestCommitFiles, onRequestIncomingAggregatedDiff, onRequestIncomingCommitFiles, pushViewMode, repoStatus.repoId]);
 
-  // 当开启搜索时，在 commits 模式下预取当前方向可视提交的文件，确保完整索引
+  // 当开启搜索时，在 commits 模式下预取当前方向可视提交的文件，确保完整索引（受限并发与可取消）
   useEffect(() => {
     if (!speedSearchQuery || pushViewMode !== 'commits') return;
+    let cancelled = false;
+
+    type FetchTask = {
+      hash: string;
+      isIncoming: boolean;
+    };
+
+    const tasks: FetchTask[] = [];
+
     if (directionFilter === 'all' || directionFilter === 'outgoing') {
       for (const c of commits) {
-        if (!filesByHash[c.hash] && loadingCommitHash !== c.hash && !inFlightCommitHashesRef.current.has(c.hash)) {
-          inFlightCommitHashesRef.current.add(c.hash);
-          void onRequestCommitFiles(repoStatus.repoId, c.hash)
-            .then(fetched => {
-              setFilesByHash(prev => ({ ...prev, [c.hash]: fetched }));
-            })
-            .catch(() => {
-              setFilesByHash(prev => ({ ...prev, [c.hash]: [] }));
-            })
-            .finally(() => {
-              inFlightCommitHashesRef.current.delete(c.hash);
-            });
+        if (!filesByHashRef.current[c.hash] && loadingCommitHash !== c.hash && !inFlightCommitHashesRef.current.has(c.hash)) {
+          tasks.push({ hash: c.hash, isIncoming: false });
         }
       }
     }
     if ((directionFilter === 'all' || directionFilter === 'incoming') && onRequestIncomingCommitFiles) {
       for (const c of incomingCommits) {
-        if (!incomingFilesByHash[c.hash] && loadingIncomingHash !== c.hash && !inFlightIncomingHashesRef.current.has(c.hash)) {
-          inFlightIncomingHashesRef.current.add(c.hash);
-          void onRequestIncomingCommitFiles(repoStatus.repoId, c.hash)
-            .then(fetched => {
-              setIncomingFilesByHash(prev => ({ ...prev, [c.hash]: fetched }));
-            })
-            .catch(() => {
-              setIncomingFilesByHash(prev => ({ ...prev, [c.hash]: [] }));
-            })
-            .finally(() => {
-              inFlightIncomingHashesRef.current.delete(c.hash);
-            });
+        if (!incomingFilesByHashRef.current[c.hash] && loadingIncomingHash !== c.hash && !inFlightIncomingHashesRef.current.has(c.hash)) {
+          tasks.push({ hash: c.hash, isIncoming: true });
         }
       }
     }
-  }, [speedSearchQuery, pushViewMode, directionFilter, commits, incomingCommits, filesByHash, incomingFilesByHash, loadingCommitHash, loadingIncomingHash, onRequestCommitFiles, onRequestIncomingCommitFiles, repoStatus.repoId]);
+
+    if (tasks.length === 0) return;
+
+    const CONCURRENCY_LIMIT = 4;
+    let taskIndex = 0;
+
+    const runNext = () => {
+      if (cancelled) return;
+      while (activePrefetchCountRef.current < CONCURRENCY_LIMIT && taskIndex < tasks.length) {
+        const task = tasks[taskIndex++];
+        activePrefetchCountRef.current++;
+        if (task.isIncoming) {
+          inFlightIncomingHashesRef.current.add(task.hash);
+          void onRequestIncomingCommitFiles!(repoStatus.repoId, task.hash)
+            .then(fetched => {
+              setIncomingFilesByHash(prev => ({ ...prev, [task.hash]: fetched }));
+            })
+            .catch(() => {
+              setIncomingFilesByHash(prev => ({ ...prev, [task.hash]: [] }));
+            })
+            .finally(() => {
+              inFlightIncomingHashesRef.current.delete(task.hash);
+              activePrefetchCountRef.current = Math.max(0, activePrefetchCountRef.current - 1);
+              scheduleNextPrefetchRef.current();
+            });
+        } else {
+          inFlightCommitHashesRef.current.add(task.hash);
+          void onRequestCommitFiles(repoStatus.repoId, task.hash)
+            .then(fetched => {
+              setFilesByHash(prev => ({ ...prev, [task.hash]: fetched }));
+            })
+            .catch(() => {
+              setFilesByHash(prev => ({ ...prev, [task.hash]: [] }));
+            })
+            .finally(() => {
+              inFlightCommitHashesRef.current.delete(task.hash);
+              activePrefetchCountRef.current = Math.max(0, activePrefetchCountRef.current - 1);
+              scheduleNextPrefetchRef.current();
+            });
+        }
+      }
+    };
+
+    scheduleNextPrefetchRef.current = runNext;
+    runNext();
+
+    return () => {
+      cancelled = true;
+      if (scheduleNextPrefetchRef.current === runNext) {
+        scheduleNextPrefetchRef.current = () => {};
+      }
+    };
+  }, [speedSearchQuery, pushViewMode, directionFilter, commits, incomingCommits, loadingCommitHash, loadingIncomingHash, onRequestCommitFiles, onRequestIncomingCommitFiles, repoStatus.repoId]);
 
   const toggleCommitSelection = (hash: string) => {
     setMultiSelectHashes(prev => {

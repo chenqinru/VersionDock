@@ -465,6 +465,8 @@ export class GitService {
   private _pendingDetachedTag: string | undefined;
   // Cache of commit hash -> diff stats (immutable commit properties)
   private commitStatsCache = new Map<string, { filesChanged: number; additions: number; deletions: number }>();
+  // Cache of stash commit OID -> file entries (immutable commit properties)
+  private stashFilesCache = new Map<string, Array<{ path: string; status: string }>>();
   // Cache of { lastCommit: string; splitHash: string } keyed by prefix
   private subtreeSplitCache = new Map<string, { lastCommit: string; splitHash: string }>();
   // Lock to sequence expensive subtree split executions and prevent CPU exhaustion
@@ -1877,44 +1879,85 @@ export class GitService {
     return { unpushed, incoming };
   }
 
-  private parseCommitShortStats(raw: string): Record<string, { filesChanged: number; additions: number; deletions: number }> {
+  private parseCommitStats(raw: string): Record<string, { filesChanged: number; additions: number; deletions: number }> {
     const result: Record<string, { filesChanged: number; additions: number; deletions: number }> = {};
     for (const block of raw.split('\x1E')) {
       if (!block.trim()) continue;
       const lines = block.trim().split('\n');
       const hash = lines[0]?.trim();
       if (!hash) continue;
-      const statLine = lines.find(l => l.includes('changed'));
-      if (statLine) {
-        const files = statLine.match(/(\d+) files? changed/);
-        const ins = statLine.match(/(\d+) insertion/);
-        const del = statLine.match(/(\d+) deletion/);
-        const stat = {
-          filesChanged: files ? parseInt(files[1], 10) : 0,
-          additions: ins ? parseInt(ins[1], 10) : 0,
-          deletions: del ? parseInt(del[1], 10) : 0,
-        };
-        result[hash] = stat;
-        this.commitStatsCache.set(hash, stat);
+
+      let filesChanged = 0;
+      let additions = 0;
+      let deletions = 0;
+      let hasNumstat = false;
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split('\t');
+        if (parts.length >= 3) {
+          hasNumstat = true;
+          filesChanged++;
+          if (parts[0] !== '-') {
+            const add = parseInt(parts[0], 10);
+            if (!isNaN(add)) additions += add;
+          }
+          if (parts[1] !== '-') {
+            const del = parseInt(parts[1], 10);
+            if (!isNaN(del)) deletions += del;
+          }
+        }
       }
+
+      let statLine: string | undefined;
+      if (!hasNumstat) {
+        // 兼容短文本兜底
+        statLine = lines.find(l => /(\d+)\s+files? changed|(\d+)\s+insertions?|(\d+)\s+deletions?/i.test(l));
+        if (statLine) {
+          const files = statLine.match(/(\d+)\s+files? changed/i);
+          const ins = statLine.match(/(\d+)\s+insertions?/i);
+          const del = statLine.match(/(\d+)\s+deletions?/i);
+          filesChanged = files ? parseInt(files[1], 10) : 0;
+          additions = ins ? parseInt(ins[1], 10) : 0;
+          deletions = del ? parseInt(del[1], 10) : 0;
+        }
+      }
+
+      if (!hasNumstat && !statLine) {
+        // 既没有 numstat 也没有统计摘要行，说明 Git 未输出该提交的统计
+        // 跳过缓存，避免将“统计不可用”错误显示为“0 files changed”
+        continue;
+      }
+
+      const stat = { filesChanged, additions, deletions };
+      result[hash] = stat;
+      this.commitStatsCache.set(hash, stat);
     }
     return result;
   }
 
+  private async runCommitStatsLog(rangeArgs: string[]): Promise<string> {
+    try {
+      return await this.git.raw(['log', ...rangeArgs, '--format=%x1E%H', '--diff-merges=first-parent', '--numstat']);
+    } catch {
+      return await this.git.raw(['log', ...rangeArgs, '--format=%x1E%H', '--numstat']).catch(() => '');
+    }
+  }
+
   async getUnpushedCommitsStats(): Promise<Record<string, { filesChanged: number; additions: number; deletions: number }>> {
     try {
-      const raw = await this.git.raw(['log', '@{u}..HEAD', '--format=%x1E%H', '--shortstat']);
-      return this.parseCommitShortStats(raw);
+      const raw = await this.runCommitStatsLog(['@{u}..HEAD']);
+      if (raw) return this.parseCommitStats(raw);
+      throw new Error('No upstream stats');
     } catch {
       try {
         const remotes = await this.git.getRemotes();
-        let raw: string;
-        if (remotes.length === 0) {
-          raw = await this.git.raw(['log', 'HEAD', '--max-count=100', '--format=%x1E%H', '--shortstat']);
-        } else {
-          raw = await this.git.raw(['log', 'HEAD', '--not', '--remotes', '--format=%x1E%H', '--shortstat']);
-        }
-        return this.parseCommitShortStats(raw);
+        const range = remotes.length === 0
+          ? ['HEAD', '--max-count=100']
+          : ['HEAD', '--not', '--remotes'];
+        const raw = await this.runCommitStatsLog(range);
+        return this.parseCommitStats(raw);
       } catch {
         return {};
       }
@@ -1925,8 +1968,8 @@ export class GitService {
     try {
       const tracking = (await this.git.raw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']).catch(() => '')).trim();
       if (!tracking) return {};
-      const raw = await this.git.raw(['log', `HEAD..${tracking}`, '--format=%x1E%H', '--shortstat']);
-      return this.parseCommitShortStats(raw);
+      const raw = await this.runCommitStatsLog([`HEAD..${tracking}`]);
+      return this.parseCommitStats(raw);
     } catch {
       return {};
     }
@@ -4051,32 +4094,26 @@ export class GitService {
         ? rawFullMessage.slice(branchMatch[0].length).trim()
         : rawFullMessage || message;
 
-      entries.push({ ref, oid: oid || undefined, index, message, fullMessage, date, branch, files: [] });
+      const cachedFiles = oid ? this.stashFilesCache.get(oid) : undefined;
+      entries.push({
+        ref,
+        oid: oid || undefined,
+        index,
+        message,
+        fullMessage,
+        date,
+        branch,
+        files: cachedFiles ? [...cachedFiles] : [],
+      });
     }
-
-    const limit = 8;
-    const executing = new Set<Promise<void>>();
-    for (const entry of entries) {
-      const p = (async () => {
-        try {
-          entry.files = await this.getStashFiles(entry.oid ?? entry.ref);
-        } catch {
-          entry.files = [];
-        }
-      })();
-      executing.add(p);
-      const clean = () => executing.delete(p);
-      p.then(clean, clean);
-      if (executing.size >= limit) {
-        await Promise.race(executing);
-      }
-    }
-    await Promise.all(executing);
 
     return entries;
   }
 
   async getStashFiles(stashRef: string): Promise<Array<{ path: string; status: string }>> {
+    const cached = this.stashFilesCache.get(stashRef);
+    if (cached) return [...cached];
+
     const files: Array<{ path: string; status: string }> = [];
     try {
       const fileRaw = await this.rawPathSafe(['stash', 'show', '--name-status', '-z', stashRef]);
@@ -4096,6 +4133,9 @@ export class GitService {
       }
     } catch { /* stash^3 may not exist for tracked-only stashes */ }
 
+    if (/^[0-9a-f]{40,64}$/i.test(stashRef)) {
+      this.stashFilesCache.set(stashRef, files);
+    }
     return files;
   }
 

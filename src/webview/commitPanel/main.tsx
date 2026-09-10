@@ -562,6 +562,9 @@ export function CommitApp() {
   const activeCommitMessageHistoryRequestIdRef = useRef<string | null>(null);
   const pendingCommitMessagesRef = useRef<Map<string, string>>(new Map());
   const successfulCommitMessagesRef = useRef<string[]>([]);
+  const activeAmendMessageRequestIdRef = useRef<{ requestId: string; repoId: string } | null>(null);
+  const lastKnownHeadHashesRef = useRef<Map<string, string>>(new Map());
+  const lastSyncStateRef = useRef<Map<string, string>>(new Map());
 
   // ── Selected file (highlighted when diff is open or on right-click) ──────
   const [selectedFile, setSelectedFile] = useState<FileStatus | null>(null);
@@ -878,6 +881,22 @@ export function CommitApp() {
             }
           }
 
+          // 如果仓库的 HEAD commit 发生变化，自动重置该仓库的 Amend 标记
+          if (Array.isArray(msg.status?.repos)) {
+            const lastHeadHashes = lastKnownHeadHashesRef.current;
+            const currentAmends = useCommitStore.getState().amendFlags;
+            for (const repo of msg.status.repos) {
+              const headHash = repo.branch?.lastCommitHash;
+              if (headHash) {
+                const prevHead = lastHeadHashes.get(repo.repoId);
+                if (prevHead && prevHead !== headHash && currentAmends[repo.repoId]) {
+                  store.setAmend(repo.repoId, false);
+                }
+                lastHeadHashes.set(repo.repoId, headHash);
+              }
+            }
+          }
+
           // Always keep stash and shelve count badges updated on status updates
           const currentGitRepos = (msg.status?.repos ?? []).filter(r => msg.repos.find(m => m.id === r.repoId)?.kind !== 'svn');
           currentGitRepos.forEach(r => {
@@ -885,7 +904,20 @@ export function CommitApp() {
             requestShelveList(r.repoId, true);
           });
           if (currentGitRepos.length > 0) {
-            requestSyncCounts(currentGitRepos.map(r => r.repoId));
+            const syncStateMap = lastSyncStateRef.current;
+            const reposNeedingSync: string[] = [];
+            for (const r of currentGitRepos) {
+              const b = r.branch;
+              const currentSyncSignature = `${b?.lastCommitHash ?? ''}:${b?.upstream ?? ''}:${b?.name ?? ''}:${b?.aheadBehind?.ahead ?? 0}:${b?.aheadBehind?.behind ?? 0}:${b?.isGone ? 1 : 0}:${r.isDetachedHead ? (b?.detachedHash ?? '1') : '0'}`;
+              const prevSyncSignature = syncStateMap.get(r.repoId);
+              if (isManualRefresh || prevSyncSignature === undefined || prevSyncSignature !== currentSyncSignature) {
+                syncStateMap.set(r.repoId, currentSyncSignature);
+                reposNeedingSync.push(r.repoId);
+              }
+            }
+            if (reposNeedingSync.length > 0) {
+              requestSyncCounts(reposNeedingSync);
+            }
           }
 
           const currentTab = activeTabRef.current;
@@ -931,12 +963,21 @@ export function CommitApp() {
             store.setWorktreeDiffDiff(msg.diff);
           }
           break;
+        case 'COMMIT_AMEND_RESET':
+          for (const rId of msg.repoIds) {
+            store.setAmend(rId, false);
+          }
+          break;
         case 'COMMIT_OP_RESULT':
           store.setLoading(false);
           {
             const committedMessage = pendingCommitMessagesRef.current.get(msg.requestId);
             pendingCommitMessagesRef.current.delete(msg.requestId);
-            if (msg.ok) {
+            if (msg.committedRepoIds && msg.committedRepoIds.length > 0) {
+              for (const rId of msg.committedRepoIds) {
+                store.setAmend(rId, false);
+              }
+            } else if (msg.ok) {
               if (msg.repoId) {
                 store.setAmend(msg.repoId, false);
               } else {
@@ -947,16 +988,16 @@ export function CommitApp() {
                   }
                 }
               }
-              if (committedMessage) {
-                successfulCommitMessagesRef.current = mergeCommitMessageHistory(
-                  [committedMessage],
-                  successfulCommitMessagesRef.current,
-                );
-                setCommitMessageHistory(prev => mergeCommitMessageHistory(
-                  successfulCommitMessagesRef.current,
-                  prev,
-                ));
-              }
+            }
+            if (msg.ok && committedMessage) {
+              successfulCommitMessagesRef.current = mergeCommitMessageHistory(
+                [committedMessage],
+                successfulCommitMessagesRef.current,
+              );
+              setCommitMessageHistory(prev => mergeCommitMessageHistory(
+                successfulCommitMessagesRef.current,
+                prev,
+              ));
             }
           }
           if (!msg.ok && msg.error && msg.error !== 'Cancelled' && !msg.handled) {
@@ -972,11 +1013,24 @@ export function CommitApp() {
             msg.messages,
           ));
           break;
-        case 'COMMIT_LAST_COMMIT_MESSAGE_RESULT':
+        case 'COMMIT_LAST_COMMIT_MESSAGE_RESULT': {
+          const activeAmend = activeAmendMessageRequestIdRef.current;
+          if (!activeAmend || activeAmend.requestId !== msg.requestId || (msg.repoId && activeAmend.repoId !== msg.repoId)) {
+            break;
+          }
+          activeAmendMessageRequestIdRef.current = null;
+          const targetRepoId = msg.repoId ?? activeAmend.repoId;
+          const isStillAmending = useCommitStore.getState().amendFlags[targetRepoId] ?? false;
+          if (!isStillAmending) {
+            break;
+          }
           if (msg.message && !useCommitStore.getState().commitMessage.trim()) {
             store.setCommitMessage(msg.message);
-          } else if (msg.error) notifyError(msg.error, msg.repoId);
+          } else if (msg.error) {
+            notifyError(msg.error, msg.repoId);
+          }
           break;
+        }
         case 'COMMIT_GENERATE_MESSAGE_RESULT':
           if (activeGenerateRequestIdRef.current !== msg.requestId) break;
           activeGenerateRequestIdRef.current = null;
@@ -3028,7 +3082,13 @@ export function CommitApp() {
               const newValue = !(store.amendFlags[repoId] ?? false);
               store.setAmend(repoId, newValue);
               if (newValue) {
-                send({ type: 'COMMIT_GET_LAST_COMMIT_MESSAGE', requestId: generateId(), repoId });
+                const requestId = generateId();
+                activeAmendMessageRequestIdRef.current = { requestId, repoId };
+                send({ type: 'COMMIT_GET_LAST_COMMIT_MESSAGE', requestId, repoId });
+              } else {
+                if (activeAmendMessageRequestIdRef.current?.repoId === repoId) {
+                  activeAmendMessageRequestIdRef.current = null;
+                }
               }
             }}
             onCommit={() => doCommit(false)}
@@ -3445,6 +3505,9 @@ export function CommitApp() {
         }
         if (isSvn) {
           repoItems = svnContextMenuItems(repoItems, hasUntracked);
+        }
+        if (repos.length <= 1) {
+          repoItems = repoItems.filter(item => ('id' in item ? item.id !== 'hide-repo' : true));
         }
         return (
           <ContextMenu

@@ -163,7 +163,8 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_WORKTREE_DIFF_STARTED'; repoId: string; repoName: string; repoColor: string; baseRef: string; currentRef: string; files: FileStatus[] }
   | { type: 'COMMIT_WORKTREE_DIFF_FILES_RESULT'; requestId: string; repoId: string; baseRef: string; currentRef: string; files: FileStatus[]; error?: string }
   | { type: 'COMMIT_WORKTREE_DIFF_RESULT'; requestId: string; diff: FileDiff | null; error?: string }
-  | { type: 'COMMIT_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string; repoId?: string; handled?: boolean }
+  | { type: 'COMMIT_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string; repoId?: string; committedRepoIds?: string[]; handled?: boolean }
+  | { type: 'COMMIT_AMEND_RESET'; repoIds: string[] }
   | { type: 'COMMIT_BRANCHES_UPDATE'; repoId: string; branches: BranchInfo[] }
   | { type: 'COMMIT_REMOTES_RESULT'; requestId: string; remotes: string[]; error?: string }
   | { type: 'COMMIT_LAST_COMMIT_MESSAGE_RESULT'; requestId: string; message: string; error?: string; repoId?: string }

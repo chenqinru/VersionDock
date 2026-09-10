@@ -562,7 +562,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       || msg.type === 'PUSH_UNPUSHED_RESULT'
       || msg.type === 'WORKTREE_LIST_RESULT'
       || msg.type === 'SUBTREE_LIST_RESULT'
-      || msg.type === 'SUBTREE_STATUS_RESULT';
+      || msg.type === 'SUBTREE_STATUS_RESULT'
+      || msg.type === 'COMMIT_AMEND_RESET'
+      || msg.type === 'PUSH_COMMITS_STATS_UPDATE';
     if (this.replyTarget.getStore() === 'undocked') {
       this.undockedPanel?.postToCommit(msg);
       if (broadcast) this.view?.webview.postMessage(msg);
@@ -1308,7 +1310,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   async hideRepo(repoId: string): Promise<void> {
+    const allMetas = this.manager.getRepoMetas();
     const current = this.getHiddenRepoIds();
+    const remainingVisible = allMetas.filter(m => !current.includes(m.id) && m.id !== repoId);
+    if (remainingVisible.length === 0) {
+      vscode.window.showWarningMessage(t('VersionDock: At least one repository must remain visible.'));
+      return;
+    }
     if (!current.includes(repoId)) {
       await this.setHiddenRepoIds([...current, repoId]);
     }
@@ -1321,11 +1329,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   async manageHiddenRepos(): Promise<void> {
     const allMetas = this.manager.getRepoMetas();
-    if (allMetas.length <= 1) {
+    if (allMetas.length === 0) return;
+    const hidden = this.getHiddenRepoIds();
+    if (allMetas.length <= 1 && hidden.length === 0) {
       vscode.window.showInformationMessage(t('VersionDock: Only one repository in current workspace.'));
       return;
     }
-    const hidden = this.getHiddenRepoIds();
     const items: Array<vscode.QuickPickItem & { repoId: string }> = allMetas.map(meta => {
       const isVisible = !hidden.includes(meta.id);
       return {
@@ -2819,6 +2828,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }, msg.noVerify);
           }, 'commit', t('VersionDock [{0}]: Committing changes…', repo.meta.name));
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, output, repoId: msg.repoId });
+          this.post({ type: 'COMMIT_AMEND_RESET', repoIds: [msg.repoId] });
           this.logger?.info('Commit', 'Commit completed', {
             repoId: msg.repoId,
             requestId: msg.requestId,
@@ -2866,6 +2876,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           await repo.commit(msg.message, msg.amend, creds, detail => {
             this.logger?.debug('Commit', detail, { repoId: msg.repoId, requestId: msg.requestId });
           }, msg.noVerify);
+          this.post({ type: 'COMMIT_AMEND_RESET', repoIds: [msg.repoId] });
           if (repo.kind !== 'svn') {
             const pushResult = await runPushWithProtection(repo, {
               repoName: this.manager.getRepoMeta(msg.repoId)?.name ?? path.basename(repo.rootPath),
@@ -3105,14 +3116,25 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 if (committedRepoIds.size > 0) {
                   errorMessage = `${t('VersionDock: {0} repositories committed successfully, {1} failed:', committedRepoIds.size, commitErrors.length)}\n\n${errorMessage}`;
                 }
-                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errorMessage });
+                this.post({
+                  type: 'COMMIT_OP_RESULT',
+                  requestId: msg.requestId,
+                  ok: false,
+                  error: errorMessage,
+                  committedRepoIds: Array.from(committedRepoIds),
+                });
               } else {
                 this.logger?.info('Commit', 'Multi-repository commit completed', {
                   repositoryCount: msg.repos.length,
                   requestId: msg.requestId,
                   durationMs: Date.now() - startedAt,
                 });
-                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+                this.post({
+                  type: 'COMMIT_OP_RESULT',
+                  requestId: msg.requestId,
+                  ok: true,
+                  committedRepoIds: Array.from(committedRepoIds),
+                });
                 this.logProvider?.refresh({ repoIds: msg.repos.map(r => r.repoId) });
               }
             } else {
@@ -3125,7 +3147,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                   requestId: msg.requestId,
                   durationMs: Date.now() - startedAt,
                 });
-                this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true });
+                this.post({
+                  type: 'COMMIT_OP_RESULT',
+                  requestId: msg.requestId,
+                  ok: true,
+                  committedRepoIds: Array.from(committedRepoIds),
+                });
                 const singleRepoName = msg.repos.length === 1 ? this.manager.getRepoMeta(msg.repos[0].repoId)?.name : undefined;
                 if (singleRepoName) {
                   vscode.window.showInformationMessage(t('VersionDock [{0}]: Commits committed and pushed successfully.', singleRepoName));
@@ -3147,7 +3174,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 });
 
                 if (committedRepoIds.size === 0 && totalFailures === 0 && totalCancelled > 0) {
-                  this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled' });
+                  this.post({
+                    type: 'COMMIT_OP_RESULT',
+                    requestId: msg.requestId,
+                    ok: false,
+                    error: 'Cancelled',
+                    committedRepoIds: Array.from(committedRepoIds),
+                  });
                 } else {
                   const details = [...commitErrors, ...pushErrors];
                   let summaryHeader: string;
@@ -3186,10 +3219,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
                     );
                   }
                   const finalError = details.length > 0 ? `${summaryHeader}\n\n${details.join('\n')}` : summaryHeader;
-                  this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: finalError });
+                  this.post({
+                    type: 'COMMIT_OP_RESULT',
+                    requestId: msg.requestId,
+                    ok: false,
+                    error: finalError,
+                    committedRepoIds: Array.from(committedRepoIds),
+                  });
                 }
                 this.logProvider?.refresh({ repoIds: Array.from(committedRepoIds) });
               }
+            }
+            if (committedRepoIds.size > 0) {
+              this.post({ type: 'COMMIT_AMEND_RESET', repoIds: Array.from(committedRepoIds) });
             }
             const status = await this.refreshStatusAfterOp();
             this.invalidateSubtreeStatus(undefined, { remote: false });
