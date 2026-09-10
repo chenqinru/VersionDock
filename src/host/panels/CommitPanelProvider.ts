@@ -2468,6 +2468,25 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private async handleMessage(msg: CommitToHostMsg): Promise<void> {
     switch (msg.type) {
+      case 'COMMIT_READ_CLIPBOARD': {
+        try {
+          const text = await vscode.env.clipboard.readText();
+          this.post({ type: 'COMMIT_READ_CLIPBOARD_RESULT', requestId: msg.requestId, text });
+        } catch {
+          this.post({ type: 'COMMIT_READ_CLIPBOARD_RESULT', requestId: msg.requestId, text: '' });
+        }
+        break;
+      }
+
+      case 'COMMIT_WRITE_CLIPBOARD': {
+        try {
+          await vscode.env.clipboard.writeText(msg.text);
+        } catch {
+          // ignore
+        }
+        break;
+      }
+
       case 'COMMIT_WEBVIEW_ERROR': {
         this.logger?.error('CommitPanelWebview', msg.message, msg.stack, { componentStack: msg.componentStack });
         break;

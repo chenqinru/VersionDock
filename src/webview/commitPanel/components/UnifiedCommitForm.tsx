@@ -8,6 +8,31 @@ import { baseNameFromPath } from '../../shared/pathUtils';
 import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 import { readableAccentColor } from '../../shared/branchColors';
 import { CommitMessageHistoryModal } from './CommitMessageHistoryModal';
+import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
+import { readClipboardText, writeClipboardText } from '../../shared/clipboard';
+
+function CutIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ flexShrink: 0 }}
+      aria-hidden="true"
+    >
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <line x1="20" y1="4" x2="8.12" y2="15.88" />
+      <line x1="14.47" y1="14.48" x2="20" y2="20" />
+      <line x1="8.12" y1="8.12" x2="12" y2="12" />
+    </svg>
+  );
+}
 
 interface Props {
   message: string;
@@ -439,6 +464,116 @@ export function UnifiedCommitForm({
     });
   }, [onMessageChange]);
 
+  const [textareaContextMenu, setTextareaContextMenu] = useState<{
+    x: number;
+    y: number;
+    start: number;
+    end: number;
+    selectedText: string;
+    hasSelection: boolean;
+    isReadOnly: boolean;
+  } | null>(null);
+
+  const handleTextareaContextMenu = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    const selectedText = el.value.slice(start, end);
+    const hasSelection = start !== end && selectedText.length > 0;
+    const isReadOnly = Boolean(generatingMessage);
+
+    setTextareaContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      start,
+      end,
+      selectedText,
+      hasSelection,
+      isReadOnly,
+    });
+  }, [generatingMessage]);
+
+  const handleContextMenuSelect = useCallback(async (id: string) => {
+    if (!textareaContextMenu) return;
+    const { start, end, selectedText, hasSelection, isReadOnly } = textareaContextMenu;
+    const currentMsg = messageRef.current;
+
+    if (id === 'cut') {
+      if (isReadOnly || !hasSelection) return;
+      void writeClipboardText(selectedText);
+      const next = currentMsg.slice(0, start) + currentMsg.slice(end);
+      historyIndexRef.current = -1;
+      historyDraftRef.current = next;
+      appliedHistoryMessageRef.current = null;
+      onMessageChange(next);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(start, start);
+        }
+      });
+    } else if (id === 'copy') {
+      if (!hasSelection) return;
+      void writeClipboardText(selectedText);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(start, end);
+        }
+      });
+    } else if (id === 'paste') {
+      if (isReadOnly) return;
+      const pastedText = await readClipboardText();
+      if (!pastedText) {
+        requestAnimationFrame(() => textareaRef.current?.focus());
+        return;
+      }
+      const next = currentMsg.slice(0, start) + pastedText + currentMsg.slice(end);
+      historyIndexRef.current = -1;
+      historyDraftRef.current = next;
+      appliedHistoryMessageRef.current = null;
+      onMessageChange(next);
+      const nextPos = start + pastedText.length;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(nextPos, nextPos);
+        }
+      });
+    }
+  }, [textareaContextMenu, onMessageChange]);
+
+  const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
+  const modKey = isMac ? '⌘ ' : 'Ctrl+';
+
+  const textareaContextMenuItems: ContextMenuEntry[] = textareaContextMenu ? [
+    {
+      id: 'cut',
+      label: t('Cut'),
+      icon: <CutIcon />,
+      shortcut: `${modKey}X`,
+      disabled: !textareaContextMenu.hasSelection || textareaContextMenu.isReadOnly,
+    },
+    {
+      id: 'copy',
+      label: t('Copy'),
+      icon: 'copy',
+      shortcut: `${modKey}C`,
+      disabled: !textareaContextMenu.hasSelection,
+    },
+    {
+      id: 'paste',
+      label: t('Paste'),
+      icon: 'clippy',
+      shortcut: `${modKey}V`,
+      disabled: textareaContextMenu.isReadOnly,
+    },
+  ] : [];
+
   useEffect(() => {
     window.addEventListener('resize', resizeTextarea);
     return () => window.removeEventListener('resize', resizeTextarea);
@@ -676,6 +811,7 @@ export function UnifiedCommitForm({
           placeholder={generatingMessage ? t('Generating commit message…') : t('Commit message (Cmd+Enter to commit)')}
           readOnly={generatingMessage}
           rows={2}
+          onContextMenu={handleTextareaContextMenu}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && canCommit) {
               e.preventDefault();
@@ -810,6 +946,17 @@ export function UnifiedCommitForm({
           loading={messageHistoryLoading}
           onSelect={applyMessageFromHistory}
           onClose={() => setMessageHistoryOpen(false)}
+        />
+      )}
+
+      {textareaContextMenu && (
+        <ContextMenu
+          x={textareaContextMenu.x}
+          y={textareaContextMenu.y}
+          items={textareaContextMenuItems}
+          minWidth={112}
+          onSelect={handleContextMenuSelect}
+          onClose={() => setTextareaContextMenu(null)}
         />
       )}
 

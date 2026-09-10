@@ -1,4 +1,7 @@
 {
+  "Cut": "剪切",
+  "Copy": "复制",
+  "Paste": "粘贴",
   "VersionDock: Fetching all remotes": "VersionDock：正在抓取所有远程",
   "Merge: {0}": "合并：{0}",
   "VersionDock: No conflict markers found in {0}": "VersionDock：在 {0} 中未找到冲突标记",

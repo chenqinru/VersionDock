@@ -4,8 +4,10 @@ import { Codicon } from '../../shared/Codicon';
 export interface ContextMenuItem {
   id: string;
   label: string;
-  icon: string;
+  icon?: string | React.ReactNode;
   danger?: boolean;
+  disabled?: boolean;
+  shortcut?: string;
   separator?: false;
 }
 export interface ContextMenuSeparator {
@@ -19,9 +21,10 @@ interface Props {
   items: ContextMenuEntry[];
   onSelect: (id: string) => void;
   onClose: () => void;
+  minWidth?: number | string;
 }
 
-export function ContextMenu({ x, y, items, onSelect, onClose }: Props) {
+export function ContextMenu({ x, y, items, onSelect, onClose, minWidth }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -63,6 +66,7 @@ export function ContextMenu({ x, y, items, onSelect, onClose }: Props) {
     left: pos?.x ?? x,
     zIndex: 9999,
     visibility: pos ? 'visible' : 'hidden',
+    ...(minWidth !== undefined ? { minWidth: typeof minWidth === 'number' ? `${minWidth}px` : minWidth } : {}),
   };
 
   return (
@@ -72,16 +76,35 @@ export function ContextMenu({ x, y, items, onSelect, onClose }: Props) {
           return <div key={i} style={styles.separator} />;
         }
         const it = item as ContextMenuItem;
+        const isDisabled = Boolean(it.disabled);
         return (
           <div
             key={it.id}
-            style={styles.item(!!it.danger)}
-            onClick={() => { onSelect(it.id); onClose(); }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--vscode-list-hoverBackground)')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            style={{
+              ...styles.item(!!it.danger),
+              ...(isDisabled ? styles.disabledItem : {}),
+            }}
+            onClick={() => {
+              if (isDisabled) return;
+              onSelect(it.id);
+              onClose();
+            }}
+            onMouseEnter={e => {
+              if (!isDisabled) e.currentTarget.style.background = 'var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground))';
+            }}
+            onMouseLeave={e => {
+              if (!isDisabled) e.currentTarget.style.background = 'transparent';
+            }}
           >
-            <Codicon name={it.icon} style={styles.icon} />
-            <span>{it.label}</span>
+            {typeof it.icon === 'string' ? (
+              <Codicon name={it.icon} style={styles.icon} />
+            ) : it.icon ? (
+              <span style={styles.customIcon}>{it.icon}</span>
+            ) : (
+              <span style={styles.iconPlaceholder} />
+            )}
+            <span style={styles.label}>{it.label}</span>
+            {it.shortcut && <span style={styles.shortcut}>{it.shortcut}</span>}
           </div>
         );
       })}
@@ -95,7 +118,7 @@ const styles = {
     border: '1px solid var(--vscode-menu-border, var(--vscode-panel-border))',
     borderRadius: '4px',
     boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-    minWidth: '180px',
+    minWidth: '160px',
     width: 'max-content',
     padding: '4px 0',
     fontSize: '12px',
@@ -106,8 +129,8 @@ const styles = {
   item: (danger: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    padding: '5px 12px',
+    gap: '6px',
+    padding: '4px 10px',
     cursor: 'pointer',
     background: 'transparent',
     whiteSpace: 'nowrap' as const,
@@ -116,6 +139,34 @@ const styles = {
       : 'var(--vscode-menu-foreground, var(--vscode-foreground))',
     transition: 'background 0.08s',
   }),
+  disabledItem: {
+    opacity: 0.45,
+    cursor: 'default',
+    pointerEvents: 'none' as const,
+  },
+  customIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '14px',
+    height: '14px',
+    flexShrink: 0,
+    fontSize: '14px',
+  },
+  iconPlaceholder: {
+    width: '14px',
+    height: '14px',
+    flexShrink: 0,
+  },
+  label: {
+    flexGrow: 1,
+  },
+  shortcut: {
+    marginLeft: '14px',
+    fontSize: '11px',
+    color: 'var(--vscode-descriptionForeground)',
+    opacity: 0.85,
+  },
   icon: {
     fontSize: '14px',
     flexShrink: 0,

@@ -1,4 +1,7 @@
 {
+  "Cut": "Cut",
+  "Copy": "Copy",
+  "Paste": "Paste",
   "VersionDock: Fetching all remotes": "VersionDock: Fetching all remotes",
   "Merge: {0}": "Merge: {0}",
   "VersionDock: No conflict markers found in {0}": "VersionDock: No conflict markers found in {0}",

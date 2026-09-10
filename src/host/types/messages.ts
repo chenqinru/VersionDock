@@ -213,11 +213,14 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_SELECT_ALL' }
   | { type: 'COMMIT_INVERT_SELECTION' }
   | { type: 'COMMIT_SET_FILE_VIEW_MODE'; mode: 'flat' | 'tree' }
-  | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab };
+  | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab }
+  | { type: 'COMMIT_READ_CLIPBOARD_RESULT'; requestId: string; text: string };
 
 // ─── Commit Panel: WebView → Host ────────────────────────────────────────────
 
 export type CommitToHostMsg =
+  | { type: 'COMMIT_READ_CLIPBOARD'; requestId: string }
+  | { type: 'COMMIT_WRITE_CLIPBOARD'; text: string }
   | { type: 'COMMIT_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
   | { type: 'COMMIT_REQUEST_STATUS'; refreshSubtrees?: boolean }
   | { type: 'COMMIT_SELECTION_STATE_CHANGED'; isAllSelected: boolean; hasSelectable: boolean }
