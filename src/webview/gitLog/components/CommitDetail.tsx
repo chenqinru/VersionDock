@@ -398,7 +398,8 @@ function SingleTreeDirRow({ node, depth, open, onToggle, onDirectoryContextMenu,
   return (
     <div
       style={isRepoRoot ? styles.repoRootRow : styles.dirRow}
-      className="versiondock-detail-row"
+      className="versiondock-detail-row versiondock-tree-dir"
+      data-list-row=""
       data-selected={false}
       title={node.fullPath}
       onClick={onToggle}
@@ -576,7 +577,8 @@ function MergeParentChangeGroup({
       <div
         style={styles.mergeParentRow(expanded)}
         className="versiondock-detail-row"
-        data-selected={expanded}
+        data-list-row=""
+        data-selected={false}
         title={`${change.hash}\n${change.message}`}
         onClick={onToggle}
       >
@@ -596,7 +598,7 @@ function MergeParentChangeGroup({
             <TreeDir
               key={child.fullPath}
               node={child}
-              depth={0}
+              depth={1}
               selectedFile={selectedFile}
               onOpen={onOpen}
               onFileContextMenu={onFileContextMenu}
@@ -622,7 +624,7 @@ function MergeParentChangeGroup({
               <div
                 key={itemKey}
                 data-speed-search-key={itemKey}
-                style={styles.mergeParentFileRow(isSelected)}
+                style={styles.fileRow(isSelected)}
                 className="versiondock-detail-row"
                 data-selected={isSelected}
                 title={`${file.path}\n${t('Click to open diff')}`}
@@ -632,6 +634,7 @@ function MergeParentChangeGroup({
                   onFileContextMenu(event, file);
                 }}
               >
+                <div style={{ width: 18, flexShrink: 0 }} />
                 <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
                 <span style={styles.fileName(statusColor, isSelected)}>
                   <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
@@ -2445,7 +2448,7 @@ const styles = {
   mergeLoading: {
     fontSize: '11px',
     color: 'var(--vscode-descriptionForeground)',
-    padding: '4px 8px',
+    padding: '4px 8px 4px 22px',
   } as React.CSSProperties,
   mergeParentGroup: {
     borderTop: '1px solid var(--vscode-panel-border)',
@@ -2461,11 +2464,13 @@ const styles = {
     background: expanded ? 'var(--vscode-list-inactiveSelectionBackground)' : 'transparent',
     color: expanded ? 'var(--vscode-list-inactiveSelectionForeground)' : 'var(--vscode-foreground)',
     userSelect: 'none' as const,
+    boxSizing: 'border-box' as const,
   }),
   mergeChevron: {
     fontSize: '10px',
     color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
+    width: '14px',
   } as React.CSSProperties,
   mergeParentTitle: {
     flexShrink: 0,
@@ -2486,21 +2491,8 @@ const styles = {
     fontSize: '11px',
   } as React.CSSProperties,
   mergeParentFileList: {
-    marginLeft: '14px',
     marginBottom: '3px',
-    paddingLeft: '4px',
   } as React.CSSProperties,
-  mergeParentFileRow: (selected: boolean): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    minHeight: '22px',
-    padding: '2px 10px 2px 4px',
-    fontSize: '12px',
-    cursor: 'pointer',
-    background: selected ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent',
-    color: selected ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)',
-  }),
   noMergeConflicts: {
     padding: '8px 10px 7px',
     fontSize: '12px',

@@ -89,6 +89,11 @@ const aggregatedCommitDetailPanels = new Map<string, vscode.WebviewPanel>();
 const pendingSingleCommitDetails = new Map<string, Promise<void>>();
 const pendingAggregatedCommitDetails = new Map<string, Promise<void>>();
 
+function getLayoutDensity(): 'comfortable' | 'compact' {
+  const raw = vscode.workspace.getConfiguration('versiondock').get<string>('layoutDensity', 'comfortable');
+  return raw === 'compact' ? 'compact' : 'comfortable';
+}
+
 function singleCommitDetailKey(repoId: string, hash: string): string {
   return scopedKey(repoId, hash);
 }
@@ -279,7 +284,16 @@ async function createCommitDetailPanel(
   panel.iconPath = new vscode.ThemeIcon('git-commit');
   const panelKey = singleCommitDetailKey(repoId, hash);
   singleCommitDetailPanels.set(panelKey, panel);
+  const configListener = vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('versiondock.layoutDensity')) {
+      panel.webview.postMessage({
+        type: 'LAYOUT_DENSITY_UPDATE',
+        layoutDensity: getLayoutDensity(),
+      });
+    }
+  });
   panel.onDidDispose(() => {
+    configListener.dispose();
     if (singleCommitDetailPanels.get(panelKey) === panel) {
       singleCommitDetailPanels.delete(panelKey);
     }
@@ -327,6 +341,7 @@ async function createCommitDetailPanel(
     repoColor,
     repoKind: repo.kind,
     showRepoGrouping,
+    layoutDensity: getLayoutDensity(),
     mode: 'single',
     autoExplain,
     i18n,
@@ -672,7 +687,16 @@ async function createAggregatedCommitDetailPanel(
   panel.iconPath = new vscode.ThemeIcon('git-commit');
   const panelKey = aggregatedCommitDetailKey(commits, options.title ?? 'selection');
   aggregatedCommitDetailPanels.set(panelKey, panel);
+  const configListener = vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('versiondock.layoutDensity')) {
+      panel.webview.postMessage({
+        type: 'LAYOUT_DENSITY_UPDATE',
+        layoutDensity: getLayoutDensity(),
+      });
+    }
+  });
   panel.onDidDispose(() => {
+    configListener.dispose();
     if (aggregatedCommitDetailPanels.get(panelKey) === panel) {
       aggregatedCommitDetailPanels.delete(panelKey);
     }
@@ -709,6 +733,7 @@ async function createAggregatedCommitDetailPanel(
     repoColor: firstCommit.repoColor,
     repoKind: 'git',
     showRepoGrouping: repoMetas.length > 1 || involvedRepoIds.length > 1,
+    layoutDensity: getLayoutDensity(),
     mode: 'aggregate',
     autoExplain,
     i18n,
@@ -1092,6 +1117,7 @@ interface PanelData {
   repoColor: string;
   repoKind: string;
   showRepoGrouping: boolean;
+  layoutDensity: 'comfortable' | 'compact';
   i18n: WebviewI18nPayload;
   iconTheme: IconThemeData;
   hash: string;
@@ -1560,21 +1586,26 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       display: flex; align-items: center; gap: 5px;
       min-height: 22px; padding: 2px 10px 2px 4px;
       font-size: 12px; cursor: pointer; user-select: none;
+      box-sizing: border-box;
+      width: 100%;
     }
     .merge-parent-row:hover { background: var(--vscode-list-hoverBackground); }
     .merge-parent-row.active { background: var(--vscode-list-inactiveSelectionBackground); }
+    .merge-parent-row.active:hover { background: var(--vscode-list-hoverBackground); }
     .merge-parent-chevron { font-size: 10px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
     .merge-parent-commit-icon { font-size: 12px; color: var(--vscode-descriptionForeground); flex-shrink: 0; }
     .merge-parent-title { flex-shrink: 0; font-size: 11px; }
     .merge-parent-message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 11px; }
     .merge-parent-count { flex-shrink: 0; color: var(--vscode-descriptionForeground); font-size: 11px; }
-    .merge-parent-files { margin-left: 14px; margin-bottom: 3px; padding-left: 4px; }
-    .merge-parent-loading { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 8px; }
+    .merge-parent-files { margin-bottom: 3px; }
+    .merge-parent-loading { font-size: 11px; color: var(--vscode-descriptionForeground); padding: 4px 8px 4px 22px; }
 
     /* Flat rows */
     .file-row {
       display: flex; align-items: center; gap: 4px;
       min-height: 22px; padding: 2px 10px 2px 0; cursor: pointer; user-select: none;
+      box-sizing: border-box;
+      width: 100%;
     }
     .file-row:hover { background: var(--vscode-list-hoverBackground); }
     .file-row.ctx-active { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground)); }
@@ -1592,6 +1623,8 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .dir-row {
       display: flex; align-items: center; gap: 3px;
       min-height: 22px; padding: 2px 10px 2px 0; cursor: pointer; user-select: none;
+      box-sizing: border-box;
+      width: 100%;
     }
     .dir-row:hover { background: var(--vscode-list-hoverBackground); }
     .dir-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -1600,6 +1633,28 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       background: var(--versiondock-badge-background);
       color: var(--versiondock-badge-foreground);
       border-radius: 8px; padding: 0 5px; flex-shrink: 0; margin-left: auto;
+    }
+
+    /* ── 统一布局密度与悬浮系统（Layout Density & Floating Hover System） ── */
+    [data-density="comfortable"] .file-row,
+    [data-density="comfortable"] .dir-row,
+    [data-density="comfortable"] .merge-parent-row {
+      margin-left: 6px !important;
+      margin-right: 6px !important;
+      border-radius: 5px !important;
+      width: auto !important;
+      box-sizing: border-box !important;
+      transition: background 0.12s ease, color 0.12s ease !important;
+    }
+
+    [data-density="compact"] .file-row,
+    [data-density="compact"] .dir-row,
+    [data-density="compact"] .merge-parent-row {
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+      border-radius: 0 !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
     }
 
     /* Speed search */
@@ -1691,7 +1746,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
 
   </style>
 </head>
-<body>
+<body data-density="${escHtml(data.layoutDensity)}">
   <div class="toolbar">
     <span class="codicon codicon-git-commit" style="color:var(--vscode-descriptionForeground)"></span>
     <span class="toolbar-hash">${escHtml(data.shortHash)}</span>
@@ -2703,7 +2758,7 @@ ${leftPanelContent}
       }
     }
 
-    function renderFlat(files = FILES) {
+    function renderFlat(files = FILES, isMergeParent = false) {
       const buf = [];
       for (const f of files) {
         const status = normalizeStatus(f.status);
@@ -2714,7 +2769,7 @@ ${leftPanelContent}
         const isActive = speedSearchActiveKey === rowKey;
         buf.push(
           '<div class="file-row' + (isActive ? ' speed-search-active' : '') + '"' + fileDatasetAttrs(f, status) + ' data-search-key="' + escAttr(rowKey) + '" title="' + escAttr(f.path) + '\\n' + escAttr(t('Click to open diff')) + '">' +
-          '<div class="row-indent" style="width:4px"></div>' +
+          '<div class="row-indent" style="width:' + (isMergeParent ? 18 : 4) + 'px"></div>' +
           fileIconHtml(name) +
           '<span class="row-name" style="color:' + col + '">' + highlightText(name, speedSearchQuery) + '</span>' +
           (dir ? '<span class="row-dir">' + highlightText(dir, speedSearchQuery) + '</span>' : '') +
@@ -2749,7 +2804,7 @@ ${leftPanelContent}
         } else if (files.length === 0) {
           buf.push('<div class="merge-parent-loading">' + escText(t('No changed files')) + '</div>');
         } else if (viewMode === 'flat') {
-          buf.push(renderFlat(files));
+          buf.push(renderFlat(files, true));
         } else {
           const tree = buildTree(files, 'merge-parent-' + parent.hash, false);
           const treeBuf = [];
@@ -2758,7 +2813,7 @@ ${leftPanelContent}
             if (a.file && !b.file) return 1;
             return a.name.localeCompare(b.name);
           });
-          for (const child of sorted) renderTreeNode(collapseDirs(child), 0, treeBuf);
+          for (const child of sorted) renderTreeNode(collapseDirs(child), 1, treeBuf);
           buf.push(treeBuf.join(''));
         }
         buf.push('</div>');
@@ -3176,11 +3231,13 @@ ${leftPanelContent}
       });
     } catch(e) { /* badges are optional */ }
 
-    // ── Revert feedback ──
+    // ── Revert feedback & density update ──
     window.addEventListener('message', e => {
       if (e.data?.type === 'revertDone') {
         const row = document.querySelector('[data-path="' + CSS.escape(e.data.filePath) + '"]');
         if (row) { row.style.opacity = '0.4'; }
+      } else if (e.data?.type === 'LAYOUT_DENSITY_UPDATE') {
+        document.body.setAttribute('data-density', e.data.layoutDensity);
       }
     });
   </script>
