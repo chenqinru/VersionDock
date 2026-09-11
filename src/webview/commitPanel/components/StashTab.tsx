@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { StashEntry } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
@@ -464,7 +464,13 @@ export function StashTab({
   activeSpeedSearchKey,
   isFirst = false,
 }: Props) {
+  const [collapsed, setCollapsed] = useState(false);
   const projectColor = readableAccentColor(repoColor);
+
+  useEffect(() => {
+    if (!expansionCommand || expansionCommand.sequence === 0) return;
+    setCollapsed(!expansionCommand.expanded);
+  }, [expansionCommand]);
 
   return (
     <div className="versiondock-repo-section" data-first={isFirst ? 'true' : undefined} style={css.root}>
@@ -472,7 +478,9 @@ export function StashTab({
         <div
           className="versiondock-repo-header"
           style={{ ...css.repoHeader, '--repo-color': projectColor } as React.CSSProperties}
+          onClick={() => setCollapsed(v => !v)}
         >
+          <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '11px', flexShrink: 0 }} />
           <span style={css.dot(projectColor)} />
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
@@ -483,38 +491,42 @@ export function StashTab({
           )}
         </div>
       )}
-      {error && (
-        <div style={css.errorRow}>
-          <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
-          {error}
-        </div>
-      )}
-      {loading && stashes.length === 0 ? (
-        <div style={css.empty}>{t('Loading…')}</div>
-      ) : stashes.length === 0 ? (
-        <div style={css.empty}>{t('No stashes')}</div>
-      ) : (
-        stashes.map(entry => (
-          <StashRow
-            key={entry.oid ?? entry.ref}
-            entry={entry}
-            repoId={repoId}
-            viewMode={viewMode}
-            onApply={onApply}
-            onPop={onPop}
-            onDrop={onDrop}
-            onOpenFileDiff={onOpenFileDiff}
-            expansionCommand={expansionCommand}
-            stashFilesMap={stashFilesMap}
-            onRequestStashFiles={onRequestStashFiles}
-            speedSearchQuery={speedSearchQuery}
-            activeSpeedSearchKey={activeSpeedSearchKey}
-          />
-        ))
+      {!collapsed && (
+        <>
+          {error && (
+            <div style={css.errorRow}>
+              <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
+              {error}
+            </div>
+          )}
+          {loading && stashes.length === 0 ? (
+            <div style={css.empty}>{t('Loading…')}</div>
+          ) : stashes.length === 0 ? (
+            <div style={css.empty}>{t('No stashes')}</div>
+          ) : (
+            stashes.map(entry => (
+              <StashRow
+                key={entry.oid ?? entry.ref}
+                entry={entry}
+                repoId={repoId}
+                viewMode={viewMode}
+                onApply={onApply}
+                onPop={onPop}
+                onDrop={onDrop}
+                onOpenFileDiff={onOpenFileDiff}
+                expansionCommand={expansionCommand}
+                stashFilesMap={stashFilesMap}
+                onRequestStashFiles={onRequestStashFiles}
+                speedSearchQuery={speedSearchQuery}
+                activeSpeedSearchKey={activeSpeedSearchKey}
+              />
+            ))
+          )}
+        </>
       )}
       <div
         className="versiondock-repo-bottom-divider"
-        data-hidden={stashes.length === 0 ? 'true' : undefined}
+        data-hidden={collapsed || stashes.length === 0 ? 'true' : undefined}
       />
     </div>
   );
@@ -535,6 +547,8 @@ const css = {
     gap: '6px',
     padding: '4px 8px',
     boxSizing: 'border-box' as const,
+    cursor: 'pointer',
+    userSelect: 'none' as const,
   },
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },

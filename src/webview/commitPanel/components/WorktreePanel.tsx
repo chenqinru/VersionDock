@@ -82,6 +82,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+        onDoubleClick={() => onOpenInNewWindow(entry.path)}
         title={entry.path}
       >
         <Codicon
@@ -107,9 +108,9 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
             )}
           </span>
         </div>
-        {hovered && !entry.isMain && (
+        {hovered && (
           <div style={row.actions}>
-            {!entry.isInWorkspace && (
+            {!entry.isInWorkspace && !entry.isMain && (
               <button
                 data-action-btn=""
                 style={row.btn}
@@ -137,33 +138,37 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
             >
               <Codicon name="link-external" />
             </button>
-            {entry.isLocked ? (
-              <button
-                data-action-btn=""
-                style={row.btn}
-                title={t('Unlock worktree')}
-                onClick={e => { e.stopPropagation(); onUnlock(repoId, entry.path); }}
-              >
-                <Codicon name="unlock" />
-              </button>
-            ) : (
-              <button
-                data-action-btn=""
-                style={row.btn}
-                title={t('Lock worktree')}
-                onClick={e => { e.stopPropagation(); onLock(repoId, entry.path); }}
-              >
-                <Codicon name="lock" />
-              </button>
+            {!entry.isMain && (
+              <>
+                {entry.isLocked ? (
+                  <button
+                    data-action-btn=""
+                    style={row.btn}
+                    title={t('Unlock worktree')}
+                    onClick={e => { e.stopPropagation(); onUnlock(repoId, entry.path); }}
+                  >
+                    <Codicon name="unlock" />
+                  </button>
+                ) : (
+                  <button
+                    data-action-btn=""
+                    style={row.btn}
+                    title={t('Lock worktree')}
+                    onClick={e => { e.stopPropagation(); onLock(repoId, entry.path); }}
+                  >
+                    <Codicon name="lock" />
+                  </button>
+                )}
+                <button
+                  data-action-btn=""
+                  style={{ ...row.btn, color: 'var(--vscode-errorForeground)' }}
+                  title={t('Remove worktree')}
+                  onClick={e => { e.stopPropagation(); onDelete(repoId, entry.path, false); }}
+                >
+                  <Codicon name="trash" />
+                </button>
+              </>
             )}
-            <button
-              data-action-btn=""
-              style={{ ...row.btn, color: 'var(--vscode-errorForeground)' }}
-              title={t('Remove worktree')}
-              onClick={e => { e.stopPropagation(); onDelete(repoId, entry.path, false); }}
-            >
-              <Codicon name="trash" />
-            </button>
           </div>
         )}
       </div>
@@ -206,6 +211,7 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
   onRequestCreate: Props['onRequestCreate'];
   isFirst?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   const hasPrunable = repo.worktrees.some(w => w.isPrunable);
   const projectColor = readableAccentColor(repo.repoColor);
 
@@ -215,7 +221,9 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
         <div
           className="versiondock-repo-header"
           style={{ ...css.repoHeader, '--repo-color': projectColor } as React.CSSProperties}
+          onClick={() => setCollapsed(v => !v)}
         >
+          <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '11px', flexShrink: 0 }} />
           <span style={css.dot(projectColor)} />
           <span style={css.repoName}>{repo.repoName}</span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '2px' }}>
@@ -224,7 +232,7 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
                 data-action-btn=""
                 style={css.headerBtn}
                 title={t('Prune stale worktrees')}
-                onClick={() => onPrune(repo.repoId)}
+                onClick={e => { e.stopPropagation(); onPrune(repo.repoId); }}
               >
                 <Codicon name="git-compare" style={{ fontSize: '12px' }} />
               </button>
@@ -234,7 +242,7 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
                 data-action-btn=""
                 style={css.headerBtn}
                 title={t('Add worktree')}
-                onClick={() => onRequestCreate(repo.repoId)}
+                onClick={e => { e.stopPropagation(); onRequestCreate(repo.repoId); }}
               >
                 <Codicon name="add" style={{ fontSize: '12px' }} />
               </button>
@@ -242,23 +250,25 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
           </div>
         </div>
       )}
-      {repo.worktrees.length === 0 ? (
-        <div style={css.empty}>{t('No worktrees')}</div>
-      ) : (
-        repo.worktrees.map(w => (
-          <WorktreeRow
-            key={w.path}
-            entry={w}
-            repoId={repo.repoId}
-            onDelete={onDelete}
-            onLock={onLock}
-            onUnlock={onUnlock}
-            onOpenInExplorer={onOpenInExplorer}
-            onOpenInNewWindow={onOpenInNewWindow}
-            onOpenInOS={onOpenInOS}
-            onAddToWorkspace={onAddToWorkspace}
-          />
-        ))
+      {!collapsed && (
+        repo.worktrees.length === 0 ? (
+          <div style={css.empty}>{t('No worktrees')}</div>
+        ) : (
+          repo.worktrees.map(w => (
+            <WorktreeRow
+              key={w.path}
+              entry={w}
+              repoId={repo.repoId}
+              onDelete={onDelete}
+              onLock={onLock}
+              onUnlock={onUnlock}
+              onOpenInExplorer={onOpenInExplorer}
+              onOpenInNewWindow={onOpenInNewWindow}
+              onOpenInOS={onOpenInOS}
+              onAddToWorkspace={onAddToWorkspace}
+            />
+          ))
+        )
       )}
       {!multiRepo && (hasPrunable || !repo.isLinkedWorktree) && (
         <div style={css.singleRepoActions}>
@@ -278,7 +288,7 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
       )}
       <div
         className="versiondock-repo-bottom-divider"
-        data-hidden={repo.worktrees.length === 0 ? 'true' : undefined}
+        data-hidden={collapsed || repo.worktrees.length === 0 ? 'true' : undefined}
       />
     </div>
   );
@@ -336,6 +346,8 @@ const css = {
   repoHeader: {
     display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px',
     boxSizing: 'border-box' as const,
+    cursor: 'pointer',
+    userSelect: 'none' as const,
   } as React.CSSProperties,
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },

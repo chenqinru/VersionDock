@@ -203,6 +203,7 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
   onReveal: (entryId: string) => void;
   isFirst?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   const summary = repoStatusSummary(entries, statuses);
 
   return (
@@ -211,44 +212,58 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
         <div
           className="versiondock-repo-header"
           style={{ ...css.repoHeader, '--repo-color': meta.color } as React.CSSProperties}
+          onClick={() => setCollapsed(v => !v)}
         >
+          <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '11px', flexShrink: 0 }} />
           <span style={css.dot(meta.color)} />
           <span style={css.repoName}>{meta.name}</span>
           {summary && <span style={css.repoStatus}>{summary}</span>}
           <div style={css.headerActions}>
-            <button data-action-btn="" style={css.headerBtn} title={t('Add Subtree from Repository')} onClick={() => onAdd(meta.id)}>
+            <button
+              data-action-btn=""
+              style={css.headerBtn}
+              title={t('Add Subtree from Repository')}
+              onClick={e => { e.stopPropagation(); onAdd(meta.id); }}
+            >
               <Codicon name="add" style={{ fontSize: '12px' }} />
             </button>
-            <button data-action-btn="" style={css.headerBtn} title={t('Register Existing Directory')} onClick={() => onRegister(meta.id)}>
+            <button
+              data-action-btn=""
+              style={css.headerBtn}
+              title={t('Register Existing Directory')}
+              onClick={e => { e.stopPropagation(); onRegister(meta.id); }}
+            >
               <Codicon name="list-tree" style={{ fontSize: '12px' }} />
             </button>
           </div>
         </div>
       )}
-      {entries.length === 0 ? (
-        <div style={css.empty}>{t('No subtrees registered')}</div>
-      ) : (
-        entries.map(entry => (
-          <SubtreeRow
-            key={entry.id}
-            entry={entry}
-            repoColor={meta.color}
-            activeOp={activeOps[entry.id]}
-            status={statuses[entry.id]}
-            onPull={onPull}
-            onPush={onPush}
-            onSplit={onSplit}
-            onMerge={onMerge}
-            onRemove={onRemove}
-            onEdit={onEdit}
-            onDeleteRegistry={onDeleteRegistry}
-            onReveal={onReveal}
-          />
-        ))
+      {!collapsed && (
+        entries.length === 0 ? (
+          <div style={css.empty}>{t('No subtrees registered')}</div>
+        ) : (
+          entries.map(entry => (
+            <SubtreeRow
+              key={entry.id}
+              entry={entry}
+              repoColor={meta.color}
+              activeOp={activeOps[entry.id]}
+              status={statuses[entry.id]}
+              onPull={onPull}
+              onPush={onPush}
+              onSplit={onSplit}
+              onMerge={onMerge}
+              onRemove={onRemove}
+              onEdit={onEdit}
+              onDeleteRegistry={onDeleteRegistry}
+              onReveal={onReveal}
+            />
+          ))
+        )
       )}
       <div
         className="versiondock-repo-bottom-divider"
-        data-hidden={entries.length === 0 ? 'true' : undefined}
+        data-hidden={collapsed || entries.length === 0 ? 'true' : undefined}
       />
       {!multiRepo && (
         <div style={css.singleRepoActions}>
@@ -345,6 +360,8 @@ const css = {
     gap: '6px',
     padding: '4px 8px',
     boxSizing: 'border-box' as const,
+    cursor: 'pointer',
+    userSelect: 'none' as const,
   } as React.CSSProperties,
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em', flex: 1 },

@@ -566,7 +566,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
                 title={t('Undo this commit (keeps changes as unstaged)')}
                 onClick={event => { event.stopPropagation(); onUndoCommit(repoId); }}
               >
-                <Codicon name="arrow-left" style={{ fontSize: '13px' }} />
+                <Codicon name="arrow-left" />
               </button>
             )}
             <button
@@ -575,7 +575,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
               title={t('Open in Log')}
               onClick={event => { event.stopPropagation(); onOpenInLog(commit.hash, repoId); }}
             >
-              <Codicon name="go-to-file" style={{ fontSize: '13px' }} />
+              <Codicon name="go-to-file" />
             </button>
           </div>
         )}
@@ -3409,7 +3409,6 @@ const styles = {
     background: 'transparent', border: 'none',
     color: 'var(--vscode-foreground)',
     cursor: 'pointer', padding: '2px 4px', borderRadius: '3px',
-    fontSize: '13px',
   } as React.CSSProperties,
   commitDetails: {
     borderTop: '1px solid var(--vscode-panel-border)',

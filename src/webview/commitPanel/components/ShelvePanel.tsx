@@ -407,6 +407,7 @@ const rowStyle = {
 // ── Public component ──────────────────────────────────────────────────────────
 
 export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, isFirst = false, worktreeBranch, worktreeBranchColor, mainRepoName, shelves, loading, error, viewMode, onUnshelve, onUnshelveAndDrop, onUnshelveFile, onDrop, onOpenFileDiff, speedSearchQuery, activeSpeedSearchKey }: Props) {
+  const [collapsed, setCollapsed] = useState(false);
   const projectColor = readableAccentColor(repoColor);
 
   return (
@@ -415,7 +416,9 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, isFirst = 
         <div
           className="versiondock-repo-header"
           style={{ ...css.repoHeader, '--repo-color': projectColor } as React.CSSProperties}
+          onClick={() => setCollapsed(v => !v)}
         >
+          <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '11px', flexShrink: 0 }} />
           <span style={css.dot(projectColor)} />
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
@@ -427,37 +430,41 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, isFirst = 
         </div>
       )}
 
-      {error && (
-        <div style={css.errorRow}>
-          <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
-          {error}
-        </div>
-      )}
+      {!collapsed && (
+        <>
+          {error && (
+            <div style={css.errorRow}>
+              <Codicon name="warning" style={{ marginRight: '4px', flexShrink: 0 }} />
+              {error}
+            </div>
+          )}
 
-      {loading && shelves.length === 0 ? (
-        <div style={css.empty}>{t('Loading…')}</div>
-      ) : shelves.length === 0 ? (
-        <div style={css.empty}>{t('No shelved changes')}</div>
-      ) : (
-        shelves.map(entry => (
-          <ShelveRow
-            key={entry.id}
-            entry={entry}
-            repoId={repoId}
-            viewMode={viewMode}
-            onUnshelve={onUnshelve}
-            onUnshelveAndDrop={onUnshelveAndDrop}
-            onUnshelveFile={onUnshelveFile}
-            onDrop={onDrop}
-            onOpenFileDiff={onOpenFileDiff}
-            speedSearchQuery={speedSearchQuery}
-            activeSpeedSearchKey={activeSpeedSearchKey}
-          />
-        ))
+          {loading && shelves.length === 0 ? (
+            <div style={css.empty}>{t('Loading…')}</div>
+          ) : shelves.length === 0 ? (
+            <div style={css.empty}>{t('No shelved changes')}</div>
+          ) : (
+            shelves.map(entry => (
+              <ShelveRow
+                key={entry.id}
+                entry={entry}
+                repoId={repoId}
+                viewMode={viewMode}
+                onUnshelve={onUnshelve}
+                onUnshelveAndDrop={onUnshelveAndDrop}
+                onUnshelveFile={onUnshelveFile}
+                onDrop={onDrop}
+                onOpenFileDiff={onOpenFileDiff}
+                speedSearchQuery={speedSearchQuery}
+                activeSpeedSearchKey={activeSpeedSearchKey}
+              />
+            ))
+          )}
+        </>
       )}
       <div
         className="versiondock-repo-bottom-divider"
-        data-hidden={shelves.length === 0 ? 'true' : undefined}
+        data-hidden={collapsed || shelves.length === 0 ? 'true' : undefined}
       />
     </div>
   );
@@ -474,6 +481,8 @@ const css = {
     gap: '6px',
     padding: '4px 8px',
     boxSizing: 'border-box' as const,
+    cursor: 'pointer',
+    userSelect: 'none' as const,
   },
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
