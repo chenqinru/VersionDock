@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { FileStatus, RepoMeta, RepoStatus } from '../../shared/types';
-import type { ViewMode } from '../store/commitStore';
+import type { ViewMode, LayoutDensity } from '../store/commitStore';
+import { useCommitStore } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
@@ -356,6 +357,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   const branchClr = branchInfoColor(repoStatus.branch);
   const projectColor = readableAccentColor(repoColor);
   const [hovered, setHovered] = useState(false);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
   const isSvn = kind === 'svn';
   const canAddToSvn = isSvn && !staged && files.some(file => file.status === 'untracked');
 
@@ -379,10 +381,10 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   };
 
   return (
-    <div style={repoGroupStyle(isFirst)}>
+    <div style={repoGroupStyle(isFirst, layoutDensity)}>
       {!singleRepo && (
         <div
-          style={repoHeaderStyle(projectColor)}
+          style={repoHeaderStyle(projectColor, layoutDensity, hovered)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e); }}
@@ -464,7 +466,11 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
         <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>{t('No changes')}</div>
       )}
       {!collapsed && !isEmpty && <div style={{ paddingBottom: '2px' }}>{renderFiles()}</div>}
-      <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
+      {layoutDensity === 'compact' ? (
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
+      ) : !collapsed && !isEmpty ? (
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', marginTop: '4px' }} />
+      ) : null}
     </div>
   );
 }
@@ -784,16 +790,36 @@ const sectionCountStyle: React.CSSProperties = {
   marginLeft: '6px',
 };
 
-const repoGroupStyle = (_isFirst: boolean): React.CSSProperties => ({
-});
+const repoGroupStyle = (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+  if (density === 'compact') return {};
+  return {
+    marginTop: isFirst ? '4px' : '6px',
+  };
+};
 
-const repoHeaderStyle = (color: string): React.CSSProperties => ({
-  display: 'flex',
-  alignItems: 'center',
-  background: color + '22',
-  height: '26px',
-  boxSizing: 'border-box',
-});
+const repoHeaderStyle = (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
+  if (density === 'compact') {
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      background: hovered ? color + '33' : color + '22',
+      height: '26px',
+      boxSizing: 'border-box',
+      transition: 'background 0.12s',
+    };
+  }
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    background: hovered ? color + '28' : color + '1c',
+    border: `1px solid ${color}${hovered ? '55' : '38'}`,
+    borderRadius: '6px',
+    height: '27px',
+    margin: '0 6px',
+    boxSizing: 'border-box',
+    transition: 'background 0.12s, border-color 0.12s',
+  };
+};
 
 const repoHeaderMainStyle: React.CSSProperties = {
   display: 'flex',

@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import type { CommitNode, RepoMeta } from '../../shared/types';
-import type { CommitSelectionMode, ComparePaneState, CompareSide, CompareState } from '../store/logStore';
+import { useLogStore, type CommitSelectionMode, type ComparePaneState, type CompareSide, type CompareState, type LayoutDensity } from '../store/logStore';
 import { CommitList } from './CommitList';
 import type { LaidOutCommit } from '../utils/graphLayout';
 import { Codicon } from '../../shared/Codicon';
@@ -59,6 +59,7 @@ export function CompareView({
   onFilterChange,
   onClose,
 }: Props) {
+  const layoutDensity = useLogStore(s => s.layoutDensity);
   const [topPaneHeight, setTopPaneHeight] = useState<number | null>(null);
   const stackRef = useRef<HTMLDivElement>(null);
   const repoColor = readableAccentColor(repoColors[compareState.repoId] ?? repos.find(repo => repo.id === compareState.repoId)?.color ?? '#888');
@@ -114,9 +115,9 @@ export function CompareView({
   };
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container(layoutDensity)}>
       <style>{INTERACTION_STYLE}</style>
-      <div style={styles.header}>
+      <div style={styles.header(layoutDensity)}>
         <span style={styles.headerLabel}>{t('Compare')}</span>
         <span style={styles.headerRepoBadge} title={compareState.repoName}>
           <span style={styles.headerRepoDot(repoColor)} />
@@ -279,24 +280,30 @@ function ComparePane({
 }
 
 const styles = {
-  container: {
+  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
     display: 'flex',
     flexDirection: 'column' as const,
     flex: 1,
     minWidth: 0,
     overflow: 'hidden',
-  },
-  header: {
+    borderRadius: density === 'compact' ? 0 : '8px',
+    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
+    background: 'var(--vscode-editor-background)',
+    boxSizing: 'border-box' as const,
+  }),
+  header: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
     height: '30px',
     padding: '0 8px',
     borderBottom: '1px solid var(--vscode-panel-border)',
+    borderTopLeftRadius: density === 'compact' ? 0 : '7px',
+    borderTopRightRadius: density === 'compact' ? 0 : '7px',
     background: 'var(--vscode-editor-background)',
     flexShrink: 0,
     fontSize: '12px',
-  } as React.CSSProperties,
+  }),
   headerLabel: {
     color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,

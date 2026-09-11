@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import type { ChangelistData, FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../../shared/types';
-import type { IconThemeData } from '../../../host/types/messages';
+import type { IconThemeData, LayoutDensity } from '../../../host/types/messages';
 import { scopedKey } from '../../shared/scopedKey';
 
 export type ViewMode = 'flat' | 'tree';
+export type { LayoutDensity };
 
 const STASH_VIEW_MODE_KEY = 'versiondock:stash-view-mode';
 
@@ -68,8 +69,10 @@ export interface CommitState {
   defaultSaveAction: 'stash' | 'shelve';
   hasWorkspaceFolder: boolean;
   noVerify: boolean;
+  layoutDensity: LayoutDensity;
 
-  setStatus: (repos: RepoMeta[], status: WorkspaceStatus, iconTheme?: IconThemeData | null, fileViewMode?: 'flat' | 'tree', defaultCommitAction?: 'commit' | 'commitAndPush', defaultSaveAction?: 'stash' | 'shelve', hasWorkspaceFolder?: boolean, noVerify?: boolean) => void;
+  setStatus: (repos: RepoMeta[], status: WorkspaceStatus, iconTheme?: IconThemeData | null, fileViewMode?: 'flat' | 'tree', defaultCommitAction?: 'commit' | 'commitAndPush', defaultSaveAction?: 'stash' | 'shelve', hasWorkspaceFolder?: boolean, noVerify?: boolean, layoutDensity?: LayoutDensity) => void;
+  setLayoutDensity: (density: LayoutDensity) => void;
   setNoVerify: (v: boolean) => void;
   setRepoSelection: (repoId: string, selected: boolean) => void;
   toggleFileSelection: (repoId: string, path: string) => void;
@@ -158,10 +161,12 @@ export const useCommitStore = create<CommitState>((set, get) => ({
   defaultSaveAction: 'stash',
   hasWorkspaceFolder: true,
   noVerify: false,
+  layoutDensity: 'comfortable',
 
+  setLayoutDensity: (density) => set({ layoutDensity: density }),
   setNoVerify: (v) => set({ noVerify: v }),
 
-  setStatus: (repoMetas, status, iconTheme, fileViewMode, defaultCommitAction, defaultSaveAction, hasWorkspaceFolder, noVerify) => {
+  setStatus: (repoMetas, status, iconTheme, fileViewMode, defaultCommitAction, defaultSaveAction, hasWorkspaceFolder, noVerify, layoutDensity) => {
     const prev = get().repoSelections;
     const prevFiles = get().fileSelections;
     const prevSeen = get().seenFiles;
@@ -210,7 +215,7 @@ export const useCommitStore = create<CommitState>((set, get) => ({
         }
       }
     }
-    set({ repoMetas, status, repoSelections, fileSelections, seenFiles, collapsedKeys, ...(iconTheme !== undefined ? { iconTheme } : {}), ...(fileViewMode !== undefined ? { viewMode: fileViewMode } : {}), ...(defaultCommitAction !== undefined ? { defaultCommitAction } : {}), ...(defaultSaveAction !== undefined ? { defaultSaveAction } : {}), ...(hasWorkspaceFolder !== undefined ? { hasWorkspaceFolder } : {}), ...(noVerify !== undefined ? { noVerify } : {}) });
+    set({ repoMetas, status, repoSelections, fileSelections, seenFiles, collapsedKeys, ...(iconTheme !== undefined ? { iconTheme } : {}), ...(fileViewMode !== undefined ? { viewMode: fileViewMode } : {}), ...(defaultCommitAction !== undefined ? { defaultCommitAction } : {}), ...(defaultSaveAction !== undefined ? { defaultSaveAction } : {}), ...(hasWorkspaceFolder !== undefined ? { hasWorkspaceFolder } : {}), ...(noVerify !== undefined ? { noVerify } : {}), ...(layoutDensity !== undefined ? { layoutDensity } : {}) });
   },
 
   setRepoSelection: (repoId, selected) =>

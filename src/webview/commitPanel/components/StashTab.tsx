@@ -3,7 +3,7 @@ import type { StashEntry } from '../../shared/msgTypes';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
-import type { ViewMode } from '../store/commitStore';
+import type { ViewMode, LayoutDensity } from '../store/commitStore';
 import { useCommitStore } from '../store/commitStore';
 import { t } from '../../shared/i18n';
 import { branchColor, readableAccentColor } from '../../shared/branchColors';
@@ -16,6 +16,7 @@ interface Props {
   repoName: string;
   repoColor: string;
   multiRepo: boolean;
+  isFirst?: boolean;
   worktreeBranch?: string;
   worktreeBranchColor?: string;
   mainRepoName?: string;
@@ -456,12 +457,20 @@ export function StashTab({
   onRequestStashFiles,
   speedSearchQuery,
   activeSpeedSearchKey,
+  isFirst = false,
 }: Props) {
   const projectColor = readableAccentColor(repoColor);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
+  const [hovered, setHovered] = useState(false);
+
   return (
-    <div style={css.root}>
+    <div style={css.root(isFirst, layoutDensity)}>
       {multiRepo && (
-        <div style={css.repoHeader(projectColor)}>
+        <div
+          style={css.repoHeader(projectColor, layoutDensity, hovered)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
           <span style={css.dot(projectColor)} />
           <span style={css.repoName}>{worktreeBranch ? mainRepoName ?? repoName : repoName}</span>
           {worktreeBranch && (
@@ -510,12 +519,35 @@ export type { Props as StashTabProps };
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const css = {
-  root: { display: 'flex', flexDirection: 'column' as const, borderBottom: '1px solid var(--vscode-panel-border)' },
-  repoHeader: (color: string): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', minHeight: '26px',
-    background: color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
-    boxSizing: 'border-box',
-  }),
+  root: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    if (density === 'compact') {
+      return { display: 'flex', flexDirection: 'column', borderBottom: '1px solid var(--vscode-panel-border)' };
+    }
+    return {
+      display: 'flex',
+      flexDirection: 'column',
+      marginTop: isFirst ? '4px' : '6px',
+    };
+  },
+  repoHeader: (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
+    if (density === 'compact') {
+      return {
+        display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', minHeight: '26px',
+        background: hovered ? color + '33' : color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
+        boxSizing: 'border-box',
+        transition: 'background 0.12s',
+      };
+    }
+    return {
+      display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px', minHeight: '27px',
+      background: hovered ? color + '28' : color + '1c',
+      border: `1px solid ${color}${hovered ? '55' : '38'}`,
+      borderRadius: '6px',
+      margin: '0 6px',
+      boxSizing: 'border-box',
+      transition: 'background 0.12s, border-color 0.12s',
+    };
+  },
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
   worktreeBadge: (color: string): React.CSSProperties => ({

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FileStatus, RepoStatus } from '../../shared/types';
 import type { ViewMode } from '../store/commitStore';
+import { useCommitStore, type LayoutDensity } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { FileTree } from './FileTree';
 import { Codicon } from '../../shared/Codicon';
@@ -77,6 +78,7 @@ export function ProjectGroup({
   };
 
   const [hovered, setHovered] = useState(false);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   const checkboxRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -84,9 +86,9 @@ export function ProjectGroup({
   }, [someSelected]);
 
   return (
-    <div style={styles.container(isFirst)}>
+    <div style={styles.container(isFirst, layoutDensity)}>
       <div
-        style={styles.header(projectColor)}
+        style={styles.header(projectColor, isFirst, layoutDensity, hovered)}
         onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId); }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -184,7 +186,11 @@ export function ProjectGroup({
           )}
         </div>
       )}
-      <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
+      {layoutDensity === 'compact' ? (
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
+      ) : !collapsed && allFiles.length > 0 ? (
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', marginTop: '4px' }} />
+      ) : null}
     </div>
   );
 }
@@ -208,10 +214,11 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
   const branchClr = branchInfoColor(repoStatus.branch);
   const projectColor = readableAccentColor(repoColor);
   const [hovered, setHovered] = useState(false);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   return (
     <div
-      style={styles.header(projectColor)}
+      style={styles.header(projectColor, true, layoutDensity, hovered)}
       onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId); }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -257,15 +264,35 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
 }
 
 const styles = {
-  container: (_isFirst: boolean): React.CSSProperties => ({
-  }),
-  header: (color: string): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    background: color + '22',
-    height: '26px',
-    boxSizing: 'border-box',
-  }),
+  container: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    if (density === 'compact') return {};
+    return {
+      marginTop: isFirst ? '4px' : '6px',
+    };
+  },
+  header: (color: string, _isFirst: boolean, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
+    if (density === 'compact') {
+      return {
+        display: 'flex',
+        alignItems: 'center',
+        background: hovered ? color + '33' : color + '22',
+        height: '26px',
+        boxSizing: 'border-box',
+        transition: 'background 0.12s',
+      };
+    }
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      background: hovered ? color + '28' : color + '1c',
+      border: `1px solid ${color}${hovered ? '55' : '38'}`,
+      borderRadius: '6px',
+      height: '27px',
+      margin: '0 6px',
+      boxSizing: 'border-box',
+      transition: 'background 0.12s, border-color 0.12s',
+    };
+  },
   repoCheckbox: {
     margin: '0 0 0 6px',
     flexShrink: 0,

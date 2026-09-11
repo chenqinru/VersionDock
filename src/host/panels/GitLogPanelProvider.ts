@@ -4,7 +4,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import type { GitService } from '../git/GitService';
-import type { LogCommitPathEntry, LogToHostMsg, HostToLogMsg } from '../types/messages';
+import type { LogCommitPathEntry, LogToHostMsg, HostToLogMsg, LayoutDensity } from '../types/messages';
 import type { BranchInfo, CommitLogList, LineRange, RepoMeta } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
 import { ShelveDocumentProvider } from '../utils/ShelveDocumentProvider';
@@ -323,6 +323,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             }).catch(() => { /* icon theme optional */ });
           }
         }
+        if (e.affectsConfiguration('versiondock.layoutDensity')) {
+          this.post({ type: 'LOG_LAYOUT_DENSITY_UPDATE', layoutDensity: this.getLayoutDensity() });
+        }
       })
     );
 
@@ -458,15 +461,22 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     this.pendingRefreshContentSignature = null;
   }
 
+  private getLayoutDensity(): LayoutDensity {
+    const raw = vscode.workspace.getConfiguration('versiondock').get<string>('layoutDensity', 'comfortable');
+    return raw === 'compact' ? 'compact' : 'comfortable';
+  }
+
   private post(msg: HostToLogMsg): void {
     if (msg.type === 'LOG_INIT_DATA') {
-      const m = msg as typeof msg & { hasWorkspaceFolder?: boolean };
+      const m = msg as typeof msg & { hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity };
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+      if (m.layoutDensity === undefined) m.layoutDensity = this.getLayoutDensity();
       this.lastLogMetadataSignature = getLogMetadataSignature(msg.repos, msg.branches);
       this.lastLogContentSignature = getLogContentSignature(msg.repos, msg.branches);
     }
     const broadcast = msg.type === 'LOG_INIT_DATA'
       || msg.type === 'LOG_ICON_THEME_UPDATE'
+      || msg.type === 'LOG_LAYOUT_DENSITY_UPDATE'
       || msg.type === 'LOG_REFRESH'
       || msg.type === 'LOG_REFS_UPDATE'
       || msg.type === 'LOG_TAGS_UPDATE';
@@ -769,6 +779,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private async handleMessage(msg: LogToHostMsg): Promise<void> {
     switch (msg.type) {
+      case 'LOG_SET_LAYOUT_DENSITY': {
+        await vscode.workspace.getConfiguration('versiondock').update('layoutDensity', msg.density, vscode.ConfigurationTarget.Global);
+        break;
+      }
       case 'LOG_REQUEST_GRAPH_COMMITS': {
         const maxCommits = vscode.workspace.getConfiguration('versiondock').get<number>('graphMaxCommits', 1000);
         const logRepoIds = this.getRequestedVisibleRepoIds(msg.repoIds);

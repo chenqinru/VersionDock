@@ -4,6 +4,7 @@ import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
 import { branchColor, headColor, readableAccentColor } from '../../shared/branchColors';
+import { useCommitStore, type LayoutDensity } from '../store/commitStore';
 
 export interface SubmodulePanelProps {
   repos: RepoSubmodules[];
@@ -350,6 +351,7 @@ function SubmoduleRepoGroup({
   onOpenInNewWindow,
   onOpenInOS,
   onRevealInExplorer,
+  isFirst = false,
 }: {
   repo: RepoSubmodules;
   multiRepo: boolean;
@@ -367,8 +369,11 @@ function SubmoduleRepoGroup({
   onOpenInNewWindow: SubmodulePanelProps['onOpenInNewWindow'];
   onOpenInOS: SubmodulePanelProps['onOpenInOS'];
   onRevealInExplorer: SubmodulePanelProps['onRevealInExplorer'];
+  isFirst?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   const hasSubmodules = repo.submodules.length > 0;
   const projectColor = readableAccentColor(repo.repoColor);
@@ -377,13 +382,12 @@ function SubmoduleRepoGroup({
   const isUpdatingAll = activeOps?.[`${repo.repoId}:__all__`] === 'update-all' || activeOps?.['__all__'] === 'update-all';
 
   return (
-    <div style={group.root}>
+    <div style={group.root(isFirst, layoutDensity)}>
       {multiRepo && (
         <div
-          style={{
-            ...group.header(projectColor),
-            borderBottom: collapsed ? 'none' : '1px solid var(--vscode-panel-border)',
-          }}
+          style={group.header(projectColor, layoutDensity, hovered, collapsed)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
           onClick={() => setCollapsed(prev => !prev)}
         >
           <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={{ fontSize: '11px', marginRight: '2px', flexShrink: 0 }} />
@@ -520,9 +524,10 @@ export function SubmodulePanel({
         <div style={css.empty}>{t('No repositories with submodules')}</div>
       ) : (
         <div style={css.repoList}>
-          {repos.map((repo: RepoSubmodules) => (
+          {repos.map((repo: RepoSubmodules, idx) => (
             <SubmoduleRepoGroup
               key={repo.repoId}
+              isFirst={idx === 0}
               repo={repo}
               multiRepo={multiRepo}
               activeOps={activeOps}
@@ -578,23 +583,52 @@ const css: Record<string, React.CSSProperties> = {
 };
 
 const group = {
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    borderBottom: '1px solid var(--vscode-panel-border)',
-  } as React.CSSProperties,
-  header: (color: string): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    padding: '4px 8px',
-    minHeight: '26px',
-    background: color + '22',
-    borderBottom: '1px solid var(--vscode-panel-border)',
-    boxSizing: 'border-box',
-    cursor: 'pointer',
-    userSelect: 'none',
-  }),
+  root: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    if (density === 'compact') {
+      return {
+        display: 'flex',
+        flexDirection: 'column',
+        borderBottom: '1px solid var(--vscode-panel-border)',
+      };
+    }
+    return {
+      display: 'flex',
+      flexDirection: 'column',
+      marginTop: isFirst ? '4px' : '6px',
+    };
+  },
+  header: (color: string, density: LayoutDensity = 'comfortable', hovered = false, collapsed = false): React.CSSProperties => {
+    if (density === 'compact') {
+      return {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '4px 8px',
+        minHeight: '26px',
+        background: hovered ? color + '33' : color + '22',
+        borderBottom: collapsed ? 'none' : '1px solid var(--vscode-panel-border)',
+        boxSizing: 'border-box',
+        cursor: 'pointer',
+        userSelect: 'none',
+        transition: 'background 0.12s',
+      };
+    }
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '4px 8px',
+      minHeight: '27px',
+      background: hovered ? color + '28' : color + '1c',
+      border: `1px solid ${color}${hovered ? '55' : '38'}`,
+      borderRadius: '6px',
+      margin: '0 6px',
+      boxSizing: 'border-box',
+      cursor: 'pointer',
+      userSelect: 'none',
+      transition: 'background 0.12s, border-color 0.12s',
+    };
+  },
   dot: (clr: string): React.CSSProperties => ({
     width: 8,
     height: 8,

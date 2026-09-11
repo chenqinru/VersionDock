@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import type { BranchInfo, CommitNode, FileDiff, GraphCommitNode, LineRange, RepoMeta, TagInfo } from '../../shared/types';
-import type { CompareSide, IconThemeData, MergeParentChange } from '../../../host/types/messages';
+import type { CompareSide, IconThemeData, MergeParentChange, LayoutDensity } from '../../../host/types/messages';
 import { scopedKey } from '../../shared/scopedKey';
 
-export type { CompareSide };
+export type { CompareSide, LayoutDensity };
 
 export interface CommitFilters {
   text: string;
@@ -110,6 +110,8 @@ interface LogState {
   updateBranches: (repoId: string, branches: BranchInfo[]) => void;
   setError: (err: string | null) => void;
   setRepoErrors: (errors: Array<{ repoId: string; error: string }> | null | undefined) => void;
+  layoutDensity: LayoutDensity;
+  setLayoutDensity: (density: LayoutDensity) => void;
   setPendingScrollHash: (hash: string | null) => void;
   clearSelection: () => void;
 }
@@ -195,6 +197,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   pendingScrollHash: null,
   replaceCommitsOnNextBatch: false,
   compareState: null,
+  layoutDensity: 'comfortable',
 
   setRepos: (repos, hasWorkspaceFolder) => set(state => {
     const repoIds = new Set(repos.map(repo => repo.id));
@@ -463,6 +466,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   setError: (err) => set({ error: err }),
   setRepoErrors: (errors) => set({ repoErrors: errors ?? null }),
   setPendingScrollHash: (hash) => set({ pendingScrollHash: hash }),
+  setLayoutDensity: (density) => set({ layoutDensity: density }),
   clearSelection: () => set({
     selectedCommitHashes: [],
     primarySelectedHash: null,

@@ -11,6 +11,7 @@ import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
 import type { ExpansionCommand } from './StashTab';
 import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared/speedSearch';
+import { useCommitStore, type LayoutDensity } from '../store/commitStore';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
@@ -23,6 +24,7 @@ export interface IncomingRepoData {
 }
 
 export interface PushTabProps {
+  layoutDensity?: LayoutDensity;
   isActive?: boolean;
   repos: RepoStatus[];
   repoMetas: RepoMeta[];
@@ -890,6 +892,7 @@ function RepoSection({
   activeSpeedSearchKey,
   activeCommit,
   onFilesLoaded,
+  isFirst = false,
 }: {
   repoStatus: RepoStatus;
   repoMeta: RepoMeta | undefined;
@@ -928,6 +931,7 @@ function RepoSection({
   activeSpeedSearchKey?: string | null;
   activeCommit?: { hash: string; isIncoming: boolean } | null;
   onFilesLoaded?: (repoId: string, files: RepoLoadedFiles) => void;
+  isFirst?: boolean;
 }) {
   const [internalExpanded, setInternalExpanded] = useState(true);
   const expanded = isExpanded !== undefined ? isExpanded : internalExpanded;
@@ -971,6 +975,7 @@ function RepoSection({
   const [multiSelectHashes, setMultiSelectHashes] = useState<Set<string>>(new Set());
   const [ctxMenu, setCtxMenu] = useState<CommitCtxMenuState | null>(null);
   const [hovered, setHovered] = useState(false);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   // Incoming state
   const [expandedIncomingHash, setExpandedIncomingHash] = useState<string | null>(null);
@@ -1475,9 +1480,9 @@ function RepoSection({
   }, [repoStatus.repoId, pushViewMode, filesByHash, incomingFilesByHash, aggregatedFiles, aggregatedIncomingFiles, onFilesLoaded]);
 
   return (
-    <div style={styles.repoRoot}>
+    <div style={styles.repoRoot(isFirst, layoutDensity)}>
       <div
-        style={styles.repoHeader(repoColor)}
+        style={styles.repoHeader(repoColor, layoutDensity, hovered)}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
@@ -2258,7 +2263,10 @@ export function PushTab(props: Props) {
     onExpansionChange,
     selectionCommand,
     onSelectionChange,
+    layoutDensity: propDensity,
   } = props;
+  const storeLayoutDensity = useCommitStore(s => s.layoutDensity);
+  const layoutDensity = propDensity ?? storeLayoutDensity;
   const metaMap = new Map(repoMetas.map(meta => [meta.id, meta]));
   const isSingleRepo = repos.length === 1;
   const [checked, setChecked] = useState<Set<string>>(() => new Set<string>());
@@ -2723,56 +2731,59 @@ export function PushTab(props: Props) {
     };
 
     return (
-      <div style={css.root}>
-        {speedSearch.isOpen && (
-          <SpeedSearchWidget
-            speedSearch={speedSearch}
-            placeholder={t('Search files or commits...')}
-          />
-        )}
-        <div ref={listRef} style={css.list}>
-          <RepoSection
-            key={solo.repoId}
-            repoStatus={solo}
-            repoMeta={metaMap.get(solo.repoId)}
-            unpushed={unpushedMap[solo.repoId]}
-            incoming={incomingMap?.[solo.repoId]}
-            checked={false}
-            canCheck={false}
-            onToggle={() => {}}
-            onOpenInLog={onOpenInLog}
-            onUndoCommit={onUndoCommit}
-            onRequestCommitFiles={onRequestCommitFiles}
-            onRequestAggregatedDiff={onRequestAggregatedDiff}
-            onOpenAggregatedFile={onOpenAggregatedFile}
-            onOpenCommitFile={onOpenCommitFile}
-            onRequestIncomingCommitFiles={onRequestIncomingCommitFiles}
-            onRequestIncomingAggregatedDiff={onRequestIncomingAggregatedDiff}
-            onOpenIncomingAggregatedFile={onOpenIncomingAggregatedFile}
-            onOpenIncomingCommitFile={onOpenIncomingCommitFile}
-            onFetch={onFetch}
-            onSquash={onSquash}
-            onDropCommits={onDropCommits}
-            onRevertCommits={onRevertCommits}
-            onEditCommitMsg={onEditCommitMsg}
-            onCherryPick={onCherryPick}
-            onCreateBranchFromCommit={onCreateBranchFromCommit}
-            onBranchClick={onBranchClick}
-            iconTheme={iconTheme}
-            singleRepo
-            directionFilter={soloFilter}
-            onToggleDirectionFilter={target => toggleRepoDirectionFilter(solo.repoId, target)}
-            isExpanded={!collapsedRepoIds.has(solo.repoId)}
-            onToggleExpanded={() => toggleRepoExpanded(solo.repoId)}
-            expansionCommand={expansionCommand}
-            externalFileViewMode={viewMode}
-            speedSearchQuery={speedSearch.query}
-            activeSpeedSearchKey={speedSearch.activeKey}
-            activeCommit={getActiveCommitForRepo(solo.repoId)}
-            onFilesLoaded={handleFilesLoaded}
-          />
+      <div style={css.root(layoutDensity)}>
+        <div style={css.listCard(layoutDensity)}>
+          {speedSearch.isOpen && (
+            <SpeedSearchWidget
+              speedSearch={speedSearch}
+              placeholder={t('Search files or commits...')}
+            />
+          )}
+          <div ref={listRef} className="versiondock-commit-scroll-container" style={css.list}>
+            <RepoSection
+              key={solo.repoId}
+              isFirst={true}
+              repoStatus={solo}
+              repoMeta={metaMap.get(solo.repoId)}
+              unpushed={unpushedMap[solo.repoId]}
+              incoming={incomingMap?.[solo.repoId]}
+              checked={false}
+              canCheck={false}
+              onToggle={() => {}}
+              onOpenInLog={onOpenInLog}
+              onUndoCommit={onUndoCommit}
+              onRequestCommitFiles={onRequestCommitFiles}
+              onRequestAggregatedDiff={onRequestAggregatedDiff}
+              onOpenAggregatedFile={onOpenAggregatedFile}
+              onOpenCommitFile={onOpenCommitFile}
+              onRequestIncomingCommitFiles={onRequestIncomingCommitFiles}
+              onRequestIncomingAggregatedDiff={onRequestIncomingAggregatedDiff}
+              onOpenIncomingAggregatedFile={onOpenIncomingAggregatedFile}
+              onOpenIncomingCommitFile={onOpenIncomingCommitFile}
+              onFetch={onFetch}
+              onSquash={onSquash}
+              onDropCommits={onDropCommits}
+              onRevertCommits={onRevertCommits}
+              onEditCommitMsg={onEditCommitMsg}
+              onCherryPick={onCherryPick}
+              onCreateBranchFromCommit={onCreateBranchFromCommit}
+              onBranchClick={onBranchClick}
+              iconTheme={iconTheme}
+              singleRepo
+              directionFilter={soloFilter}
+              onToggleDirectionFilter={target => toggleRepoDirectionFilter(solo.repoId, target)}
+              isExpanded={!collapsedRepoIds.has(solo.repoId)}
+              onToggleExpanded={() => toggleRepoExpanded(solo.repoId)}
+              expansionCommand={expansionCommand}
+              externalFileViewMode={viewMode}
+              speedSearchQuery={speedSearch.query}
+              activeSpeedSearchKey={speedSearch.activeKey}
+              activeCommit={getActiveCommitForRepo(solo.repoId)}
+              onFilesLoaded={handleFilesLoaded}
+            />
+          </div>
         </div>
-        <div style={css.footer}>
+        <div style={css.footer(layoutDensity)}>
           {renderSoloButtons()}
         </div>
       </div>
@@ -3003,58 +3014,61 @@ export function PushTab(props: Props) {
   };
 
   return (
-    <div style={css.root}>
-      {speedSearch.isOpen && (
-        <SpeedSearchWidget
-          speedSearch={speedSearch}
-          placeholder={t('Search files or commits...')}
-        />
-      )}
-      <div ref={listRef} style={css.list}>
-        {repos.map(repoStatus => (
-          <RepoSection
-            key={repoStatus.repoId}
-            repoStatus={repoStatus}
-            repoMeta={metaMap.get(repoStatus.repoId)}
-            unpushed={unpushedMap[repoStatus.repoId]}
-            incoming={incomingMap?.[repoStatus.repoId]}
-            checked={checked.has(repoStatus.repoId)}
-            canCheck={canPushRepo(repoStatus) || canPullRepo(repoStatus)}
-            onToggle={toggleRepo}
-            onOpenInLog={onOpenInLog}
-            onUndoCommit={onUndoCommit}
-            onRequestCommitFiles={onRequestCommitFiles}
-            onRequestAggregatedDiff={onRequestAggregatedDiff}
-            onOpenAggregatedFile={onOpenAggregatedFile}
-            onOpenCommitFile={onOpenCommitFile}
-            onRequestIncomingCommitFiles={onRequestIncomingCommitFiles}
-            onRequestIncomingAggregatedDiff={onRequestIncomingAggregatedDiff}
-            onOpenIncomingAggregatedFile={onOpenIncomingAggregatedFile}
-            onOpenIncomingCommitFile={onOpenIncomingCommitFile}
-            onFetch={onFetch}
-            onSquash={onSquash}
-            onDropCommits={onDropCommits}
-            onRevertCommits={onRevertCommits}
-            onEditCommitMsg={onEditCommitMsg}
-            onCherryPick={onCherryPick}
-            onCreateBranchFromCommit={onCreateBranchFromCommit}
-            onBranchClick={onBranchClick}
-            iconTheme={iconTheme}
-            directionFilter={getRepoDirectionFilter(repoStatus.repoId)}
-            onToggleDirectionFilter={target => toggleRepoDirectionFilter(repoStatus.repoId, target)}
-            isExpanded={!collapsedRepoIds.has(repoStatus.repoId)}
-            onToggleExpanded={() => toggleRepoExpanded(repoStatus.repoId)}
-            expansionCommand={expansionCommand}
-            externalFileViewMode={viewMode}
-            speedSearchQuery={speedSearch.query}
-            activeSpeedSearchKey={speedSearch.activeKey}
-            activeCommit={getActiveCommitForRepo(repoStatus.repoId)}
-            onFilesLoaded={handleFilesLoaded}
+    <div style={css.root(layoutDensity)}>
+      <div style={css.listCard(layoutDensity)}>
+        {speedSearch.isOpen && (
+          <SpeedSearchWidget
+            speedSearch={speedSearch}
+            placeholder={t('Search files or commits...')}
           />
-        ))}
+        )}
+        <div ref={listRef} className="versiondock-commit-scroll-container" style={css.list}>
+          {repos.map((repoStatus, idx) => (
+            <RepoSection
+              key={repoStatus.repoId}
+              isFirst={idx === 0}
+              repoStatus={repoStatus}
+              repoMeta={metaMap.get(repoStatus.repoId)}
+              unpushed={unpushedMap[repoStatus.repoId]}
+              incoming={incomingMap?.[repoStatus.repoId]}
+              checked={checked.has(repoStatus.repoId)}
+              canCheck={canPushRepo(repoStatus) || canPullRepo(repoStatus)}
+              onToggle={toggleRepo}
+              onOpenInLog={onOpenInLog}
+              onUndoCommit={onUndoCommit}
+              onRequestCommitFiles={onRequestCommitFiles}
+              onRequestAggregatedDiff={onRequestAggregatedDiff}
+              onOpenAggregatedFile={onOpenAggregatedFile}
+              onOpenCommitFile={onOpenCommitFile}
+              onRequestIncomingCommitFiles={onRequestIncomingCommitFiles}
+              onRequestIncomingAggregatedDiff={onRequestIncomingAggregatedDiff}
+              onOpenIncomingAggregatedFile={onOpenIncomingAggregatedFile}
+              onOpenIncomingCommitFile={onOpenIncomingCommitFile}
+              onFetch={onFetch}
+              onSquash={onSquash}
+              onDropCommits={onDropCommits}
+              onRevertCommits={onRevertCommits}
+              onEditCommitMsg={onEditCommitMsg}
+              onCherryPick={onCherryPick}
+              onCreateBranchFromCommit={onCreateBranchFromCommit}
+              onBranchClick={onBranchClick}
+              iconTheme={iconTheme}
+              directionFilter={getRepoDirectionFilter(repoStatus.repoId)}
+              onToggleDirectionFilter={target => toggleRepoDirectionFilter(repoStatus.repoId, target)}
+              isExpanded={!collapsedRepoIds.has(repoStatus.repoId)}
+              onToggleExpanded={() => toggleRepoExpanded(repoStatus.repoId)}
+              expansionCommand={expansionCommand}
+              externalFileViewMode={viewMode}
+              speedSearchQuery={speedSearch.query}
+              activeSpeedSearchKey={speedSearch.activeKey}
+              activeCommit={getActiveCommitForRepo(repoStatus.repoId)}
+              onFilesLoaded={handleFilesLoaded}
+            />
+          ))}
+        </div>
       </div>
 
-      <div style={css.footer}>
+      <div style={css.footer(layoutDensity)}>
         {checkedRepos.length > 0 && (
           <div style={css.pills}>
             {checkedRepos.map(repo => {
@@ -3130,18 +3144,50 @@ const ctxStyles = {
 };
 
 const css = {
-  root: { display: 'flex', flexDirection: 'column' as const, flex: 1, height: '100%', minHeight: 0, overflow: 'hidden', position: 'relative' as const },
+  root: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
+    display: 'flex',
+    flexDirection: 'column' as const,
+    flex: 1,
+    height: '100%',
+    minHeight: 0,
+    position: 'relative' as const,
+    gap: density === 'compact' ? 0 : '6px',
+  }),
+  listCard: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    return {
+      display: 'flex',
+      flexDirection: 'column' as const,
+      flex: 1,
+      minHeight: 0,
+      overflow: 'hidden',
+      position: 'relative' as const,
+      borderRadius: isCompact ? 0 : '8px',
+      border: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      background: 'var(--vscode-sideBar-background)',
+      boxSizing: 'border-box' as const,
+    };
+  },
   list: { flex: 1, overflowY: 'auto' as const, minHeight: 0 },
-  footer: {
-    flexShrink: 0,
-    display: 'flex', flexDirection: 'column' as const, gap: '6px',
-    padding: '8px',
-    borderTop: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-sideBar-background)',
-    position: 'sticky' as const,
-    bottom: 0,
-    zIndex: 2,
-  } as React.CSSProperties,
+  footer: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    return {
+      position: 'relative' as const,
+      zIndex: 10,
+      flexShrink: 0,
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: '6px',
+      padding: '6px 8px',
+      borderRadius: isCompact ? 0 : '8px',
+      borderTop: '1px solid var(--vscode-panel-border)',
+      borderRight: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderBottom: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderLeft: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      background: 'var(--vscode-sideBar-background)',
+      boxSizing: 'border-box' as const,
+    };
+  },
   pills: { display: 'flex', flexWrap: 'wrap' as const, gap: '4px' } as React.CSSProperties,
   pill: (color: string): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', gap: '3px',
@@ -3164,13 +3210,35 @@ const css = {
 };
 
 const styles = {
-  repoRoot: { borderBottom: '1px solid var(--vscode-panel-border)' } as React.CSSProperties,
-  repoHeader: (color: string): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center',
-    padding: '4px 8px', minHeight: '26px',
-    background: color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
-    boxSizing: 'border-box',
-  }),
+  repoRoot: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    if (density === 'compact') {
+      return { borderBottom: '1px solid var(--vscode-panel-border)' };
+    }
+    return {
+      marginTop: isFirst ? '4px' : '6px',
+    };
+  },
+  repoHeader: (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
+    if (density === 'compact') {
+      return {
+        display: 'flex', alignItems: 'center',
+        padding: '4px 8px', minHeight: '26px',
+        background: hovered ? color + '33' : color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
+        boxSizing: 'border-box',
+        transition: 'background 0.12s',
+      };
+    }
+    return {
+      display: 'flex', alignItems: 'center',
+      padding: '4px 8px', minHeight: '27px',
+      background: hovered ? color + '28' : color + '1c',
+      border: `1px solid ${color}${hovered ? '55' : '38'}`,
+      borderRadius: '6px',
+      margin: '0 6px',
+      boxSizing: 'border-box',
+      transition: 'background 0.12s, border-color 0.12s',
+    };
+  },
   checkbox: {
     margin: '0 2px 0 0', flexShrink: 0,
     accentColor: 'var(--vscode-button-background)',

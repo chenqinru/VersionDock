@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import type { CommitFilters } from '../store/logStore';
+import { useLogStore, type CommitFilters, type LayoutDensity } from '../store/logStore';
 import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t, getLocale } from '../../shared/i18n';
@@ -21,6 +21,7 @@ interface RevisionOption {
 }
 
 interface Props {
+  layoutDensity?: LayoutDensity;
   filters: CommitFilters;
   branches: BranchInfo[];
   tags: TagInfo[];
@@ -61,7 +62,9 @@ export const FILTER_INPUT_STYLE = `
 }
 `;
 
-export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions, onFilterChange, onRepoChange, onClear, onFetchAll, repoNamesExpanded, onToggleRepoNames, onUndock, hideUndock, disableBranchFilter = false }: Props) {
+export function CommitFiltersBar({ layoutDensity: propDensity, filters, branches, tags, repos, authorOptions, onFilterChange, onRepoChange, onClear, onFetchAll, repoNamesExpanded, onToggleRepoNames, onUndock, hideUndock, disableBranchFilter = false }: Props) {
+  const storeDensity = useLogStore(s => s.layoutDensity);
+  const layoutDensity = propDensity ?? storeDensity;
   const relevantBranches = filters.repoId
     ? branches.filter(b => b.repoId === filters.repoId)
     : branches;
@@ -96,7 +99,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
   const hasFilters = !!(filters.text || filters.author || filters.branch || filters.dateFrom || filters.dateTo || filters.repoId || filters.path);
 
   return (
-    <div style={styles.bar}>
+    <div style={styles.bar(layoutDensity)}>
       <style>{FILTER_INPUT_STYLE}</style>
       <DebouncedInput
         value={filters.text}
@@ -1029,17 +1032,20 @@ const calStyles = {
 };
 
 const styles = {
-  bar: {
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'nowrap' as const,
-    gap: '6px',
-    padding: '6px 10px',
-    borderBottom: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-editor-background)',
-    flexShrink: 0,
-    minHeight: '38px',
-    boxSizing: 'border-box' as const,
+  bar: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      flexWrap: 'nowrap' as const,
+      gap: '6px',
+      padding: isCompact ? '6px 10px' : '6px 8px',
+      borderBottom: isCompact ? '1px solid var(--vscode-panel-border)' : 'none',
+      background: 'var(--vscode-editor-background)',
+      flexShrink: 0,
+      minHeight: '38px',
+      boxSizing: 'border-box' as const,
+    };
   },
   rightActions: {
     display: 'flex',

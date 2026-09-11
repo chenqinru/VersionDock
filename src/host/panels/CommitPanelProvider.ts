@@ -8,7 +8,7 @@ import { type GitService, parseGitmodulesFileSync, parseGitConfigEntries } from 
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent, extractBaseAndTargetFromPatch } from '../utils/ShelveDocumentProvider';
-import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, SubtreeEntry, SubtreeOp, SubtreePushStatus, SyncPullStrategy } from '../types/messages';
+import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, LayoutDensity, SubtreeEntry, SubtreeOp, SubtreePushStatus, SyncPullStrategy } from '../types/messages';
 import type { FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { CHANGELIST_UNVERSIONED_ID } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
@@ -519,6 +519,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }).catch(() => { /* icon theme optional */ });
         }
       }
+      if (e.affectsConfiguration('versiondock.layoutDensity')) {
+        this.post({ type: 'COMMIT_LAYOUT_DENSITY_UPDATE', layoutDensity: this.getLayoutDensity() });
+      }
       if (e.affectsConfiguration('versiondock.changesViewMode') || e.affectsConfiguration('versiondock.defaultCommitAction') || e.affectsConfiguration('versiondock.defaultSaveAction')) {
         this.changelistService?.setChangelistMode(this.getChangesViewMode() === 'changelists');
         void this.manager.getAllStatuses().then(status => {
@@ -552,14 +555,16 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     if (msg.type === 'COMMIT_STATUS_UPDATE') {
       this.badgeController?.update(msg.status);
       this.updateVcsContext(msg.repos);
-      const m = msg as typeof msg & { fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean };
+      const m = msg as typeof msg & { fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity };
       if (m.fileViewMode === undefined) m.fileViewMode = this.getFileViewMode();
       if (m.defaultCommitAction === undefined) m.defaultCommitAction = this.getDefaultCommitAction();
       if (m.defaultSaveAction === undefined) m.defaultSaveAction = this.getDefaultSaveAction();
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
       if (m.noVerify === undefined) m.noVerify = vscode.workspace.getConfiguration('versiondock').get<boolean>('git.noVerify', false);
+      if (m.layoutDensity === undefined) m.layoutDensity = this.getLayoutDensity();
     }
     const broadcast = msg.type === 'COMMIT_STATUS_UPDATE'
+      || msg.type === 'COMMIT_LAYOUT_DENSITY_UPDATE'
       || msg.type === 'COMMIT_BRANCHES_UPDATE'
       || msg.type === 'COMMIT_HIDDEN_REPOS_UPDATE'
       || msg.type === 'CHANGELISTS_UPDATE'
@@ -1012,6 +1017,11 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private getFileViewMode(): 'flat' | 'tree' {
     return this.globalState?.get<'flat' | 'tree'>('fileViewMode', 'tree') ?? 'tree';
+  }
+
+  private getLayoutDensity(): LayoutDensity {
+    const raw = vscode.workspace.getConfiguration('versiondock').get<string>('layoutDensity', 'comfortable');
+    return raw === 'compact' ? 'compact' : 'comfortable';
   }
 
   private resolveAiCommitMessageTargets(

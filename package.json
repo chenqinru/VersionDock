@@ -793,6 +793,20 @@
             "default": "simplified",
             "description": "%configuration.changesViewMode.description%"
           },
+          "versiondock.layoutDensity": {
+            "order": 10.5,
+            "type": "string",
+            "enum": [
+              "comfortable",
+              "compact"
+            ],
+            "enumDescriptions": [
+              "%configuration.layoutDensity.enum.comfortable%",
+              "%configuration.layoutDensity.enum.compact%"
+            ],
+            "default": "comfortable",
+            "description": "%configuration.layoutDensity.description%"
+          },
           "versiondock.defaultCommitAction": {
             "order": 11,
             "type": "string",

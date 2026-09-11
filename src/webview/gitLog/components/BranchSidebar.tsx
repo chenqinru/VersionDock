@@ -6,6 +6,7 @@ import { t } from '../../shared/i18n';
 import { baseNameFromPath } from '../../shared/pathUtils';
 import { readableAccentColor } from '../../shared/branchColors';
 import { branchRevisionRef } from '../utils/refs';
+import { useLogStore, type LayoutDensity } from '../store/logStore';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
@@ -143,6 +144,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   onCheckout, onMerge, onRebase, onCompareWithCurrent, onShowWorktreeDiff, onDelete, onFetchRepo: _onFetchRepo, onPull, onPush,
   onCheckoutTag, onMergeTag, onPushTag, onDeleteTag, onCollapse,
 }, ref) {
+  const layoutDensity = useLogStore(s => s.layoutDensity);
   const [collapsed, setCollapsed] = useState<Set<SectionKey>>(() => {
     const initial = new Set<SectionKey>();
     // Auto-collapse tags section when there are many tags and not currently detached on a tag
@@ -254,11 +256,11 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   }
 
   return (
-    <div ref={ref} style={styles.container} onClick={() => { setContextMenu(null); setTagContextMenu(null); }}>
+    <div ref={ref} style={styles.container(layoutDensity)} onClick={() => { setContextMenu(null); setTagContextMenu(null); }}>
       <style>{INTERACTION_STYLE}</style>
       {/* Sticky header: search + repo list */}
-      <div style={styles.stickyHeader}>
-        <div style={styles.searchBox}>
+      <div style={styles.stickyHeader(layoutDensity)}>
+        <div style={styles.searchBox(layoutDensity)}>
           <div style={styles.searchInputWrap}>
             <Codicon name="filter" style={styles.searchIcon} />
             <input
@@ -795,31 +797,50 @@ function ContextMenu({ merged, x, y, isSvn, isRemote, canDelete, canCompare, onC
 
 
 const styles = {
-  container: {
-    width: '220px',
-    flexShrink: 0,
-    borderRight: '1px solid var(--vscode-panel-border)',
-    overflowY: 'auto' as const,
-    overflowX: 'hidden' as const,
-    background: 'var(--vscode-sideBar-background)',
-    display: 'flex',
-    flexDirection: 'column' as const,
-    fontSize: '12px',
-    color: 'var(--vscode-foreground)',
-    position: 'relative' as const,
-    userSelect: 'none' as const,
+  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    return {
+      width: '220px',
+      flexShrink: 0,
+      borderTop: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderRight: '1px solid var(--vscode-panel-border)',
+      borderBottom: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderLeft: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderRadius: isCompact ? 0 : '8px',
+      overflowY: 'auto' as const,
+      overflowX: 'hidden' as const,
+      background: 'var(--vscode-sideBar-background)',
+      display: 'flex',
+      flexDirection: 'column' as const,
+      fontSize: '12px',
+      color: 'var(--vscode-foreground)',
+      position: 'relative' as const,
+      userSelect: 'none' as const,
+      boxSizing: 'border-box' as const,
+    };
   },
-  stickyHeader: {
-    position: 'sticky' as const,
-    top: 0,
-    zIndex: 10,
-    background: 'var(--vscode-sideBar-background)',
+  stickyHeader: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const radius = density === 'compact' ? 0 : '7px';
+    return {
+      position: 'sticky' as const,
+      top: 0,
+      zIndex: 10,
+      background: 'var(--vscode-sideBar-background)',
+      borderTopLeftRadius: radius,
+      borderTopRightRadius: radius,
+    };
   },
-  searchBox: {
-    borderBottom: '1px solid var(--vscode-panel-border)',
-    display: 'flex',
-    alignItems: 'stretch',
-    height: '35px',
+  searchBox: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const radius = density === 'compact' ? 0 : '7px';
+    return {
+      borderBottom: '1px solid var(--vscode-panel-border)',
+      display: 'flex',
+      alignItems: 'stretch',
+      height: '35px',
+      borderTopLeftRadius: radius,
+      borderTopRightRadius: radius,
+      overflow: 'hidden',
+    };
   },
   searchInputWrap: {
     flex: 1,

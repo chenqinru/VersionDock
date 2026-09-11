@@ -1,6 +1,6 @@
 import React, { useEffect, useCallback, useRef, useState, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useCommitStore } from './store/commitStore';
+import { useCommitStore, type LayoutDensity } from './store/commitStore';
 import { ProjectGroup } from './components/ProjectGroup';
 import { ChangelistView } from './components/ChangelistView';
 import { VscodeView } from './components/VscodeView';
@@ -333,6 +333,8 @@ function changedPaths(repoStatus: Pick<FileStatus, 'path'>[] | undefined): strin
 
 export function CommitApp() {
   const store = useCommitStore();
+  const layoutDensity = store.layoutDensity;
+  const densityStyles = useMemo(() => getDensityStyles(layoutDensity), [layoutDensity]);
   const pendingRef = useRef<Map<string, (msg: HostToCommitMsg) => void>>(new Map());
   const commitActionRef = useRef<(andPush: boolean) => void>(() => {});
   // Renders that return an empty/loading state must not retain a previously
@@ -858,10 +860,13 @@ export function CommitApp() {
           // checks are not started twice by the same manual refresh.
           break;
         }
+        case 'COMMIT_LAYOUT_DENSITY_UPDATE':
+          store.setLayoutDensity(msg.layoutDensity);
+          break;
         case 'COMMIT_STATUS_UPDATE': {
           const isManualRefresh = commitStatusRefreshPendingRef.current;
           commitStatusRefreshPendingRef.current = false;
-          store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder, msg.noVerify);
+          store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder, msg.noVerify, msg.layoutDensity);
           if (Array.isArray(msg.status.repos) && useCommitStore.getState().changesViewMode === 'vscode') {
             const prevCounts = prevUnstagedCountsRef.current;
             let hasNewChanges = false;
@@ -2881,16 +2886,17 @@ export function CommitApp() {
       )}
 
       {/* ── Tab content ── */}
-      <div style={css.main}>
+      <div style={densityStyles.main}>
 
         {visitedTabs.has('changes') && (
-          <div style={{ display: activeTab === 'changes' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }}>
-            {activeTab === 'changes' && changesSpeedSearch.isOpen && (
-              <SpeedSearchWidget speedSearch={changesSpeedSearch} />
-            )}
+          <div style={{ ...densityStyles.tabContent, display: activeTab === 'changes' ? 'flex' : 'none' }}>
+            <div style={densityStyles.listCard}>
+              {activeTab === 'changes' && changesSpeedSearch.isOpen && (
+                <SpeedSearchWidget speedSearch={changesSpeedSearch} />
+              )}
 
-          {/* File list */}
-          <div ref={changesScrollContainerRef} className="versiondock-commit-scroll-container" style={css.repoList}>
+              {/* File list */}
+              <div ref={changesScrollContainerRef} className="versiondock-commit-scroll-container" style={css.repoList}>
             {store.changesViewMode === 'vscode' ? (
               <VscodeView
                 repos={repos}
@@ -3024,10 +3030,11 @@ export function CommitApp() {
               })
             )}
           </div>
+        </div>
 
           {/* Shelve name prompt — appears above commit form */}
           {shelvePrompt && (
-            <div style={css.shelvePromptBar}>
+            <div style={densityStyles.shelvePromptBar}>
               <Codicon name="archive" style={{ flexShrink: 0, fontSize: '14px' }} />
               <input
                 ref={shelvePromptRef}
@@ -3057,6 +3064,7 @@ export function CommitApp() {
 
           {/* Commit form */}
           <UnifiedCommitForm
+            layoutDensity={layoutDensity}
             message={store.commitMessage}
             messageHistory={commitMessageHistory}
             messageHistoryLoading={commitMessageHistoryLoading}
@@ -3150,12 +3158,12 @@ export function CommitApp() {
 
         {visitedTabs.has('shelf') && (
           /* Shelf tab */
-          <div ref={shelveScrollContainerRef} style={{ display: activeTab === 'shelf' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+          <div ref={shelveScrollContainerRef} style={{ ...densityStyles.listCard, display: activeTab === 'shelf' ? 'flex' : 'none' }}>
             {activeTab === 'shelf' && shelveSpeedSearch.isOpen && (
               <SpeedSearchWidget speedSearch={shelveSpeedSearch} />
             )}
             <div style={css.repoList}>
-              {gitRepos.map(repoStatus => {
+              {gitRepos.map((repoStatus, idx) => {
                 const repoId = repoStatus.repoId;
                 const meta = metaMap.get(repoId);
                 const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
@@ -3167,6 +3175,7 @@ export function CommitApp() {
                 return (
                   <ShelvePanel
                     key={repoId}
+                    isFirst={idx === 0}
                     repoId={repoId}
                     repoName={repoName}
                     repoColor={repoColor}
@@ -3194,12 +3203,12 @@ export function CommitApp() {
 
         {visitedTabs.has('stash') && (
           /* Stash tab */
-          <div ref={stashScrollContainerRef} style={{ display: activeTab === 'stash' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+          <div ref={stashScrollContainerRef} style={{ ...densityStyles.listCard, display: activeTab === 'stash' ? 'flex' : 'none' }}>
             {activeTab === 'stash' && stashSpeedSearch.isOpen && (
               <SpeedSearchWidget speedSearch={stashSpeedSearch} />
             )}
             <div style={css.repoList}>
-              {gitRepos.map(repoStatus => {
+              {gitRepos.map((repoStatus, idx) => {
                 const repoId = repoStatus.repoId;
                 const meta = metaMap.get(repoId);
                 const repoName = meta?.name ?? baseNameFromPath(repoId) ?? repoId;
@@ -3211,6 +3220,7 @@ export function CommitApp() {
                 return (
                   <StashTab
                     key={repoId}
+                    isFirst={idx === 0}
                     repoId={repoId}
                     repoName={repoName}
                     repoColor={repoColor}
@@ -3239,9 +3249,10 @@ export function CommitApp() {
         )}
 
         {visitedTabs.has('push') && (
-          /* Sync tab — manages its own scroll, footer anchored at bottom */
-          <div style={{ display: activeTab === 'push' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0, position: 'relative' }}>
+          /* Sync tab — manages its own scroll and cards */
+          <div style={{ ...densityStyles.tabContent, display: activeTab === 'push' ? 'flex' : 'none' }}>
             <PushTab
+              layoutDensity={layoutDensity}
               isActive={activeTab === 'push'}
               repos={gitRepos}
               repoMetas={visibleGitRepoMetas}
@@ -3289,7 +3300,7 @@ export function CommitApp() {
 
         {visitedTabs.has('submodule') && (
           /* Submodule tab */
-          <div style={{ display: activeTab === 'submodule' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ ...densityStyles.listCard, display: activeTab === 'submodule' ? 'flex' : 'none' }}>
             <div style={css.repoList}>
               <SubmodulePanel
                 repos={visibleSubmoduleRepos}
@@ -3319,7 +3330,7 @@ export function CommitApp() {
 
         {visitedTabs.has('worktree') && (
           /* Worktree tab */
-          <div style={{ display: activeTab === 'worktree' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ ...densityStyles.listCard, display: activeTab === 'worktree' ? 'flex' : 'none' }}>
             <div style={css.repoList}>
               <WorktreePanel
                 repos={visibleWorktreeRepos}
@@ -3342,7 +3353,7 @@ export function CommitApp() {
 
         {visitedTabs.has('subtree') && (
           /* Subtree tab */
-          <div style={{ display: activeTab === 'subtree' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
+          <div style={{ ...densityStyles.listCard, display: activeTab === 'subtree' ? 'flex' : 'none' }}>
             <div style={css.repoList}>
               <SubtreePanel
                 entries={visibleSubtreeEntries}
@@ -3688,6 +3699,102 @@ export function CommitApp() {
       )}
     </div>
   );
+}
+
+function getDensityStyles(density: LayoutDensity) {
+  if (density === 'compact') {
+    return {
+      main: {
+        display: 'flex',
+        flexDirection: 'column' as const,
+        flex: 1,
+        overflow: 'hidden',
+        padding: 0,
+        gap: 0,
+        boxSizing: 'border-box' as const,
+      } as React.CSSProperties,
+      tabContent: {
+        display: 'flex',
+        flexDirection: 'column' as const,
+        flex: 1,
+        minHeight: 0,
+        position: 'relative' as const,
+        gap: 0,
+      } as React.CSSProperties,
+      listCard: {
+        display: 'flex',
+        flexDirection: 'column' as const,
+        flex: 1,
+        minHeight: 0,
+        overflow: 'hidden',
+        position: 'relative' as const,
+        borderRadius: 0,
+        border: 'none',
+        background: 'var(--vscode-sideBar-background)',
+        boxSizing: 'border-box' as const,
+      } as React.CSSProperties,
+      shelvePromptBar: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '5px 8px',
+        borderTop: '1px solid var(--vscode-panel-border)',
+        borderRight: 'none',
+        borderBottom: 'none',
+        borderLeft: 'none',
+        borderRadius: 0,
+        background: 'var(--vscode-sideBar-background)',
+        flexShrink: 0,
+        boxSizing: 'border-box' as const,
+      } as React.CSSProperties,
+    };
+  }
+
+  return {
+    main: {
+      display: 'flex',
+      flexDirection: 'column' as const,
+      flex: 1,
+      overflow: 'hidden',
+      padding: '6px 6px 1px 6px',
+      gap: '6px',
+      boxSizing: 'border-box' as const,
+    } as React.CSSProperties,
+    tabContent: {
+      display: 'flex',
+      flexDirection: 'column' as const,
+      flex: 1,
+      minHeight: 0,
+      position: 'relative' as const,
+      gap: '6px',
+    } as React.CSSProperties,
+    listCard: {
+      display: 'flex',
+      flexDirection: 'column' as const,
+      flex: 1,
+      minHeight: 0,
+      overflow: 'hidden',
+      position: 'relative' as const,
+      borderRadius: '8px',
+      border: '1px solid var(--vscode-panel-border)',
+      background: 'var(--vscode-sideBar-background)',
+      boxSizing: 'border-box' as const,
+    } as React.CSSProperties,
+    shelvePromptBar: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      padding: '5px 8px',
+      borderTop: '1px solid var(--vscode-panel-border)',
+      borderRight: '1px solid var(--vscode-panel-border)',
+      borderBottom: '1px solid var(--vscode-panel-border)',
+      borderLeft: '1px solid var(--vscode-panel-border)',
+      borderRadius: '8px',
+      background: 'var(--vscode-sideBar-background)',
+      flexShrink: 0,
+      boxSizing: 'border-box' as const,
+    } as React.CSSProperties,
+  };
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────

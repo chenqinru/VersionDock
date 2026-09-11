@@ -10,6 +10,7 @@ import { readableAccentColor } from '../../shared/branchColors';
 import { CommitMessageHistoryModal } from './CommitMessageHistoryModal';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { readClipboardText, writeClipboardText } from '../../shared/clipboard';
+import type { LayoutDensity } from '../store/commitStore';
 
 function CutIcon() {
   return (
@@ -65,6 +66,7 @@ interface Props {
   noVerify?: boolean;
   onNoVerifyChange?: (v: boolean) => void;
   onRequestMessageHistory?: () => void;
+  layoutDensity?: LayoutDensity;
 }
 
 interface DropdownButtonItem { icon: string; label: string; onSelect: () => void; }
@@ -334,7 +336,7 @@ export function UnifiedCommitForm({
   message, messageHistory, messageHistoryLoading, repoStatuses, repoMetas, amendFlags, unpushedMap,
   loading, changesViewMode, defaultCommitAction = 'commit', defaultSaveAction = 'stash', vscodeSelectedRepos, getSelectedFilesForRepo, onDeselectRepo, onMessageChange, onAmendToggle, onCommit, onCommitAndPush, onShelve, onStash,
   onAutopilot, onStopAutopilot, onOpenComposer, onOpenCodeReview, generatingMessage, noVerify = false, onNoVerifyChange,
-  onRequestMessageHistory,
+  onRequestMessageHistory, layoutDensity = 'comfortable',
 }: Props) {
   const metaMap = new Map(repoMetas.map(m => [m.id, m]));
 
@@ -672,9 +674,9 @@ export function UnifiedCommitForm({
   }, []);
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container(layoutDensity)}>
       <div
-        style={styles.resizeHandle(resizingTextarea)}
+        style={styles.resizeHandle(resizingTextarea, layoutDensity)}
         title={t('Drag to resize the commit message area')}
         role="separator"
         aria-orientation="horizontal"
@@ -990,21 +992,30 @@ export function UnifiedCommitForm({
 }
 
 const styles = {
-  container: {
-    position: 'relative' as const,
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '6px',
-    padding: '8px',
-    borderTop: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-sideBar-background)',
+  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    return {
+      position: 'relative',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px',
+      padding: '6px 8px',
+      borderRadius: isCompact ? 0 : '8px',
+      borderTop: '1px solid var(--vscode-panel-border)',
+      borderRight: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderBottom: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      borderLeft: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
+      background: 'var(--vscode-sideBar-background)',
+      boxSizing: 'border-box',
+      flexShrink: 0,
+    };
   },
-  resizeHandle: (active: boolean): React.CSSProperties => ({
+  resizeHandle: (active: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
     position: 'absolute',
-    top: '-4px',
+    top: density === 'compact' ? '-4px' : '-6px',
     left: 0,
     right: 0,
-    height: '9px',
+    height: density === 'compact' ? '9px' : '11px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

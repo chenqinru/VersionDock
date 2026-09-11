@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { ChangelistData, FileStatus, RepoStatus } from '../../shared/types';
 import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../../shared/types';
-import type { ViewMode } from '../store/commitStore';
+import type { ViewMode, LayoutDensity } from '../store/commitStore';
+import { useCommitStore } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { FileTree } from './FileTree';
 import { Codicon } from '../../shared/Codicon';
@@ -233,6 +234,7 @@ function RepoSubGroup({
     : branchColor('main');
   const projectColor = readableAccentColor(repoColor);
   const [hovered, setHovered] = useState(false);
+  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   const checkboxRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -245,10 +247,10 @@ function RepoSubGroup({
   };
 
   return (
-    <div style={styles.repoSubGroup(isFirst)}>
+    <div style={styles.repoSubGroup(isFirst, layoutDensity)}>
       {multiRepo && !singleRepo && (
         <div
-          style={styles.repoHeader(projectColor)}
+          style={styles.repoHeader(projectColor, layoutDensity, hovered)}
           onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId, changelistId); }}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
@@ -336,7 +338,11 @@ function RepoSubGroup({
           activeSpeedSearchKey={activeSpeedSearchKey}
         />
       )}
-      <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
+      {layoutDensity === 'compact' ? (
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
+      ) : !collapsed && files.length > 0 ? (
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', marginTop: '4px' }} />
+      ) : null}
     </div>
   );
 }
@@ -425,15 +431,35 @@ const styles = {
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
 
-  repoSubGroup: (_isFirst: boolean): React.CSSProperties => ({
-  }),
-  repoHeader: (color: string): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    background: color + '22',
-    height: '26px',
-    boxSizing: 'border-box',
-  }),
+  repoSubGroup: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    if (density === 'compact') return {};
+    return {
+      marginTop: isFirst ? '4px' : '6px',
+    };
+  },
+  repoHeader: (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
+    if (density === 'compact') {
+      return {
+        display: 'flex',
+        alignItems: 'center',
+        background: hovered ? color + '33' : color + '22',
+        height: '26px',
+        boxSizing: 'border-box',
+        transition: 'background 0.12s',
+      };
+    }
+    return {
+      display: 'flex',
+      alignItems: 'center',
+      background: hovered ? color + '28' : color + '1c',
+      border: `1px solid ${color}${hovered ? '55' : '38'}`,
+      borderRadius: '6px',
+      height: '27px',
+      margin: '0 6px',
+      boxSizing: 'border-box',
+      transition: 'background 0.12s, border-color 0.12s',
+    };
+  },
 
   // Repo checkbox indented one level from changelist checkbox
   repoCheckbox: {

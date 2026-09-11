@@ -157,7 +157,8 @@ export type CommitPanelTab = 'changes' | 'shelf' | 'stash' | 'push' | 'worktree'
 // ─── Commit Panel: Host → WebView ────────────────────────────────────────────
 
 export type HostToCommitMsg =
-  | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean; noVerify?: boolean }
+  | { type: 'COMMIT_STATUS_UPDATE'; repos: RepoMeta[]; status: WorkspaceStatus; iconTheme?: IconThemeData; fileViewMode?: 'flat' | 'tree'; defaultCommitAction?: 'commit' | 'commitAndPush'; defaultSaveAction?: 'stash' | 'shelve'; hasWorkspaceFolder?: boolean; noVerify?: boolean; layoutDensity?: LayoutDensity }
+  | { type: 'COMMIT_LAYOUT_DENSITY_UPDATE'; layoutDensity: LayoutDensity }
   | { type: 'COMMIT_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'COMMIT_DIFF_RESULT'; requestId: string; diff: FileDiff | null; error?: string }
   | { type: 'COMMIT_WORKTREE_DIFF_STARTED'; repoId: string; repoName: string; repoColor: string; baseRef: string; currentRef: string; files: FileStatus[] }
@@ -390,9 +391,12 @@ export interface LogCommitPathEntry {
 
 export type CompareSide = 'baseOnly' | 'targetOnly';
 
+export type LayoutDensity = 'comfortable' | 'compact';
+
 export type HostToLogMsg =
-  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean }
+  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity }
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
+  | { type: 'LOG_LAYOUT_DENSITY_UPDATE'; layoutDensity: LayoutDensity }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }
   | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string; repoErrors?: Array<{ repoId: string; error: string }> }
   | { type: 'LOG_GRAPH_COMMITS'; commits: GraphCommitNode[]; generation: number; requestId: string }
@@ -418,6 +422,7 @@ export type HostToLogMsg =
 // ─── Git Log: WebView → Host ─────────────────────────────────────────────────
 
 export type LogToHostMsg =
+  | { type: 'LOG_SET_LAYOUT_DENSITY'; density: LayoutDensity }
   | { type: 'LOG_REQUEST_COMMITS'; repoIds: string[] | null; limit: number; skip: number; generation?: number; requestId?: string; filterText?: string; filterAuthor?: string; filterBranch?: string; filterDateFrom?: string; filterDateTo?: string; filterPath?: string; lineRange?: LineRange }
   | { type: 'LOG_REQUEST_GRAPH_COMMITS'; repoIds: string[] | null; generation: number; requestId: string }
   | { type: 'LOG_REQUEST_COMMIT_FILES'; requestId: string; repoId: string; hash: string; parents?: string[]; includeMergeParentChanges?: boolean; prefetchContent?: boolean }

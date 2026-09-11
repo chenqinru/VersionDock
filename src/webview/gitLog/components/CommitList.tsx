@@ -14,7 +14,7 @@ import type { LogToHostMsg } from '../../../host/types/messages';
 import { AuthorAvatar } from './AuthorAvatar';
 import { formatDateTime } from '../../shared/dateUtils';
 import { t } from '../../shared/i18n';
-import { getCommitKey, useLogStore, type CommitSelectionMode } from '../store/logStore';
+import { getCommitKey, useLogStore, type CommitSelectionMode, type LayoutDensity } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
 import { readableAccentColor } from '../../shared/branchColors';
 
@@ -90,10 +90,11 @@ const INTERACTION_STYLE = `
 `;
 
 function CommitSkeleton() {
+  const layoutDensity = useLogStore(s => s.layoutDensity);
   const rows = Math.ceil(window.innerHeight / ROW_HEIGHT) + 2;
   return (
     <div
-      style={skeletonStyles.container}
+      style={skeletonStyles.container(layoutDensity)}
       role="status"
       aria-live="polite"
       aria-label={t('Loading commits…')}
@@ -116,6 +117,7 @@ function CommitSkeleton() {
 
 export function CommitList({ commits, selectedHashes, primarySelectedHash, repos, currentBranchByRepo, headHashByRepo, remoteNamesByRepo = {}, onSelect, onLoadMore, onRetry, hasMore, storeHasMore, loading, backgroundLoading, expandedRepoIds, onToggleRepoName, scrollToHash, onScrolledToHash }: Props) {
   const repoErrors = useLogStore(s => s.repoErrors);
+  const layoutDensity = useLogStore(s => s.layoutDensity);
   const parentRef = useRef<HTMLDivElement>(null);
   // Start as true — skeleton is always shown until commits arrive (handles first load correctly)
   const [showSkeleton, setShowSkeleton] = useState(true);
@@ -255,7 +257,12 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   }, [commits, hasMore, loading, onLoadMore, onScrolledToHash, onSelect, scrollToHash, virtualizer]);
 
   const anyExpanded = expandedRepos.size > 0;
-  const labelColWidth = multiRepo ? (anyExpanded ? REPO_LABEL_WIDTH_EXPANDED : REPO_LABEL_WIDTH + 2) : 0;
+  const isCompact = layoutDensity === 'compact';
+  const labelColWidth = multiRepo
+    ? (anyExpanded
+        ? REPO_LABEL_WIDTH_EXPANDED + (isCompact ? 0 : 4)
+        : (isCompact ? REPO_LABEL_WIDTH + 2 : 12))
+    : 0;
 
   const scrollTop = virtualizer.scrollOffset ?? 0;
 
@@ -277,7 +284,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
 
   if (commits.length === 0) {
     return (
-      <div style={emptyStyles.container}>
+      <div style={emptyStyles.container(layoutDensity)}>
         <Codicon name="history" style={emptyStyles.icon} />
         <div style={emptyStyles.title}>{t('No commits found')}</div>
       </div>
@@ -285,7 +292,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   }
 
   return (
-    <div style={styles.frame}>
+    <div style={styles.frame(layoutDensity)}>
       <div
         ref={scrollContainerRef}
         style={styles.container}
@@ -294,13 +301,15 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
         <style>{INTERACTION_STYLE}</style>
         <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
 
-        {/* Repo label strips */}
+        {/* Multi-repo group indicator strip (drawn once per contiguous block of commits) */}
         {multiRepo && repoBlocks.map((block) => {
           const blockTopPx = block.startRow * ROW_HEIGHT;
           const blockHeightPx = block.rowCount * ROW_HEIGHT;
-          const leadingGap = block.startRow > 0 ? REPO_BLOCK_GAP : 0;
+          const leadingGap = isCompact
+            ? (block.startRow > 0 ? REPO_BLOCK_GAP : 0)
+            : (block.startRow === 0 ? 3 : REPO_BLOCK_GAP);
           const topPx = blockTopPx + leadingGap;
-          const heightPx = Math.max(0, blockHeightPx - leadingGap);
+          const heightPx = Math.max(0, isCompact ? blockHeightPx - leadingGap : blockHeightPx - leadingGap - 2);
           const expanded = expandedRepos.has(block.repoId);
           const nameOffset = Math.min(
             Math.max(scrollTop - topPx, 0),
@@ -309,12 +318,12 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
           return (
             <div
               key={`strip-${block.repoId}-${block.startRow}`}
-              style={styles.repoStrip(topPx, heightPx, block.color, expanded)}
+              style={styles.repoStrip(topPx, heightPx, block.color, expanded, layoutDensity)}
               className="versiondock-log-repo-strip"
               onClick={() => toggleRepo(block.repoId)}
               title={block.name}
             >
-              <span style={styles.repoStripBar(block.color)} />
+              <span style={styles.repoStripBar(block.color, layoutDensity)} />
               {expanded && (
                 <span style={styles.repoStripName(nameOffset)}>{block.name}</span>
               )}
@@ -1334,7 +1343,7 @@ function RefBadgeIcon({ group }: { group: RefGroup }) {
 
 
 const skeletonStyles = {
-  container: {
+  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
     flex: 1,
     minHeight: 0,
     position: 'relative' as const,
@@ -1344,7 +1353,10 @@ const skeletonStyles = {
     display: 'flex',
     flexDirection: 'column' as const,
     alignSelf: 'stretch' as const,
-  },
+    borderRadius: density === 'compact' ? 0 : '8px',
+    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
+    boxSizing: 'border-box' as const,
+  }),
   overlay: {
     position: 'absolute' as const,
     inset: 0,
@@ -1398,7 +1410,7 @@ const skeletonStyles = {
 };
 
 const emptyStyles = {
-  container: {
+  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
     flex: 1,
     minHeight: 0,
     display: 'flex',
@@ -1408,7 +1420,10 @@ const emptyStyles = {
     gap: '10px',
     color: 'var(--vscode-foreground)',
     background: 'var(--vscode-editor-background)',
-  } as React.CSSProperties,
+    borderRadius: density === 'compact' ? 0 : '8px',
+    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
+    boxSizing: 'border-box' as const,
+  }),
   icon: {
     fontSize: '28px',
     color: 'var(--vscode-descriptionForeground)',
@@ -1420,14 +1435,18 @@ const emptyStyles = {
 };
 
 const styles = {
-  frame: {
+  frame: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
     flex: 1,
     height: '100%',
     minHeight: 0,
     minWidth: 0,
     position: 'relative' as const,
     background: 'var(--vscode-editor-background)',
-  } as React.CSSProperties,
+    borderRadius: density === 'compact' ? 0 : '8px',
+    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
+    overflow: 'hidden',
+    boxSizing: 'border-box' as const,
+  }),
   container: {
     flex: 1,
     height: '100%',
@@ -1439,32 +1458,40 @@ const styles = {
     background: 'var(--vscode-editor-background)',
     boxSizing: 'border-box',
   } as React.CSSProperties,
-  repoStrip: (top: number, height: number, color: string, expanded: boolean): React.CSSProperties => ({
-    position: 'absolute',
-    top,
-    left: 0,
-    width: expanded ? REPO_LABEL_WIDTH_EXPANDED : REPO_LABEL_WIDTH,
-    height,
-    display: 'flex',
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    cursor: 'pointer',
-    zIndex: 3,
-    userSelect: 'none' as const,
-    overflow: 'hidden',
-    borderRadius: expanded ? '0 3px 3px 0' : '0',
-    background: expanded ? `${color}22` : 'transparent',
-    border: expanded ? `1px solid ${color}55` : 'none',
-    borderLeft: 'none',
-    transition: 'width 0.15s ease, background 0.1s',
-  }),
-  repoStripBar: (color: string): React.CSSProperties => ({
-    width: REPO_LABEL_WIDTH,
-    minWidth: REPO_LABEL_WIDTH,
-    height: '100%',
-    background: color,
-    flexShrink: 0,
-  }),
+  repoStrip: (top: number, height: number, color: string, expanded: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    return {
+      position: 'absolute',
+      top,
+      left: isCompact ? 0 : 4,
+      width: expanded ? REPO_LABEL_WIDTH_EXPANDED : (isCompact ? REPO_LABEL_WIDTH : 4),
+      height,
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'stretch',
+      cursor: 'pointer',
+      zIndex: 3,
+      userSelect: 'none' as const,
+      overflow: 'hidden',
+      borderRadius: isCompact ? (expanded ? '0 3px 3px 0' : '0') : (expanded ? '6px' : '999px'),
+      background: expanded ? `${color}22` : 'transparent',
+      border: expanded ? `1px solid ${color}55` : 'none',
+      borderLeft: isCompact && expanded ? 'none' : (expanded ? `1px solid ${color}55` : 'none'),
+      transition: 'width 0.15s ease, background 0.1s',
+    };
+  },
+  repoStripBar: (color: string, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
+    const isCompact = density === 'compact';
+    const width = isCompact ? REPO_LABEL_WIDTH : 4;
+    return {
+      width,
+      minWidth: width,
+      height: '100%',
+      background: color,
+      borderRadius: isCompact ? 0 : '999px',
+      flexShrink: 0,
+    };
+  },
   repoStripName: (offset: number): React.CSSProperties => ({
     alignSelf: 'flex-start',
     flex: 1,

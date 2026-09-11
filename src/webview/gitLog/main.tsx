@@ -1,6 +1,6 @@
 import React, { useEffect, useCallback, useRef, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { useLogStore, getCommitKey, type CommitFileEntry, type CommitFilters, type CommitSelectionMode, type CompareSide, type LogViewFileEntry } from './store/logStore';
+import { useLogStore, getCommitKey, type CommitFileEntry, type CommitFilters, type CommitSelectionMode, type CompareSide, type LogViewFileEntry, type LayoutDensity } from './store/logStore';
 import { BranchSidebar } from './components/BranchSidebar';
 import { CommitList } from './components/CommitList';
 import { CommitDetail } from './components/CommitDetail';
@@ -133,6 +133,8 @@ export function GitLogApp() {
   const [detailCollapsed, setDetailCollapsed] = useState(false);
   const [expandedRepoIds, setExpandedRepoIds] = useState<Set<string>>(new Set());
   const isUndocked = (window as Window & { __VERSIONDOCK_APP_NAME__?: string }).__VERSIONDOCK_APP_NAME__ === 'undockedPanel';
+  const layoutDensity = store.layoutDensity;
+  const densityStyles = useMemo(() => getDensityStyles(layoutDensity), [layoutDensity]);
 
   const send = useCallback((msg: LogToHostMsg) => {
     getVsCodeApi().postMessage(msg);
@@ -244,7 +246,11 @@ export function GitLogApp() {
         case 'LOG_INIT_DATA':
           store.setRepos(msg.repos, msg.hasWorkspaceFolder);
           store.setBranches(msg.branches);
+          if (msg.layoutDensity) store.setLayoutDensity(msg.layoutDensity);
           if (msg.iconTheme) store.setIconTheme(msg.iconTheme);
+          break;
+        case 'LOG_LAYOUT_DENSITY_UPDATE':
+          store.setLayoutDensity(msg.layoutDensity);
           break;
         case 'LOG_ICON_THEME_UPDATE':
           store.setIconTheme(msg.iconTheme);
@@ -764,6 +770,7 @@ export function GitLogApp() {
       {noRepoOverlay}
       {store.mode !== 'compare' && (
         <CommitFiltersBar
+          layoutDensity={layoutDensity}
           filters={store.commitFilters}
           branches={store.branches}
           tags={store.tags}
@@ -781,9 +788,13 @@ export function GitLogApp() {
         />
       )}
 
-      <div style={{ ...mainLayout, visibility: showNoRepo ? 'hidden' : 'visible' }}>
+      <div style={{
+        ...densityStyles.mainLayout,
+        ...(store.mode === 'compare' && layoutDensity !== 'compact' ? { paddingTop: '6px' } : {}),
+        visibility: showNoRepo ? 'hidden' : 'visible',
+      }}>
         {sidebarCollapsed ? (
-          <div style={collapsedSidebarStrip}>
+          <div style={densityStyles.collapsedSidebarStrip}>
             <button data-top-action-btn="" style={expandSidebarBtn} onClick={() => setSidebarCollapsed(false)} title={t('Expand sidebar')}>
               <Codicon name="layout-sidebar-left-off" style={{ fontSize: '14px' }} />
             </button>
@@ -853,7 +864,7 @@ export function GitLogApp() {
               }}
               onCollapse={() => setSidebarCollapsed(true)}
             />
-            <ResizeHandle onMouseDown={onSidebarResize} onKeyDown={onSidebarResizeKeyDown} />
+            <ResizeHandle onMouseDown={onSidebarResize} onKeyDown={onSidebarResizeKeyDown} style={densityStyles.resizeHandleStyle} />
           </>
         )}
 
@@ -912,7 +923,7 @@ export function GitLogApp() {
 
         {hasSelectedCommit && (
           detailCollapsed ? (
-            <div style={collapsedDetailStrip}>
+            <div style={densityStyles.collapsedDetailStrip}>
               <button
                 data-top-action-btn=""
                 style={expandSidebarBtn}
@@ -924,8 +935,8 @@ export function GitLogApp() {
             </div>
           ) : (
             <>
-              <ResizeHandle onMouseDown={onDetailResize} onKeyDown={onDetailResizeKeyDown} />
-              <div ref={detailRef} style={detailPane}>
+              <ResizeHandle onMouseDown={onDetailResize} onKeyDown={onDetailResizeKeyDown} style={densityStyles.resizeHandleStyle} />
+              <div ref={detailRef} style={densityStyles.detailPane}>
                 <CommitDetail
                   commit={primarySelectedCommit}
                   commits={sortedSelectedCommits}
@@ -979,32 +990,106 @@ const appStyle: React.CSSProperties = {
   userSelect: 'none',
 };
 
-const mainLayout: React.CSSProperties = {
-  display: 'flex',
-  flex: 1,
-  overflow: 'hidden',
-  userSelect: 'none',
-};
+function getDensityStyles(density: LayoutDensity) {
+  if (density === 'compact') {
+    return {
+      mainLayout: {
+        display: 'flex',
+        flex: 1,
+        overflow: 'hidden',
+        userSelect: 'none',
+        padding: 0,
+        boxSizing: 'border-box',
+      } as React.CSSProperties,
+      collapsedSidebarStrip: {
+        width: '28px',
+        flexShrink: 0,
+        borderRight: '1px solid var(--vscode-panel-border)',
+        background: 'var(--vscode-sideBar-background)',
+        display: 'flex',
+        justifyContent: 'center',
+        paddingTop: '6px',
+        boxSizing: 'border-box',
+      } as React.CSSProperties,
+      collapsedDetailStrip: {
+        width: '28px',
+        flexShrink: 0,
+        borderLeft: '1px solid var(--vscode-panel-border)',
+        background: 'var(--vscode-sideBar-background)',
+        display: 'flex',
+        justifyContent: 'center',
+        paddingTop: '6px',
+        boxSizing: 'border-box',
+      } as React.CSSProperties,
+      detailPane: {
+        width: '320px',
+        flexShrink: 0,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        userSelect: 'text',
+        borderLeft: '1px solid var(--vscode-panel-border)',
+        background: 'var(--vscode-editor-background)',
+        boxSizing: 'border-box',
+      } as React.CSSProperties,
+      resizeHandleStyle: {
+        width: '4px',
+        borderRadius: 0,
+      } as React.CSSProperties,
+    };
+  }
 
-const collapsedSidebarStrip: React.CSSProperties = {
-  width: '28px',
-  flexShrink: 0,
-  borderRight: '1px solid var(--vscode-panel-border)',
-  background: 'var(--vscode-sideBar-background)',
-  display: 'flex',
-  justifyContent: 'center',
-  paddingTop: '6px',
-};
-
-const collapsedDetailStrip: React.CSSProperties = {
-  width: '28px',
-  flexShrink: 0,
-  borderLeft: '1px solid var(--vscode-panel-border)',
-  background: 'var(--vscode-sideBar-background)',
-  display: 'flex',
-  justifyContent: 'center',
-  paddingTop: '6px',
-};
+  return {
+    mainLayout: {
+      display: 'flex',
+      flex: 1,
+      overflow: 'hidden',
+      userSelect: 'none',
+      padding: '0 6px 6px 6px',
+      boxSizing: 'border-box',
+    } as React.CSSProperties,
+    collapsedSidebarStrip: {
+      width: '28px',
+      flexShrink: 0,
+      border: '1px solid var(--vscode-panel-border)',
+      borderRadius: '8px',
+      background: 'var(--vscode-sideBar-background)',
+      display: 'flex',
+      justifyContent: 'center',
+      paddingTop: '6px',
+      marginRight: '6px',
+      boxSizing: 'border-box',
+    } as React.CSSProperties,
+    collapsedDetailStrip: {
+      width: '28px',
+      flexShrink: 0,
+      border: '1px solid var(--vscode-panel-border)',
+      borderRadius: '8px',
+      background: 'var(--vscode-sideBar-background)',
+      display: 'flex',
+      justifyContent: 'center',
+      paddingTop: '6px',
+      marginLeft: '6px',
+      boxSizing: 'border-box',
+    } as React.CSSProperties,
+    detailPane: {
+      width: '320px',
+      flexShrink: 0,
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      userSelect: 'text',
+      borderRadius: '8px',
+      border: '1px solid var(--vscode-panel-border)',
+      background: 'var(--vscode-editor-background)',
+      boxSizing: 'border-box',
+    } as React.CSSProperties,
+    resizeHandleStyle: {
+      width: '6px',
+      borderRadius: '3px',
+    } as React.CSSProperties,
+  };
+}
 
 const expandSidebarBtn: React.CSSProperties = {
   width: '22px',
@@ -1017,15 +1102,6 @@ const expandSidebarBtn: React.CSSProperties = {
   background: 'transparent',
   color: 'var(--vscode-descriptionForeground)',
   cursor: 'pointer',
-};
-
-const detailPane: React.CSSProperties = {
-  width: '320px',
-  flexShrink: 0,
-  overflow: 'hidden',
-  display: 'flex',
-  flexDirection: 'column',
-  userSelect: 'text',
 };
 
 class GitLogErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: string | null }> {

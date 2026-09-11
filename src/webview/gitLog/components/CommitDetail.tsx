@@ -2071,7 +2071,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
     height: '100%',
-    borderLeft: '1px solid var(--vscode-panel-border)',
+    border: 'none',
     background: 'var(--vscode-editor-background)',
     position: 'relative' as const,
   },
