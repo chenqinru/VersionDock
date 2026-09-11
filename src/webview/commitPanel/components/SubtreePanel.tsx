@@ -5,7 +5,6 @@ import { Codicon } from '../../shared/Codicon';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
 import { branchColor, readableAccentColor } from '../../shared/branchColors';
-import { useCommitStore, type LayoutDensity } from '../store/commitStore';
 
 interface Props {
   entries: SubtreeEntry[];
@@ -204,16 +203,13 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
   isFirst?: boolean;
 }) {
   const summary = repoStatusSummary(entries, statuses);
-  const [hovered, setHovered] = useState(false);
-  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   return (
-    <div style={css.repoSection(isFirst ?? false, layoutDensity)}>
+    <div className="versiondock-repo-group" data-first={isFirst ? 'true' : undefined} style={css.repoSection}>
       {multiRepo && (
         <div
-          style={css.repoHeader(meta.color, layoutDensity, hovered)}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
+          className="versiondock-repo-header"
+          style={{ ...css.repoHeader, '--repo-color': meta.color } as React.CSSProperties}
         >
           <span style={css.dot(meta.color)} />
           <span style={css.repoName}>{meta.name}</span>
@@ -337,42 +333,14 @@ export function SubtreePanel({
 
 const css = {
   root: { display: 'flex', flexDirection: 'column' as const },
-  repoSection: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
-    if (density === 'compact') {
-      return { borderBottom: '1px solid var(--vscode-panel-border)' };
-    }
-    return {
-      marginTop: isFirst ? '4px' : '6px',
-    };
-  },
-  repoHeader: (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
-    if (density === 'compact') {
-      return {
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        padding: '4px 8px',
-        minHeight: '26px',
-        background: hovered ? color + '33' : color + '22',
-        borderBottom: '1px solid var(--vscode-panel-border)',
-        boxSizing: 'border-box',
-        transition: 'background 0.12s',
-      };
-    }
-    return {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '6px',
-      padding: '4px 8px',
-      minHeight: '27px',
-      background: hovered ? color + '28' : color + '1c',
-      border: `1px solid ${color}${hovered ? '55' : '38'}`,
-      borderRadius: '6px',
-      margin: '0 6px',
-      boxSizing: 'border-box',
-      transition: 'background 0.12s, border-color 0.12s',
-    };
-  },
+  repoSection: {} as React.CSSProperties,
+  repoHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '4px 8px',
+    boxSizing: 'border-box' as const,
+  } as React.CSSProperties,
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
   repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em', flex: 1 },
   repoStatus: {

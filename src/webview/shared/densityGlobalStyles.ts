@@ -54,6 +54,92 @@ export const GLOBAL_DENSITY_STYLES = `
   border-radius: 0 0 6px 6px !important;
 }
 
+/* 通用：标题栏操作按钮悬浮显现 */
+.versiondock-repo-header [data-action-btn],
+.versiondock-group-divider [data-action-btn] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.versiondock-repo-header:hover [data-action-btn],
+.versiondock-group-divider:hover [data-action-btn],
+.versiondock-repo-header [data-action-btn][data-active="true"] {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* 多仓库分组与标题栏（RepoHeader） */
+[data-density="comfortable"] .versiondock-repo-group,
+[data-density="comfortable"] .versiondock-repo-section {
+  margin-top: 6px;
+}
+[data-density="comfortable"] .versiondock-repo-group[data-first="true"],
+[data-density="comfortable"] .versiondock-repo-section[data-first="true"] {
+  margin-top: 4px;
+}
+
+[data-density="comfortable"] .versiondock-repo-header {
+  margin: 0 6px !important;
+  border-radius: 6px !important;
+  min-height: 27px;
+  border: 1px solid color-mix(in srgb, var(--repo-color, #888) 38%, transparent) !important;
+  background: color-mix(in srgb, var(--repo-color, #888) 12%, transparent);
+  transition: background 0.12s ease, border-color 0.12s ease !important;
+}
+[data-density="comfortable"] .versiondock-repo-header:hover {
+  background: color-mix(in srgb, var(--repo-color, #888) 20%, transparent);
+  border-color: color-mix(in srgb, var(--repo-color, #888) 55%, transparent) !important;
+}
+
+/* 模块分割线与组底分割线 */
+[data-density="comfortable"] .versiondock-group-divider,
+[data-density="comfortable"] .versiondock-repo-bottom-divider {
+  border-bottom: 1px solid var(--vscode-panel-border);
+  margin: 4px 6px 0 6px;
+  opacity: 0.5;
+}
+[data-density="comfortable"] .versiondock-group-divider[data-hidden-in-comfortable="true"],
+[data-density="comfortable"] .versiondock-repo-bottom-divider[data-hidden-in-comfortable="true"] {
+  display: none !important;
+}
+
+/* 统一提交输入卡片（UnifiedCommitForm） */
+[data-density="comfortable"] .versiondock-commit-form {
+  border-radius: 8px !important;
+  border: 1px solid var(--vscode-panel-border) !important;
+}
+
+/* PushTab 容器与底栏 */
+[data-density="comfortable"] .versiondock-push-root {
+  gap: 6px !important;
+}
+[data-density="comfortable"] .versiondock-push-card {
+  border: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 8px !important;
+}
+[data-density="comfortable"] .versiondock-push-footer {
+  border: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 8px !important;
+}
+
+/* Git Log 框架、侧边栏与过滤器 */
+[data-density="comfortable"] .versiondock-log-frame {
+  border: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 8px !important;
+}
+[data-density="comfortable"] .versiondock-branch-sidebar {
+  border: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 8px !important;
+}
+[data-density="comfortable"] .versiondock-filters-bar {
+  padding: 6px 8px !important;
+  border-bottom: none !important;
+}
+[data-density="comfortable"] .versiondock-compare-view {
+  border: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 8px !important;
+}
+
 /* 弱化或移除舒适模式下多余的直通硬分割线 */
 [data-density="comfortable"] [data-row-divider] {
   border-bottom: none !important;
@@ -82,6 +168,72 @@ export const GLOBAL_DENSITY_STYLES = `
 }
 
 [data-density="compact"] .versiondock-card-body {
+  border-radius: 0 !important;
+}
+
+[data-density="compact"] .versiondock-repo-group,
+[data-density="compact"] .versiondock-repo-section {
+  margin-top: 0 !important;
+}
+
+[data-density="compact"] .versiondock-repo-header {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  min-height: 26px;
+  border: none !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+  background: color-mix(in srgb, var(--repo-color, #888) 15%, transparent);
+}
+[data-density="compact"] .versiondock-repo-header:hover {
+  background: color-mix(in srgb, var(--repo-color, #888) 22%, transparent);
+}
+
+[data-density="compact"] .versiondock-group-divider,
+[data-density="compact"] .versiondock-repo-bottom-divider {
+  border-bottom: 1px solid var(--vscode-panel-border);
+  margin: 0 !important;
+  opacity: 1 !important;
+}
+
+[data-density="compact"] .versiondock-commit-form {
+  border-radius: 0 !important;
+  border: none !important;
+  border-top: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-push-root {
+  gap: 0 !important;
+}
+[data-density="compact"] .versiondock-push-card {
+  border: none !important;
+  border-radius: 0 !important;
+}
+[data-density="compact"] .versiondock-push-footer {
+  border-radius: 0 !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+  border-top: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-log-frame {
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+[data-density="compact"] .versiondock-branch-sidebar {
+  border: none !important;
+  border-right: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 0 !important;
+}
+
+[data-density="compact"] .versiondock-filters-bar {
+  padding: 6px 10px !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-compare-view {
+  border: none !important;
   border-radius: 0 !important;
 }
 

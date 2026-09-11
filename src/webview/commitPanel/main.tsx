@@ -3074,7 +3074,6 @@ export function CommitApp() {
 
           {/* Commit form */}
           <UnifiedCommitForm
-            layoutDensity={layoutDensity}
             message={store.commitMessage}
             messageHistory={commitMessageHistory}
             messageHistoryLoading={commitMessageHistoryLoading}
@@ -3262,7 +3261,6 @@ export function CommitApp() {
           /* Sync tab — manages its own scroll and cards */
           <div style={{ ...densityStyles.tabContent, display: activeTab === 'push' ? 'flex' : 'none' }}>
             <PushTab
-              layoutDensity={layoutDensity}
               isActive={activeTab === 'push'}
               repos={gitRepos}
               repoMetas={visibleGitRepoMetas}

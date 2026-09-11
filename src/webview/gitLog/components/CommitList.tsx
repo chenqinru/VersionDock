@@ -90,11 +90,11 @@ const INTERACTION_STYLE = `
 `;
 
 function CommitSkeleton() {
-  const layoutDensity = useLogStore(s => s.layoutDensity);
   const rows = Math.ceil(window.innerHeight / ROW_HEIGHT) + 2;
   return (
     <div
-      style={skeletonStyles.container(layoutDensity)}
+      className="versiondock-log-frame"
+      style={skeletonStyles.container}
       role="status"
       aria-live="polite"
       aria-label={t('Loading commits…')}
@@ -284,7 +284,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
 
   if (commits.length === 0) {
     return (
-      <div style={emptyStyles.container(layoutDensity)}>
+      <div className="versiondock-log-frame" style={emptyStyles.container}>
         <Codicon name="history" style={emptyStyles.icon} />
         <div style={emptyStyles.title}>{t('No commits found')}</div>
       </div>
@@ -292,7 +292,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   }
 
   return (
-    <div style={styles.frame(layoutDensity)}>
+    <div className="versiondock-log-frame" style={styles.frame}>
       <div
         ref={scrollContainerRef}
         style={styles.container}
@@ -1343,7 +1343,7 @@ function RefBadgeIcon({ group }: { group: RefGroup }) {
 
 
 const skeletonStyles = {
-  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
+  container: {
     flex: 1,
     minHeight: 0,
     position: 'relative' as const,
@@ -1353,10 +1353,8 @@ const skeletonStyles = {
     display: 'flex',
     flexDirection: 'column' as const,
     alignSelf: 'stretch' as const,
-    borderRadius: density === 'compact' ? 0 : '8px',
-    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
     boxSizing: 'border-box' as const,
-  }),
+  },
   overlay: {
     position: 'absolute' as const,
     inset: 0,
@@ -1410,7 +1408,7 @@ const skeletonStyles = {
 };
 
 const emptyStyles = {
-  container: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
+  container: {
     flex: 1,
     minHeight: 0,
     display: 'flex',
@@ -1420,10 +1418,8 @@ const emptyStyles = {
     gap: '10px',
     color: 'var(--vscode-foreground)',
     background: 'var(--vscode-editor-background)',
-    borderRadius: density === 'compact' ? 0 : '8px',
-    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
     boxSizing: 'border-box' as const,
-  }),
+  },
   icon: {
     fontSize: '28px',
     color: 'var(--vscode-descriptionForeground)',
@@ -1435,18 +1431,16 @@ const emptyStyles = {
 };
 
 const styles = {
-  frame: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
+  frame: {
     flex: 1,
     height: '100%',
     minHeight: 0,
     minWidth: 0,
     position: 'relative' as const,
     background: 'var(--vscode-editor-background)',
-    borderRadius: density === 'compact' ? 0 : '8px',
-    border: density === 'compact' ? 'none' : '1px solid var(--vscode-panel-border)',
     overflow: 'hidden',
     boxSizing: 'border-box' as const,
-  }),
+  },
   container: {
     flex: 1,
     height: '100%',

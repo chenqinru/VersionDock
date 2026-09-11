@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { FileStatus, RepoMeta, RepoStatus } from '../../shared/types';
-import type { ViewMode, LayoutDensity } from '../store/commitStore';
-import { useCommitStore } from '../store/commitStore';
+import type { ViewMode } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
@@ -361,8 +360,6 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   const collapsed = isEmpty ? !isCollapsed(collapseKey) : isCollapsed(collapseKey);
   const branchClr = branchInfoColor(repoStatus.branch);
   const projectColor = readableAccentColor(repoColor);
-  const [hovered, setHovered] = useState(false);
-  const layoutDensity = useCommitStore(s => s.layoutDensity);
   const isSvn = kind === 'svn';
   const canAddToSvn = isSvn && !staged && files.some(file => file.status === 'untracked');
 
@@ -386,12 +383,11 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
   };
 
   return (
-    <div style={repoGroupStyle(isFirst, layoutDensity)}>
+    <div className="versiondock-repo-section" data-first={isFirst ? 'true' : undefined} style={repoGroupStyle}>
       {!singleRepo && (
         <div
-          style={repoHeaderStyle(projectColor, layoutDensity, hovered)}
-          onMouseEnter={() => setHovered(true)}
-          onMouseLeave={() => setHovered(false)}
+          className="versiondock-repo-header"
+          style={{ ...repoHeaderStyle, '--repo-color': projectColor } as React.CSSProperties}
           onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e); }}
         >
           {staged && onToggleRepoSelection && (
@@ -434,30 +430,30 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
           </div>
           {!isEmpty && (
             <div style={repoActionsStyle}>
-              <button data-action-btn="" style={{ ...actionBtnStyle, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
+              <button data-action-btn="" style={actionBtnStyle}
                 title={staged ? t('Open Staged Changes') : t('Open Changes')}
                 onClick={e => { e.stopPropagation(); onOpenChanges(); }}>
                 <Codicon name="diff-multiple" />
               </button>
               {!staged && (
-                <button data-action-btn="" style={{ ...actionBtnStyle, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }} title={t('Rollback All')}
+                <button data-action-btn="" style={actionBtnStyle} title={t('Rollback All')}
                   onClick={e => { e.stopPropagation(); onRollback(files); }}>
                   <Codicon name="discard" />
                 </button>
               )}
               {!isSvn && (staged ? (
-                <button data-action-btn="" style={{ ...actionBtnStyle, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }} title={t('Unstage All')}
+                <button data-action-btn="" style={actionBtnStyle} title={t('Unstage All')}
                   onClick={e => { e.stopPropagation(); onUnstageFiles(files.map(f => f.path)); }}>
                   <Codicon name="remove" />
                 </button>
               ) : (
-                <button data-action-btn="" style={{ ...actionBtnStyle, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }} title={t('Stage All')}
+                <button data-action-btn="" style={actionBtnStyle} title={t('Stage All')}
                   onClick={e => { e.stopPropagation(); onStageFiles(files.map(f => f.path)); }}>
                   <Codicon name="add" />
                 </button>
               ))}
               {canAddToSvn && (
-                <button data-action-btn="" style={{ ...actionBtnStyle, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }} title={t('Add to SVN')}
+                <button data-action-btn="" style={actionBtnStyle} title={t('Add to SVN')}
                   onClick={e => { e.stopPropagation(); onStageFiles(files.map(f => f.path)); }}>
                   <Codicon name="add" />
                 </button>
@@ -471,11 +467,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
         <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>{t('No changes')}</div>
       )}
       {!collapsed && !isEmpty && <div style={{ paddingBottom: '2px' }}>{renderFiles()}</div>}
-      {layoutDensity === 'compact' ? (
-        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
-      ) : !collapsed && !isEmpty ? (
-        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', margin: '4px 6px 0 6px', opacity: 0.5 }} />
-      ) : null}
+      <div className="versiondock-repo-bottom-divider" data-hidden-in-comfortable={collapsed || isEmpty ? 'true' : undefined} />
     </div>
   );
 }
@@ -795,35 +787,16 @@ const sectionCountStyle: React.CSSProperties = {
   marginLeft: '6px',
 };
 
-const repoGroupStyle = (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
-  if (density === 'compact') return {};
-  return {
-    marginTop: isFirst ? '4px' : '6px',
-  };
+const repoGroupStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
 };
 
-const repoHeaderStyle = (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
-  if (density === 'compact') {
-    return {
-      display: 'flex',
-      alignItems: 'center',
-      background: hovered ? color + '33' : color + '22',
-      height: '26px',
-      boxSizing: 'border-box',
-      transition: 'background 0.12s',
-    };
-  }
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    background: hovered ? color + '28' : color + '1c',
-    border: `1px solid ${color}${hovered ? '55' : '38'}`,
-    borderRadius: '6px',
-    height: '27px',
-    margin: '0 6px',
-    boxSizing: 'border-box',
-    transition: 'background 0.12s, border-color 0.12s',
-  };
+const repoHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  height: '26px',
+  boxSizing: 'border-box',
 };
 
 const repoHeaderMainStyle: React.CSSProperties = {

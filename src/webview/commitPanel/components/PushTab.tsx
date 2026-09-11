@@ -11,7 +11,6 @@ import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
 import type { ExpansionCommand } from './StashTab';
 import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared/speedSearch';
-import { useCommitStore, type LayoutDensity } from '../store/commitStore';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
@@ -24,7 +23,6 @@ export interface IncomingRepoData {
 }
 
 export interface PushTabProps {
-  layoutDensity?: LayoutDensity;
   isActive?: boolean;
   repos: RepoStatus[];
   repoMetas: RepoMeta[];
@@ -983,8 +981,6 @@ function RepoSection({
   const [loadingAggregatedFiles, setLoadingAggregatedFiles] = useState(false);
   const [multiSelectHashes, setMultiSelectHashes] = useState<Set<string>>(new Set());
   const [ctxMenu, setCtxMenu] = useState<CommitCtxMenuState | null>(null);
-  const [hovered, setHovered] = useState(false);
-  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   // Incoming state
   const [expandedIncomingHash, setExpandedIncomingHash] = useState<string | null>(null);
@@ -1489,11 +1485,10 @@ function RepoSection({
   }, [repoStatus.repoId, pushViewMode, filesByHash, incomingFilesByHash, aggregatedFiles, aggregatedIncomingFiles, onFilesLoaded]);
 
   return (
-    <div style={styles.repoRoot(isFirst, layoutDensity)}>
+    <div className="versiondock-repo-section" data-first={isFirst ? 'true' : undefined} style={styles.repoRoot}>
       <div
-        style={styles.repoHeader(repoColor, layoutDensity, hovered)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        className="versiondock-repo-header"
+        style={{ ...styles.repoHeader, '--repo-color': repoColor } as React.CSSProperties}
       >
         {!singleRepo && (
           <input
@@ -1525,7 +1520,7 @@ function RepoSection({
                 <button
                   type="button"
                   data-action-btn=""
-                  style={styles.repoModeButton(false, hovered, false)}
+                  style={styles.repoModeButton(false, false)}
                   title={t('Fetch remote changes')}
                   onClick={event => {
                     event.stopPropagation();
@@ -1538,7 +1533,8 @@ function RepoSection({
               <button
                 type="button"
                 data-action-btn=""
-                style={styles.repoModeButton(!canTogglePushView, hovered || pushViewMode === 'changes', pushViewMode === 'changes')}
+                data-active={pushViewMode === 'changes' ? 'true' : undefined}
+                style={styles.repoModeButton(!canTogglePushView, pushViewMode === 'changes')}
                 disabled={!canTogglePushView}
                 title={pushViewMode === 'commits' ? t('Show aggregated changes') : t('Show commit list')}
                 onClick={event => {
@@ -2272,10 +2268,7 @@ export function PushTab(props: Props) {
     onExpansionChange,
     selectionCommand,
     onSelectionChange,
-    layoutDensity: propDensity,
   } = props;
-  const storeLayoutDensity = useCommitStore(s => s.layoutDensity);
-  const layoutDensity = propDensity ?? storeLayoutDensity;
   const metaMap = new Map(repoMetas.map(meta => [meta.id, meta]));
   const isSingleRepo = repos.length === 1;
   const [checked, setChecked] = useState<Set<string>>(() => new Set<string>());
@@ -2740,8 +2733,8 @@ export function PushTab(props: Props) {
     };
 
     return (
-      <div style={css.root(layoutDensity)}>
-        <div style={css.listCard(layoutDensity)}>
+      <div className="versiondock-push-root" style={css.root}>
+        <div className="versiondock-push-card" style={css.listCard}>
           {speedSearch.isOpen && (
             <SpeedSearchWidget
               speedSearch={speedSearch}
@@ -2792,7 +2785,7 @@ export function PushTab(props: Props) {
             />
           </div>
         </div>
-        <div style={css.footer(layoutDensity)}>
+        <div className="versiondock-push-footer" style={css.footer}>
           {renderSoloButtons()}
         </div>
       </div>
@@ -3023,8 +3016,8 @@ export function PushTab(props: Props) {
   };
 
   return (
-    <div style={css.root(layoutDensity)}>
-      <div style={css.listCard(layoutDensity)}>
+    <div className="versiondock-push-root" style={css.root}>
+      <div className="versiondock-push-card" style={css.listCard}>
         {speedSearch.isOpen && (
           <SpeedSearchWidget
             speedSearch={speedSearch}
@@ -3077,7 +3070,7 @@ export function PushTab(props: Props) {
         </div>
       </div>
 
-      <div style={css.footer(layoutDensity)}>
+      <div className="versiondock-push-footer" style={css.footer}>
         {checkedRepos.length > 0 && (
           <div style={css.pills}>
             {checkedRepos.map(repo => {
@@ -3153,49 +3146,35 @@ const ctxStyles = {
 };
 
 const css = {
-  root: (density: LayoutDensity = 'comfortable'): React.CSSProperties => ({
+  root: {
     display: 'flex',
     flexDirection: 'column' as const,
     flex: 1,
     height: '100%',
     minHeight: 0,
     position: 'relative' as const,
-    gap: density === 'compact' ? 0 : '6px',
-  }),
-  listCard: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
-    const isCompact = density === 'compact';
-    return {
-      display: 'flex',
-      flexDirection: 'column' as const,
-      flex: 1,
-      minHeight: 0,
-      overflow: 'hidden',
-      position: 'relative' as const,
-      borderRadius: isCompact ? 0 : '8px',
-      border: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
-      background: 'var(--vscode-sideBar-background)',
-      boxSizing: 'border-box' as const,
-    };
+  },
+  listCard: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+    position: 'relative' as const,
+    background: 'var(--vscode-sideBar-background)',
+    boxSizing: 'border-box' as const,
   },
   list: { flex: 1, overflowY: 'auto' as const, minHeight: 0 },
-  footer: (density: LayoutDensity = 'comfortable'): React.CSSProperties => {
-    const isCompact = density === 'compact';
-    return {
-      position: 'relative' as const,
-      zIndex: 10,
-      flexShrink: 0,
-      display: 'flex',
-      flexDirection: 'column' as const,
-      gap: '6px',
-      padding: '6px 8px',
-      borderRadius: isCompact ? 0 : '8px',
-      borderTop: '1px solid var(--vscode-panel-border)',
-      borderRight: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
-      borderBottom: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
-      borderLeft: isCompact ? 'none' : '1px solid var(--vscode-panel-border)',
-      background: 'var(--vscode-sideBar-background)',
-      boxSizing: 'border-box' as const,
-    };
+  footer: {
+    position: 'relative' as const,
+    zIndex: 10,
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '6px',
+    padding: '6px 8px',
+    background: 'var(--vscode-sideBar-background)',
+    boxSizing: 'border-box' as const,
   },
   pills: { display: 'flex', flexWrap: 'wrap' as const, gap: '4px' } as React.CSSProperties,
   pill: (color: string): React.CSSProperties => ({
@@ -3219,34 +3198,16 @@ const css = {
 };
 
 const styles = {
-  repoRoot: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
-    if (density === 'compact') {
-      return { borderBottom: '1px solid var(--vscode-panel-border)' };
-    }
-    return {
-      marginTop: isFirst ? '4px' : '6px',
-    };
+  repoRoot: {
+    display: 'flex',
+    flexDirection: 'column' as const,
   },
-  repoHeader: (color: string, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
-    if (density === 'compact') {
-      return {
-        display: 'flex', alignItems: 'center',
-        padding: '4px 8px', minHeight: '26px',
-        background: hovered ? color + '33' : color + '22', borderBottom: '1px solid var(--vscode-panel-border)',
-        boxSizing: 'border-box',
-        transition: 'background 0.12s',
-      };
-    }
-    return {
-      display: 'flex', alignItems: 'center',
-      padding: '4px 8px', minHeight: '27px',
-      background: hovered ? color + '28' : color + '1c',
-      border: `1px solid ${color}${hovered ? '55' : '38'}`,
-      borderRadius: '6px',
-      margin: '0 6px',
-      boxSizing: 'border-box',
-      transition: 'background 0.12s, border-color 0.12s',
-    };
+  repoHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '4px 8px',
+    minHeight: '26px',
+    boxSizing: 'border-box' as const,
   },
   checkbox: {
     margin: '0 2px 0 0', flexShrink: 0,
@@ -3310,14 +3271,14 @@ const styles = {
     marginLeft: 'auto',
     flexShrink: 0,
   } as React.CSSProperties,
-  repoModeButton: (disabled: boolean, visible: boolean, active = false): React.CSSProperties => ({
+  repoModeButton: (disabled: boolean, active = false): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 22, height: 22, padding: 0, border: 'none', borderRadius: '3px',
     background: active ? 'var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.24))' : 'transparent',
     color: active ? 'var(--vscode-foreground)' : 'var(--vscode-icon-foreground)',
     cursor: disabled ? 'default' : 'pointer',
-    opacity: visible ? (disabled ? 0.35 : 1) : 0,
-    pointerEvents: visible && !disabled ? 'auto' : 'none',
+    opacity: disabled ? 0.35 : undefined,
+    pointerEvents: disabled ? 'none' : 'auto',
     transition: 'opacity 0.1s, background-color 0.1s',
     flexShrink: 0,
   }),

@@ -777,7 +777,6 @@ export function GitLogApp() {
       {noRepoOverlay}
       {store.mode !== 'compare' && (
         <CommitFiltersBar
-          layoutDensity={layoutDensity}
           filters={store.commitFilters}
           branches={store.branches}
           tags={store.tags}

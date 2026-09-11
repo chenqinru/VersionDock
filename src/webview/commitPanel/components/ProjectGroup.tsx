@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FileStatus, RepoStatus } from '../../shared/types';
 import type { ViewMode } from '../store/commitStore';
-import { useCommitStore, type LayoutDensity } from '../store/commitStore';
 import type { IconThemeData } from '../../../host/types/messages';
 import { FileTree } from './FileTree';
 import { Codicon } from '../../shared/Codicon';
@@ -77,21 +76,17 @@ export function ProjectGroup({
     onSetFiles(repoId, allFiles.map(f => f.path), !allSelected);
   };
 
-  const [hovered, setHovered] = useState(false);
-  const layoutDensity = useCommitStore(s => s.layoutDensity);
-
   const checkboxRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (checkboxRef.current) checkboxRef.current.indeterminate = someSelected;
   }, [someSelected]);
 
   return (
-    <div style={styles.container(isFirst, layoutDensity)}>
+    <div className="versiondock-repo-group" data-first={isFirst ? 'true' : undefined} style={styles.container}>
       <div
-        style={styles.header(projectColor, isFirst, layoutDensity, hovered)}
+        className="versiondock-repo-header"
+        style={{ ...styles.header, '--repo-color': projectColor } as React.CSSProperties}
         onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId); }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
       >
         <input
           ref={checkboxRef}
@@ -140,7 +135,7 @@ export function ProjectGroup({
             <div style={styles.rightGroup}>
               <button
                 data-action-btn=""
-                style={{ ...styles.openChangesBtn, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
+                style={styles.openChangesBtn}
                 onClick={e => { e.stopPropagation(); onOpenAllChanges(repoId); }}
                 title={t('Open all changes')}
               >
@@ -186,11 +181,10 @@ export function ProjectGroup({
           )}
         </div>
       )}
-      {layoutDensity === 'compact' ? (
-        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
-      ) : !collapsed && allFiles.length > 0 ? (
-        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', marginTop: '4px' }} />
-      ) : null}
+      <div
+        className="versiondock-group-divider"
+        data-hidden-in-comfortable={collapsed || allFiles.length === 0}
+      />
     </div>
   );
 }
@@ -213,15 +207,12 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
   const repoId = repoStatus.repoId;
   const branchClr = branchInfoColor(repoStatus.branch);
   const projectColor = readableAccentColor(repoColor);
-  const [hovered, setHovered] = useState(false);
-  const layoutDensity = useCommitStore(s => s.layoutDensity);
 
   return (
     <div
-      style={styles.header(projectColor, true, layoutDensity, hovered)}
+      className="versiondock-repo-header"
+      style={{ ...styles.header, '--repo-color': projectColor } as React.CSSProperties}
       onContextMenu={e => { e.preventDefault(); onRepoContextMenu(e, repoId); }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <div style={styles.headerMain} onClick={() => onBranchClick(repoId)}>
         <span style={styles.dot(projectColor)} />
@@ -250,7 +241,7 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
           <div style={styles.rightGroup}>
             <button
               data-action-btn=""
-              style={{ ...styles.openChangesBtn, opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
+              style={styles.openChangesBtn}
               onClick={e => { e.stopPropagation(); onOpenAllChanges(repoId); }}
               title={t('Open all changes')}
             >
@@ -264,35 +255,12 @@ export function SingleRepoHeader({ repoStatus, repoName, repoColor, isSubmodule,
 }
 
 const styles = {
-  container: (isFirst: boolean, density: LayoutDensity = 'comfortable'): React.CSSProperties => {
-    if (density === 'compact') return {};
-    return {
-      marginTop: isFirst ? '4px' : '6px',
-    };
-  },
-  header: (color: string, _isFirst: boolean, density: LayoutDensity = 'comfortable', hovered = false): React.CSSProperties => {
-    if (density === 'compact') {
-      return {
-        display: 'flex',
-        alignItems: 'center',
-        background: hovered ? color + '33' : color + '22',
-        height: '26px',
-        boxSizing: 'border-box',
-        transition: 'background 0.12s',
-      };
-    }
-    return {
-      display: 'flex',
-      alignItems: 'center',
-      background: hovered ? color + '28' : color + '1c',
-      border: `1px solid ${color}${hovered ? '55' : '38'}`,
-      borderRadius: '6px',
-      height: '27px',
-      margin: '0 6px',
-      boxSizing: 'border-box',
-      transition: 'background 0.12s, border-color 0.12s',
-    };
-  },
+  container: {} as React.CSSProperties,
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    boxSizing: 'border-box' as const,
+  } as React.CSSProperties,
   repoCheckbox: {
     margin: '0 0 0 6px',
     flexShrink: 0,
