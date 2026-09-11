@@ -138,8 +138,9 @@ function SubmoduleRow({
   const isOperating = Boolean(activeOp);
 
   return (
-    <div style={row.root}>
+    <div style={row.root} data-row-divider="">
       <div
+        data-list-row=""
         style={{
           ...row.header,
           background: isHighlighted

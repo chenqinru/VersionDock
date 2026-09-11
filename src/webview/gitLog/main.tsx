@@ -14,6 +14,7 @@ import { getVsCodeApi } from '../shared/vscodeApi';
 import { t } from '../shared/i18n';
 import { Codicon } from '../shared/Codicon';
 import { scopedKey } from '../shared/scopedKey';
+import { GLOBAL_DENSITY_STYLES } from '../shared/densityGlobalStyles';
 import type { CommitNode } from '../shared/types';
 import type { LogToHostMsg, HostToLogMsg } from '../../host/types/messages';
 
@@ -766,7 +767,13 @@ export function GitLogApp() {
   ) : null;
 
   return (
-    <div style={{ ...appStyle, position: 'relative' }} onContextMenu={event => event.preventDefault()}>
+    <div
+      style={{ ...appStyle, position: 'relative' }}
+      data-density={layoutDensity}
+      className="versiondock-log-root"
+      onContextMenu={event => event.preventDefault()}
+    >
+      <style>{GLOBAL_DENSITY_STYLES}</style>
       {noRepoOverlay}
       {store.mode !== 'compare' && (
         <CommitFiltersBar

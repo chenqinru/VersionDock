@@ -224,6 +224,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
   return (
     <div>
       <div
+        data-list-row=""
         style={{
           display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
           paddingLeft, paddingRight: '8px', gap: '0',
@@ -281,9 +282,10 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onU
   const treeNodes = viewMode === 'tree' ? buildTree(entry.files) : null;
 
   return (
-    <div style={rowStyle.root}>
+    <div className="versiondock-card" style={rowStyle.root}>
       {/* Header */}
       <div
+        className="versiondock-card-header"
         style={{ ...rowStyle.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onClick={() => toggleShelveCollapsed(entryKey)}
         onMouseEnter={() => setHovered(true)}
@@ -329,7 +331,7 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onU
 
       {/* Expanded body: file list (flat or tree) */}
       {expanded && (
-        <div style={rowStyle.fileList}>
+        <div className="versiondock-card-body" style={rowStyle.fileList}>
           {viewMode === 'tree' && treeNodes
             ? treeNodes.map(node =>
                 node.kind === 'dir'

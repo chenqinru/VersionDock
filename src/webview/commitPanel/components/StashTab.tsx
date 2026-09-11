@@ -204,6 +204,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
   return (
     <div>
       <div
+        data-list-row=""
         style={{
           display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
           paddingLeft, paddingRight: '8px', gap: '0',
@@ -351,10 +352,11 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   };
 
   return (
-    <div style={row.root}>
+    <div className="versiondock-card" style={row.root}>
       {/* Header */}
       <div
         data-speed-search-key={stashEntryKey}
+        className="versiondock-card-header"
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onClick={handleToggleExpand}
         onMouseEnter={() => setHovered(true)}
@@ -404,7 +406,7 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
 
       {/* Expanded body */}
       {expanded && (
-        <div style={row.fileList}>
+        <div className="versiondock-card-body" style={row.fileList}>
           {filesLoading ? (
             <div style={{ ...row.emptyFiles, display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Codicon name="loading~spin" style={{ fontSize: '12px' }} />

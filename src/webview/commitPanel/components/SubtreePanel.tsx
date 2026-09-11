@@ -123,8 +123,9 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
   };
 
   return (
-    <div style={row.root}>
+    <div style={row.root} data-row-divider="">
       <div
+        data-list-row=""
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}

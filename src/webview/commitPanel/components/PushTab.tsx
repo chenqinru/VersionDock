@@ -510,10 +510,11 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   };
 
   return (
-    <div style={styles.commitCard(expanded, selected)}>
+    <div className="versiondock-card" style={styles.commitCard(expanded, selected)}>
       <div
         data-commit-row="true"
         data-speed-search-key={commitKey}
+        className="versiondock-card-header"
         role="button"
         tabIndex={0}
         style={{ ...styles.commitRow, background }}
@@ -583,7 +584,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
       </div>
 
       {expanded && (
-        <div style={styles.commitDetails}>
+        <div className="versiondock-card-body" style={styles.commitDetails}>
           <PushFileList
             files={files}
             loading={loadingFiles}
@@ -725,10 +726,18 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
     );
   }
 
+  const [hovered, setHovered] = useState(false);
   const open = !collapsed[node.path];
   return (
     <div>
-      <div style={styles.dirRow(depth)} onClick={() => onToggle(node.path)} title={node.path}>
+      <div
+        data-list-row=""
+        style={styles.dirRow(depth, hovered)}
+        onClick={() => onToggle(node.path)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        title={node.path}
+      >
         <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.folderChevron} />
         <FileIcon name={node.name} isFolder isOpen={open} theme={iconTheme} size={ICON_SIZE} />
         <span style={styles.folderName}>
@@ -3444,7 +3453,7 @@ const styles = {
   treeRoot: {
     padding: '2px 0',
   } as React.CSSProperties,
-  dirRow: (depth: number): React.CSSProperties => ({
+  dirRow: (depth: number, hovered = false): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '4px',
@@ -3454,6 +3463,7 @@ const styles = {
     boxSizing: 'border-box',
     minWidth: 0,
     overflow: 'hidden',
+    background: hovered ? 'var(--vscode-list-hoverBackground)' : undefined,
   }),
   folderChevron: {
     fontSize: '12px',

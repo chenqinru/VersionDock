@@ -258,7 +258,12 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
   return (
     <div>
       <div
-        style={{ ...treeDirStyle, paddingLeft: `${BASE_PAD + depth * LEVEL_PAD}px`, background: ctxActive ? 'var(--vscode-list-inactiveSelectionBackground)' : hovered ? 'var(--vscode-list-hoverBackground)' : undefined, borderRadius: '2px' }}
+        data-list-row=""
+        style={{
+          ...treeDirStyle,
+          paddingLeft: `${BASE_PAD + depth * LEVEL_PAD}px`,
+          background: ctxActive ? 'var(--vscode-list-inactiveSelectionBackground)' : hovered ? 'var(--vscode-list-hoverBackground)' : undefined,
+        }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onContextMenu={e => { e.preventDefault(); onFolderContextMenu(e, node.path, allFiles); }}
@@ -469,7 +474,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
       {layoutDensity === 'compact' ? (
         <div style={{ borderBottom: '1px solid var(--vscode-panel-border)' }} />
       ) : !collapsed && !isEmpty ? (
-        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', marginTop: '4px' }} />
+        <div style={{ borderBottom: '1px solid var(--vscode-panel-border)', margin: '4px 6px 0 6px', opacity: 0.5 }} />
       ) : null}
     </div>
   );

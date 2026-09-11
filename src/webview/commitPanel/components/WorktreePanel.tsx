@@ -75,8 +75,9 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
   const branchClr = entry.isDetached ? headColor() : branchColor(branchLabel);
 
   return (
-    <div style={row.root}>
+    <div style={row.root} data-row-divider="">
       <div
+        data-list-row=""
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}

@@ -23,6 +23,7 @@ import { CHANGELIST_DEFAULT_ID, CHANGELIST_UNVERSIONED_ID } from '../shared/type
 import { baseNameFromPath } from '../shared/pathUtils';
 import { branchInfoColor } from '../shared/branchColors';
 import { scopedKey } from '../shared/scopedKey';
+import { GLOBAL_DENSITY_STYLES } from '../shared/densityGlobalStyles';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -544,13 +545,15 @@ export function CommitApp() {
       [data-branch-switch-badge]:active {
         transform: translateY(0);
       }
-      @media (prefers-reduced-motion: reduce) {
-        [data-branch-switch-badge] {
-          transition: none;
-        }
-        [data-branch-switch-badge]:hover {
-          transform: none;
-        }
+      .gs-tabbar-scroll::-webkit-scrollbar {
+        display: none;
+      }
+      .gs-tab-item {
+        outline: none;
+      }
+      .gs-tab-item:not([data-active="true"]):hover {
+        background: var(--vscode-toolbar-hoverBackground) !important;
+        color: var(--vscode-foreground) !important;
       }
     `;
     document.head.appendChild(s);
@@ -2797,82 +2800,13 @@ export function CommitApp() {
   }
 
   return (
-    <div style={css.app} onContextMenu={e => e.preventDefault()}>
-
-      {/* ── Tab bar ── */}
-      {(() => {
-        const totalChanges = repos.reduce((sum, repo) => {
-          const paths = new Set<string>();
-          for (const file of repo.stagedFiles) paths.add(file.path);
-          for (const file of repo.unstagedFiles) paths.add(file.path);
-          return sum + paths.size;
-        }, 0);
-        const totalShelves = Object.entries(shelveMap).reduce((sum, [repoId, shelves]) => (
-          visibleRepoIds.has(repoId) ? sum + shelves.length : sum
-        ), 0);
-        const totalStashes = gitRepos.reduce((sum, repo) => (
-          sum + (stashCountMap[repo.repoId] ?? stashMap[repo.repoId]?.length ?? 0)
-        ), 0);
-        const totalSubmodules = visibleSubmoduleRepos.reduce((sum, repo) => (
-          sum + repo.submodules.length
-        ), 0);
-        const totalSubmoduleIssues = visibleSubmoduleRepos.reduce((sum, repo) => (
-          sum + repo.submodules.filter((s: SubmoduleItem) => !s.initialized || s.syncStatus === 'out-of-sync').length
-        ), 0);
-        const totalWorktrees = visibleWorktreeRepos.reduce((sum, repo) => (
-          sum + repo.worktrees.length
-        ), 0);
-        const totalSubtrees = visibleSubtreeEntries.length;
-        const tabCounts: Record<TabId, number> = {
-          changes: totalChanges,
-          shelf: totalShelves,
-          stash: totalStashes,
-          submodule: totalSubmodules,
-          worktree: totalWorktrees,
-          subtree: totalSubtrees,
-          push: totalToPush + totalToPull,
-          sync: totalToPush + totalToPull,
-        };
-        return (
-          <div style={css.tabBar}>
-            {visibleTabs.map(tab => {
-              const changesLabel = (store.changesViewMode === 'changelists' || store.changesViewMode === 'vscode') ? t('Commit') : t('Changes');
-              const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'submodule' ? t('Submodules') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Sync');
-              const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'submodule' ? 'repo-clone' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'sync';
-              const count = tabCounts[tab];
-              const isActive = activeTab === tab;
-              return (
-                <button
-                  data-action-btn=""
-                  key={tab}
-                  style={css.tab(isActive)}
-                  title={tab === 'push'
-                    ? `${label} (${t('{0} incoming, {1} outgoing', totalToPull, totalToPush)})`
-                    : tab === 'submodule' && totalSubmoduleIssues > 0
-                      ? `${label} (${count}, ${t('{0} issues', totalSubmoduleIssues)})`
-                      : `${label} (${count})`}
-                  onClick={() => switchTab(tab)}
-                >
-                  <Codicon
-                    name={iconName}
-                    style={{ marginRight: isActive ? '5px' : '0', fontSize: '13px', transition: 'margin 0.15s' }}
-                  />
-                  {isActive && (
-                    <span style={{ animation: 'gs-tab-label-in 0.18s ease-out both', overflow: 'hidden', display: 'inline-block' }}>
-                      {label}
-                    </span>
-                  )}
-                  {count > 0 && (
-                    <span style={css.tabBadge(isActive)}>
-                      {count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        );
-      })()}
+    <div
+      style={css.app}
+      data-density={layoutDensity}
+      className="versiondock-commit-root"
+      onContextMenu={e => e.preventDefault()}
+    >
+      <style>{GLOBAL_DENSITY_STYLES}</style>
 
       {/* ── Error / info notification bar ── */}
       {store.error && (
@@ -2885,8 +2819,84 @@ export function CommitApp() {
         </div>
       )}
 
-      {/* ── Tab content ── */}
+      {/* ── Main content (Tabs + Cards) ── */}
       <div style={densityStyles.main}>
+
+        {/* ── Tab bar card ── */}
+        {(() => {
+          const totalChanges = repos.reduce((sum, repo) => {
+            const paths = new Set<string>();
+            for (const file of repo.stagedFiles) paths.add(file.path);
+            for (const file of repo.unstagedFiles) paths.add(file.path);
+            return sum + paths.size;
+          }, 0);
+          const totalShelves = Object.entries(shelveMap).reduce((sum, [repoId, shelves]) => (
+            visibleRepoIds.has(repoId) ? sum + shelves.length : sum
+          ), 0);
+          const totalStashes = gitRepos.reduce((sum, repo) => (
+            sum + (stashCountMap[repo.repoId] ?? stashMap[repo.repoId]?.length ?? 0)
+          ), 0);
+          const totalSubmodules = visibleSubmoduleRepos.reduce((sum, repo) => (
+            sum + repo.submodules.length
+          ), 0);
+          const totalSubmoduleIssues = visibleSubmoduleRepos.reduce((sum, repo) => (
+            sum + repo.submodules.filter((s: SubmoduleItem) => !s.initialized || s.syncStatus === 'out-of-sync').length
+          ), 0);
+          const totalWorktrees = visibleWorktreeRepos.reduce((sum, repo) => (
+            sum + repo.worktrees.length
+          ), 0);
+          const totalSubtrees = visibleSubtreeEntries.length;
+          const tabCounts: Record<TabId, number> = {
+            changes: totalChanges,
+            shelf: totalShelves,
+            stash: totalStashes,
+            submodule: totalSubmodules,
+            worktree: totalWorktrees,
+            subtree: totalSubtrees,
+            push: totalToPush + totalToPull,
+            sync: totalToPush + totalToPull,
+          };
+          return (
+            <div className="gs-tabbar-scroll" style={densityStyles.tabBar}>
+              {visibleTabs.map(tab => {
+                const changesLabel = (store.changesViewMode === 'changelists' || store.changesViewMode === 'vscode') ? t('Commit') : t('Changes');
+                const label = tab === 'changes' ? changesLabel : tab === 'shelf' ? t('Shelf') : tab === 'stash' ? t('Stash') : tab === 'submodule' ? t('Submodules') : tab === 'worktree' ? t('Worktrees') : tab === 'subtree' ? t('Subtrees') : t('Sync');
+                const iconName = tab === 'changes' ? 'source-control' : tab === 'shelf' ? 'archive' : tab === 'stash' ? 'save' : tab === 'submodule' ? 'repo-clone' : tab === 'worktree' ? 'worktree' : tab === 'subtree' ? 'repo' : 'sync';
+                const count = tabCounts[tab];
+                const isActive = activeTab === tab;
+                return (
+                  <button
+                    key={tab}
+                    className="gs-tab-item"
+                    data-active={isActive ? 'true' : 'false'}
+                    style={densityStyles.tab(isActive)}
+                    title={tab === 'push'
+                      ? `${label} (${t('{0} incoming, {1} outgoing', totalToPull, totalToPush)})`
+                      : tab === 'submodule' && totalSubmoduleIssues > 0
+                        ? `${label} (${count}, ${t('{0} issues', totalSubmoduleIssues)})`
+                        : `${label} (${count})`}
+                    onClick={() => switchTab(tab)}
+                  >
+                    <Codicon
+                      name={iconName}
+                      style={{ marginRight: isActive ? '5px' : '0', fontSize: '13px', transition: 'margin 0.15s' }}
+                    />
+                    {isActive && (
+                      <span style={{ animation: 'gs-tab-label-in 0.18s ease-out both', overflow: 'hidden', display: 'inline-block' }}>
+                        {label}
+                      </span>
+                    )}
+                    {count > 0 && (
+                      <span style={css.tabBadge(isActive)}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {visitedTabs.has('changes') && (
           <div style={{ ...densityStyles.tabContent, display: activeTab === 'changes' ? 'flex' : 'none' }}>
@@ -3162,7 +3172,7 @@ export function CommitApp() {
             {activeTab === 'shelf' && shelveSpeedSearch.isOpen && (
               <SpeedSearchWidget speedSearch={shelveSpeedSearch} />
             )}
-            <div style={css.repoList}>
+            <div className="versiondock-commit-scroll-container" style={css.repoList}>
               {gitRepos.map((repoStatus, idx) => {
                 const repoId = repoStatus.repoId;
                 const meta = metaMap.get(repoId);
@@ -3207,7 +3217,7 @@ export function CommitApp() {
             {activeTab === 'stash' && stashSpeedSearch.isOpen && (
               <SpeedSearchWidget speedSearch={stashSpeedSearch} />
             )}
-            <div style={css.repoList}>
+            <div className="versiondock-commit-scroll-container" style={css.repoList}>
               {gitRepos.map((repoStatus, idx) => {
                 const repoId = repoStatus.repoId;
                 const meta = metaMap.get(repoId);
@@ -3301,7 +3311,7 @@ export function CommitApp() {
         {visitedTabs.has('submodule') && (
           /* Submodule tab */
           <div style={{ ...densityStyles.listCard, display: activeTab === 'submodule' ? 'flex' : 'none' }}>
-            <div style={css.repoList}>
+            <div className="versiondock-commit-scroll-container" style={css.repoList}>
               <SubmodulePanel
                 repos={visibleSubmoduleRepos}
                 loading={submoduleLoading}
@@ -3331,7 +3341,7 @@ export function CommitApp() {
         {visitedTabs.has('worktree') && (
           /* Worktree tab */
           <div style={{ ...densityStyles.listCard, display: activeTab === 'worktree' ? 'flex' : 'none' }}>
-            <div style={css.repoList}>
+            <div className="versiondock-commit-scroll-container" style={css.repoList}>
               <WorktreePanel
                 repos={visibleWorktreeRepos}
                 loading={worktreeLoading}
@@ -3354,7 +3364,7 @@ export function CommitApp() {
         {visitedTabs.has('subtree') && (
           /* Subtree tab */
           <div style={{ ...densityStyles.listCard, display: activeTab === 'subtree' ? 'flex' : 'none' }}>
-            <div style={css.repoList}>
+            <div className="versiondock-commit-scroll-container" style={css.repoList}>
               <SubtreePanel
                 entries={visibleSubtreeEntries}
                 repoMetas={visibleGitRepoMetas}
@@ -3713,6 +3723,32 @@ function getDensityStyles(density: LayoutDensity) {
         gap: 0,
         boxSizing: 'border-box' as const,
       } as React.CSSProperties,
+      tabBar: {
+        display: 'flex',
+        alignItems: 'center',
+        borderBottom: '1px solid var(--vscode-panel-border)',
+        background: 'var(--vscode-sideBar-background)',
+        flexShrink: 0,
+        boxSizing: 'border-box' as const,
+        overflowX: 'auto' as const,
+        scrollbarWidth: 'none' as const,
+      } as React.CSSProperties,
+      tab: (active: boolean): React.CSSProperties => ({
+        display: 'flex',
+        alignItems: 'center',
+        padding: active ? '5px 12px' : '5px 10px',
+        fontSize: '12px',
+        cursor: 'pointer',
+        background: 'transparent',
+        border: 'none',
+        borderBottom: active ? '2px solid var(--vscode-focusBorder)' : '2px solid transparent',
+        opacity: 1,
+        color: active ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
+        fontFamily: 'var(--vscode-font-family)',
+        fontWeight: active ? '600' : 'normal',
+        whiteSpace: 'nowrap' as const,
+        transition: 'color 0.1s, border-color 0.1s',
+      }),
       tabContent: {
         display: 'flex',
         flexDirection: 'column' as const,
@@ -3760,6 +3796,41 @@ function getDensityStyles(density: LayoutDensity) {
       gap: '6px',
       boxSizing: 'border-box' as const,
     } as React.CSSProperties,
+    tabBar: {
+      display: 'flex',
+      alignItems: 'center',
+      padding: '3px',
+      gap: '2px',
+      borderRadius: '8px',
+      border: '1px solid var(--vscode-panel-border)',
+      background: 'var(--vscode-sideBar-background)',
+      flexShrink: 0,
+      boxSizing: 'border-box' as const,
+      overflowX: 'auto' as const,
+      scrollbarWidth: 'none' as const,
+    } as React.CSSProperties,
+    tab: (active: boolean): React.CSSProperties => ({
+      display: 'flex',
+      alignItems: 'center',
+      padding: active ? '3px 9px' : '3px 7px',
+      fontSize: '12px',
+      cursor: 'pointer',
+      background: active
+        ? 'color-mix(in srgb, var(--vscode-focusBorder) 16%, transparent)'
+        : 'transparent',
+      border: active
+        ? '1px solid color-mix(in srgb, var(--vscode-focusBorder) 32%, transparent)'
+        : '1px solid transparent',
+      borderRadius: '6px',
+      boxShadow: active ? '0 1px 2px rgba(0, 0, 0, 0.1)' : 'none',
+      opacity: 1,
+      color: active ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
+      fontFamily: 'var(--vscode-font-family)',
+      fontWeight: active ? '600' : 'normal',
+      whiteSpace: 'nowrap' as const,
+      transition: 'background 0.15s, color 0.15s, border-color 0.15s',
+      boxSizing: 'border-box' as const,
+    }),
     tabContent: {
       display: 'flex',
       flexDirection: 'column' as const,
@@ -3822,22 +3893,6 @@ const css = {
     color: 'var(--vscode-descriptionForeground)', display: 'flex', alignItems: 'center', flexShrink: 0,
     fontSize: '13px', borderRadius: '2px',
   } as React.CSSProperties,
-  tabBar: {
-    display: 'flex', borderBottom: '1px solid var(--vscode-panel-border)',
-    background: 'var(--vscode-sideBar-background)', flexShrink: 0,
-  } as React.CSSProperties,
-  tab: (active: boolean): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center',
-    padding: active ? '5px 12px' : '5px 10px',
-    fontSize: '12px',
-    cursor: 'pointer', background: 'transparent', border: 'none',
-    borderBottom: active ? '2px solid var(--vscode-focusBorder)' : '2px solid transparent',
-    opacity: 1,
-    color: active ? 'var(--vscode-foreground)' : 'var(--vscode-descriptionForeground)',
-    fontFamily: 'var(--vscode-font-family)',
-    fontWeight: active ? '600' : 'normal', whiteSpace: 'nowrap' as const,
-    transition: 'color 0.1s, border-color 0.1s',
-  }),
   tabBadge: (active: boolean): React.CSSProperties => ({
     background: 'var(--versiondock-badge-background)',
     color: 'var(--versiondock-badge-foreground)',
