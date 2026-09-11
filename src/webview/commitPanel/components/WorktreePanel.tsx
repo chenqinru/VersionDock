@@ -76,6 +76,7 @@ function WorktreeRow({ entry, repoId, onDelete, onLock, onUnlock, onOpenInExplor
   return (
     <div style={row.root} data-row-divider="">
       <div
+        className="versiondock-list-row"
         data-list-row=""
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onMouseEnter={() => setHovered(true)}
@@ -275,6 +276,10 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
           )}
         </div>
       )}
+      <div
+        className="versiondock-repo-bottom-divider"
+        data-hidden={repo.worktrees.length === 0 ? 'true' : undefined}
+      />
     </div>
   );
 }

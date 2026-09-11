@@ -335,8 +335,8 @@ function RepoSubGroup({
         />
       )}
       <div
-        className="versiondock-group-divider"
-        data-hidden-in-comfortable={collapsed || files.length === 0}
+        className="versiondock-repo-bottom-divider"
+        data-hidden={collapsed || files.length === 0 ? 'true' : undefined}
       />
     </div>
   );

@@ -158,6 +158,8 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, speedSearchQu
   return (
     <div
       data-speed-search-key={itemKey}
+      className="versiondock-file-row"
+      data-list-row=""
       style={{
         display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
         gap: '3px', paddingLeft, paddingRight: '8px', cursor: 'pointer',
@@ -204,6 +206,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, openDirs, tog
   return (
     <div>
       <div
+        className="versiondock-tree-dir"
         data-list-row=""
         style={{
           display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
@@ -509,6 +512,10 @@ export function StashTab({
           />
         ))
       )}
+      <div
+        className="versiondock-repo-bottom-divider"
+        data-hidden={stashes.length === 0 ? 'true' : undefined}
+      />
     </div>
   );
 }

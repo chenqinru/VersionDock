@@ -782,6 +782,8 @@ function PushFileRow({ file, depth, iconTheme, onOpenFile, isPotentialConflict, 
   return (
     <div
       data-speed-search-key={itemKey}
+      className="versiondock-file-row"
+      data-list-row=""
       style={styles.fileRow(depth, hovered)}
       title={isPotentialConflict ? `${file.path} (${t('Potential conflict: this file has local uncommitted modifications')})` : file.path}
       onClick={() => onOpenFile(file)}
@@ -1945,6 +1947,11 @@ function RepoSection({
           onClose={() => { setIncomingCtxMenu(null); setMultiSelectIncomingHashes(new Set()); }}
         />
       )}
+
+      <div
+        className="versiondock-repo-bottom-divider"
+        data-hidden={!expanded || (!hasAnyCommits && aggregatedFiles.length === 0 && aggregatedIncomingFiles.length === 0) ? 'true' : undefined}
+      />
     </div>
   );
 }

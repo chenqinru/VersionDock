@@ -124,6 +124,7 @@ function SubtreeRow({ entry, repoColor, activeOp, status, onPull, onPush, onSpli
   return (
     <div style={row.root} data-row-divider="">
       <div
+        className="versiondock-list-row"
         data-list-row=""
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onMouseEnter={() => setHovered(true)}
@@ -245,6 +246,10 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
           />
         ))
       )}
+      <div
+        className="versiondock-repo-bottom-divider"
+        data-hidden={entries.length === 0 ? 'true' : undefined}
+      />
       {!multiRepo && (
         <div style={css.singleRepoActions}>
           <button data-secondary-action-btn="" style={css.actionBtn} onClick={() => onAdd(meta.id)}>

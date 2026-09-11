@@ -153,6 +153,8 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
   return (
     <div
       data-speed-search-key={itemKey}
+      className="versiondock-file-row"
+      data-list-row=""
       style={{ ...rowStyle(isSelected, isCtxActive, hovered), paddingLeft: `${BASE_PAD + depth * LEVEL_PAD}px` }}
       onClick={isSubmodule ? undefined : () => onSelect(file)}
       onContextMenu={e => { e.preventDefault(); onContextMenu(e, file); }}
@@ -257,6 +259,7 @@ function VscodeDirNode({ node, depth, staged, repoId, selectedFile, ctxFile, ico
   return (
     <div>
       <div
+        className="versiondock-tree-dir"
         data-list-row=""
         style={{
           ...treeDirStyle,
@@ -467,7 +470,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
         <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>{t('No changes')}</div>
       )}
       {!collapsed && !isEmpty && <div style={{ paddingBottom: '2px' }}>{renderFiles()}</div>}
-      <div className="versiondock-repo-bottom-divider" data-hidden-in-comfortable={collapsed || isEmpty ? 'true' : undefined} />
+      <div className="versiondock-repo-bottom-divider" data-hidden={collapsed || isEmpty ? 'true' : undefined} />
     </div>
   );
 }

@@ -193,7 +193,9 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
 
   return (
     <div
-      style={{ ...styles.treeDir, paddingLeft: `${basePad + depth * LEVEL_PAD}px`, background: ctxActive ? 'var(--vscode-list-inactiveSelectionBackground)' : hovered ? 'var(--vscode-list-hoverBackground)' : undefined, borderRadius: '2px' }}
+      className="versiondock-tree-dir"
+      data-list-row=""
+      style={{ ...styles.treeDir, paddingLeft: `${basePad + depth * LEVEL_PAD}px`, background: ctxActive ? 'var(--vscode-list-inactiveSelectionBackground)' : hovered ? 'var(--vscode-list-hoverBackground)' : undefined }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onContextMenu={(e) => { e.preventDefault(); onFolderContextMenu(e, repoId, node.path, allFiles); }}
@@ -253,6 +255,7 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
   return (
     <div
       data-speed-search-key={itemKey}
+      className="versiondock-file-row"
       style={{ ...styles.row(isSelected, isCtxActive, hovered), paddingLeft: `${basePad + depth * LEVEL_PAD}px` }}
       onClick={isSubmodule || isRepoRootChange ? undefined : () => onSelect(file)}
       onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, file); }}

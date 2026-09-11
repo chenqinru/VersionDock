@@ -139,6 +139,7 @@ function SubmoduleRow({
   return (
     <div style={row.root} data-row-divider="">
       <div
+        className="versiondock-list-row"
         data-list-row=""
         style={{
           ...row.header,
@@ -469,6 +470,10 @@ function SubmoduleRepoGroup({
           )}
         </div>
       )}
+      <div
+        className="versiondock-repo-bottom-divider"
+        data-hidden={collapsed || !hasSubmodules ? 'true' : undefined}
+      />
     </div>
   );
 }

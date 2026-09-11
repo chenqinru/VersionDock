@@ -156,6 +156,8 @@ function FileRow({ file, repoId, entry, depth = 0, onOpenFileDiff, onUnshelveFil
   return (
     <div
       data-speed-search-key={itemKey}
+      className="versiondock-file-row"
+      data-list-row=""
       style={{
         display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
         gap: '3px', paddingLeft, paddingRight: '8px', cursor: 'pointer',
@@ -224,6 +226,7 @@ function TreeDirNode({ node, depth, repoId, entry, onOpenFileDiff, onUnshelveFil
   return (
     <div>
       <div
+        className="versiondock-tree-dir"
         data-list-row=""
         style={{
           display: 'flex', alignItems: 'center', minHeight: '22px', fontSize: '12px',
@@ -452,6 +455,10 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, isFirst = 
           />
         ))
       )}
+      <div
+        className="versiondock-repo-bottom-divider"
+        data-hidden={shelves.length === 0 ? 'true' : undefined}
+      />
     </div>
   );
 }
