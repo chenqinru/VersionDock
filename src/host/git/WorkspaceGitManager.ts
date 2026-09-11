@@ -2101,32 +2101,34 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
   async getAllBranches(options?: { force?: boolean; repoIds?: string[] }): Promise<BranchInfo[]> {
     const targetRepoIds = options?.repoIds && options.repoIds.length > 0 ? new Set(options.repoIds) : undefined;
-    const [allBranches, currentBranches] = await Promise.all([
-      Promise.allSettled(Array.from(this.repos.values()).map(r => {
-        const shouldForce = options?.force && (!targetRepoIds || targetRepoIds.has(r.repoId));
-        return r instanceof SvnService ? r.getBranches({ force: shouldForce }) : r.getBranches();
-      })),
-      Promise.allSettled(Array.from(this.repos.values()).map(r => r.getCurrentBranch())),
-    ]);
+    const allBranchesResults = await Promise.allSettled(Array.from(this.repos.values()).map(r => {
+      const shouldForce = options?.force && (!targetRepoIds || targetRepoIds.has(r.repoId));
+      return r instanceof SvnService ? r.getBranches({ force: shouldForce }) : r.getBranches();
+    }));
 
-    const branches = allBranches
+    const branches = allBranchesResults
       .filter((r): r is PromiseFulfilledResult<BranchInfo[]> => r.status === 'fulfilled')
       .flatMap(r => r.value);
 
     // Merge in getCurrentBranch results: they carry isHead:true and detachedTag.
     // In normal HEAD, getBranches() already marks the right branch isHead:true so
-    // the current branch entry is a duplicate — skip it. In detached HEAD on a tag,
-    // getBranches() has no isHead:true entry, so we append the HEAD entry so the
-    // sidebar knows which tag is active.
-    for (const r of currentBranches) {
-      if (r.status !== 'fulfilled') continue;
-      const cur = r.value;
-      const hasAnyBranchForRepo = branches.some(b => b.repoId === cur.repoId);
-      if (!cur.detachedTag && !cur.detachedHash && hasAnyBranchForRepo) continue; // normal branch — already handled by getBranches()
-      // Remove any existing entry for this repoId that might have isHead:true (safety)
-      const idx = branches.findIndex(b => b.repoId === cur.repoId && b.isHead);
-      if (idx >= 0) branches.splice(idx, 1);
-      branches.push(cur);
+    // the current branch entry is a duplicate. Only query getCurrentBranch() for repositories
+    // that did not have an isHead entry returned by getBranches() (e.g. detached HEAD on a tag).
+    const reposWithHead = new Set(branches.filter(b => b.isHead).map(b => b.repoId));
+    const reposNeedingCurrent = Array.from(this.repos.values()).filter(r => !reposWithHead.has(r.repoId));
+
+    if (reposNeedingCurrent.length > 0) {
+      const currentBranches = await Promise.allSettled(reposNeedingCurrent.map(r => r.getCurrentBranch()));
+      for (const r of currentBranches) {
+        if (r.status !== 'fulfilled') continue;
+        const cur = r.value;
+        const hasAnyBranchForRepo = branches.some(b => b.repoId === cur.repoId);
+        if (!cur.detachedTag && !cur.detachedHash && hasAnyBranchForRepo) continue; // normal branch — already handled by getBranches()
+        // Remove any existing entry for this repoId that might have isHead:true (safety)
+        const idx = branches.findIndex(b => b.repoId === cur.repoId && b.isHead);
+        if (idx >= 0) branches.splice(idx, 1);
+        branches.push(cur);
+      }
     }
 
     // For worktree repos, duplicate their isHead branch entry under the main repo's repoId.

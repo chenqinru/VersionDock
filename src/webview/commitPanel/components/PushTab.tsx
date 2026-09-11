@@ -710,6 +710,8 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
   activeSpeedSearchKey?: string | null;
   itemKeyPrefix?: string;
 }) {
+  const [hovered, setHovered] = useState(false);
+
   if (node.kind === 'file') {
     return (
       <PushFileRow
@@ -725,7 +727,6 @@ function PushFileTreeNode({ node, depth, collapsed, iconTheme, onToggle, onOpenF
     );
   }
 
-  const [hovered, setHovered] = useState(false);
   const open = !collapsed[node.path];
   return (
     <div>

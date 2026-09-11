@@ -1150,6 +1150,38 @@ export class GitService {
     return { repoId: this.repoId, branch: branchInfo, stagedFiles, unstagedFiles, isDetachedHead: status.detached, conflictCount, operationState };
   }
 
+  private _lastBranchInfo?: BranchInfo;
+
+  getCachedBranch(): BranchInfo | undefined {
+    const vsRepo = this.vsRepo();
+    if (vsRepo) {
+      const head = vsRepo.state.HEAD;
+      if (!head) return this._lastBranchInfo;
+      const vsTagName = head.type === RefType.Tag ? head.name : undefined;
+      const isDetached = head.type !== RefType.Head && Boolean(vsTagName || !head.name);
+      const branchName = head.name || (isDetached ? 'HEAD' : undefined);
+      if (!branchName) return this._lastBranchInfo;
+      const upstream = head.upstream ? `${head.upstream.remote}/${head.upstream.name}` : undefined;
+      const aheadBehind = (head.ahead !== undefined && head.behind !== undefined)
+        ? { ahead: head.ahead, behind: head.behind }
+        : undefined;
+      return {
+        repoId: this.repoId,
+        name: branchName,
+        fullName: isDetached ? 'HEAD' : `refs/heads/${branchName}`,
+        isHead: true,
+        isRemote: false,
+        upstream,
+        aheadBehind,
+        lastCommitHash: head.commit,
+        detachedTag: vsTagName,
+        detachedHash: isDetached && !vsTagName ? head.commit?.slice(0, 8) : undefined,
+        isProtected: !isDetached && isBranchProtected(branchName),
+      };
+    }
+    return this._lastBranchInfo;
+  }
+
   async getCurrentBranch(): Promise<BranchInfo> {
     await waitForGitWrite(this.rootPath);
     const vsRepo = this.vsRepo();
@@ -1187,21 +1219,25 @@ export class GitService {
 
       let isGone: boolean | undefined;
       if (isNamedBranch) {
-        try {
-          const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
-          if (tracking) {
-            upstream = tracking.upstream ?? upstream;
-            if (tracking.aheadBehind !== undefined) {
-              aheadBehind = tracking.aheadBehind;
+        // If upstream and aheadBehind are already provided by vsRepo HEAD, skip running
+        // the external `git for-each-ref` CLI unless tracking information is missing.
+        if (!upstream || aheadBehind === undefined) {
+          try {
+            const tracking = (await this.getLocalBranchTrackingInfo()).get(branchName);
+            if (tracking) {
+              upstream = tracking.upstream ?? upstream;
+              if (tracking.aheadBehind !== undefined) {
+                aheadBehind = tracking.aheadBehind;
+              }
+              if (tracking.isGone !== undefined) {
+                isGone = tracking.isGone;
+              }
             }
-            if (tracking.isGone !== undefined) {
-              isGone = tracking.isGone;
-            }
-          }
-        } catch { /* ignore fallback */ }
+          } catch { /* ignore fallback */ }
+        }
       }
 
-      return {
+      const result: BranchInfo = {
         repoId: this.repoId,
         name: branchName,
         fullName: isDetached ? `HEAD` : `refs/heads/${branchName}`,
@@ -1215,6 +1251,8 @@ export class GitService {
         isGone,
         isProtected: !isDetached && isBranchProtected(branchName),
       };
+      this._lastBranchInfo = result;
+      return result;
     }
     const status = await this.git.status();
     const isDetached = status.detached;
@@ -1242,7 +1280,7 @@ export class GitService {
         }
       } catch { /* ignore fallback */ }
     }
-    return {
+    const fallbackResult: BranchInfo = {
       repoId: this.repoId,
       name: branchName,
       fullName: isDetached ? 'HEAD' : `refs/heads/${branchName}`,
@@ -1256,6 +1294,8 @@ export class GitService {
       isGone,
       isProtected: !isDetached && isBranchProtected(branchName),
     };
+    this._lastBranchInfo = fallbackResult;
+    return fallbackResult;
   }
 
   async getBranches(): Promise<BranchInfo[]> {

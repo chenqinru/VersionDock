@@ -56,6 +56,7 @@ export interface CompareState {
 interface LogState {
   repos: RepoMeta[];
   initialized: boolean;
+  loadingBranches: boolean;
   branches: BranchInfo[];
   tags: TagInfo[];
   iconTheme: IconThemeData | null;
@@ -86,7 +87,7 @@ interface LogState {
 
   hasWorkspaceFolder: boolean;
   setRepos: (repos: RepoMeta[], hasWorkspaceFolder?: boolean) => void;
-  setBranches: (branches: BranchInfo[]) => void;
+  setBranches: (branches: BranchInfo[], isInitialPartial?: boolean) => void;
   updateTags: (repoId: string, tags: TagInfo[]) => void;
   setIconTheme: (theme: IconThemeData | null) => void;
   setGraphCommits: (commits: GraphCommitNode[]) => void;
@@ -169,6 +170,7 @@ function createEmptyComparePane(): ComparePaneState {
 export const useLogStore = create<LogState>((set, get) => ({
   repos: [],
   initialized: false,
+  loadingBranches: false,
   hasWorkspaceFolder: true,
   branches: [],
   tags: [],
@@ -247,7 +249,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       ...(hasWorkspaceFolder !== undefined ? { hasWorkspaceFolder } : {}),
     };
   }),
-  setBranches: (branches) => set({ branches }),
+  setBranches: (branches, isInitialPartial = false) => set({ branches, loadingBranches: isInitialPartial }),
   updateTags: (repoId, tags) => set(s => (
     s.repos.some(repo => repo.id === repoId)
       ? { tags: [...s.tags.filter(t => t.repoId !== repoId), ...tags] }

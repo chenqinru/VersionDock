@@ -192,6 +192,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private hiddenRepoIds: string[] = [];
   private pendingFilterRepoId: string | null = null;
   private pendingFilterBranch: string | null = null;
+  private pendingAllBranchesTask: Promise<BranchInfo[]> | null = null;
 
   setCommitPanel(provider: CommitPanelProvider): void {
     this.commitPanel = provider;
@@ -740,9 +741,21 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return requestedRepoIds.filter(repoId => visibleRepoIds.has(repoId));
   }
 
-  private async getFilteredBranches(repos = this.getVisibleRepos(), options?: { force?: boolean; repoIds?: string[] }) {
+  private async getFilteredBranches(repos = this.getVisibleRepos(), options?: { force?: boolean; repoIds?: string[] }): Promise<BranchInfo[]> {
     const ids = new Set(repos.map(r => r.id));
-    const all = await this.manager.getAllBranches(options);
+    if (options?.force || options?.repoIds) {
+      const all = await this.manager.getAllBranches(options);
+      return all.filter(b => ids.has(b.repoId));
+    }
+    if (!this.pendingAllBranchesTask) {
+      const task = this.manager.getAllBranches().finally(() => {
+        if (this.pendingAllBranchesTask === task) {
+          this.pendingAllBranchesTask = null;
+        }
+      });
+      this.pendingAllBranchesTask = task;
+    }
+    const all = await this.pendingAllBranchesTask;
     return all.filter(b => ids.has(b.repoId));
   }
 
@@ -833,7 +846,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           // Webview initializes instantly (store.initialized = true) without
           // waiting for remote SVN branch ls CLI round-trips.
           const initialBranches = this.getCachedFilteredBranches(repos);
-          this.post({ type: 'LOG_INIT_DATA', repos, branches: initialBranches });
+          this.post({ type: 'LOG_INIT_DATA', repos, branches: initialBranches, isInitialPartial: true });
 
           void (async () => {
             try {
@@ -843,7 +856,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
               ]);
               if (metadataGeneration === this.managerSyncGeneration) {
                 this.acknowledgeFreshLogSnapshot(repos, branches);
-                this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme });
+                this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme, isInitialPartial: false });
 
                 // Send tags for all visible repos without blocking the commit batch.
                 for (const meta of repos) {

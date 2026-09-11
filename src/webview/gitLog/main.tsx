@@ -246,7 +246,7 @@ export function GitLogApp() {
       switch (msg.type) {
         case 'LOG_INIT_DATA':
           store.setRepos(msg.repos, msg.hasWorkspaceFolder);
-          store.setBranches(msg.branches);
+          store.setBranches(msg.branches, msg.isInitialPartial ?? false);
           if (msg.layoutDensity) store.setLayoutDensity(msg.layoutDensity);
           if (msg.iconTheme) store.setIconTheme(msg.iconTheme);
           break;
@@ -812,7 +812,7 @@ export function GitLogApp() {
               repos={store.repos.filter(repo => !repo.isWorktree)}
               branches={store.branches}
               tags={store.tags}
-              loading={!store.initialized}
+              loading={!store.initialized || store.loadingBranches}
               filter={store.branchFilter}
               selectedBranchFilter={store.commitFilters.branch}
               selectedBranchRepoIds={store.commitFilters.repoIds}

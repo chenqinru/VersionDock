@@ -394,7 +394,7 @@ export type CompareSide = 'baseOnly' | 'targetOnly';
 export type LayoutDensity = 'comfortable' | 'compact';
 
 export type HostToLogMsg =
-  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity }
+  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity; isInitialPartial?: boolean }
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'LOG_LAYOUT_DENSITY_UPDATE'; layoutDensity: LayoutDensity }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }

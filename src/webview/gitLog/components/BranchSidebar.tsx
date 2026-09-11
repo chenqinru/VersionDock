@@ -190,6 +190,13 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
     });
   }
 
+  const handleHeaderKeyDown = (key: SectionKey, e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggle(key);
+    }
+  };
+
   const repoColorMap = Object.fromEntries(repos.map(r => [r.id, readableAccentColor(r.color)]));
   const repoKindMap: Record<string, 'git' | 'svn'> = Object.fromEntries(
     repos.map(r => [r.id, r.kind ?? 'git']),
@@ -337,7 +344,14 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
       </div>
 
       {/* LOCAL section */}
-      <div style={styles.sectionHeader} onClick={() => toggle('local')}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed.has('local')}
+        style={styles.sectionHeader}
+        onClick={() => toggle('local')}
+        onKeyDown={(e) => handleHeaderKeyDown('local', e)}
+      >
         <span style={styles.chevron}>{collapsed.has('local') ? '▶' : '▼'}</span>
         <Codicon name="git-branch" style={styles.sectionIcon} />
         <span style={styles.sectionLabel}>{t('Local')}</span>
@@ -369,7 +383,14 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
         const sectionKey = `remote:${name}`;
         return (
           <React.Fragment key={sectionKey}>
-            <div style={styles.sectionHeader} onClick={() => toggle(sectionKey)}>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={!collapsed.has(sectionKey)}
+              style={styles.sectionHeader}
+              onClick={() => toggle(sectionKey)}
+              onKeyDown={(e) => handleHeaderKeyDown(sectionKey, e)}
+            >
               <span style={styles.chevron}>{collapsed.has(sectionKey) ? '▶' : '▼'}</span>
               <Codicon name="cloud" style={styles.sectionIcon} />
               <span style={styles.sectionLabel}>{name.charAt(0).toUpperCase() + name.slice(1)}</span>
@@ -405,7 +426,14 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
       {/* TAGS section */}
       {mergedTags.length > 0 && (
         <>
-          <div style={styles.sectionHeader} onClick={() => toggle('tags')}>
+          <div
+            role="button"
+            tabIndex={0}
+            aria-expanded={!collapsed.has('tags')}
+            style={styles.sectionHeader}
+            onClick={() => toggle('tags')}
+            onKeyDown={(e) => handleHeaderKeyDown('tags', e)}
+          >
             <span style={styles.chevron}>{collapsed.has('tags') ? '▶' : '▼'}</span>
             <Codicon name="tag" style={styles.sectionIcon} />
             <span style={styles.sectionLabel}>{t('Tags')}</span>
