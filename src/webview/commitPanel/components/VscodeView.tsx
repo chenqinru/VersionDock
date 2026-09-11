@@ -470,7 +470,7 @@ function VscodeRepoGroup({ repoStatus, repoName, repoColor, staged, files, viewM
         <div style={{ padding: '12px 8px', fontSize: '12px', color: 'var(--vscode-descriptionForeground)', textAlign: 'center' }}>{t('No changes')}</div>
       )}
       {!collapsed && !isEmpty && <div style={{ paddingBottom: '2px' }}>{renderFiles()}</div>}
-      <div className="versiondock-repo-bottom-divider" data-hidden={collapsed || isEmpty ? 'true' : undefined} />
+      <div className="versiondock-repo-bottom-divider" data-hidden-in-comfortable={collapsed || isEmpty ? 'true' : undefined} />
     </div>
   );
 }

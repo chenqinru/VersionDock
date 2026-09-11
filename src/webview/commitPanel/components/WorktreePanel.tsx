@@ -286,10 +286,6 @@ function RepoSection({ repo, multiRepo, onDelete, onLock, onUnlock, onPrune, onO
           )}
         </div>
       )}
-      <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={collapsed || repo.worktrees.length === 0 ? 'true' : undefined}
-      />
     </div>
   );
 }

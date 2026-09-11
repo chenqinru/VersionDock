@@ -261,10 +261,6 @@ function RepoSection({ meta, entries, activeOps, statuses, multiRepo, onAdd, onR
           ))
         )
       )}
-      <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={collapsed || entries.length === 0 ? 'true' : undefined}
-      />
       {!multiRepo && (
         <div style={css.singleRepoActions}>
           <button data-secondary-action-btn="" style={css.actionBtn} onClick={() => onAdd(meta.id)}>

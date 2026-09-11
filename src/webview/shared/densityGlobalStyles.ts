@@ -23,9 +23,29 @@ export const GLOBAL_DENSITY_STYLES = `
   transition: background 0.12s ease, color 0.12s ease !important;
 }
 
-/* 舒适模式清除行间硬贴边分割线（浮动行由底部仓库分割线收尾） */
-[data-density="comfortable"] [data-row-divider] {
+/* 舒适模式下每条数据条目行保持内缩下分割线进行分割（左右各留出6px间距，不占满，与标题栏及悬浮行对齐） */
+[data-density="comfortable"] [data-row-divider],
+[data-density="comfortable"] .versiondock-card {
+  position: relative !important;
   border-bottom: none !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+[data-density="comfortable"] [data-row-divider]::after,
+[data-density="comfortable"] .versiondock-card::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  height: 1px;
+  background: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 2;
 }
 
 /* Git Log 绝对定位虚拟提交行：避开泳道，浮动高亮 */
@@ -44,33 +64,28 @@ export const GLOBAL_DENSITY_STYLES = `
   transition: background 0.12s ease, color 0.12s ease !important;
 }
 
-/* 卡片容器（暂存项、搁置项、提交卡片等） */
-[data-density="comfortable"] .versiondock-card {
-  margin: 2px 6px !important;
-  border-radius: 6px !important;
-  overflow: hidden !important;
-  border-bottom: none !important;
-}
-
 [data-density="comfortable"] .versiondock-card-header {
-  border-radius: 6px !important;
+  border-radius: 5px !important;
   transition: background 0.12s ease !important;
 }
 
 [data-density="comfortable"] .versiondock-card-body {
-  border-radius: 0 0 6px 6px !important;
+  border-radius: 0 !important;
+  border-top: none !important;
+  position: relative !important;
 }
 
-/* 卡片内部元素占满卡片宽度，不再二次向内缩进，确保卡片整体外边距与仓库标题栏（margin: 0 6px）绝对对齐 */
-[data-density="comfortable"] .versiondock-card [data-speed-search-key],
-[data-density="comfortable"] .versiondock-card [data-commit-row],
-[data-density="comfortable"] .versiondock-card [data-list-row],
-[data-density="comfortable"] .versiondock-card .versiondock-file-row,
-[data-density="comfortable"] .versiondock-card .versiondock-tree-dir {
-  margin-left: 0 !important;
-  margin-right: 0 !important;
-  width: 100% !important;
-  border-radius: 0 !important;
+[data-density="comfortable"] .versiondock-card-body::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 0;
+  height: 1px;
+  background: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 2;
 }
 
 /* 通用：标题栏操作按钮悬浮显现 */
@@ -171,12 +186,17 @@ export const GLOBAL_DENSITY_STYLES = `
   border-radius: 8px !important;
 }
 
-/* 弱化或移除舒适模式下多余的直通硬分割线 */
-[data-density="comfortable"] [data-row-divider] {
-  border-bottom: none !important;
+/* ── 2. 紧凑模式（Compact Mode: VS Code 原生最高信息密度） ── */
+
+[data-density="compact"] [data-row-divider]::after,
+[data-density="compact"] .versiondock-card::after {
+  display: none !important;
 }
 
-/* ── 2. 紧凑模式（Compact Mode: VS Code 原生最高信息密度） ── */
+[data-density="compact"] [data-row-divider] {
+  border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35))) !important;
+  box-sizing: border-box !important;
+}
 
 [data-density="compact"] [data-speed-search-key],
 [data-density="compact"] [data-commit-row],
@@ -200,6 +220,11 @@ export const GLOBAL_DENSITY_STYLES = `
 
 [data-density="compact"] .versiondock-card-body {
   border-radius: 0 !important;
+  border-top: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-card-body::before {
+  display: none !important;
 }
 
 [data-density="compact"] .versiondock-repo-group,

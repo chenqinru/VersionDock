@@ -285,10 +285,11 @@ function ShelveRow({ entry, repoId, viewMode, onUnshelve, onUnshelveAndDrop, onU
   const treeNodes = viewMode === 'tree' ? buildTree(entry.files) : null;
 
   return (
-    <div className="versiondock-card" style={rowStyle.root}>
+    <div className="versiondock-card" style={rowStyle.root} data-row-divider="">
       {/* Header */}
       <div
-        className="versiondock-card-header"
+        className="versiondock-card-header versiondock-list-row"
+        data-list-row=""
         style={{ ...rowStyle.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onClick={() => toggleShelveCollapsed(entryKey)}
         onMouseEnter={() => setHovered(true)}
@@ -462,10 +463,6 @@ export function ShelvePanel({ repoId, repoName, repoColor, multiRepo, isFirst = 
           )}
         </>
       )}
-      <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={collapsed || shelves.length === 0 ? 'true' : undefined}
-      />
     </div>
   );
 }

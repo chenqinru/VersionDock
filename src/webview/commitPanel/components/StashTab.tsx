@@ -355,11 +355,12 @@ function StashRow({ entry, repoId, viewMode, onApply, onPop, onDrop, onOpenFileD
   };
 
   return (
-    <div className="versiondock-card" style={row.root}>
+    <div className="versiondock-card" style={row.root} data-row-divider="">
       {/* Header */}
       <div
         data-speed-search-key={stashEntryKey}
-        className="versiondock-card-header"
+        className="versiondock-card-header versiondock-list-row"
+        data-list-row=""
         style={{ ...row.header, background: hovered ? 'var(--vscode-list-hoverBackground)' : 'transparent' }}
         onClick={handleToggleExpand}
         onMouseEnter={() => setHovered(true)}
@@ -524,10 +525,6 @@ export function StashTab({
           )}
         </>
       )}
-      <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={collapsed || stashes.length === 0 ? 'true' : undefined}
-      />
     </div>
   );
 }

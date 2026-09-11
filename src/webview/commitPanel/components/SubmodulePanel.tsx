@@ -470,10 +470,6 @@ function SubmoduleRepoGroup({
           )}
         </div>
       )}
-      <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={collapsed || !hasSubmodules ? 'true' : undefined}
-      />
     </div>
   );
 }
@@ -654,13 +650,13 @@ const row = {
   root: {
     display: 'flex',
     flexDirection: 'column',
+    borderBottom: '1px solid var(--vscode-panel-border)',
   } as React.CSSProperties,
   header: {
     display: 'flex',
     alignItems: 'center',
     padding: '6px 10px',
     cursor: 'default',
-    borderBottom: '1px solid var(--vscode-tree-tableColumnsBorder, rgba(128, 128, 128, 0.08))',
     gap: '8px',
     minHeight: '42px',
     boxSizing: 'border-box',

@@ -182,8 +182,8 @@ export function ProjectGroup({
         </div>
       )}
       <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={collapsed || allFiles.length === 0 ? 'true' : undefined}
+        className="versiondock-group-divider"
+        data-hidden-in-comfortable={collapsed || allFiles.length === 0}
       />
     </div>
   );

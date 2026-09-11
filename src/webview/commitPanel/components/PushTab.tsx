@@ -508,11 +508,12 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   };
 
   return (
-    <div className="versiondock-card" style={styles.commitCard(expanded, selected)}>
+    <div className="versiondock-card" style={styles.commitCard(expanded, selected)} data-row-divider="">
       <div
         data-commit-row="true"
         data-speed-search-key={commitKey}
-        className="versiondock-card-header"
+        className="versiondock-card-header versiondock-list-row"
+        data-list-row=""
         role="button"
         tabIndex={0}
         style={{ ...styles.commitRow, background }}
@@ -847,7 +848,7 @@ function AggregatedChangesView({
   isIncoming?: boolean;
 }) {
   return (
-    <div style={{ borderTop: '1px solid var(--vscode-panel-border)', paddingBottom: '6px' }}>
+    <div className="versiondock-card-body" style={{ borderTop: '1px solid var(--vscode-panel-border)', paddingBottom: '6px' }}>
       <PushFileList
         files={files}
         loading={loading}
@@ -1948,10 +1949,6 @@ function RepoSection({
         />
       )}
 
-      <div
-        className="versiondock-repo-bottom-divider"
-        data-hidden={!expanded || (!hasAnyCommits && aggregatedFiles.length === 0 && aggregatedIncomingFiles.length === 0) ? 'true' : undefined}
-      />
     </div>
   );
 }
