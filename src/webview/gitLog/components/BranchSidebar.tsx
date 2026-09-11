@@ -264,18 +264,19 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
     <div ref={ref} className="versiondock-branch-sidebar" style={styles.container} onClick={() => { setContextMenu(null); setTagContextMenu(null); }}>
       <style>{INTERACTION_STYLE}</style>
       {/* Sticky header: search + repo list */}
-      <div style={styles.stickyHeader}>
-        <div style={styles.searchBox}>
-          <div style={styles.searchInputWrap}>
+      <div className="versiondock-sidebar-sticky-header" style={styles.stickyHeader}>
+        <div className="versiondock-sidebar-search" style={styles.searchBox}>
+          <div className="versiondock-sidebar-search-input-wrap" style={styles.searchInputWrap}>
             <Codicon name="filter" style={styles.searchIcon} />
             <input
+              className="versiondock-sidebar-search-input"
               style={styles.searchInput}
               value={localFilter}
               onChange={e => handleInputChange(e.target.value)}
               placeholder={t('Filter branches & tags...')}
             />
           </div>
-          <button style={styles.collapseBtn} onClick={onCollapse} title={t('Collapse sidebar')}>
+          <button className="versiondock-sidebar-collapse-btn" style={styles.collapseBtn} onClick={onCollapse} title={t('Collapse sidebar')}>
             <div data-top-action-btn="" style={styles.collapseBtnInner}>
               <Codicon name="layout-sidebar-left" style={{ fontSize: '14px' }} />
             </div>
@@ -289,7 +290,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
         )}
 
         {repos.length > 1 && (
-          <div style={styles.repoList}>
+          <div className="versiondock-sidebar-repo-list" style={styles.repoList}>
             {repos.map(repo => {
               const activeKey = `repo:${repo.id}`;
               const isClickSelected = activeItem === activeKey;
@@ -307,7 +308,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
                 <div
                   key={repo.id}
                   style={styles.repoRow(isClickSelected, isFilterSelected)}
-                  className="versiondock-sidebar-row"
+                  className="versiondock-sidebar-row versiondock-sidebar-repo-row"
                   data-selected={isClickSelected}
                   role="button"
                   tabIndex={0}
@@ -345,121 +346,124 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
 
       {/* LOCAL section */}
       <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed.has('local')}
-        style={styles.sectionHeader}
-        onClick={() => toggle('local')}
-        onKeyDown={(e) => handleHeaderKeyDown('local', e)}
-      >
-        <span style={styles.chevron}>{collapsed.has('local') ? '▶' : '▼'}</span>
-        <Codicon name="git-branch" style={styles.sectionIcon} />
-        <span style={styles.sectionLabel}>{t('Local')}</span>
-        <span style={styles.count}>{localMerged.length}</span>
-      </div>
-      {!collapsed.has('local') && localMerged.map(m => (
-        <BranchRow
-          key={m.key}
-          merged={m}
-          repoColorMap={repoColorMap}
-          multiRepo={multiRepo}
-          isSvn={m.vcsKind === 'svn'}
-          showVcsBadge={showVcsBadges}
-          isClickSelected={activeItem === `branch:local:${m.key}`}
-          isFilterSelected={isSelectedBranchScope(m, revisionRef(m))}
-          isCtxActive={contextMenu?.merged.key === m.key}
-          onClick={() => setActiveItem(`branch:local:${m.key}`)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
-          }}
-          onDoubleClick={() => onBranchFilterSelect(revisionRef(m), m.repoIds)}
-        />
-      ))}
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed.has('local')}
+          className="versiondock-sidebar-section-header"
+          style={styles.sectionHeader}
+          onClick={() => toggle('local')}
+          onKeyDown={(e) => handleHeaderKeyDown('local', e)}
+        >
+          <span style={styles.chevron}>{collapsed.has('local') ? '▶' : '▼'}</span>
+          <Codicon name="git-branch" style={styles.sectionIcon} />
+          <span style={styles.sectionLabel}>{t('Local')}</span>
+          <span style={styles.count}>{localMerged.length}</span>
+        </div>
+        {!collapsed.has('local') && localMerged.map(m => (
+          <BranchRow
+            key={m.key}
+            merged={m}
+            repoColorMap={repoColorMap}
+            multiRepo={multiRepo}
+            isSvn={m.vcsKind === 'svn'}
+            showVcsBadge={showVcsBadges}
+            isClickSelected={activeItem === `branch:local:${m.key}`}
+            isFilterSelected={isSelectedBranchScope(m, revisionRef(m))}
+            isCtxActive={contextMenu?.merged.key === m.key}
+            onClick={() => setActiveItem(`branch:local:${m.key}`)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
+            }}
+            onDoubleClick={() => onBranchFilterSelect(revisionRef(m), m.repoIds)}
+          />
+        ))}
 
-      {/* REMOTE sections — one per remote name (origin, upstream, …) */}
-      {remoteGroups.map(({ name, merged }) => {
-        const sectionKey = `remote:${name}`;
-        return (
-          <React.Fragment key={sectionKey}>
+        {/* REMOTE sections — one per remote name (origin, upstream, …) */}
+        {remoteGroups.map(({ name, merged }) => {
+          const sectionKey = `remote:${name}`;
+          return (
+            <React.Fragment key={sectionKey}>
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={!collapsed.has(sectionKey)}
+                className="versiondock-sidebar-section-header"
+                style={styles.sectionHeader}
+                onClick={() => toggle(sectionKey)}
+                onKeyDown={(e) => handleHeaderKeyDown(sectionKey, e)}
+              >
+                <span style={styles.chevron}>{collapsed.has(sectionKey) ? '▶' : '▼'}</span>
+                <Codicon name="cloud" style={styles.sectionIcon} />
+                <span style={styles.sectionLabel}>{name.charAt(0).toUpperCase() + name.slice(1)}</span>
+                <span style={styles.count}>{merged.length}</span>
+              </div>
+              {!collapsed.has(sectionKey) && merged.map(m => {
+                const fullName = revisionRef(m);
+                return (
+                  <BranchRow
+                    key={m.key}
+                    merged={m}
+                    repoColorMap={repoColorMap}
+                    multiRepo={multiRepo}
+                    isSvn={m.vcsKind === 'svn'}
+                    showVcsBadge={showVcsBadges}
+                    isClickSelected={activeItem === `branch:${sectionKey}:${m.key}`}
+                    isFilterSelected={isSelectedBranchScope(m, fullName)}
+                    isCtxActive={contextMenu?.merged.key === m.key}
+                    onClick={() => setActiveItem(`branch:${sectionKey}:${m.key}`)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
+                    }}
+                    onDoubleClick={() => onBranchFilterSelect(fullName, m.repoIds)}
+                  />
+                );
+              })}
+            </React.Fragment>
+          );
+        })}
+
+        {/* TAGS section */}
+        {mergedTags.length > 0 && (
+          <>
             <div
               role="button"
               tabIndex={0}
-              aria-expanded={!collapsed.has(sectionKey)}
+              aria-expanded={!collapsed.has('tags')}
+              className="versiondock-sidebar-section-header"
               style={styles.sectionHeader}
-              onClick={() => toggle(sectionKey)}
-              onKeyDown={(e) => handleHeaderKeyDown(sectionKey, e)}
+              onClick={() => toggle('tags')}
+              onKeyDown={(e) => handleHeaderKeyDown('tags', e)}
             >
-              <span style={styles.chevron}>{collapsed.has(sectionKey) ? '▶' : '▼'}</span>
-              <Codicon name="cloud" style={styles.sectionIcon} />
-              <span style={styles.sectionLabel}>{name.charAt(0).toUpperCase() + name.slice(1)}</span>
-              <span style={styles.count}>{merged.length}</span>
+              <span style={styles.chevron}>{collapsed.has('tags') ? '▶' : '▼'}</span>
+              <Codicon name="tag" style={styles.sectionIcon} />
+              <span style={styles.sectionLabel}>{t('Tags')}</span>
+              <span style={styles.count}>{mergedTags.length}</span>
             </div>
-            {!collapsed.has(sectionKey) && merged.map(m => {
-              const fullName = revisionRef(m);
-              return (
-                <BranchRow
-                  key={m.key}
-                  merged={m}
-                  repoColorMap={repoColorMap}
-                  multiRepo={multiRepo}
-                  isSvn={m.vcsKind === 'svn'}
-                  showVcsBadge={showVcsBadges}
-                  isClickSelected={activeItem === `branch:${sectionKey}:${m.key}`}
-                  isFilterSelected={isSelectedBranchScope(m, fullName)}
-                  isCtxActive={contextMenu?.merged.key === m.key}
-                  onClick={() => setActiveItem(`branch:${sectionKey}:${m.key}`)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setContextMenu({ merged: m, x: e.clientX, y: e.clientY });
-                  }}
-                  onDoubleClick={() => onBranchFilterSelect(fullName, m.repoIds)}
-                />
-              );
-            })}
-          </React.Fragment>
-        );
-      })}
-
-      {/* TAGS section */}
-      {mergedTags.length > 0 && (
-        <>
-          <div
-            role="button"
-            tabIndex={0}
-            aria-expanded={!collapsed.has('tags')}
-            style={styles.sectionHeader}
-            onClick={() => toggle('tags')}
-            onKeyDown={(e) => handleHeaderKeyDown('tags', e)}
-          >
-            <span style={styles.chevron}>{collapsed.has('tags') ? '▶' : '▼'}</span>
-            <Codicon name="tag" style={styles.sectionIcon} />
-            <span style={styles.sectionLabel}>{t('Tags')}</span>
-            <span style={styles.count}>{mergedTags.length}</span>
-          </div>
-          {!collapsed.has('tags') && mergedTags.map(mt => (
-            <TagRow
-              key={mt.key}
-              mergedTag={mt}
-              repoColorMap={repoColorMap}
-              multiRepo={multiRepo}
-              isSvn={mt.vcsKind === 'svn'}
-              showVcsBadge={showVcsBadges}
-              isActive={activeDetachedTags.has(mt.key)}
-              isClickSelected={activeItem === `tag:${mt.key}`}
-              isCtxActive={tagContextMenu?.mergedTag.key === mt.key}
-              onClick={() => setActiveItem(`tag:${mt.key}`)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setTagContextMenu({ mergedTag: mt, x: e.clientX, y: e.clientY });
-              }}
-            />
-          ))}
-        </>
-      )}
+            {!collapsed.has('tags') && mergedTags.map(mt => (
+              <TagRow
+                key={mt.key}
+                mergedTag={mt}
+                repoColorMap={repoColorMap}
+                multiRepo={multiRepo}
+                isSvn={mt.vcsKind === 'svn'}
+                showVcsBadge={showVcsBadges}
+                isActive={activeDetachedTags.has(mt.key)}
+                isClickSelected={activeItem === `tag:${mt.key}`}
+                isCtxActive={tagContextMenu?.mergedTag.key === mt.key}
+                onClick={() => setActiveItem(`tag:${mt.key}`)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setTagContextMenu({ mergedTag: mt, x: e.clientX, y: e.clientY });
+                }}
+              />
+            ))}
+          </>
+        )}
 
       {/* Branch context menu */}
       {contextMenu && (() => {
@@ -542,6 +546,7 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
       style={styles.branchRow(isFilterSelected, isClickSelected, hovered, isCtxActive, isHead)}
       className="versiondock-sidebar-row"
       data-selected={isClickSelected}
+      data-is-head={isHead ? 'true' : undefined}
       role="button"
       tabIndex={0}
       aria-pressed={isClickSelected}
@@ -577,6 +582,7 @@ function BranchRow({ merged, repoColorMap, multiRepo, isSvn, showVcsBadge, isCli
 
       {isHead && (
         <span
+          className="versiondock-head-badge"
           style={styles.headBadge}
           title={multiRepo
             ? t('Current HEAD in {0} of {1} repositories', headRepoCount, repoIds.length)
@@ -622,9 +628,10 @@ function TagRow({ mergedTag, repoColorMap, multiRepo, isSvn, showVcsBadge, isAct
 
   return (
     <div
-      style={styles.branchRow(false, isClickSelected, hovered, isCtxActive)}
+      style={styles.branchRow(false, isClickSelected, hovered, isCtxActive, isActive)}
       className="versiondock-sidebar-row"
       data-selected={isClickSelected}
+      data-is-head={isActive ? 'true' : undefined}
       role="button"
       tabIndex={0}
       aria-pressed={isClickSelected}

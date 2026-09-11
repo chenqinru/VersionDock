@@ -56,12 +56,116 @@ export const GLOBAL_DENSITY_STYLES = `
   transition: background 0.12s ease, color 0.12s ease !important;
 }
 
-/* 侧边栏行项（分支树等） */
-[data-density="comfortable"] .versiondock-sidebar-row {
-  margin-left: 4px !important;
-  margin-right: 4px !important;
+/* 侧边栏整体、吸顶顶栏、搜索框、折叠分组与列表项统一拦截（Sidebar & Inner Elements） */
+[data-density="comfortable"] .versiondock-branch-sidebar {
+  border: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 8px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-sticky-header {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 10 !important;
+  border-top-left-radius: 7px !important;
+  border-top-right-radius: 7px !important;
+  background: var(--vscode-sideBar-background) !important;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2)) !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-search {
+  height: auto !important;
+  padding: 5px 6px 1px 6px !important;
+  border-bottom: none !important;
+  gap: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-search-input-wrap {
+  border-radius: 6px !important;
+  height: 26px !important;
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.25)) !important;
+  background: var(--vscode-input-background) !important;
+  box-sizing: border-box !important;
+  padding-left: 7px !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-collapse-btn {
+  border-left: none !important;
+  border-radius: 6px !important;
+  height: 26px !important;
+  width: 26px !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-collapse-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)) !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-repo-list {
+  padding: 0 0 3px 0 !important;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2)) !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-section-header {
+  margin: 3px 6px 1px 6px !important;
   border-radius: 4px !important;
+  border-bottom: none !important;
+  padding: 2px 8px !important;
+  min-height: 23px !important;
+  background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent) !important;
+  transition: background 0.12s ease !important;
+  box-sizing: border-box !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-section-header:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 9%, transparent) !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-row {
+  margin: 1px 6px !important;
+  border-radius: 4px !important;
+  min-height: 22px !important;
+  padding-top: 1px !important;
+  padding-bottom: 1px !important;
+  padding-left: 10px !important;
+  padding-right: 6px !important;
+  box-sizing: border-box !important;
   transition: background 0.12s ease, color 0.12s ease !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-repo-row {
+  min-height: 22px !important;
+  margin: 1px 6px !important;
+  border-radius: 4px !important;
+  padding: 1px 6px !important;
+}
+
+/* 舒适模式下 HEAD 当前分支圆角药丸指示器（替代直角 borderLeft） */
+[data-density="comfortable"] .versiondock-sidebar-row[data-is-head="true"] {
+  border-left: none !important;
+  position: relative !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-row[data-is-head="true"]::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--vscode-textLink-foreground);
+}
+
+[data-density="comfortable"] .versiondock-head-badge {
+  border-radius: 3px !important;
 }
 
 [data-density="comfortable"] .versiondock-card-header {
@@ -168,12 +272,8 @@ export const GLOBAL_DENSITY_STYLES = `
   border-radius: 8px !important;
 }
 
-/* Git Log 框架、侧边栏与过滤器 */
+/* Git Log 框架与过滤器 */
 [data-density="comfortable"] .versiondock-log-frame {
-  border: 1px solid var(--vscode-panel-border) !important;
-  border-radius: 8px !important;
-}
-[data-density="comfortable"] .versiondock-branch-sidebar {
   border: 1px solid var(--vscode-panel-border) !important;
   border-radius: 8px !important;
 }
@@ -281,6 +381,52 @@ export const GLOBAL_DENSITY_STYLES = `
   border: none !important;
   border-right: 1px solid var(--vscode-panel-border) !important;
   border-radius: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-sticky-header {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 10 !important;
+  border-radius: 0 !important;
+  border-bottom: none !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-search {
+  height: 35px !important;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+  gap: 0 !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-search-input-wrap {
+  border-radius: 0 !important;
+  height: 100% !important;
+  border: none !important;
+  padding-left: 8px !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-collapse-btn {
+  border-left: 1px solid var(--vscode-panel-border) !important;
+  border-radius: 0 !important;
+  height: 100% !important;
+  width: auto !important;
+  padding: 0 5px !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-repo-list {
+  padding: 3px 0 !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-section-header {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+  padding: 4px 8px !important;
+  min-height: auto !important;
+  background: var(--vscode-sideBarSectionHeader-background) !important;
 }
 
 [data-density="compact"] .versiondock-filters-bar {
@@ -314,5 +460,19 @@ export const GLOBAL_DENSITY_STYLES = `
   margin-left: 0 !important;
   margin-right: 0 !important;
   border-radius: 0 !important;
+  min-height: 22px !important;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-repo-row {
+  min-height: 20px !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  padding: 2px 8px !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-row[data-is-head="true"]::before {
+  display: none !important;
 }
 `;
