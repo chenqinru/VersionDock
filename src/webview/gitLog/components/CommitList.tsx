@@ -90,11 +90,17 @@ const INTERACTION_STYLE = `
 `;
 
 function CommitSkeleton() {
+  const layoutDensity = useLogStore(s => s.layoutDensity);
+  const isCompact = layoutDensity === 'compact';
   const rows = Math.ceil(window.innerHeight / ROW_HEIGHT) + 2;
   return (
     <div
       className="versiondock-log-frame"
-      style={skeletonStyles.container}
+      style={{
+        ...skeletonStyles.container,
+        paddingTop: isCompact ? 0 : 4,
+        paddingBottom: isCompact ? 0 : 4,
+      }}
       role="status"
       aria-live="polite"
       aria-label={t('Loading commits…')}
@@ -204,6 +210,10 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     }
     return blocks;
   }, [commits, repoMeta, multiRepo]);
+
+  const isCompact = layoutDensity === 'compact';
+  const virtualPadding = isCompact ? 0 : 4;
+
   const virtualizer = useVirtualizer({
     count: commits.length,
     getScrollElement: () => parentRef.current,
@@ -211,6 +221,8 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
     // boundaries. Repository separation is drawn only in the label strip.
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
+    paddingStart: virtualPadding,
+    paddingEnd: virtualPadding,
   });
 
   const items = virtualizer.getVirtualItems();
@@ -257,7 +269,6 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
   }, [commits, hasMore, loading, onLoadMore, onScrolledToHash, onSelect, scrollToHash, virtualizer]);
 
   const anyExpanded = expandedRepos.size > 0;
-  const isCompact = layoutDensity === 'compact';
   const labelColWidth = multiRepo
     ? (anyExpanded
         ? REPO_LABEL_WIDTH_EXPANDED + (isCompact ? 0 : 4)
@@ -303,11 +314,9 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
 
         {/* Multi-repo group indicator strip (drawn once per contiguous block of commits) */}
         {multiRepo && repoBlocks.map((block) => {
-          const blockTopPx = block.startRow * ROW_HEIGHT;
+          const blockTopPx = virtualPadding + block.startRow * ROW_HEIGHT;
           const blockHeightPx = block.rowCount * ROW_HEIGHT;
-          const leadingGap = isCompact
-            ? (block.startRow > 0 ? REPO_BLOCK_GAP : 0)
-            : (block.startRow === 0 ? 3 : REPO_BLOCK_GAP);
+          const leadingGap = block.startRow > 0 ? REPO_BLOCK_GAP : 0;
           const topPx = blockTopPx + leadingGap;
           const heightPx = Math.max(0, isCompact ? blockHeightPx - leadingGap : blockHeightPx - leadingGap - 2);
           const expanded = expandedRepos.has(block.repoId);
