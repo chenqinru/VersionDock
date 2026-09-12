@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallba
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { CommitNode, LineRange, RepoMeta } from '../../shared/types';
 import { getVsCodeApi } from '../../shared/vscodeApi';
-import type { HostToLogMsg, LogCommitPathEntry, LogToHostMsg, IconThemeData, MergeParentChange } from '../../../host/types/messages';
+import type { HostToLogMsg, LogCommitPathEntry, LogToHostMsg, IconThemeData, MergeParentChange, LayoutDensity } from '../../../host/types/messages';
 import { Codicon } from '../../shared/Codicon';
 import { FileIcon } from '../../shared/FileIcon';
 import { groupRefs, branchColor, tagColor, headColor, splitRemoteRefName } from '../utils/refs';
@@ -11,7 +11,7 @@ import type { RefGroup } from '../utils/refs';
 import { isPrimaryBranch } from '../../shared/branchUtils';
 import { AuthorAvatar } from './AuthorAvatar';
 import { t } from '../../shared/i18n';
-import type { LogViewFileEntry } from '../store/logStore';
+import { useLogStore, type LogViewFileEntry } from '../store/logStore';
 import { scopedKey } from '../../shared/scopedKey';
 import { isSameHistoryFilePath } from '../utils/historyPath';
 import { readableAccentColor } from '../../shared/branchColors';
@@ -75,6 +75,7 @@ interface Props {
   isMultiCommitSelection: boolean;
   activeHistoryPath?: string;
   activeLineRange?: LineRange;
+  layoutDensity?: LayoutDensity;
   onSelectFile: (file: { repoId: string; path: string; status: string; commitHash?: string } | null) => void;
   onCollapse?: () => void;
 }
@@ -350,7 +351,7 @@ function SingleTreeFileRow({ node, depth, selectedFile, isOpeningDiff, onOpen, o
     <div
       data-speed-search-key={itemKey}
       style={styles.fileRow(isSelected)}
-      className="versiondock-detail-row"
+      className="versiondock-detail-row versiondock-file-row"
       data-selected={isSelected}
       onClick={isRepoRootChange ? undefined : () => onOpen(file)}
       onContextMenu={isRepoRootChange ? undefined : (event => {
@@ -573,7 +574,7 @@ function MergeParentChangeGroup({
   ), [tree]);
 
   return (
-    <div style={styles.mergeParentGroup}>
+    <div style={styles.mergeParentGroup} className="versiondock-detail-merge-group">
       <div
         style={styles.mergeParentRow(expanded)}
         className="versiondock-detail-row"
@@ -625,7 +626,7 @@ function MergeParentChangeGroup({
                 key={itemKey}
                 data-speed-search-key={itemKey}
                 style={styles.fileRow(isSelected)}
-                className="versiondock-detail-row"
+                className="versiondock-detail-row versiondock-file-row"
                 data-selected={isSelected}
                 title={`${file.path}\n${t('Click to open diff')}`}
                 onClick={() => onOpen(file)}
@@ -660,7 +661,10 @@ function MergeParentChangeGroup({
   );
 }
 
-export function CommitDetail({ commit, commits, files, mergeParentChanges, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, onSelectFile, onCollapse }: Props) {
+export function CommitDetail({ commit, commits, files, mergeParentChanges, groupedEntries, selectedFile, loadingFiles, repoColor, repos, remoteNamesByRepo, iconTheme, isMultiCommitSelection, activeHistoryPath, activeLineRange, layoutDensity: propLayoutDensity, onSelectFile, onCollapse }: Props) {
+  const storeLayoutDensity = useLogStore(s => s.layoutDensity);
+  const effectiveDensity = propLayoutDensity ?? storeLayoutDensity ?? 'comfortable';
+  const itemHeight = 22;
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [allExpanded, setAllExpanded] = useState<boolean | null>(null);
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
@@ -721,7 +725,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const singleCommitMessageExpanded = primaryCommitMessageKey
     ? expandedCommitMessageKeys.has(primaryCommitMessageKey)
     : false;
-  const singleCommitMessageCanExpand = Boolean(displayedCommitMessage.body);
+  const singleCommitMessageCanExpand = Boolean(displayedCommitMessage.body) || displayedCommitMessage.subject.length > 25;
 
   const toggleCommitMessage = useCallback((messageKey: string) => {
     setExpandedCommitMessageKeys(current => {
@@ -763,7 +767,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   const virtualizer = useVirtualizer({
     count: shouldVirtualize ? itemCount : 0,
     getScrollElement: () => fileListRef.current,
-    estimateSize: () => 22,
+    estimateSize: () => itemHeight,
     overscan: 10,
     enabled: shouldVirtualize,
   });
@@ -1454,10 +1458,10 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
   };
 
   return (
-    <div ref={containerRef} style={styles.container} onContextMenu={event => event.preventDefault()}>
+    <div ref={containerRef} style={styles.container} className="versiondock-detail-container" onContextMenu={event => event.preventDefault()}>
       <style>{INTERACTION_STYLE}</style>
       <div style={styles.fileSection}>
-        <div style={styles.fileListToolbar}>
+        <div style={styles.fileListToolbar} className="versiondock-detail-toolbar">
           <span style={styles.fileCount}>
             {activeFiles.length === 1 ? t('{0} file', activeFiles.length) : t('{0} files', activeFiles.length)}
           </span>
@@ -1516,7 +1520,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                     key={itemKey}
                     data-speed-search-key={itemKey}
                     style={styles.fileRow(isSelected)}
-                    className="versiondock-detail-row"
+                    className="versiondock-detail-row versiondock-file-row"
                     data-selected={isSelected}
                     onClick={isRepoRootChange ? undefined : () => handleOpenDiff(file)}
                     onContextMenu={isRepoRootChange ? undefined : (event => {
@@ -1597,7 +1601,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                           top: 0,
                           left: 0,
                           width: '100%',
-                          height: '22px',
+                          height: `${itemHeight}px`,
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                       >
@@ -1646,11 +1650,11 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
         </div>
       </div>
 
-      <div style={styles.sectionSplitter} onMouseDown={handleSectionResizeMouseDown} />
+      <div style={styles.sectionSplitter} className="versiondock-detail-splitter" onMouseDown={handleSectionResizeMouseDown} />
 
       <div ref={infoSectionRef} style={styles.infoSection(infoSectionHeight)}>
         {isMultiCommitSelection ? (
-          <div style={styles.multiSummary}>
+          <div style={styles.multiSummary} className="versiondock-detail-info">
             <div style={styles.summaryHeader}>
               <div style={styles.summaryTitle}>{t('Aggregated commit selection')}</div>
               <div style={styles.detailActions}>
@@ -1713,7 +1717,8 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 const message = splitCommitMessage(fullCommitMessages[messageKey] ?? null, selectedCommit.message);
                 const loadingMessage = loadingCommitMessageKeys.has(messageKey);
                 const messageExpanded = expandedCommitMessageKeys.has(messageKey);
-                const messageCanExpand = Boolean(message.body);
+                const messageCanExpand = Boolean(message.body) || message.subject.length > 25;
+                const itemFullMessage = fullCommitMessages[messageKey] || selectedCommit.message || message.subject;
                 const selectedBranches = aggregateContainingBranches[messageKey];
                 const selectedRefGroups = groupRefs(Array.from(new Set([
                   ...selectedCommit.refs,
@@ -1726,15 +1731,22 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 const loadingSelectedBranches = loadingAggregateBranchKeys.has(messageKey);
                 return (
                   <div key={messageKey} style={styles.summaryItem(index === commits.length - 1)}>
-                    <div style={styles.summaryRepoRow}>
+                    <div style={{ ...styles.summaryRepoRow, '--repo-color': repoColorById[selectedCommit.repoId] } as React.CSSProperties} className="versiondock-detail-repo-header">
                       <Codicon name="repo" style={styles.repoIcon} />
                       <span style={styles.repoName(repoColorById[selectedCommit.repoId])}>
                         {repoNameById[selectedCommit.repoId] ?? selectedCommit.repoId}
                       </span>
                     </div>
-                    <div style={styles.summaryMessageCard}>
-                      <div style={styles.messageTitleRow}>
-                        <div style={{ ...styles.summaryMessage, ...(messageExpanded ? styles.messageTitleExpanded : {}) }}>{message.subject}</div>
+                    <div style={styles.summaryMessageCard} className="versiondock-detail-message-card" title={itemFullMessage}>
+                      <div
+                        style={{ ...styles.messageTitleRow, cursor: messageCanExpand ? 'pointer' : 'default' }}
+                        onClick={messageCanExpand ? () => {
+                          if ((window.getSelection()?.toString() || '').length === 0) {
+                            toggleCommitMessage(messageKey);
+                          }
+                        } : undefined}
+                      >
+                        <div style={{ ...styles.summaryMessage, ...(messageExpanded ? styles.messageTitleExpanded : {}) }} title={itemFullMessage}>{message.subject}</div>
                         {messageCanExpand && (
                           <button
                             type="button"
@@ -1742,7 +1754,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                             style={styles.messageExpandButton}
                             title={messageExpanded ? t('Click to collapse') : t('Click to expand')}
                             aria-expanded={messageExpanded}
-                            onClick={() => toggleCommitMessage(messageKey)}
+                            onClick={(e) => { e.stopPropagation(); toggleCommitMessage(messageKey); }}
                           >
                             <Codicon name={messageExpanded ? 'chevron-up' : 'chevron-down'} style={styles.messageExpandIcon} />
                           </button>
@@ -1753,7 +1765,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                         <div style={styles.summaryMessageBody}>{message.body}</div>
                       ) : null}
                     </div>
-                    <div style={styles.summaryItemMeta}>
+                    <div style={styles.summaryItemMeta} className="versiondock-detail-author-row">
                       <AuthorAvatar authorName={selectedCommit.authorName} authorEmail={selectedCommit.authorEmail} size={20} />
                       <div style={styles.summaryItemMetaText}>
                         <span>{selectedCommit.authorName}</span>
@@ -1762,14 +1774,14 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                         <span style={styles.dot}>·</span>
                         <span style={styles.metaHashGroup} title={selectedCommit.hash}>
                           <Codicon name="git-commit" style={styles.metaHashIcon} />
-                          <span style={styles.metaHash}>{selectedCommit.shortHash}</span>
+                          <span style={styles.metaHash} className="versiondock-detail-hash">{selectedCommit.shortHash}</span>
                         </span>
                       </div>
                     </div>
                     {(selectedRefGroups.length > 0 || loadingSelectedBranches) && (
                       <div style={styles.summaryRefsRow}>
                         {selectedHeadGroup && (
-                          <span style={styles.refBadge(headColor(), true)} title={headBadgeTitle(selectedHeadGroup)}>
+                          <span style={styles.refBadge(headColor(), true)} className="versiondock-detail-ref-badge" title={headBadgeTitle(selectedHeadGroup)}>
                             <Codicon name="arrow-right" style={{ fontSize: '9px', flexShrink: 0, lineHeight: 1 }} />
                             HEAD
                           </span>
@@ -1783,6 +1795,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                             <span
                               key={group.key}
                               style={styles.refBadge(color, (group.isHead || group.isDetached) && !group.isRemoteHead)}
+                              className="versiondock-detail-ref-badge"
                               title={badgeTitle(group)}
                             >
                               <RefBadgeIcon group={group} />
@@ -1801,9 +1814,9 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
             </div>
           </div>
         ) : commit ? (
-          <div style={styles.singleInfo}>
+          <div style={styles.singleInfo} className="versiondock-detail-info">
             {repoName && (
-              <div style={styles.repoRow}>
+              <div style={{ ...styles.repoRow, '--repo-color': repoColor } as React.CSSProperties} className="versiondock-detail-repo-header">
                 <Codicon name="repo" style={styles.repoIcon} />
                 <span style={styles.repoName(repoColor ? readableAccentColor(repoColor) : undefined)}>{repoName}</span>
                 <div style={styles.detailActions}>
@@ -1849,28 +1862,40 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 </div>
               </div>
             )}
-            <div style={styles.commitMessageCard}>
-              <div style={styles.messageTitleRow}>
-                <div style={{ ...styles.message, ...(singleCommitMessageExpanded ? styles.messageTitleExpanded : {}) }}>{displayedCommitMessage.subject}</div>
-                {singleCommitMessageCanExpand && (
-                  <button
-                    type="button"
-                    className="versiondock-detail-icon-row"
-                    style={styles.messageExpandButton}
-                    title={singleCommitMessageExpanded ? t('Click to collapse') : t('Click to expand')}
-                    aria-expanded={singleCommitMessageExpanded}
-                    onClick={() => toggleCommitMessage(primaryCommitMessageKey)}
+            {(() => {
+              const fullMessageTooltip = fullCommitMessage || commit?.message || displayedCommitMessage.subject;
+              return (
+                <div style={styles.commitMessageCard} className="versiondock-detail-message-card" title={fullMessageTooltip}>
+                  <div
+                    style={{ ...styles.messageTitleRow, cursor: singleCommitMessageCanExpand ? 'pointer' : 'default' }}
+                    onClick={singleCommitMessageCanExpand ? () => {
+                      if ((window.getSelection()?.toString() || '').length === 0) {
+                        toggleCommitMessage(primaryCommitMessageKey);
+                      }
+                    } : undefined}
                   >
-                    <Codicon name={singleCommitMessageExpanded ? 'chevron-up' : 'chevron-down'} style={styles.messageExpandIcon} />
-                  </button>
-                )}
-                {!singleCommitMessageCanExpand && <span style={styles.messageExpandPlaceholder} aria-hidden="true" />}
-              </div>
-              {singleCommitMessageExpanded && !loadingCommitMessage && displayedCommitMessage.body ? (
-                <div style={styles.commitMessageBody}>{displayedCommitMessage.body}</div>
-              ) : null}
-            </div>
-            <div style={styles.authorRow}>
+                    <div style={{ ...styles.message, ...(singleCommitMessageExpanded ? styles.messageTitleExpanded : {}) }} title={fullMessageTooltip}>{displayedCommitMessage.subject}</div>
+                    {singleCommitMessageCanExpand && (
+                      <button
+                        type="button"
+                        className="versiondock-detail-icon-row"
+                        style={styles.messageExpandButton}
+                        title={singleCommitMessageExpanded ? t('Click to collapse') : t('Click to expand')}
+                        aria-expanded={singleCommitMessageExpanded}
+                        onClick={(e) => { e.stopPropagation(); toggleCommitMessage(primaryCommitMessageKey); }}
+                      >
+                        <Codicon name={singleCommitMessageExpanded ? 'chevron-up' : 'chevron-down'} style={styles.messageExpandIcon} />
+                      </button>
+                    )}
+                    {!singleCommitMessageCanExpand && <span style={styles.messageExpandPlaceholder} aria-hidden="true" />}
+                  </div>
+                  {singleCommitMessageExpanded && !loadingCommitMessage && displayedCommitMessage.body ? (
+                    <div style={styles.commitMessageBody}>{displayedCommitMessage.body}</div>
+                  ) : null}
+                </div>
+              );
+            })()}
+            <div style={styles.authorRow} className="versiondock-detail-author-row">
               <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} size={20} />
               <div style={styles.meta}>
                 <span>{commit.authorName}</span>
@@ -1879,7 +1904,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 <span style={styles.dot}>·</span>
                 <span style={styles.metaHashGroup} title={commit.hash}>
                   <Codicon name="git-commit" style={styles.metaHashIcon} />
-                  <span style={styles.metaHash}>{commit.shortHash}</span>
+                  <span style={styles.metaHash} className="versiondock-detail-hash">{commit.shortHash}</span>
                 </span>
               </div>
             </div>
@@ -1973,7 +1998,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                     || (group.isSvnRevision && group.label === 'HEAD');
                   const color = group.isTag ? tagColor() : isSpecialHead ? headColor() : branchColor(group.label, false);
                   return (
-                    <span key={key} style={styles.refBadge(color, (group.isHead || group.isDetached) && !group.isRemoteHead)} title={badgeTitle(group)}>
+                    <span key={key} style={styles.refBadge(color, (group.isHead || group.isDetached) && !group.isRemoteHead)} className="versiondock-detail-ref-badge" title={badgeTitle(group)}>
                       <RefBadgeIcon group={group} />
                       <span style={styles.refBadgeLabel}>{formatRefLabel(group)}</span>
                     </span>
@@ -1982,7 +2007,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 if (badge.kind === 'tag') {
                   const color = tagColor();
                   return (
-                    <span key={key} style={styles.refBadge(color)} title={t('Tag: {0}', badge.name)}>
+                    <span key={key} style={styles.refBadge(color)} className="versiondock-detail-ref-badge" title={t('Tag: {0}', badge.name)}>
                       <Codicon name="tag" style={{ fontSize: '11px', flexShrink: 0, lineHeight: 1 }} />
                       <span style={styles.refBadgeLabel}>{badge.name}</span>
                     </span>
@@ -1993,7 +2018,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 const label = isRemote ? `${remoteName}/${badge.name}` : badge.name;
                 const color = branchColor(badge.name, false);
                 return (
-                  <span key={key} style={styles.refBadge(color)} title={isRemote ? t('Remote branch: {0}', label) : t('Branch: {0}', label)}>
+                  <span key={key} style={styles.refBadge(color)} className="versiondock-detail-ref-badge" title={isRemote ? t('Remote branch: {0}', label) : t('Branch: {0}', label)}>
                     <Codicon name={isRemote ? 'cloud' : 'git-branch'} style={{ fontSize: '11px', flexShrink: 0, lineHeight: 1 }} />
                     <span style={styles.refBadgeLabel}>{label}</span>
                   </span>
@@ -2004,7 +2029,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
               return (
                 <div style={refsExpanded ? styles.refsRowExpanded : styles.refsRow}>
                   {nonDetachedHeadGroup && (
-                    <span style={styles.refBadge(headColor(), true)} title={headBadgeTitle(nonDetachedHeadGroup)}>
+                    <span style={styles.refBadge(headColor(), true)} className="versiondock-detail-ref-badge" title={headBadgeTitle(nonDetachedHeadGroup)}>
                       <Codicon name="arrow-right" style={{ fontSize: '9px', flexShrink: 0, lineHeight: 1 }} />
                       HEAD
                     </span>

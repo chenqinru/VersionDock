@@ -958,6 +958,7 @@ export function GitLogApp() {
                   isMultiCommitSelection={isMultiCommitSelection}
                   activeHistoryPath={store.commitFilters.path}
                   activeLineRange={store.commitFilters.lineRange}
+                  layoutDensity={layoutDensity}
                   onSelectFile={store.selectFile}
                   onCollapse={() => setDetailCollapsed(true)}
                 />

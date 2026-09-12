@@ -286,6 +286,124 @@ export const GLOBAL_DENSITY_STYLES = `
   border-radius: 8px !important;
 }
 
+/* 变更与提交详情面板通用拦截（CommitDetail & Change Detail Panels） */
+[data-density="comfortable"] .versiondock-detail-toolbar {
+  padding: 5px 10px 6px 10px !important;
+  border-bottom: none !important;
+  position: relative !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-toolbar::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 0;
+  height: 1px;
+  background: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 2;
+}
+
+[data-density="comfortable"] .versiondock-detail-row {
+  margin: 0 6px !important;
+  border-radius: 5px !important;
+  min-height: 22px !important;
+  width: auto !important;
+  box-sizing: border-box !important;
+  transition: background 0.12s ease, color 0.12s ease !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-splitter {
+  height: 6px !important;
+  background: transparent !important;
+  background-image: none !important;
+  position: relative !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-splitter::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1px;
+  background: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  opacity: 0.85;
+  transition: background 0.15s ease, opacity 0.15s ease;
+  pointer-events: none;
+}
+
+[data-density="comfortable"] .versiondock-detail-splitter:hover::after {
+  background: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+  opacity: 1;
+}
+
+[data-density="comfortable"] .versiondock-detail-info {
+  padding: 10px 12px 14px 12px !important;
+  gap: 6px !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-repo-header {
+  margin: 0 0 4px 0 !important;
+  padding: 2px 0 !important;
+  border-radius: 0 !important;
+  min-height: auto !important;
+  background: transparent !important;
+  border: none !important;
+  box-sizing: border-box !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-message-card {
+  margin-top: 0 !important;
+  margin-bottom: 7px !important;
+  padding: 10px 12px !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25)) !important;
+  box-sizing: border-box !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-author-row {
+  margin-top: 2px !important;
+  margin-bottom: 7px !important;
+  gap: 8px !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-hash {
+  border-radius: 4px !important;
+  padding: 1px 5px !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-ref-badge {
+  height: 19px !important;
+  line-height: 17px !important;
+  border-radius: 4px !important;
+  padding: 0 7px !important;
+  font-size: 11px !important;
+  box-sizing: border-box !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-merge-group {
+  border-top: none !important;
+  position: relative !important;
+  padding-top: 4px !important;
+  margin-top: 2px !important;
+}
+
+[data-density="comfortable"] .versiondock-detail-merge-group::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 0;
+  height: 1px;
+  background: var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 /* ── 2. 紧凑模式（Compact Mode: VS Code 原生最高信息密度） ── */
 
 [data-density="compact"] [data-row-divider]::after,
@@ -473,6 +591,86 @@ export const GLOBAL_DENSITY_STYLES = `
 }
 
 [data-density="compact"] .versiondock-sidebar-row[data-is-head="true"]::before {
+  display: none !important;
+}
+
+/* 变更与提交详情面板通用拦截（紧凑模式还原） */
+[data-density="compact"] .versiondock-detail-toolbar {
+  padding: 3px 10px !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-detail-toolbar::after {
+  display: none !important;
+}
+
+[data-density="compact"] .versiondock-detail-row {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  border-radius: 0 !important;
+  min-height: 22px !important;
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+  width: 100% !important;
+}
+
+[data-density="compact"] .versiondock-detail-splitter {
+  height: 4px !important;
+  background-image: linear-gradient(to bottom, transparent 1px, var(--vscode-panel-border) 1px, var(--vscode-panel-border) 2px, transparent 2px) !important;
+}
+
+[data-density="compact"] .versiondock-detail-splitter::after {
+  display: none !important;
+}
+
+[data-density="compact"] .versiondock-detail-info {
+  padding: 9px 12px 12px !important;
+  gap: 4px !important;
+}
+
+[data-density="compact"] .versiondock-detail-repo-header {
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  min-height: auto !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+[data-density="compact"] .versiondock-detail-message-card {
+  margin-top: 2px !important;
+  margin-bottom: 3px !important;
+  padding: 10px 12px !important;
+  border-radius: 4px !important;
+  border: 1px solid var(--vscode-panel-border) !important;
+}
+
+[data-density="compact"] .versiondock-detail-author-row {
+  margin-top: 3px !important;
+  margin-bottom: 5px !important;
+  gap: 6px !important;
+}
+
+[data-density="compact"] .versiondock-detail-hash {
+  border-radius: 3px !important;
+  padding: 1px 4px !important;
+}
+
+[data-density="compact"] .versiondock-detail-ref-badge {
+  height: 16px !important;
+  line-height: 16px !important;
+  border-radius: 3px !important;
+  padding: 0 6px !important;
+  font-size: 10px !important;
+}
+
+[data-density="compact"] .versiondock-detail-merge-group {
+  border-top: 1px solid var(--vscode-panel-border) !important;
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+
+[data-density="compact"] .versiondock-detail-merge-group::before {
   display: none !important;
 }
 `;
