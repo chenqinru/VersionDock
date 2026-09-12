@@ -199,6 +199,10 @@ export const GLOBAL_DENSITY_STYLES = `
   pointer-events: none;
   transition: opacity 0.12s ease;
 }
+.versiondock-repo-header [data-action-btn] {
+  max-height: 20px;
+  box-sizing: border-box;
+}
 .versiondock-repo-header:hover [data-action-btn],
 .versiondock-group-divider:hover [data-action-btn],
 .versiondock-repo-header [data-action-btn][data-active="true"] {
@@ -219,7 +223,11 @@ export const GLOBAL_DENSITY_STYLES = `
 [data-density="comfortable"] .versiondock-repo-header {
   margin: 0 6px !important;
   border-radius: 6px !important;
-  min-height: 27px;
+  height: 28px !important;
+  min-height: 28px !important;
+  box-sizing: border-box !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
   border: 1px solid color-mix(in srgb, var(--repo-color, #888) 38%, transparent) !important;
   background: color-mix(in srgb, var(--repo-color, #888) 12%, transparent);
   transition: background 0.12s ease, border-color 0.12s ease !important;
@@ -233,11 +241,14 @@ export const GLOBAL_DENSITY_STYLES = `
 [data-density="comfortable"] [data-section-header] {
   margin: 4px 6px 2px 6px !important;
   border-radius: 6px !important;
-  min-height: 27px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  box-sizing: border-box !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
   border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, #007acc) 30%, transparent) !important;
   border-left: 3px solid var(--vscode-focusBorder, var(--vscode-button-background, #007acc)) !important;
   background: color-mix(in srgb, var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.15)) 80%, transparent) !important;
-  box-sizing: border-box !important;
   transition: background 0.12s ease, border-color 0.12s ease !important;
 }
 [data-density="comfortable"] [data-section-header]:hover {
@@ -517,7 +528,11 @@ export const GLOBAL_DENSITY_STYLES = `
 [data-density="compact"] .versiondock-repo-header {
   margin: 0 !important;
   border-radius: 0 !important;
-  min-height: 26px;
+  height: 26px !important;
+  min-height: 26px !important;
+  box-sizing: border-box !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
   border: none !important;
   border-bottom: 1px solid var(--vscode-panel-border) !important;
   background: color-mix(in srgb, var(--repo-color, #888) 15%, transparent);
@@ -529,6 +544,11 @@ export const GLOBAL_DENSITY_STYLES = `
 [data-density="compact"] [data-section-header] {
   margin: 0 !important;
   border-radius: 0 !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  box-sizing: border-box !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
   border: none !important;
   border-left: 3px solid var(--vscode-focusBorder, var(--vscode-button-background, #007acc)) !important;
   border-bottom: 1px solid var(--vscode-panel-border) !important;

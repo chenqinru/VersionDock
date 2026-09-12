@@ -464,7 +464,7 @@ const styles = {
   repoNameInline: {
     fontWeight: 'bold' as const,
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.04em',
+    letterSpacing: '0.05em',
     fontSize: '10px',
     color: 'var(--vscode-sideBarSectionHeader-foreground)',
     flexShrink: 0,

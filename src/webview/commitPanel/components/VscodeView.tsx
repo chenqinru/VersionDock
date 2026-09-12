@@ -763,7 +763,7 @@ const sectionHeaderMainStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: '4px',
-  padding: '3px 8px 3px 8px',
+  padding: '0 8px',
   cursor: 'pointer',
   flex: 1,
   fontSize: '11px',
@@ -799,7 +799,6 @@ const repoGroupStyle: React.CSSProperties = {
 const repoHeaderStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  height: '26px',
   boxSizing: 'border-box',
 };
 
@@ -807,7 +806,7 @@ const repoHeaderMainStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: '4px',
-  padding: '3px 0 3px 8px',
+  padding: '0 0 0 8px',
   cursor: 'pointer',
   flex: 1,
   fontSize: '11px',

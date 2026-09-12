@@ -3210,8 +3210,7 @@ const styles = {
   repoHeader: {
     display: 'flex',
     alignItems: 'center',
-    padding: '4px 8px',
-    minHeight: '26px',
+    padding: '0 8px',
     boxSizing: 'border-box' as const,
   },
   checkbox: {
@@ -3227,7 +3226,7 @@ const styles = {
   }),
   repoName: {
     fontSize: '11px', fontWeight: 'bold' as const,
-    textTransform: 'uppercase' as const, letterSpacing: 0, minWidth: 0,
+    textTransform: 'uppercase' as const, letterSpacing: '0.05em', minWidth: 0,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, flexShrink: 1,
   },
   branchBadge: (color: string): React.CSSProperties => ({
@@ -3278,7 +3277,7 @@ const styles = {
   } as React.CSSProperties,
   repoModeButton: (disabled: boolean, active = false): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 22, height: 22, padding: 0, border: 'none', borderRadius: '3px',
+    width: 20, height: 20, padding: 0, border: 'none', borderRadius: '3px',
     background: active ? 'var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.24))' : 'transparent',
     color: active ? 'var(--vscode-foreground)' : 'var(--vscode-icon-foreground)',
     cursor: disabled ? 'default' : 'pointer',

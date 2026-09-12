@@ -340,13 +340,13 @@ const css = {
   root: { display: 'flex', flexDirection: 'column' as const },
   repoSection: {} as React.CSSProperties,
   repoHeader: {
-    display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px',
+    display: 'flex', alignItems: 'center', gap: '6px', padding: '0 8px',
     boxSizing: 'border-box' as const,
     cursor: 'pointer',
     userSelect: 'none' as const,
   } as React.CSSProperties,
   dot: (color: string): React.CSSProperties => ({ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }),
-  repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.04em' },
+  repoName: { fontSize: '11px', fontWeight: 'bold' as const, textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
   headerBtn: {
     background: 'transparent', border: 'none', cursor: 'pointer',
     padding: '2px 4px', borderRadius: '3px', display: 'flex', alignItems: 'center',
