@@ -499,6 +499,7 @@ function SectionHeader({ title, icon, count, collapsed, onToggle, onContextMenu,
   const [hovered, setHovered] = useState(false);
   return (
     <div
+      data-section-header=""
       style={sectionHeaderStyle}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

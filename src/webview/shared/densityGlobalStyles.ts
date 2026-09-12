@@ -229,6 +229,28 @@ export const GLOBAL_DENSITY_STYLES = `
   border-color: color-mix(in srgb, var(--repo-color, #888) 55%, transparent) !important;
 }
 
+/* VS Code 视图模式分区标题栏与 Changelist 视图模式分组标题栏（通用 Section Header 语义拦截） */
+[data-density="comfortable"] [data-section-header] {
+  margin: 4px 6px 2px 6px !important;
+  border-radius: 6px !important;
+  min-height: 27px !important;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, #007acc) 30%, transparent) !important;
+  border-left: 3px solid var(--vscode-focusBorder, var(--vscode-button-background, #007acc)) !important;
+  background: color-mix(in srgb, var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.15)) 80%, transparent) !important;
+  box-sizing: border-box !important;
+  transition: background 0.12s ease, border-color 0.12s ease !important;
+}
+[data-density="comfortable"] [data-section-header]:hover {
+  background: color-mix(in srgb, var(--vscode-sideBarSectionHeader-background, rgba(128, 128, 128, 0.25)) 90%, transparent) !important;
+}
+
+/* 舒适模式下提交面板各滚动列表容器垂直呼吸空间 */
+[data-density="comfortable"] .versiondock-commit-scroll-container {
+  padding-top: 4px !important;
+  padding-bottom: 6px !important;
+  box-sizing: border-box !important;
+}
+
 /* 模块分割线与组底分割线：在舒适模式下展开且有数据时呈现与仓库标题栏等宽的清晰分割线 */
 .versiondock-repo-bottom-divider,
 .versiondock-group-divider {
@@ -253,10 +275,20 @@ export const GLOBAL_DENSITY_STYLES = `
   opacity: 0.85 !important;
 }
 
-/* 统一提交输入卡片（UnifiedCommitForm） */
+/* 统一提交输入卡片与表单控件（UnifiedCommitForm & General Form Controls） */
 [data-density="comfortable"] .versiondock-commit-form {
   border-radius: 8px !important;
   border: 1px solid var(--vscode-panel-border) !important;
+}
+[data-density="comfortable"] [data-form-input] {
+  border-radius: 6px !important;
+}
+[data-density="comfortable"] [data-dropdown-btn] {
+  border-radius: 6px !important;
+}
+[data-density="comfortable"] .versiondock-commit-form .gs-ai-marquee-track {
+  rx: 5.5px !important;
+  ry: 5.5px !important;
 }
 
 /* PushTab 容器与底栏 */
@@ -462,6 +494,20 @@ export const GLOBAL_DENSITY_STYLES = `
   background: color-mix(in srgb, var(--repo-color, #888) 22%, transparent);
 }
 
+[data-density="compact"] [data-section-header] {
+  margin: 0 !important;
+  border-radius: 0 !important;
+  border: none !important;
+  border-left: 3px solid var(--vscode-focusBorder, var(--vscode-button-background, #007acc)) !important;
+  border-bottom: 1px solid var(--vscode-panel-border) !important;
+  background: var(--vscode-sideBarSectionHeader-background, rgba(128,128,128,0.08)) !important;
+}
+
+[data-density="compact"] .versiondock-commit-scroll-container {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
 [data-density="compact"] .versiondock-group-divider,
 [data-density="compact"] .versiondock-repo-bottom-divider {
   border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35))) !important;
@@ -473,6 +519,16 @@ export const GLOBAL_DENSITY_STYLES = `
   border-radius: 0 !important;
   border: none !important;
   border-top: 1px solid var(--vscode-panel-border) !important;
+}
+[data-density="compact"] [data-form-input] {
+  border-radius: 3px !important;
+}
+[data-density="compact"] [data-dropdown-btn] {
+  border-radius: 4px !important;
+}
+[data-density="compact"] .versiondock-commit-form .gs-ai-marquee-track {
+  rx: 2.5px !important;
+  ry: 2.5px !important;
 }
 
 [data-density="compact"] .versiondock-push-root {

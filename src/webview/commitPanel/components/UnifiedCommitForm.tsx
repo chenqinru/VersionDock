@@ -174,13 +174,16 @@ function DropdownButton({ enabled, icon, label, title, disabledTitle, variant, f
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'flex', ...(fullWidth ? { width: '100%' } : {}), opacity: enabled ? 1 : 0.4 }}>
-      <div style={{
-        display: 'flex', flex: fullWidth ? 1 : undefined, ...(fullWidth ? { width: '100%' } : {}),
-        border: '1px solid var(--vscode-button-border)',
-        borderRadius: '4px',
-        overflow: 'hidden',
-        backgroundColor: bg,
-      }}>
+      <div
+        data-dropdown-btn=""
+        style={{
+          display: 'flex', flex: fullWidth ? 1 : undefined, ...(fullWidth ? { width: '100%' } : {}),
+          border: '1px solid var(--vscode-button-border)',
+          borderRadius: '4px',
+          overflow: 'hidden',
+          backgroundColor: bg,
+        }}
+      >
         <button
           style={{ ...childStyle, flex: fullWidth ? 1 : undefined, gap: '6px', padding: '5px 12px', backgroundColor: hoverMain && enabled ? bgHover : bg }}
           disabled={!enabled}
@@ -809,6 +812,7 @@ export function UnifiedCommitForm({
         )}
         <textarea
           ref={textareaRef}
+          data-form-input=""
           className="gs-commit-textarea"
           data-generating={generatingMessage ? 'true' : 'false'}
           style={{

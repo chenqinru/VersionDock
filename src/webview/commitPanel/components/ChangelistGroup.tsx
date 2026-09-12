@@ -88,6 +88,7 @@ export function ChangelistGroup({
   return (
     <div style={styles.container}>
       <div
+        data-section-header=""
         style={styles.header}
         onContextMenu={e => { e.preventDefault(); onHeaderContextMenu(e, changelist.id); }}
       >
