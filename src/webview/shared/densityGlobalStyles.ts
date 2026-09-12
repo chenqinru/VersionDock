@@ -310,8 +310,40 @@ export const GLOBAL_DENSITY_STYLES = `
   border-radius: 8px !important;
 }
 [data-density="comfortable"] .versiondock-filters-bar {
-  padding: 6px 8px !important;
+  padding: 6px 6px !important;
   border-bottom: none !important;
+}
+[data-density="comfortable"] .versiondock-filter-field,
+[data-density="comfortable"] .versiondock-filter-history-chip,
+[data-density="comfortable"] [data-filter-picker-btn] {
+  border-radius: 6px !important;
+  height: 26px !important;
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.25)) !important;
+  transition: background 0.12s ease, border-color 0.12s ease !important;
+}
+[data-density="comfortable"] .versiondock-filters-bar [data-top-action-btn] {
+  border-radius: 6px !important;
+  height: 26px !important;
+  width: 26px !important;
+  border: 1px solid var(--vscode-input-border, rgba(128, 128, 128, 0.25)) !important;
+  transition: background 0.12s ease, border-color 0.12s ease !important;
+}
+[data-density="comfortable"] .versiondock-filters-bar [data-top-action-btn]:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)) !important;
+}
+[data-density="comfortable"] .versiondock-filter-dropdown,
+[data-density="comfortable"] .versiondock-filter-calendar-popover,
+[data-density="comfortable"] .versiondock-filter-more-dropdown {
+  border-radius: 6px !important;
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.35))) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28) !important;
+  overflow: hidden !important;
+}
+[data-density="comfortable"] [data-filter-dropdown-item],
+[data-density="comfortable"] [data-more-menu-item] {
+  border-radius: 4px !important;
+  margin: 1px 4px !important;
+  transition: background 0.12s ease, color 0.12s ease !important;
 }
 [data-density="comfortable"] .versiondock-compare-view {
   border: 1px solid var(--vscode-panel-border) !important;

@@ -141,7 +141,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
       />
 
       {filters.path && (
-        <div style={styles.historyChip} title={filters.path}>
+        <div className="versiondock-filter-history-chip" style={styles.historyChip} title={filters.path}>
           <Codicon name="history" style={styles.fieldIcon} />
           <span style={styles.historyPrefix}>{t('History:')}</span>
           <span style={styles.historyLabel}>{historyLabel}</span>
@@ -218,7 +218,7 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
         <Codicon name="three-bars" style={{ fontSize: '14px' }} />
       </button>
       {open && (
-        <div style={styles.moreDropdown}>
+        <div className="versiondock-filter-more-dropdown" style={styles.moreDropdown}>
           <div
             data-more-menu-item=""
             style={styles.moreItem}
@@ -310,7 +310,7 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
       </button>
 
       {open && (
-        <div style={styles.dropdown}>
+        <div className="versiondock-filter-dropdown" style={styles.dropdown}>
           <div style={styles.dropdownSearch}>
             <Codicon name="search" style={{ fontSize: '11px', flexShrink: 0 }} />
             <input
@@ -420,7 +420,7 @@ export function DebouncedInput({ value, placeholder, icon, onChange, width, styl
   }
 
   return (
-    <div style={{ ...styles.fieldWrap, width, ...style }}>
+    <div className="versiondock-filter-field" style={{ ...styles.fieldWrap, width, ...style }}>
       <Codicon name={icon} style={styles.fieldIcon} />
       <input
         className="versiondock-filter-input"
@@ -490,7 +490,7 @@ function BranchTagPicker({ value, branches, tags, onChange, width, style, disabl
       </button>
 
       {open && !disabled && (
-        <div style={styles.dropdown}>
+        <div className="versiondock-filter-dropdown" style={styles.dropdown}>
           <div style={styles.dropdownSearch}>
             <Codicon name="search" style={{ fontSize: '11px', flexShrink: 0 }} />
             <input
@@ -594,7 +594,7 @@ function RepoPicker({ value, repos, onChange, style }: {
       </button>
 
       {open && (
-        <div style={styles.dropdown}>
+        <div className="versiondock-filter-dropdown" style={styles.dropdown}>
           <div style={styles.dropdownList}>
             <div
               data-filter-dropdown-item=""
@@ -829,7 +829,7 @@ export function DateRangePicker({ from, to, onFromChange, onToChange, style }: {
       </button>
 
       {open && (
-        <div style={isDual ? calStyles.dualPopup : calStyles.singlePopup}>
+        <div className="versiondock-filter-calendar-popover" style={isDual ? calStyles.dualPopup : calStyles.singlePopup}>
           {isDual ? (
             <>
               <div style={calStyles.calCol}>
