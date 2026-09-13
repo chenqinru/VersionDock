@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 
 export type CodeReviewVerdict = 'pass' | 'warning' | 'block';
 export type CodeReviewSeverity = 'critical' | 'high' | 'medium' | 'low';
@@ -58,7 +58,7 @@ export interface CodeReviewContext {
 
 export interface CodeReviewGenerateResult {
   report: CodeReviewReport;
-  provider: AiProvider;
+  provider: AiRuntimeProvider;
   model?: string;
   promptSource: CodeReviewPromptSource;
   inputTruncated: boolean;

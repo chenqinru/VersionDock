@@ -36,7 +36,7 @@ It activates automatically when the opened workspace contains a Git repository o
 - Commit selected files only, or all staged changes.
 - SVN working copies use selected files as the commit target because SVN has no Git-style index.
 - **Commit** and **Commit & Push** unified dropdown button; **Amend** and **Amend & Push** via the dropdown.
-- Built-in AI commit-message generation for GitHub Copilot, OpenAI, Claude, Gemini, and custom OpenAI-compatible endpoints.
+- Built-in AI workflows for GitHub Copilot, OpenAI, Claude, Gemini, custom OpenAI-compatible endpoints, and local Claude, Codex, Antigravity, or OpenCode agent CLIs.
 - Generated messages stream into the commit box with a typewriter effect and use the same editable Commit Prompt for every provider.
 - Commit message pre-filled automatically with `Merge branch 'X' into 'Y'` when merge conflicts are detected.
 - New and modified files are **not** automatically selected — only files that were already selected before the change are preserved.
@@ -221,7 +221,9 @@ Open a workspace that contains one or more Git repositories or SVN working copie
 
 Use the Commit panel to select files, inspect diffs, write a commit message, commit, commit and push Git changes, shelve Git changes, manage Git stashes, or review unpushed Git commits. For SVN, selected files are committed directly to the server.
 
-The default AI provider is `github-copilot`. Select `openai`, `claude`, `gemini`, or `custom` to configure an API URL, model, and key.
+The default AI provider is `github-copilot`. Select `openai`, `claude`, `gemini`, or `custom` to configure a model and key. The API URL accepts either a service root such as `http://localhost:8317` (the standard provider path is appended automatically) or a complete endpoint; official providers use their default endpoint when left empty.
+
+Set `versiondock.ai.executionMode` to `agent-cli` to run an installed Claude, Codex, Antigravity, or OpenCode CLI on the extension host. VersionDock keeps the selected diff as the authoritative scope while the read-only agent may inspect related repository files. Claude and Codex use non-persistent sessions, OpenCode sessions are deleted after each request, and Antigravity reuses one VersionDock conversation per working root. For multi-repository requests, VersionDock asks before granting access to a common parent outside the current workspace roots.
 
 Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace prompt is stored at `.vscode/ai-commit-message.prompt.md`; the global prompt is stored in VersionDock's global extension storage. Workspace prompts take precedence when all selected repositories belong to one workspace, followed by the global prompt and the built-in default.
 
@@ -253,6 +255,8 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `VersionDock: Reset Commit Prompt` | Removes a workspace or global custom prompt. |
 | `VersionDock: Edit Commit Explanation Prompt` | Edits the workspace or global prompt used for AI commit explanations. |
 | `VersionDock: Reset Commit Explanation Prompt` | Removes a workspace or global custom commit-explanation prompt. |
+| `VersionDock: Check Current AI CLI` | Verifies the selected CLI executable and required non-interactive/session options without starting a model request. |
+| `VersionDock: Reset Antigravity CLI Conversation` | Forgets the VersionDock conversation mapping for the current working roots. The Antigravity conversation itself is not deleted. |
 | `VersionDock: Manage Version Control Accounts` | Opens the context-aware Git identity or SVN account manager. |
 | `VersionDock: Switch Git Profile` | Switches the active Git profile for the current workspace. |
 | `VersionDock: SVN Cleanup` | Runs `svn cleanup` for an SVN working copy. |
@@ -286,12 +290,17 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `versiondock.changesViewMode` | `"simplified"` | How to display changed files: `simplified`, `changelists`, or `vscode`. Chosen via QuickPick on first install. |
 | `versiondock.gitAnnotations.enabled` | `true` | Enable inline Git blame annotations in the editor. |
 | `versiondock.gitGhostText.enabled` | `true` | Enable inline Git ghost text in the editor. |
+| `versiondock.ai.executionMode` | `"provider"` | AI execution mode: existing provider integration or a local `agent-cli`. |
 | `versiondock.ai.provider` | `"github-copilot"` | AI provider: `github-copilot`, `openai`, `claude`, `gemini`, or `custom`. |
-| `versiondock.ai.model` | `""` | Model name. GitHub Copilot selects a model automatically when empty. |
-| `versiondock.ai.apiUrl` | `""` | Endpoint URL required by non-Copilot providers. |
-| `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers. |
-| `versiondock.ai.maxInputTokens` | `128000` | Maximum locally estimated input tokens for OpenAI, Claude, Gemini, and Custom requests. Changes apply to the next request; Copilot ignores this setting and uses the selected model's own limit. |
-| `versiondock.ai.maxOutputTokens` | `128000` | Global output-token ceiling for OpenAI, Claude, Gemini, and Custom requests. Each feature dynamically chooses a smaller request budget; Copilot ignores this setting. |
+| `versiondock.ai.cli.provider` | `"claude"` | Local agent CLI: `claude`, `codex`, `antigravity`, or `opencode`. |
+| `versiondock.ai.cli.model` | `""` | Optional model override for the selected CLI. |
+| `versiondock.ai.cli.timeoutSeconds` | `300` | Timeout for one CLI request. |
+| `versiondock.ai.cli.*Path` | CLI name | Executable name or absolute path for each supported CLI on the extension host. |
+| `versiondock.ai.model` | `""` | Provider-mode model name. GitHub Copilot selects a model automatically when empty; Agent CLI mode ignores this setting. |
+| `versiondock.ai.apiUrl` | `""` | Optional base URL or full endpoint for official providers; Custom requires it. A bare host automatically receives the standard provider path. Ignored in Agent CLI mode. |
+| `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers; ignored in Agent CLI mode. |
+| `versiondock.ai.maxInputTokens` | `128000` | Maximum locally estimated prepared-context size. Copilot uses its model limit; Agent CLI mode uses this as a local safety budget. |
+| `versiondock.ai.maxOutputTokens` | `128000` | Output ceiling for HTTP providers and local feature-budget calculations. Copilot controls its own output budget. |
 
 Example:
 
@@ -344,7 +353,7 @@ out/                      Built extension and webview bundles
 - SVN support is designed for working copies with a conventional `/trunk`, `/branches`, and `/tags` layout. Branch/tag actions are hidden or limited when that layout cannot be listed by the SVN server.
 - SVN has no Git index. The Commit panel treats checked files as the SVN commit target instead of staged files.
 - Destructive operations (rollback, delete, branch delete, reset, stash drop, shelve drop, commit undo) ask for confirmation.
-- GitHub Copilot generation requires an available VS Code language model; the other providers require a compatible URL, model, and API key.
+- GitHub Copilot generation requires an available VS Code language model; HTTP providers require a compatible URL, model, and API key; Agent CLI mode requires the selected CLI to be installed and authenticated on the extension host.
 - The merge editor works on files that contain Git/SVN text conflict markers. SVN conflicts can be marked resolved as working after saving.
 - Git Annotations require the file to be tracked in a Git repository with at least one commit.
 

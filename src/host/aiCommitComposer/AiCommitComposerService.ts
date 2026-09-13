@@ -144,6 +144,9 @@ export class AiCommitComposerService {
       cancellationToken: options.cancellationToken,
       onDelta: () => {},
       maxOutputTokens,
+      taskKind: 'commit-composer',
+      repoRootPaths: [repoRootPath],
+      selectedPaths: Array.from(new Set(options.source.units.map(unit => unit.filePath))),
     });
     this.logGenerationCompleted(requestId, 'Generation completed', result, prompt.source, requiredUnitIds.length);
     if (result.inputTruncated) throw new Error(t('AI input was truncated. Select fewer changes and try again.'));
@@ -169,6 +172,9 @@ export class AiCommitComposerService {
           cancellationToken: options.cancellationToken,
           onDelta: () => {},
           maxOutputTokens: retryOutputTokens,
+          taskKind: 'commit-composer',
+          repoRootPaths: [repoRootPath],
+          selectedPaths: Array.from(new Set(options.source.units.map(unit => unit.filePath))),
         });
         this.logGenerationCompleted(requestId, 'Generation retry completed', result, prompt.source, requiredUnitIds.length);
         if (result.inputTruncated) throw new Error(t('AI input was truncated. Select fewer changes and try again.'));
@@ -202,6 +208,7 @@ export class AiCommitComposerService {
         invalidResponse: result.text,
         requiredUnitIds,
         promptSource: prompt.source,
+        repoRootPath,
         cancellationToken: options.cancellationToken,
       });
     }
@@ -227,6 +234,7 @@ export class AiCommitComposerService {
           unitPayload,
           unitIdByModelId,
           promptSource: prompt.source,
+          repoRootPath,
           cancellationToken: options.cancellationToken,
         }),
         missingIds: [],
@@ -250,6 +258,7 @@ export class AiCommitComposerService {
     invalidResponse: string;
     requiredUnitIds: string[];
     promptSource: 'workspace' | 'global' | 'builtin';
+    repoRootPath: string;
     cancellationToken: vscode.CancellationToken;
   }): Promise<unknown> {
     const systemPrompt = this.buildJsonRepairPrompt();
@@ -267,6 +276,8 @@ export class AiCommitComposerService {
       cancellationToken: options.cancellationToken,
       onDelta: () => {},
       maxOutputTokens,
+      taskKind: 'json-repair',
+      repoRootPaths: [options.repoRootPath],
     });
     this.logGenerationCompleted(
       options.requestId,
@@ -306,6 +317,7 @@ export class AiCommitComposerService {
     unitPayload: Array<Record<string, unknown> & { id: string; filePath: string }>;
     unitIdByModelId: Map<string, string>;
     promptSource: 'workspace' | 'global' | 'builtin';
+    repoRootPath: string;
     cancellationToken: vscode.CancellationToken;
   }): Promise<ComposerCommitGroup[]> {
     const unitById = new Map(options.unitPayload.map(unit => [unit.id, unit]));
@@ -333,6 +345,8 @@ export class AiCommitComposerService {
       cancellationToken: options.cancellationToken,
       onDelta: () => {},
       maxOutputTokens,
+      taskKind: 'json-repair',
+      repoRootPaths: [options.repoRootPath],
     });
     this.logGenerationCompleted(
       options.requestId,

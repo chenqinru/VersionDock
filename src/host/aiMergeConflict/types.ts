@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 import type { MergeConflictFile } from '../types/git';
 
 export type AiMergePromptSource = 'workspace' | 'global' | 'builtin';
@@ -19,7 +19,7 @@ export interface AiMergeConflictGenerateOptions {
 
 export interface AiMergeConflictGenerateResult {
   resolutions: AiMergeConflictResolution[];
-  provider: AiProvider;
+  provider: AiRuntimeProvider;
   model?: string;
   promptSource: AiMergePromptSource;
   inputCharCount: number;

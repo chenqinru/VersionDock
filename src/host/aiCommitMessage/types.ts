@@ -1,10 +1,11 @@
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 
 export type AiCommitPromptSource = 'workspace' | 'global' | 'builtin';
 
 export interface AiCommitMessageGenerationContext {
   text: string;
   repoRootPaths: string[];
+  selectedPaths: string[];
   vcsKinds: Array<'git' | 'svn'>;
   repositoryCount: number;
   fileCount: number;
@@ -24,7 +25,7 @@ export interface AiCommitMessageGenerateOptions {
 
 export interface AiCommitMessageGenerateResult {
   message: string;
-  provider: AiProvider;
+  provider: AiRuntimeProvider;
   model?: string;
   promptSource: AiCommitPromptSource;
   inputCharCount: number;

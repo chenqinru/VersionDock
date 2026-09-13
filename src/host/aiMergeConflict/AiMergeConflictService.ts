@@ -168,6 +168,9 @@ export class AiMergeConflictService {
       cancellationToken: options.cancellationToken,
       onDelta: () => undefined,
       maxOutputTokens,
+      taskKind: 'merge-conflict',
+      repoRootPaths: options.repoRootPaths,
+      selectedPaths: [options.file.relativePath],
     });
     throwIfCancelled(options.cancellationToken);
     if (result.inputTruncated) {
@@ -195,7 +198,12 @@ export class AiMergeConflictService {
         finishReason: result.finishReason,
         parseError: error.diagnostic,
       });
-      const repair = await this.repairInvalidResponse(result.text, requestedIndexes, options.cancellationToken);
+      const repair = await this.repairInvalidResponse(
+        result.text,
+        requestedIndexes,
+        options.repoRootPaths,
+        options.cancellationToken,
+      );
       try {
         parsedResponse = this.parseResolutions(repair.text, requestedIndexes);
       } catch (repairError: unknown) {
@@ -452,6 +460,7 @@ export class AiMergeConflictService {
   private async repairInvalidResponse(
     invalidResponse: string,
     requestedIndexes: number[],
+    repoRootPaths: string[],
     cancellationToken: vscode.CancellationToken,
   ): Promise<AiProviderGenerateResult> {
     const systemPrompt = `You repair malformed JSON returned by an AI merge-conflict resolver.
@@ -467,6 +476,8 @@ Preserve every existing resolution index and every source character exactly. Con
       cancellationToken,
       onDelta: () => undefined,
       maxOutputTokens: calculateMergeJsonRepairOutputTokens(`${systemPrompt}\n${userMessage}`, invalidResponse),
+      taskKind: 'json-repair',
+      repoRootPaths,
     });
     throwIfCancelled(cancellationToken);
     if (result.inputTruncated) {

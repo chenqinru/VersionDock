@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
 import { calculateCommitExplanationOutputTokens } from '../ai/outputTokenBudget';
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 import { t } from '../utils/l10n';
 import { CommitExplanationPromptManager } from './CommitExplanationPromptManager';
 import type {
@@ -31,7 +31,7 @@ export class AiCommitExplanationService {
     this.promptManager = new CommitExplanationPromptManager(context);
   }
 
-  getProvider(): AiProvider {
+  getProvider(): AiRuntimeProvider {
     return this.aiProviderService.getProvider();
   }
 
@@ -64,6 +64,9 @@ export class AiCommitExplanationService {
       cancellationToken: options.cancellationToken,
       onDelta: options.onDelta,
       maxOutputTokens,
+      taskKind: 'commit-explanation',
+      repoRootPaths: options.context.repoRootPaths,
+      selectedPaths: options.context.selectedPaths,
     });
     throwIfCancelled(options.cancellationToken);
 

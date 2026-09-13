@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
 import { calculateCommitMessageOutputTokens } from '../ai/outputTokenBudget';
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 import { t } from '../utils/l10n';
 import { CommitPromptManager } from './CommitPromptManager';
 import type {
@@ -32,7 +32,7 @@ export class AiCommitMessageService {
     this.commitPromptManager = new CommitPromptManager(context);
   }
 
-  getProvider(): AiProvider {
+  getProvider(): AiRuntimeProvider {
     return this.aiProviderService.getProvider();
   }
 
@@ -61,6 +61,9 @@ export class AiCommitMessageService {
       cancellationToken: options.cancellationToken,
       onDelta: options.onDelta,
       maxOutputTokens,
+      taskKind: 'commit-message',
+      repoRootPaths: options.context.repoRootPaths,
+      selectedPaths: options.context.selectedPaths,
     });
     throwIfCancelled(options.cancellationToken);
 
@@ -77,46 +80,38 @@ export class AiCommitMessageService {
     const vcsLabel = context.vcsKinds.length > 1 ? 'Git/SVN' : (context.vcsKinds[0] ?? 'VCS').toUpperCase();
     const isZh = vscode.env.language.toLowerCase().startsWith('zh');
 
-    const totalLines = (context.totalAdditions ?? 0) + (context.totalDeletions ?? 0);
     const hasLineStats = context.totalAdditions !== undefined || context.totalDeletions !== undefined;
-    const isSmallChange = context.fileCount <= 2 && (hasLineStats ? totalLines <= 25 : true);
 
     if (isZh) {
       const statsNote = hasLineStats
-        ? `（共 ${context.fileCount} 个文件，+${context.totalAdditions ?? 0}/-${context.totalDeletions ?? 0} 行）`
-        : `（共 ${context.fileCount} 个文件）`;
-      const scaleInstruction = isSmallChange
-        ? `【改动规模感知】本次属于轻量/微小改动${statsNote}。请严格仅输出 1 行 Header，严禁输出任何 Body 正文，切勿拆解凑数！`
-        : `【改动规模感知】本次改动涉及多处或较大规模${statsNote}。若 Header 足以自解释则无需正文；若确需说明，至多提供 1~3 条精炼要点，严禁空洞套话。`;
+        ? `共 ${context.fileCount} 个文件，+${context.totalAdditions ?? 0}/-${context.totalDeletions ?? 0} 行。`
+        : `共 ${context.fileCount} 个文件。`;
 
       const promptSections: string[] = ['# 任务'];
       if (context.userPrompt?.trim()) {
-        promptSections.push(`【用户核心意图指示】用户为本次提交提供了核心意图/草稿：“${context.userPrompt.trim()}”。你必须以该意图为准心，将其与实际代码变更紧密结合并进行规范化润色，确保提交主题精准切中该意图！`);
+        promptSections.push(`【用户草稿】${context.userPrompt.trim()}\n仅将其作为意图线索；如与选中 Diff 不一致，以 Diff 为准。`);
       }
       if (context.branchIntent?.trim()) {
-        promptSections.push(`【开发分支意图】当前开发分支为 "${context.branchIntent.trim()}"，该分支名称代表了本次开发的主要任务目标，请以此作为理解变更方向的重要依据。`);
+        promptSections.push(`【分支名】${context.branchIntent.trim()}\n仅用于辅助理解，不得据此补充 Diff 无法证明的内容。`);
       }
-      promptSections.push(scaleInstruction);
+      promptSections.push(`【变更统计】${statsNote}${context.truncated ? '\n变更上下文已按 Token 预算裁剪，只能根据可见证据总结，不得推测被省略的内容。' : ''}`);
       promptSections.push(`## ${vcsLabel} 变更上下文\n\n基于以下变更 Diff 生成提交信息：\n\n\`\`\`diff\n${context.text}\n\`\`\``);
 
       return promptSections.join('\n\n');
     }
 
     const statsNote = hasLineStats
-      ? `(${context.fileCount} file(s), +${context.totalAdditions ?? 0}/-${context.totalDeletions ?? 0} lines)`
-      : `(${context.fileCount} file(s))`;
-    const scaleInstruction = isSmallChange
-      ? `[Scale Guidance] This is a small/atomic change ${statsNote}. Output only a single Header line. Strictly DO NOT output any Body text or bullet points!`
-      : `[Scale Guidance] This is a substantial change ${statsNote}. If the Header is self-explanatory, do not output a Body; if details are needed, provide at most 1 to 3 concise bullets. Avoid generic fluff.`;
+      ? `${context.fileCount} file(s), +${context.totalAdditions ?? 0}/-${context.totalDeletions ?? 0} lines.`
+      : `${context.fileCount} file(s).`;
 
     const promptSections: string[] = ['# Task'];
     if (context.userPrompt?.trim()) {
-      promptSections.push(`[User Intent Anchor] The user provided the following core draft/intent for this commit: "${context.userPrompt.trim()}". You MUST anchor to this intent as the primary goal, aligning it with code changes to formulate an accurate and professional commit message!`);
+      promptSections.push(`[User Draft] ${context.userPrompt.trim()}\nUse it only as an intent clue. If it conflicts with the selected diff, follow the diff.`);
     }
     if (context.branchIntent?.trim()) {
-      promptSections.push(`[Branch Context] The current development branch is "${context.branchIntent.trim()}", which reflects the primary objective of this work. Use it as directional guidance when interpreting diffs.`);
+      promptSections.push(`[Branch Name] ${context.branchIntent.trim()}\nUse it only as supporting context. Do not add claims that the diff does not support.`);
     }
-    promptSections.push(scaleInstruction);
+    promptSections.push(`[Change Statistics] ${statsNote}${context.truncated ? '\nThe change context was trimmed to the token budget. Summarize only visible evidence and do not infer omitted contents.' : ''}`);
     promptSections.push(`## ${vcsLabel} Change Context\n\nGenerate a commit message from the following change diff:\n\n\`\`\`diff\n${context.text}\n\`\`\``);
 
     return promptSections.join('\n\n');

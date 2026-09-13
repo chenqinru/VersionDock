@@ -1,13 +1,15 @@
 import * as vscode from 'vscode';
+import type { VersionDockLogger } from '../utils/Logger';
 import { t } from '../utils/l10n';
-import { getAiProviderConfig } from './config';
+import { AgentCliService } from './AgentCliService';
+import { getAiProviderConfig, resolveAiApiUrl } from './config';
 import { parseStreamingResponse } from './sse';
 import { estimateTokenCount, getInputTokenBudget, truncateToTokenBudget } from './inputTokenBudget';
 import type {
-  AiProvider,
   AiProviderConfig,
   AiProviderGenerateOptions,
   AiProviderGenerateResult,
+  AiRuntimeProvider,
 } from './types';
 
 const GENERATION_TIMEOUT_MS = 120_000;
@@ -58,18 +60,29 @@ function throwIfCancelled(token: vscode.CancellationToken): void {
 }
 
 export class AiProviderService {
-  getProvider(): AiProvider {
-    return getAiProviderConfig().provider;
+  private readonly cliService?: AgentCliService;
+
+  constructor(context?: vscode.ExtensionContext, logger?: VersionDockLogger) {
+    if (context) this.cliService = new AgentCliService(context, logger);
+  }
+
+  getProvider(): AiRuntimeProvider {
+    const config = getAiProviderConfig();
+    return config.executionMode === 'agent-cli'
+      ? `${config.cliProvider}-cli`
+      : config.provider;
   }
 
   getMaxOutputTokens(): number | undefined {
     const config = getAiProviderConfig();
-    return config.provider === 'github-copilot' ? undefined : config.maxOutputTokens;
+    return config.executionMode === 'provider' && config.provider === 'github-copilot'
+      ? undefined
+      : config.maxOutputTokens;
   }
 
   async getMaxInputTokens(): Promise<number> {
     const config = getAiProviderConfig();
-    if (config.provider !== 'github-copilot') return config.maxInputTokens;
+    if (config.executionMode === 'agent-cli' || config.provider !== 'github-copilot') return config.maxInputTokens;
     const model = await this.selectCopilotModel(config.model);
     return model.maxInputTokens;
   }
@@ -77,7 +90,13 @@ export class AiProviderService {
   async generate(options: AiProviderGenerateOptions): Promise<AiProviderGenerateResult> {
     throwIfCancelled(options.cancellationToken);
     const config = getAiProviderConfig();
-    if (config.provider !== 'github-copilot') await this.ensureApiConfig(config);
+    if (config.executionMode === 'agent-cli') {
+      if (!this.cliService) throw new Error(t('AI CLI service is not available. Reload the VersionDock extension.'));
+      return this.cliService.generate(config, options);
+    }
+    const apiUrl = config.provider === 'github-copilot'
+      ? undefined
+      : await this.ensureApiConfig(config);
     throwIfCancelled(options.cancellationToken);
     const maxOutputTokens = config.provider === 'github-copilot'
       ? undefined
@@ -110,7 +129,7 @@ export class AiProviderService {
       const response: ProviderResponse = config.provider === 'github-copilot'
         ? await this.generateWithCopilot(config.model, options.systemPrompt, options.userMessage, requestCancellation.token, onDelta)
         : await this.generateWithApi(
-          config,
+          { ...config, apiUrl: apiUrl ?? config.apiUrl },
           options.systemPrompt,
           options.userMessage,
           requestCancellation.token,
@@ -154,11 +173,23 @@ export class AiProviderService {
     }
   }
 
-  private async ensureApiConfig(config: AiProviderConfig): Promise<void> {
-    if (!config.apiKey || !config.apiUrl || !config.model) {
+  checkCurrentCli(): Promise<void> {
+    if (!this.cliService) return Promise.reject(new Error(t('AI CLI service is not available. Reload the VersionDock extension.')));
+    return this.cliService.checkCurrentCli();
+  }
+
+  resetCurrentAntigravitySession(): Promise<void> {
+    if (!this.cliService) return Promise.reject(new Error(t('AI CLI service is not available. Reload the VersionDock extension.')));
+    return this.cliService.resetCurrentAntigravitySession();
+  }
+
+  private async ensureApiConfig(config: AiProviderConfig): Promise<string> {
+    if (!config.apiKey || !config.model || (config.provider === 'custom' && !config.apiUrl)) {
       const configure = t('Open Settings');
       const selected = await vscode.window.showWarningMessage(
-        t('VersionDock: Provider {0} requires an API Key, API URL, and model.', config.provider),
+        config.provider === 'custom'
+          ? t('VersionDock: Provider {0} requires an API Key, API URL, and model.', config.provider)
+          : t('VersionDock: Provider {0} requires an API Key and model.', config.provider),
         configure,
       );
       if (selected === configure) {
@@ -168,14 +199,17 @@ export class AiProviderService {
     }
 
     let parsedUrl: URL;
+    let apiUrl: string;
     try {
-      parsedUrl = new URL(config.apiUrl);
+      apiUrl = resolveAiApiUrl(config.provider, config.apiUrl);
+      parsedUrl = new URL(apiUrl);
     } catch {
       throw new Error(t('AI API URL is invalid: {0}', config.apiUrl));
     }
     if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
       throw new Error(t('AI API URL must use HTTP or HTTPS.'));
     }
+    return apiUrl;
   }
 
   private resolveMaxOutputTokens(configuredMaximum: number, requestedMaximum?: number): number {

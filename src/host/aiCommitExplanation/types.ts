@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 
 export type AiCommitExplanationMode = 'single' | 'aggregate';
 export type AiCommitExplanationPromptSource = 'workspace' | 'global' | 'builtin';
@@ -28,6 +28,7 @@ export interface AiCommitExplanationContext {
   mode: AiCommitExplanationMode;
   text: string;
   repoRootPaths: string[];
+  selectedPaths: string[];
   vcsKinds: Array<'git' | 'svn'>;
   repositoryCount: number;
   commitCount: number;
@@ -44,7 +45,7 @@ export interface AiCommitExplanationGenerateOptions {
 
 export interface AiCommitExplanationGenerateResult {
   explanation: string;
-  provider: AiProvider;
+  provider: AiRuntimeProvider;
   model?: string;
   promptSource: AiCommitExplanationPromptSource;
   inputCharCount: number;

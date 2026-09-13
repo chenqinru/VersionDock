@@ -243,6 +243,14 @@
         "title": "%commands.aiCodeReview.resetPrompt.title%"
       },
       {
+        "command": "versiondock.aiCli.check",
+        "title": "%commands.aiCli.check.title%"
+      },
+      {
+        "command": "versiondock.aiCli.resetAntigravitySession",
+        "title": "%commands.aiCli.resetAntigravitySession.title%"
+      },
+      {
         "command": "versiondock.openGitAnnotations",
         "title": "%commands.openGitAnnotations.title%",
         "icon": "$(git-commit)"
@@ -1161,10 +1169,44 @@
         }
       },
       {
-        "title": "%configuration.category.ai%",
+        "title": "%configuration.category.aiGeneral%",
+        "properties": {
+          "versiondock.ai.executionMode": {
+            "order": 149,
+            "type": "string",
+            "enum": [
+              "provider",
+              "agent-cli"
+            ],
+            "enumDescriptions": [
+              "%configuration.ai.executionMode.enum.provider%",
+              "%configuration.ai.executionMode.enum.agentCli%"
+            ],
+            "default": "provider",
+            "description": "%configuration.ai.executionMode.description%"
+          },
+          "versiondock.ai.maxInputTokens": {
+            "order": 150,
+            "type": "number",
+            "default": 128000,
+            "minimum": 4096,
+            "description": "%configuration.ai.maxInputTokens.description%"
+          },
+          "versiondock.ai.maxOutputTokens": {
+            "order": 151,
+            "type": "number",
+            "default": 128000,
+            "minimum": 1024,
+            "maximum": 128000,
+            "description": "%configuration.ai.maxOutputTokens.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.aiProvider%",
         "properties": {
           "versiondock.ai.provider": {
-            "order": 150,
+            "order": 160,
             "type": "string",
             "enum": [
               "github-copilot",
@@ -1184,37 +1226,83 @@
             "description": "%configuration.ai.provider.description%"
           },
           "versiondock.ai.model": {
-            "order": 151,
+            "order": 161,
             "type": "string",
             "default": "",
             "description": "%configuration.ai.model.description%"
           },
           "versiondock.ai.apiUrl": {
-            "order": 152,
+            "order": 162,
             "type": "string",
             "default": "",
             "description": "%configuration.ai.apiUrl.description%"
           },
           "versiondock.ai.apiKey": {
-            "order": 153,
+            "order": 163,
             "type": "string",
             "default": "",
             "description": "%configuration.ai.apiKey.description%"
+          }
+        }
+      },
+      {
+        "title": "%configuration.category.aiCli%",
+        "properties": {
+          "versiondock.ai.cli.provider": {
+            "order": 170,
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex",
+              "antigravity",
+              "opencode"
+            ],
+            "enumDescriptions": [
+              "%configuration.ai.cli.provider.enum.claude%",
+              "%configuration.ai.cli.provider.enum.codex%",
+              "%configuration.ai.cli.provider.enum.antigravity%",
+              "%configuration.ai.cli.provider.enum.opencode%"
+            ],
+            "default": "claude",
+            "description": "%configuration.ai.cli.provider.description%"
           },
-          "versiondock.ai.maxInputTokens": {
-            "order": 154,
-            "type": "number",
-            "default": 128000,
-            "minimum": 4096,
-            "description": "%configuration.ai.maxInputTokens.description%"
+          "versiondock.ai.cli.model": {
+            "order": 171,
+            "type": "string",
+            "default": "",
+            "description": "%configuration.ai.cli.model.description%"
           },
-          "versiondock.ai.maxOutputTokens": {
-            "order": 155,
+          "versiondock.ai.cli.timeoutSeconds": {
+            "order": 172,
             "type": "number",
-            "default": 128000,
-            "minimum": 1024,
-            "maximum": 128000,
-            "description": "%configuration.ai.maxOutputTokens.description%"
+            "default": 300,
+            "minimum": 30,
+            "maximum": 1800,
+            "description": "%configuration.ai.cli.timeoutSeconds.description%"
+          },
+          "versiondock.ai.cli.claudePath": {
+            "order": 173,
+            "type": "string",
+            "default": "claude",
+            "description": "%configuration.ai.cli.claudePath.description%"
+          },
+          "versiondock.ai.cli.codexPath": {
+            "order": 174,
+            "type": "string",
+            "default": "codex",
+            "description": "%configuration.ai.cli.codexPath.description%"
+          },
+          "versiondock.ai.cli.antigravityPath": {
+            "order": 175,
+            "type": "string",
+            "default": "agy",
+            "description": "%configuration.ai.cli.antigravityPath.description%"
+          },
+          "versiondock.ai.cli.opencodePath": {
+            "order": 176,
+            "type": "string",
+            "default": "opencode",
+            "description": "%configuration.ai.cli.opencodePath.description%"
           }
         }
       }

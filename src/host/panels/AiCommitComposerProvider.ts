@@ -306,6 +306,7 @@ export class AiCommitComposerProvider implements vscode.Disposable {
     return {
       text,
       repoRootPaths: [this.manager.getRepo(source.repoId)?.rootPath ?? ''],
+      selectedPaths: Array.from(new Set(source.units.map(unit => unit.filePath))),
       vcsKinds: [source.vcsKind],
       repositoryCount: 1,
       fileCount: new Set(units.map(unit => unit.filePath)).size,

@@ -1130,6 +1130,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }> = [];
     const includedRepoIds = new Set<string>();
     const includedRepoRootPaths = new Set<string>();
+    const selectedPaths = new Set<string>();
     const vcsKinds = new Set<'git' | 'svn'>();
     const candidateBranchIntents: string[] = [];
     let totalAdditions = 0;
@@ -1162,6 +1163,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       const groupEntries: typeof preparedGroups[number]['entries'] = [];
       for (const file of files) {
         throwIfCancellationRequested(cancellationToken);
+        selectedPaths.add(file.path);
 
         const includeStaged = file.staged;
         const includeUnstaged = file.unstaged && (target.source === 'selected' || target.source === 'working');
@@ -1275,6 +1277,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     return {
       text,
       repoRootPaths: Array.from(includedRepoRootPaths),
+      selectedPaths: Array.from(selectedPaths),
       vcsKinds: Array.from(vcsKinds),
       repositoryCount: includedRepoIds.size,
       fileCount: context.includedEntryCount,

@@ -164,7 +164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   badge.startLoading();
 
   const profileService = new GitProfileService(context, logger);
-  const aiProviderService = new AiProviderService();
+  const aiProviderService = new AiProviderService(context, logger);
   const aiCommitMessageService = new AiCommitMessageService(context, aiProviderService);
   const aiMergeConflictService = new AiMergeConflictService(context, aiProviderService, logger);
   const aiCommitExplanationService = new AiCommitExplanationService(context, aiProviderService);
@@ -265,6 +265,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('versiondock.aiCommitComposer.resetPrompt', () => aiCommitComposer.resetPrompt()),
     vscode.commands.registerCommand('versiondock.aiCodeReview.editPrompt', () => aiCodeReview.editPrompt()),
     vscode.commands.registerCommand('versiondock.aiCodeReview.resetPrompt', () => aiCodeReview.resetPrompt()),
+    vscode.commands.registerCommand('versiondock.aiCli.check', async () => {
+      try {
+        await aiProviderService.checkCurrentCli();
+      } catch (error: unknown) {
+        await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      }
+    }),
+    vscode.commands.registerCommand('versiondock.aiCli.resetAntigravitySession', async () => {
+      try {
+        await aiProviderService.resetCurrentAntigravitySession();
+      } catch (error: unknown) {
+        await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      }
+    }),
   );
 
   registerCommands(context, commitPanel, logPanel, mergeEditor, conflictsPanel, branchStatusBar, annotationController, profileStatusBar, manager);

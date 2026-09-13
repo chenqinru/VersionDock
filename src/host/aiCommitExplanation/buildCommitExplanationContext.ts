@@ -31,6 +31,7 @@ export async function buildCommitExplanationContext(
   const repoRootPaths = new Set<string>();
   const vcsKinds = new Set<'git' | 'svn'>();
   const repoIds = new Set<string>();
+  const selectedPaths = new Set<string>();
 
   for (let commitIndex = 0; commitIndex < commits.length; commitIndex++) {
     throwIfCancelled(cancellationToken);
@@ -44,6 +45,7 @@ export async function buildCommitExplanationContext(
     const entries: typeof preparedGroups[number]['entries'] = [];
     for (const file of commit.files) {
       throwIfCancelled(cancellationToken);
+      selectedPaths.add(file.path);
       const diff = await repo.getFileDiff(commit.repoId, commit.hash, file.path).catch(() => null);
       throwIfCancelled(cancellationToken);
       const label = `${file.status.toUpperCase()} ${file.path}`;
@@ -85,6 +87,7 @@ export async function buildCommitExplanationContext(
     mode,
     text,
     repoRootPaths: Array.from(repoRootPaths),
+    selectedPaths: Array.from(selectedPaths),
     vcsKinds: Array.from(vcsKinds),
     repositoryCount: repoIds.size,
     commitCount: commits.length,

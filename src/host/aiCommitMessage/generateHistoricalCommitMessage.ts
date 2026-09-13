@@ -79,8 +79,10 @@ async function buildContext(
 
   let totalAdditions = 0;
   let totalDeletions = 0;
+  const selectedPaths = new Set<string>();
   for (const group of preparedGroups) {
     for (const entry of group.entries) {
+      selectedPaths.add(entry.label.replace(/^[A-Z?]+\s+/, ''));
       const { added, removed } = countDiffChanges(entry.diff);
       totalAdditions += added;
       totalDeletions += removed;
@@ -90,6 +92,7 @@ async function buildContext(
   return {
     text,
     repoRootPaths: [repo.rootPath],
+    selectedPaths: Array.from(selectedPaths),
     vcsKinds: ['git'],
     repositoryCount: 1,
     fileCount: context.includedEntryCount,

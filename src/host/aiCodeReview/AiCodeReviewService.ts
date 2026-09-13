@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { AiProviderService } from '../ai/AiProviderService';
 import { calculateCodeReviewOutputTokens } from '../ai/outputTokenBudget';
-import type { AiProvider } from '../ai/types';
+import type { AiRuntimeProvider } from '../ai/types';
 import { t } from '../utils/l10n';
 import { CodeReviewPromptManager } from './CodeReviewPromptManager';
 import type {
@@ -38,7 +38,7 @@ export class AiCodeReviewService {
     this.promptManager = new CodeReviewPromptManager(context);
   }
 
-  getProvider(): AiProvider { return this.provider.getProvider(); }
+  getProvider(): AiRuntimeProvider { return this.provider.getProvider(); }
   getMaxInputTokens(): Promise<number> { return this.provider.getMaxInputTokens(); }
   editPrompt(): Promise<void> { return this.promptManager.edit(); }
   resetPrompt(): Promise<void> { return this.promptManager.reset(); }
@@ -54,6 +54,9 @@ export class AiCodeReviewService {
       onDelta: options.onDelta,
       maxOutputTokens: calculateCodeReviewOutputTokens(`${promptResolution.prompt}\n${userMessage}`, options.context.fileCount),
       temperature: 0,
+      taskKind: 'code-review',
+      repoRootPaths: options.context.repoRootPaths,
+      selectedPaths: Array.from(new Set(Array.from(options.context.anchors.values()).map(anchor => anchor.filePath))),
     });
     throwIfCancelled(options.cancellationToken);
     if (result.inputTruncated) throw new Error(t('AI input was truncated. Select fewer changes and try again.'));
