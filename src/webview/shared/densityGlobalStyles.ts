@@ -129,7 +129,7 @@ export const GLOBAL_DENSITY_STYLES = `
 }
 
 [data-density="comfortable"] .versiondock-sidebar-row {
-  margin: 1px 6px !important;
+  margin: 0 6px !important;
   border-radius: 4px !important;
   min-height: 22px !important;
   padding-top: 1px !important;
@@ -142,7 +142,7 @@ export const GLOBAL_DENSITY_STYLES = `
 
 [data-density="comfortable"] .versiondock-sidebar-repo-row {
   min-height: 22px !important;
-  margin: 1px 6px !important;
+  margin: 0 6px !important;
   border-radius: 4px !important;
   padding: 1px 6px !important;
 }
