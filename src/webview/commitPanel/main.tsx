@@ -3157,6 +3157,7 @@ export function CommitApp() {
                 message,
                 repos: targets,
               } satisfies CommitToHostMsg);
+              store.setCommitMessage('');
             }}
             noVerify={store.noVerify}
             onNoVerifyChange={v => store.setNoVerify(v)}
