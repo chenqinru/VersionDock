@@ -3,7 +3,7 @@ import type { FileStatus } from '../../shared/types';
 import { FileIcon } from '../../shared/FileIcon';
 import { Codicon } from '../../shared/Codicon';
 import type { IconThemeData } from '../../../host/types/messages';
-import type { WorktreeDiffState } from '../store/commitStore';
+import type { LayoutDensity, WorktreeDiffState } from '../store/commitStore';
 import { ContextMenu, type ContextMenuEntry } from './ContextMenu';
 import { t } from '../../shared/i18n';
 import { readableAccentColor } from '../../shared/branchColors';
@@ -12,6 +12,7 @@ import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared
 interface Props {
   state: WorktreeDiffState;
   iconTheme?: IconThemeData | null;
+  layoutDensity?: LayoutDensity;
   onClose: () => void;
   onSelectFile: (file: FileStatus) => void;
   onOpenFile: (file: FileStatus) => void;
@@ -50,9 +51,17 @@ const SCROLLBAR_CSS = `
   background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
   background-clip: content-box;
 }
+.versiondock-detail-row[data-selected="false"]:hover,
 .versiondock-worktree-dir-row:hover,
 .versiondock-worktree-file-row[data-selected="false"]:hover {
   background: var(--vscode-list-hoverBackground) !important;
+}
+.versiondock-worktree-file-row[data-selected="true"]:hover {
+  filter: brightness(1.08);
+}
+.versiondock-worktree-toolbar-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground) !important;
+  color: var(--vscode-foreground) !important;
 }
 `;
 
@@ -83,7 +92,15 @@ const FILE_CONTEXT_ITEMS: ContextMenuEntry[] = [
   { id: 'open', label: t('Open file'), icon: 'go-to-file' },
 ];
 
-export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onOpenFile }: Props) {
+export function WorktreeDiffPanel({
+  state,
+  iconTheme,
+  layoutDensity = 'comfortable',
+  onClose,
+  onSelectFile,
+  onOpenFile,
+}: Props) {
+  const isCompact = layoutDensity === 'compact';
   const [viewMode, setViewMode] = useState<'tree' | 'flat'>('tree');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; file: FileStatus } | null>(null);
@@ -136,9 +153,9 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
   const collapseAll = () => setCollapsed(new Set(collectDirKeys(tree)));
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} data-density={layoutDensity}>
       <style>{SCROLLBAR_CSS}</style>
-      <div style={styles.header}>
+      <div style={styles.header(isCompact)}>
         <div style={styles.headerText}>
           <div style={styles.titleRow}>
             <span style={styles.repoDot(readableAccentColor(state.repoColor))} />
@@ -147,38 +164,66 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
           </div>
           <div style={styles.subtitle}>{t('{0} compared with {1}', state.baseRef, state.currentRef)}</div>
         </div>
-        <button data-action-btn="" style={styles.iconButton} onClick={onClose} title={t('Back to Changes')}>
+        <button data-action-btn="" style={styles.iconButton(isCompact)} onClick={onClose} title={t('Back to Changes')}>
           <Codicon name="arrow-left" />
         </button>
       </div>
 
       {state.error && <div style={styles.errorBar}>{state.error}</div>}
 
-      <div style={styles.toolbar}>
+      <div style={styles.toolbar(isCompact)}>
         <span style={styles.count}>{state.files.length === 1 ? t('{0} file', state.files.length) : t('{0} files', state.files.length)}</span>
         <div style={{ flex: 1 }} />
         {viewMode === 'tree' && (
-          <>
-            <button data-action-btn="" style={styles.toolbarButton} onClick={expandAll} title={t('Expand all')}>
+          <div style={styles.expandBtns}>
+            <button
+              data-action-btn=""
+              className="versiondock-worktree-toolbar-btn"
+              style={styles.toolbarButton}
+              onClick={expandAll}
+              title={t('Expand all')}
+            >
               <Codicon name="expand-all" />
             </button>
-            <button data-action-btn="" style={styles.toolbarButton} onClick={collapseAll} title={t('Collapse all')}>
+            <button
+              data-action-btn=""
+              className="versiondock-worktree-toolbar-btn"
+              style={styles.toolbarButton}
+              onClick={collapseAll}
+              title={t('Collapse all')}
+            >
               <Codicon name="collapse-all" />
             </button>
-          </>
+          </div>
         )}
-        <button data-action-btn="" style={styles.toolbarButton} onClick={() => setViewMode('tree')} title={t('Tree view')}>
-          <Codicon name="list-tree" />
-        </button>
-        <button data-action-btn="" style={styles.toolbarButton} onClick={() => setViewMode('flat')} title={t('Flat list')}>
-          <Codicon name="list-flat" />
-        </button>
+        <div style={styles.viewToggle}>
+          <button
+            data-action-btn=""
+            className="versiondock-worktree-toolbar-btn"
+            data-active={viewMode === 'tree' ? 'true' : 'false'}
+            style={styles.toggleBtn(viewMode === 'tree')}
+            onClick={() => setViewMode('tree')}
+            title={t('Tree view')}
+          >
+            <Codicon name="list-tree" />
+          </button>
+          <button
+            data-action-btn=""
+            className="versiondock-worktree-toolbar-btn"
+            data-active={viewMode === 'flat' ? 'true' : 'false'}
+            style={styles.toggleBtn(viewMode === 'flat')}
+            onClick={() => setViewMode('flat')}
+            title={t('Flat list')}
+          >
+            <Codicon name="list-flat" />
+          </button>
+        </div>
       </div>
 
       <div style={styles.content}>
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {speedSearch.isOpen && <SpeedSearchWidget speedSearch={speedSearch} />}
-          <div ref={sidebarRef} className="versiondock-worktree-scroll" style={styles.sidebar}>
+          <div ref={sidebarRef} className="versiondock-worktree-scroll versiondock-commit-scroll-container" style={styles.sidebar}>
             {contextMenu && (
               <ContextMenu
                 x={contextMenu.x}
@@ -211,6 +256,7 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
                   }}
                   speedSearchQuery={speedSearch.query}
                   activeSpeedSearchKey={speedSearch.activeKey}
+                  isCompact={isCompact}
                 />
               ))
             ) : (
@@ -227,6 +273,7 @@ export function WorktreeDiffPanel({ state, iconTheme, onClose, onSelectFile, onO
                   }}
                   speedSearchQuery={speedSearch.query}
                   activeSpeedSearchKey={speedSearch.activeKey}
+                  isCompact={isCompact}
                 />
               ))
             )}
@@ -248,6 +295,7 @@ function TreeNodeView({
   onContextMenu,
   speedSearchQuery,
   activeSpeedSearchKey,
+  isCompact,
 }: {
   node: TreeNode;
   depth: number;
@@ -259,6 +307,7 @@ function TreeNodeView({
   onContextMenu: (event: React.MouseEvent, file: FileStatus) => void;
   speedSearchQuery?: string;
   activeSpeedSearchKey?: string | null;
+  isCompact: boolean;
 }) {
   if (node.kind === 'file') {
     return (
@@ -271,6 +320,7 @@ function TreeNodeView({
         onContextMenu={onContextMenu}
         speedSearchQuery={speedSearchQuery}
         activeSpeedSearchKey={activeSpeedSearchKey}
+        isCompact={isCompact}
       />
     );
   }
@@ -278,9 +328,17 @@ function TreeNodeView({
   const isCollapsed = collapsed.has(node.path);
   return (
     <>
-      <div className="versiondock-worktree-dir-row" style={{ ...styles.dirRow, paddingLeft: `${10 + depth * 18}px` }} onClick={() => onToggle(node.path)} title={node.path}>
+      <div
+        className="versiondock-detail-row versiondock-tree-dir versiondock-worktree-dir-row"
+        data-list-row=""
+        data-selected="false"
+        style={styles.dirRow(isCompact)}
+        onClick={() => onToggle(node.path)}
+        title={node.path}
+      >
+        <div style={{ width: depth * 14, flexShrink: 0 }} />
         <Codicon name={isCollapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
-        <FileIcon name={node.name} isFolder isOpen={!isCollapsed} theme={iconTheme} size={16} />
+        <FileIcon name={node.name} isFolder isOpen={!isCollapsed} theme={iconTheme} size={16} style={styles.folderIconBase} />
         <span style={styles.dirName}>
           <HighlightedText text={node.name} query={speedSearchQuery} />
         </span>
@@ -299,6 +357,7 @@ function TreeNodeView({
           onContextMenu={onContextMenu}
           speedSearchQuery={speedSearchQuery}
           activeSpeedSearchKey={activeSpeedSearchKey}
+          isCompact={isCompact}
         />
       ))}
     </>
@@ -314,6 +373,7 @@ function FileRow({
   onContextMenu,
   speedSearchQuery,
   activeSpeedSearchKey,
+  isCompact,
 }: {
   file: FileStatus;
   depth: number;
@@ -323,6 +383,7 @@ function FileRow({
   onContextMenu: (event: React.MouseEvent, file: FileStatus) => void;
   speedSearchQuery?: string;
   activeSpeedSearchKey?: string | null;
+  isCompact: boolean;
 }) {
   const color = STATUS_COLORS[file.status] ?? 'var(--vscode-foreground)';
   const letter = STATUS_LETTERS[file.status] ?? 'M';
@@ -332,10 +393,11 @@ function FileRow({
 
   return (
     <div
-      className="versiondock-worktree-file-row"
+      className="versiondock-detail-row versiondock-file-row versiondock-worktree-file-row"
+      data-list-row=""
       data-speed-search-key={file.path}
       data-selected={selected ? 'true' : 'false'}
-      style={{ ...styles.fileRow(selected), paddingLeft: `${10 + depth * 18}px` }}
+      style={styles.fileRow(selected, isCompact)}
       onClick={() => onSelect(file)}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -343,9 +405,9 @@ function FileRow({
       }}
       title={file.path}
     >
-      <span style={styles.fileLeadingSpacer} />
-      <FileIcon name={fileName} theme={iconTheme} size={16} />
-      <span style={styles.fileName(color)}>
+      <div style={{ width: depth * 14 + 18, flexShrink: 0 }} />
+      <FileIcon name={fileName} theme={iconTheme} size={14} style={styles.fileIconBase} />
+      <span style={styles.fileName(color, selected)}>
         <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
       </span>
       {dir && (
@@ -430,17 +492,21 @@ const styles = {
   container: {
     display: 'flex',
     flexDirection: 'column' as const,
-    height: '100vh',
+    flex: 1,
+    minHeight: 0,
+    height: '100%',
+    overflow: 'hidden',
     background: 'var(--vscode-sideBar-background)',
     color: 'var(--vscode-foreground)',
   },
-  header: {
+  header: (isCompact: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
-    padding: '8px 10px',
+    padding: isCompact ? '5px 8px' : '7px 10px',
     borderBottom: '1px solid var(--vscode-panel-border)',
-  } as React.CSSProperties,
+    flexShrink: 0,
+  }),
   headerText: {
     display: 'flex',
     flexDirection: 'column' as const,
@@ -476,43 +542,73 @@ const styles = {
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
   },
-  iconButton: {
+  iconButton: (isCompact: boolean): React.CSSProperties => ({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '28px',
-    height: '28px',
+    width: isCompact ? '24px' : '26px',
+    height: isCompact ? '24px' : '26px',
     background: 'transparent',
     border: '1px solid var(--vscode-panel-border)',
     borderRadius: '4px',
     color: 'var(--vscode-foreground)',
     cursor: 'pointer',
-  } as React.CSSProperties,
+    flexShrink: 0,
+  }),
   errorBar: {
     padding: '6px 10px',
     fontSize: '12px',
     color: 'var(--vscode-errorForeground)',
     borderBottom: '1px solid var(--vscode-panel-border)',
   },
-  toolbar: {
+  toolbar: (isCompact: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    minHeight: '34px',
-    padding: '0 10px',
+    gap: '4px',
+    minHeight: isCompact ? '28px' : '32px',
+    padding: isCompact ? '2px 8px' : '3px 10px',
     borderBottom: '1px solid var(--vscode-panel-border)',
+    flexShrink: 0,
+  }),
+  expandBtns: {
+    display: 'flex',
+    gap: '2px',
+    alignItems: 'center',
+  } as React.CSSProperties,
+  viewToggle: {
+    display: 'flex',
+    gap: '2px',
+    alignItems: 'center',
+    marginLeft: '4px',
+    paddingLeft: '4px',
+    borderLeft: '1px solid var(--vscode-panel-border)',
   } as React.CSSProperties,
   toolbarButton: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '24px',
-    height: '24px',
+    width: '22px',
+    height: '22px',
     background: 'transparent',
     border: 'none',
-    color: 'var(--vscode-foreground)',
+    borderRadius: '3px',
+    color: 'var(--vscode-descriptionForeground)',
     cursor: 'pointer',
+    padding: '2px 4px',
   } as React.CSSProperties,
+  toggleBtn: (active: boolean): React.CSSProperties => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    background: active ? 'var(--vscode-toolbar-activeBackground)' : 'transparent',
+    border: 'none',
+    borderRadius: '3px',
+    color: active ? 'var(--vscode-list-activeSelectionForeground, var(--vscode-foreground))' : 'var(--vscode-descriptionForeground)',
+    cursor: 'pointer',
+    padding: '2px 4px',
+  }),
   repoDot: (color: string): React.CSSProperties => ({
     width: '7px',
     height: '7px',
@@ -521,7 +617,7 @@ const styles = {
     flexShrink: 0,
   }),
   count: {
-    fontSize: '12px',
+    fontSize: '11px',
     color: 'var(--vscode-descriptionForeground)',
   },
   content: {
@@ -551,22 +647,31 @@ const styles = {
     color: 'var(--vscode-descriptionForeground)',
     fontSize: '12px',
   },
-  dirRow: {
+  dirRow: (isCompact: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '4px',
-    minHeight: '24px',
+    minHeight: isCompact ? '20px' : '22px',
+    paddingTop: isCompact ? '1px' : '2px',
+    paddingBottom: isCompact ? '1px' : '2px',
+    paddingRight: isCompact ? '8px' : '10px',
     cursor: 'pointer',
     userSelect: 'none' as const,
     minWidth: 0,
     overflow: 'hidden',
-  } as React.CSSProperties,
+    color: 'var(--vscode-foreground)',
+  }),
   chevron: {
-    fontSize: '12px',
+    fontSize: '10px',
+    color: 'var(--vscode-descriptionForeground)',
     flexShrink: 0,
-  },
-  fileLeadingSpacer: {
-    width: '12px',
+    width: '14px',
+    textAlign: 'center' as const,
+  } as React.CSSProperties,
+  folderIconBase: {
+    flexShrink: 0,
+  } as React.CSSProperties,
+  fileIconBase: {
     flexShrink: 0,
   } as React.CSSProperties,
   dirName: {
@@ -578,34 +683,41 @@ const styles = {
     minWidth: 0,
   },
   fileCountBadge: {
-    marginLeft: '6px',
-    padding: '0 7px',
-    minWidth: '18px',
-    height: '18px',
-    borderRadius: '999px',
+    marginLeft: 'auto',
+    padding: '0 5px',
+    minWidth: '16px',
+    height: '14px',
+    lineHeight: '14px',
+    borderRadius: '8px',
     fontSize: '10px',
     fontWeight: 600,
-    lineHeight: '18px',
     textAlign: 'center' as const,
     color: 'var(--versiondock-badge-foreground)',
     background: 'var(--versiondock-badge-background)',
     flexShrink: 0,
+    boxSizing: 'border-box' as const,
   } as React.CSSProperties,
-  fileRow: (selected: boolean): React.CSSProperties => ({
+  fileRow: (selected: boolean, isCompact: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
     gap: '4px',
-    minHeight: '24px',
+    minHeight: isCompact ? '20px' : '22px',
+    paddingTop: isCompact ? '1px' : '2px',
+    paddingBottom: isCompact ? '1px' : '2px',
+    paddingRight: isCompact ? '8px' : '10px',
     cursor: 'pointer',
+    userSelect: 'none' as const,
+    minWidth: 0,
+    overflow: 'hidden',
     background: selected ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent',
     color: selected ? 'var(--vscode-list-activeSelectionForeground)' : 'var(--vscode-foreground)',
   }),
-  fileName: (color: string): React.CSSProperties => ({
-    color,
+  fileName: (color: string, selected = false): React.CSSProperties => ({
+    color: selected ? 'inherit' : color,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
-    flex: 1,
+    flex: '0 1 auto',
     minWidth: 0,
     fontSize: '12px',
   }),
@@ -615,23 +727,24 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
-    maxWidth: '100px',
-    flexShrink: 0,
+    maxWidth: '120px',
+    flexShrink: 1,
+    marginLeft: '4px',
   },
   fileMeta: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: '8px',
+    gap: '6px',
     marginLeft: 'auto',
-    minWidth: '92px',
     flexShrink: 0,
   },
   lineStats: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: '3px',
     fontSize: '10px',
+    fontFamily: 'var(--vscode-editor-font-family, monospace)',
     flexShrink: 0,
   } as React.CSSProperties,
   added: {
@@ -642,9 +755,9 @@ const styles = {
   },
   statusLetter: (color: string): React.CSSProperties => ({
     color,
-    fontSize: '10px',
+    fontSize: '11px',
     fontWeight: 700,
-    width: '12px',
+    width: '14px',
     textAlign: 'center' as const,
     flexShrink: 0,
   }),

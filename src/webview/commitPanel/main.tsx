@@ -2792,13 +2792,22 @@ export function CommitApp() {
 
   if (store.panelMode === 'worktreeDiff' && store.worktreeDiffState) {
     return (
-      <WorktreeDiffPanel
-        state={store.worktreeDiffState}
-        iconTheme={store.iconTheme}
-        onClose={() => store.closeWorktreeDiff()}
-        onSelectFile={selectWorktreeDiffFile}
-        onOpenFile={(file) => send({ type: 'COMMIT_OPEN_FILE', repoId: file.repoId, filePath: file.path })}
-      />
+      <div
+        style={css.app}
+        data-density={layoutDensity}
+        className="versiondock-commit-root"
+        onContextMenu={e => e.preventDefault()}
+      >
+        <style>{GLOBAL_DENSITY_STYLES}</style>
+        <WorktreeDiffPanel
+          state={store.worktreeDiffState}
+          iconTheme={store.iconTheme}
+          layoutDensity={layoutDensity}
+          onClose={() => store.closeWorktreeDiff()}
+          onSelectFile={selectWorktreeDiffFile}
+          onOpenFile={(file) => send({ type: 'COMMIT_OPEN_FILE', repoId: file.repoId, filePath: file.path })}
+        />
+      </div>
     );
   }
 
