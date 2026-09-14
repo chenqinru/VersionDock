@@ -70,6 +70,7 @@
   "commands.svnSwitch.title": "VersionDock: SVN Switch",
   "commands.svnCreateBranch.title": "VersionDock: SVN Create Branch",
   "commands.svnCreateTag.title": "VersionDock: SVN Create Tag",
+  "commands.svnCheckout.title": "VersionDock: SVN Checkout...",
   "commands.expandAll.title": "Expand All",
   "commands.expandAll.checked.title": "✓ Expand All",
   "commands.collapseAll.title": "Collapse All",

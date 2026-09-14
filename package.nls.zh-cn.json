@@ -70,6 +70,7 @@
   "commands.svnSwitch.title": "VersionDock：SVN 切换",
   "commands.svnCreateBranch.title": "VersionDock：SVN 创建分支",
   "commands.svnCreateTag.title": "VersionDock：SVN 创建标签",
+  "commands.svnCheckout.title": "VersionDock：SVN 检出...",
   "commands.expandAll.title": "全部展开",
   "commands.expandAll.checked.title": "✓ 全部展开",
   "commands.collapseAll.title": "全部折叠",

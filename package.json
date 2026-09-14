@@ -411,6 +411,11 @@
         "icon": "$(tag)"
       },
       {
+        "command": "versiondock.svn.checkout",
+        "title": "%commands.svnCheckout.title%",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "versiondock.expandAll",
         "title": "%commands.expandAll.title%"
       },

@@ -19,6 +19,7 @@ import { openSquashEditor } from './SquashEditorPanel';
 import { openEditMessageEditor } from './EditMessageEditorPanel';
 import type { GitProfileService } from '../git/GitProfileService';
 import type { SvnIgnoreEntry, SvnIgnoreUpdateResult } from '../svn/SvnService';
+import { checkoutSvnRepository } from '../svn/svnCheckout';
 import { t } from '../utils/l10n';
 import { showGitErrorMessage } from '../utils/gitError';
 import { collectAbortOperationTargets, runAbortOperationFlow } from '../utils/abortOperation';
@@ -7311,6 +7312,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         await vscode.commands.executeCommand('git.init', folder.uri);
         await new Promise(r => setTimeout(r, 500));
         this.manager.reinitializeAndRefresh();
+        this.logProvider?.refresh();
+        break;
+      }
+
+      case 'COMMIT_CHECKOUT_SVN_REPO': {
+        await checkoutSvnRepository(this.manager);
         this.logProvider?.refresh();
         break;
       }

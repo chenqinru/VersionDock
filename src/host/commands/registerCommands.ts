@@ -13,6 +13,7 @@ import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { formatRepoLabel } from '../utils/repoLabels';
 import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
 import { showConflictActionsMenu } from './showConflictActionsMenu';
+import { checkoutSvnRepository } from '../svn/svnCheckout';
 
 function getScmResourceUri(resource: unknown): vscode.Uri | undefined {
   if (resource instanceof vscode.Uri) return resource;
@@ -512,6 +513,11 @@ export function registerCommands(
       if (!name) return;
       const current = await picked.repo.getCurrentBranch().catch(() => undefined);
       await picked.repo.createTag(name.trim(), current?.lastCommitHash ?? '');
+      logPanel.refresh();
+    }),
+
+    vscode.commands.registerCommand('versiondock.svn.checkout', async (targetDir?: string) => {
+      await checkoutSvnRepository(manager, targetDir);
       logPanel.refresh();
     }),
   );

@@ -17,6 +17,7 @@ import { openEditMessageEditor } from './EditMessageEditorPanel';
 import { formatRepoLabel } from '../utils/repoLabels';
 import { toGitUri } from '../utils/resourceUri';
 import type { SvnService } from '../svn/SvnService';
+import { checkoutSvnRepository } from '../svn/svnCheckout';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
 import type { VersionDockLogger } from '../utils/Logger';
@@ -1104,6 +1105,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         await vscode.commands.executeCommand('git.init', folder.uri);
         await new Promise(r => setTimeout(r, 1000));
         this.manager.reinitializeAndRefresh();
+        break;
+      }
+
+      case 'LOG_CHECKOUT_SVN_REPO': {
+        await checkoutSvnRepository(this.manager);
+        this.refresh();
         break;
       }
 

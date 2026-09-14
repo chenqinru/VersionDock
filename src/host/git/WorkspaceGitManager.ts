@@ -386,6 +386,8 @@ export class WorkspaceGitManager implements vscode.Disposable {
   private mergeCompletionTasks = new Map<string, Promise<MergeCommitResult | undefined>>();
   /** Set after a branch/HEAD change so intermediate checkout states are never published. */
   private statusStabilizationSignature: string | null | undefined;
+  /** Paths currently undergoing initial checkout/clone — ignored by watchers until complete. */
+  private activeCheckoutDirs = new Set<string>();
   private disposed = false;
 
   constructor(
@@ -716,6 +718,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
         SVN_REPOSITORY_SCAN_MAX_DEPTH,
         candidatePath => this.isRepositoryScanIgnored(candidatePath, folder.uri.fsPath),
       )) {
+        if (this.isPathInActiveCheckout(repoPath)) {
+          continue;
+        }
         const meta = this.buildSvnRepoMeta(repoPath, colorIdx.value++, folders, customColors);
         if (this.repos.has(meta.id)) continue;
         this.repoMetas.set(meta.id, meta);
@@ -1856,6 +1861,25 @@ export class WorkspaceGitManager implements vscode.Disposable {
     }
   }
 
+  isPathInActiveCheckout(targetPath: string): boolean {
+    for (const dir of this.activeCheckoutDirs) {
+      if (isWithinPath(dir, targetPath) || isWithinPath(targetPath, dir) || isPathEqual(dir, targetPath)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async runWithCheckoutSuppressed<T>(checkoutDir: string, action: () => Promise<T>): Promise<T> {
+    const normalized = path.normalize(checkoutDir);
+    this.activeCheckoutDirs.add(normalized);
+    try {
+      return await this.runWithStatusUpdatesSuppressed(action, 'checkout', 'SVN Checkout');
+    } finally {
+      this.activeCheckoutDirs.delete(normalized);
+    }
+  }
+
   getRepoMetas(): RepoMeta[] {
     return Array.from(this.repoMetas.values());
   }
@@ -2332,6 +2356,9 @@ export class WorkspaceGitManager implements vscode.Disposable {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const onMetadataCreated = (maxDepth: number) => (metadataUri: vscode.Uri) => {
         const repoPath = path.dirname(metadataUri.fsPath);
+        if (this.isPathInActiveCheckout(repoPath)) {
+          return;
+        }
         const depth = this.repositoryScanDepth(folder.uri.fsPath, repoPath);
         if (depth < 0 || depth > maxDepth) return;
         if (this.isRepositoryScanIgnored(repoPath, folder.uri.fsPath)) return;

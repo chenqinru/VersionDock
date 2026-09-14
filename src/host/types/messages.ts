@@ -364,6 +364,7 @@ export type CommitToHostMsg =
   | { type: 'SUBTREE_REMOVE'; requestId: string; entryId: string }
   | { type: 'SUBTREE_REVEAL_PREFIX'; entryId: string }
   | { type: 'COMMIT_INIT_REPO' }
+  | { type: 'COMMIT_CHECKOUT_SVN_REPO' }
   | { type: 'COMMIT_OPEN_FOLDER' }
   | { type: 'COMMIT_CLONE_REPO' }
   | { type: 'COMMIT_HIDE_REPO'; repoId: string }
@@ -483,6 +484,7 @@ export type LogToHostMsg =
   | { type: 'LOG_REVEAL_IN_EXPLORER'; repoId: string; filePath: string }
   | { type: 'LOG_REVEAL_IN_OS'; repoId: string; filePath: string }
   | { type: 'LOG_INIT_REPO' }
+  | { type: 'LOG_CHECKOUT_SVN_REPO' }
   | { type: 'LOG_OPEN_FOLDER' }
   | { type: 'LOG_CLONE_REPO' }
   | {
