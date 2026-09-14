@@ -2,7 +2,7 @@
   "name": "versiondock",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "publisher": "chenqinru",
   "author": {
     "name": "chenqinru",
@@ -1326,10 +1326,12 @@
     "version:bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {
+    "cross-spawn": "^7.0.6",
     "simple-git": "^3.22.0"
   },
   "devDependencies": {
     "@tanstack/react-virtual": "^3.2.0",
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",

@@ -1,8 +1,8 @@
-import { spawn } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
+import crossSpawn from 'cross-spawn';
 import * as vscode from 'vscode';
 import type { VersionDockLogger } from '../utils/Logger';
 import { t } from '../utils/l10n';
@@ -23,6 +23,8 @@ const ANTIGRAVITY_SESSIONS_KEY = 'versiondock.ai.antigravityConversations';
 const OPENCODE_PENDING_SESSIONS_KEY = 'versiondock.ai.openCodePendingSessions';
 const APPROVED_ROOT_SETS_KEY = 'versiondock.ai.approvedCliRootSets';
 const MAX_CLI_OUTPUT_BYTES = 40 * 1024 * 1024;
+// npm-installed CLIs use .cmd shims on Windows, which Node's native spawn cannot launch directly.
+const spawn = crossSpawn as typeof import('child_process').spawn;
 
 type CliGenerationResult = {
   text: string;
