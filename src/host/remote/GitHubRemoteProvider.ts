@@ -60,6 +60,10 @@ export class GitHubRemoteProvider implements RemoteRepositoryProvider {
     await this.getAccessToken(true);
   }
 
+  async getSession(options?: { createIfNone?: boolean; clearSessionPreference?: boolean }): Promise<vscode.AuthenticationSession | undefined> {
+    return vscode.authentication.getSession('github', BASE_SCOPES, options);
+  }
+
   async listRepositories(query?: string): Promise<RemoteRepository[]> {
     const token = await this.getAccessToken(true);
     const repositories = await this.fetchPages<GithubRepository>(

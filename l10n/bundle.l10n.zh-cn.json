@@ -2596,5 +2596,13 @@
   "Unpublished repository — Click to publish to GitHub or GitLab": "本地未发布仓库 — 点击发布到 GitHub 或 GitLab",
   "Publish…": "发布…",
   "Git command-line tool is not found. Please install Git and ensure 'git' is available in your PATH.": "未找到 Git 命令行工具。请安装 Git 并确保 'git' 可在系统 PATH 中使用。",
-  "Undoing commit…": "正在撤销提交…"
+  "Undoing commit…": "正在撤销提交…",
+  "Connected": "已连接",
+  "Not connected": "未连接",
+  "Connected as {0}. Click to manage account.": "已连接为 {0}。点击以管理账户。",
+  "VersionDock: Connected to GitHub account \"{0}\".": "VersionDock: 已成功连接 GitHub 账户 \"{0}\"。",
+  "Switch GitHub account…": "切换 GitHub 账户…",
+  "Sign in with a different GitHub account": "以其他 GitHub 账户登录",
+  "Open GitHub Profile": "打开 GitHub 个人主页",
+  "GitHub Account — {0}": "GitHub 账户 — {0}"
 }

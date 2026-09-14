@@ -2596,5 +2596,13 @@
   "Unpublished repository — Click to publish to GitHub or GitLab": "Unpublished repository — Click to publish to GitHub or GitLab",
   "Publish…": "Publish…",
   "Git command-line tool is not found. Please install Git and ensure 'git' is available in your PATH.": "Git command-line tool is not found. Please install Git and ensure 'git' is available in your PATH.",
-  "Undoing commit…": "Undoing commit…"
+  "Undoing commit…": "Undoing commit…",
+  "Connected": "Connected",
+  "Not connected": "Not connected",
+  "Connected as {0}. Click to manage account.": "Connected as {0}. Click to manage account.",
+  "VersionDock: Connected to GitHub account \"{0}\".": "VersionDock: Connected to GitHub account \"{0}\".",
+  "Switch GitHub account…": "Switch GitHub account…",
+  "Sign in with a different GitHub account": "Sign in with a different GitHub account",
+  "Open GitHub Profile": "Open GitHub Profile",
+  "GitHub Account — {0}": "GitHub Account — {0}"
 }

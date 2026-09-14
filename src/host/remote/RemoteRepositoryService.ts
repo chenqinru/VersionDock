@@ -62,10 +62,20 @@ export class RemoteRepositoryService implements vscode.Disposable {
 
   async manageAccounts(): Promise<void> {
     type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' };
+
+    const githubSession = await this.github.getSession({ createIfNone: false }).catch(() => undefined);
+
     const items: AccountAction[] = [
       {
-        label: `$(github) ${vscode.l10n.t('Sign in to GitHub')}`,
-        description: vscode.l10n.t('Use the VS Code GitHub authentication provider'),
+        label: githubSession
+          ? `$(github) GitHub (${githubSession.account.label})`
+          : `$(github) ${vscode.l10n.t('Sign in to GitHub')}`,
+        description: githubSession
+          ? `$(check) ${vscode.l10n.t('Connected')}`
+          : vscode.l10n.t('Not connected'),
+        detail: githubSession
+          ? vscode.l10n.t('Connected as {0}. Click to manage account.', githubSession.account.label)
+          : vscode.l10n.t('Use the VS Code GitHub authentication provider'),
         action: 'github',
       },
       {
@@ -80,11 +90,57 @@ export class RemoteRepositoryService implements vscode.Disposable {
       await this.gitlab.manageAccounts();
       return;
     }
-    try {
-      await this.github.authenticate();
-      vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: GitHub account is connected through VS Code.'));
-    } catch (error) {
-      this.showRemoteError('GitHub', error);
+
+    await this.manageGitHubAccount(githubSession);
+  }
+
+  private async manageGitHubAccount(currentSession?: vscode.AuthenticationSession): Promise<void> {
+    if (!currentSession) {
+      try {
+        const session = await this.github.getSession({ createIfNone: true });
+        if (session?.account.label) {
+          void vscode.window.showInformationMessage(
+            vscode.l10n.t('VersionDock: Connected to GitHub account "{0}".', session.account.label),
+          );
+        }
+      } catch (error) {
+        this.showRemoteError('GitHub', error);
+      }
+      return;
+    }
+
+    type GitHubAction = vscode.QuickPickItem & { action: 'switch' | 'profile' };
+    const actions: GitHubAction[] = [
+      {
+        label: `$(account) ${vscode.l10n.t('Switch GitHub account…')}`,
+        description: vscode.l10n.t('Sign in with a different GitHub account'),
+        action: 'switch',
+      },
+      {
+        label: `$(globe) ${vscode.l10n.t('Open GitHub Profile')}`,
+        description: `https://github.com/${currentSession.account.label}`,
+        action: 'profile',
+      },
+    ];
+
+    const chosen = await vscode.window.showQuickPick(actions, {
+      title: vscode.l10n.t('GitHub Account — {0}', currentSession.account.label),
+    });
+    if (!chosen) return;
+
+    if (chosen.action === 'switch') {
+      try {
+        const newSession = await this.github.getSession({ clearSessionPreference: true, createIfNone: true });
+        if (newSession?.account.label) {
+          void vscode.window.showInformationMessage(
+            vscode.l10n.t('VersionDock: Connected to GitHub account "{0}".', newSession.account.label),
+          );
+        }
+      } catch (error) {
+        this.showRemoteError('GitHub', error);
+      }
+    } else if (chosen.action === 'profile') {
+      void vscode.env.openExternal(vscode.Uri.parse(`https://github.com/${currentSession.account.label}`));
     }
   }
 
