@@ -362,14 +362,16 @@ const styles = {
     flexDirection: 'column',
     flex: height == null ? '1 1 0' : `0 0 ${height}px`,
     minHeight: 0,
-    overflow: 'hidden',
+    position: 'relative',
+    zIndex: 10,
   }),
   bottomPaneSlot: {
     display: 'flex',
     flexDirection: 'column' as const,
     flex: 1,
     minHeight: 0,
-    overflow: 'hidden',
+    position: 'relative' as const,
+    zIndex: 5,
   },
   splitter: {
     height: '4px',
@@ -395,7 +397,7 @@ const styles = {
     minHeight: '32px',
     padding: '4px 8px',
     flexShrink: 0,
-    overflow: 'hidden',
+    overflow: 'visible',
     borderBottom: '1px solid var(--vscode-panel-border)',
     background: 'var(--vscode-editor-background)',
     position: 'relative' as const,
@@ -414,7 +416,7 @@ const styles = {
   dateFilter: {
     flex: '0 1 215px',
     width: '215px',
-    minWidth: '190px',
+    minWidth: '140px',
     maxWidth: '225px',
   } as React.CSSProperties,
   notice: {
