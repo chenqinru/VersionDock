@@ -126,10 +126,6 @@
         "title": "%commands.fetchAll.title%"
       },
       {
-        "command": "versiondock.manageRemoteAccounts",
-        "title": "%commands.manageRemoteAccounts.title%"
-      },
-      {
         "command": "versiondock.openMergeEditor",
         "title": "%commands.openMergeEditor.title%"
       },
@@ -414,6 +410,21 @@
         "command": "versiondock.svn.checkout",
         "title": "%commands.svnCheckout.title%",
         "icon": "$(cloud-download)"
+      },
+      {
+        "command": "versiondock.git.clone",
+        "title": "%commands.gitClone.title%",
+        "icon": "$(repo-clone)"
+      },
+      {
+        "command": "versiondock.git.publish",
+        "title": "%commands.gitPublish.title%",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "versiondock.manageRemoteAccounts",
+        "title": "%commands.manageRemoteAccounts.title%",
+        "icon": "$(account)"
       },
       {
         "command": "versiondock.expandAll",

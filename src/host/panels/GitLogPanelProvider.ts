@@ -18,6 +18,7 @@ import { formatRepoLabel } from '../utils/repoLabels';
 import { toGitUri } from '../utils/resourceUri';
 import type { SvnService } from '../svn/SvnService';
 import { checkoutSvnRepository } from '../svn/svnCheckout';
+import { cloneGitRepository } from '../git/gitClone';
 import { assertNoSymlinkAncestors } from '../utils/repoPath';
 import { scopedKey } from '../utils/scopedKey';
 import type { VersionDockLogger } from '../utils/Logger';
@@ -1119,7 +1120,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         break;
 
       case 'LOG_CLONE_REPO':
-        await vscode.commands.executeCommand('git.clone');
+        await cloneGitRepository(this.manager);
+        this.refresh();
+        break;
+
+      case 'LOG_MANAGE_REMOTE_ACCOUNTS':
+        await this.manager.remoteService?.manageAccounts();
         break;
 
       case 'LOG_REVERT_FILE': {

@@ -20,6 +20,7 @@ import { openEditMessageEditor } from './EditMessageEditorPanel';
 import type { GitProfileService } from '../git/GitProfileService';
 import type { SvnIgnoreEntry, SvnIgnoreUpdateResult } from '../svn/SvnService';
 import { checkoutSvnRepository } from '../svn/svnCheckout';
+import { cloneGitRepository } from '../git/gitClone';
 import { t } from '../utils/l10n';
 import { showGitErrorMessage } from '../utils/gitError';
 import { collectAbortOperationTargets, runAbortOperationFlow } from '../utils/abortOperation';
@@ -7327,8 +7328,23 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         break;
 
       case 'COMMIT_CLONE_REPO':
-        await vscode.commands.executeCommand('git.clone');
+        await cloneGitRepository(this.manager);
+        this.logProvider?.refresh();
         break;
+
+      case 'COMMIT_PUBLISH_REPO': {
+        const repo = this.manager.getRepo(msg.repoId);
+        if (repo) {
+          await this.manager.publishRepository(msg.repoId, repo.rootPath);
+          this.logProvider?.refresh();
+        }
+        break;
+      }
+
+      case 'COMMIT_MANAGE_REMOTE_ACCOUNTS': {
+        await this.manager.remoteService?.manageAccounts();
+        break;
+      }
 
       case 'COMMIT_REVEAL_IN_EXPLORER': {
         const repoRE = this.manager.getRepo(msg.repoId);

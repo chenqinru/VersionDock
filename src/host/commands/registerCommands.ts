@@ -14,6 +14,7 @@ import { formatRepoLabel } from '../utils/repoLabels';
 import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchNameSanitizer';
 import { showConflictActionsMenu } from './showConflictActionsMenu';
 import { checkoutSvnRepository } from '../svn/svnCheckout';
+import { cloneGitRepository } from '../git/gitClone';
 
 function getScmResourceUri(resource: unknown): vscode.Uri | undefined {
   if (resource instanceof vscode.Uri) return resource;
@@ -518,6 +519,56 @@ export function registerCommands(
 
     vscode.commands.registerCommand('versiondock.svn.checkout', async (targetDir?: string) => {
       await checkoutSvnRepository(manager, targetDir);
+      logPanel.refresh();
+    }),
+
+    vscode.commands.registerCommand('versiondock.git.clone', async (targetDir?: string) => {
+      await cloneGitRepository(manager, targetDir);
+      logPanel.refresh();
+    }),
+
+    vscode.commands.registerCommand('versiondock.git.publish', async (targetRepoId?: string) => {
+      if (!manager) return;
+      const gitRepos = manager.getRepoMetas().filter(m => m.kind !== 'svn');
+      if (gitRepos.length === 0) {
+        void vscode.window.showInformationMessage(t('No Git repositories found to publish.'));
+        return;
+      }
+
+      let selectedRepoMeta = gitRepos[0];
+      if (targetRepoId && typeof targetRepoId === 'string') {
+        selectedRepoMeta = gitRepos.find(m => m.id === targetRepoId) ?? selectedRepoMeta;
+      } else if (gitRepos.length > 1) {
+        const picked = await vscode.window.showQuickPick(
+          gitRepos.map(m => ({
+            label: `$(repo) ${m.name}`,
+            description: m.rootPath,
+            meta: m,
+          })),
+          {
+            title: t('Select Git Repository to Publish'),
+            placeHolder: t('Choose a repository to publish to GitHub or GitLab'),
+          }
+        );
+        if (!picked) return;
+        selectedRepoMeta = picked.meta;
+      }
+
+      const gitRepo = manager.getRepo(selectedRepoMeta.id);
+      const remotes = gitRepo ? await gitRepo.getRemotes().catch(() => [] as string[]) : [];
+      if (remotes.length > 0) {
+        const pushLabel = t('Push to Remote');
+        const choice = await vscode.window.showInformationMessage(
+          t('Repository "{0}" already has configured remote(s): {1}', selectedRepoMeta.name, remotes.join(', ')),
+          pushLabel,
+        );
+        if (choice === pushLabel && gitRepo) {
+          await gitRepo.push();
+        }
+        return;
+      }
+
+      await manager.publishRepository(selectedRepoMeta.id, selectedRepoMeta.rootPath);
       logPanel.refresh();
     }),
   );

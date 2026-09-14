@@ -371,7 +371,9 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_UNHIDE_REPO'; repoId: string }
   | { type: 'COMMIT_MANAGE_HIDDEN_REPOS' }
   | { type: 'COMMIT_MANAGE_REPO'; repoId: string }
-  | { type: 'COMMIT_VIEW_GIT_LOG'; repoId: string };
+  | { type: 'COMMIT_VIEW_GIT_LOG'; repoId: string }
+  | { type: 'COMMIT_PUBLISH_REPO'; repoId: string }
+  | { type: 'COMMIT_MANAGE_REMOTE_ACCOUNTS' };
 
 // ─── Git Log: Host → WebView ─────────────────────────────────────────────────
 
@@ -487,6 +489,7 @@ export type LogToHostMsg =
   | { type: 'LOG_CHECKOUT_SVN_REPO' }
   | { type: 'LOG_OPEN_FOLDER' }
   | { type: 'LOG_CLONE_REPO' }
+  | { type: 'LOG_MANAGE_REMOTE_ACCOUNTS' }
   | {
       type: 'LOG_OPEN_EXTENDED_DETAIL';
       repoId: string;

@@ -2686,7 +2686,7 @@ export function CommitApp() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '220px' }}>
             <button data-primary-action-btn="" style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_OPEN_FOLDER' } as CommitToHostMsg)}>{t('Open Folder')}</button>
-            <button style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_CLONE_REPO' } as CommitToHostMsg)}>{t('Clone Git Repository')}</button>
+            <button style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_CLONE_REPO' } as CommitToHostMsg)}>{t('Clone Git Repository...')}</button>
             <button style={css.initRepoBtn} onClick={() => send({ type: 'COMMIT_CHECKOUT_SVN_REPO' } as CommitToHostMsg)}>{t('Checkout SVN Repository...')}</button>
           </div>
         </div>
@@ -2696,7 +2696,7 @@ export function CommitApp() {
       return (
         <div style={{ ...css.fullCenter, flexDirection: 'column', gap: '12px', padding: '24px' }}>
           <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5' }}>
-            {t("The folder currently open doesn't have a Git or SVN repository. You can initialize a Git repository or checkout an SVN repository to enable source control features.")}
+            {t("The folder currently open doesn't have a Git or SVN repository. You can initialize a local repository, or clone / checkout from Git or SVN.")}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '220px' }}>
             <button
@@ -2705,6 +2705,12 @@ export function CommitApp() {
               onClick={() => send({ type: 'COMMIT_INIT_REPO' } as CommitToHostMsg)}
             >
               {t('Initialize Git Repository')}
+            </button>
+            <button
+              style={css.initRepoBtn}
+              onClick={() => send({ type: 'COMMIT_CLONE_REPO' } as CommitToHostMsg)}
+            >
+              {t('Clone Git Repository...')}
             </button>
             <button
               style={css.initRepoBtn}

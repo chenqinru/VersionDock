@@ -750,18 +750,21 @@ export function GitLogApp() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '220px' }}>
             <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_OPEN_FOLDER' })}>{t('Open Folder')}</button>
-            <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_CLONE_REPO' })}>{t('Clone Git Repository')}</button>
+            <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_CLONE_REPO' })}>{t('Clone Git Repository...')}</button>
             <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_CHECKOUT_SVN_REPO' })}>{t('Checkout SVN Repository...')}</button>
           </div>
         </>
       ) : (
         <>
           <div style={{ textAlign: 'center', color: 'var(--vscode-foreground)', fontSize: '13px', lineHeight: '1.5' }}>
-            {t("The folder currently open doesn't have a Git or SVN repository. You can initialize a Git repository or checkout an SVN repository to enable source control features.")}
+            {t("The folder currently open doesn't have a Git or SVN repository. You can initialize a local repository, or clone / checkout from Git or SVN.")}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '220px' }}>
             <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_INIT_REPO' })}>
               {t('Initialize Git Repository')}
+            </button>
+            <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_CLONE_REPO' })}>
+              {t('Clone Git Repository...')}
             </button>
             <button style={initRepoBtnStyle} onClick={() => send({ type: 'LOG_CHECKOUT_SVN_REPO' })}>
               {t('Checkout SVN Repository...')}

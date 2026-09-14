@@ -11,6 +11,7 @@ import { t } from '../utils/l10n';
 import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { PublishMissingRemote } from '../remote/types';
+import type { RemoteRepositoryService } from '../remote/RemoteRepositoryService';
 import { GitHubRemoteProvider } from '../remote/GitHubRemoteProvider';
 import { GitLabRemoteProvider } from '../remote/GitLabRemoteProvider';
 import { setRemoteProtectedBranches } from '../utils/branchProtection';
@@ -389,6 +390,15 @@ export class WorkspaceGitManager implements vscode.Disposable {
   /** Paths currently undergoing initial checkout/clone — ignored by watchers until complete. */
   private activeCheckoutDirs = new Set<string>();
   private disposed = false;
+  public remoteService?: RemoteRepositoryService;
+
+  public async publishRepository(repoId: string, rootPath: string): Promise<void> {
+    if (this.remoteService) {
+      await this.remoteService.publishRepository(repoId, rootPath, undefined, true);
+    } else if (this.publishMissingRemote) {
+      await this.publishMissingRemote(repoId, rootPath);
+    }
+  }
 
   constructor(
     private readonly context: vscode.ExtensionContext,

@@ -148,6 +148,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const remoteRepositoryService = new RemoteRepositoryService(context, logger);
   const manager = new WorkspaceVcsManager(context, logger, remoteRepositoryService.publishMissingRemote);
+  manager.remoteService = remoteRepositoryService;
   setMultiRepoProvider(() => manager.getRepoMetas().length > 1);
   void vscode.commands.executeCommand('setContext', 'versiondock.isMultiRepo', manager.getRepoMetas().length > 1);
 
