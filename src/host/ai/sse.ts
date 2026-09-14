@@ -14,6 +14,12 @@ interface ResponseMetadata {
   reasoningTokenCount?: number;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 function asTokenCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
@@ -22,10 +28,13 @@ function asTokenCount(value: unknown): number | undefined {
 
 function extractResponseMetadata(payload: unknown): ResponseMetadata {
   if (!payload || typeof payload !== 'object') return {};
-  const value = payload as {
+  const outer = payload as Record<string, unknown>;
+  const value = (asRecord(outer.response) ?? outer) as {
     choices?: Array<{ finish_reason?: unknown }>;
     finish_reason?: unknown;
     stop_reason?: unknown;
+    status?: unknown;
+    incomplete_details?: { reason?: unknown };
     delta?: { stop_reason?: unknown };
     usage?: {
       completion_tokens?: unknown;
@@ -45,7 +54,9 @@ function extractResponseMetadata(payload: unknown): ResponseMetadata {
   const finishReasonCandidate = value.choices?.[0]?.finish_reason
     ?? value.finish_reason
     ?? value.stop_reason
-    ?? value.delta?.stop_reason;
+    ?? value.delta?.stop_reason
+    ?? value.incomplete_details?.reason
+    ?? value.status;
   const usage = value.usage ?? value.message?.usage;
   return {
     finishReason: typeof finishReasonCandidate === 'string' ? finishReasonCandidate : undefined,
@@ -61,8 +72,10 @@ function extractStreamDelta(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
   const value = payload as {
     choices?: Array<{ delta?: { content?: unknown } }>;
-    delta?: { text?: unknown };
+    type?: unknown;
+    delta?: { text?: unknown } | string;
   };
+  if (value.type === 'response.output_text.delta' && typeof value.delta === 'string') return value.delta;
   const openAiContent = value.choices?.[0]?.delta?.content;
   if (typeof openAiContent === 'string') return openAiContent;
   if (Array.isArray(openAiContent)) {
@@ -73,16 +86,21 @@ function extractStreamDelta(payload: unknown): string {
       return typeof text === 'string' ? text : '';
     }).join('');
   }
-  return typeof value.delta?.text === 'string' ? value.delta.text : '';
+  return typeof value.delta === 'object' && typeof value.delta?.text === 'string' ? value.delta.text : '';
 }
 
 function extractCompleteMessage(payload: unknown): string {
   if (!payload || typeof payload !== 'object') return '';
-  const value = payload as {
+  const outer = payload as Record<string, unknown>;
+  const value = (asRecord(outer.response) ?? outer) as {
     choices?: Array<{ message?: { content?: unknown } }>;
     content?: Array<{ text?: unknown }>;
+    output?: Array<{ type?: unknown; content?: Array<{ type?: unknown; text?: unknown }> }>;
     output_text?: unknown;
+    type?: unknown;
+    text?: unknown;
   };
+  if (value.type === 'response.output_text.done' && typeof value.text === 'string') return value.text;
   const openAiContent = value.choices?.[0]?.message?.content;
   if (typeof openAiContent === 'string') return openAiContent;
   if (Array.isArray(openAiContent)) {
@@ -94,6 +112,13 @@ function extractCompleteMessage(payload: unknown): string {
   }
   const claudeContent = value.content?.[0]?.text;
   if (typeof claudeContent === 'string') return claudeContent;
+  const responsesContent = value.output
+    ?.filter(item => item?.type === 'message')
+    .flatMap(item => item.content ?? [])
+    .filter(part => part?.type === 'output_text' && typeof part.text === 'string')
+    .map(part => String(part.text))
+    .join('');
+  if (responsesContent) return responsesContent;
   return typeof value.output_text === 'string' ? value.output_text : '';
 }
 
@@ -116,6 +141,7 @@ export async function parseStreamingResponse(
   let finishReason: string | undefined;
   let outputTokenCount: number | undefined;
   let reasoningTokenCount: number | undefined;
+  let streamError: string | undefined;
 
   const consumeBlock = (block: string): void => {
     const data = block
@@ -137,10 +163,30 @@ export async function parseStreamingResponse(
       if (metadata.outputTokenCount !== undefined) outputTokenCount = metadata.outputTokenCount;
       if (metadata.reasoningTokenCount !== undefined) reasoningTokenCount = metadata.reasoningTokenCount;
       const delta = extractStreamDelta(payload);
-      if (!delta) return;
-      streamed = true;
-      fullText += delta;
-      onDelta(delta);
+      if (delta) {
+        streamed = true;
+        fullText += delta;
+        onDelta(delta);
+      } else if (!fullText) {
+        fullText = extractCompleteMessage(payload);
+      }
+      const record = asRecord(payload);
+      if (record?.type === 'error') {
+        const error = asRecord(record.error);
+        streamError = typeof error?.message === 'string'
+          ? error.message
+          : typeof record.message === 'string'
+            ? record.message
+            : 'Unknown streaming error';
+      }
+      if (record?.type === 'response.failed') {
+        const response = asRecord(record.response);
+        const error = asRecord(response?.error);
+        streamError = typeof error?.message === 'string' ? error.message : 'Response generation failed';
+        completed = true;
+      } else if (record?.type === 'response.completed' || record?.type === 'response.incomplete') {
+        completed = true;
+      }
     } catch {
       // Ignore malformed keep-alive or vendor-specific events.
     }
@@ -163,10 +209,12 @@ export async function parseStreamingResponse(
     if (done) break;
   }
 
+  if (completed) await reader.cancel().catch(() => undefined);
   if (!completed && buffer.trim()) consumeBlock(buffer);
-  if (streamed) return {
+  if (streamError) throw new Error(streamError);
+  if (fullText) return {
     text: fullText,
-    streamed: true,
+    streamed,
     finishReason,
     outputTokenCount,
     reasoningTokenCount,

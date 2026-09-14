@@ -62,7 +62,7 @@ function throwIfCancelled(token: vscode.CancellationToken): void {
 export class AiProviderService {
   private readonly cliService?: AgentCliService;
 
-  constructor(context?: vscode.ExtensionContext, logger?: VersionDockLogger) {
+  constructor(context?: vscode.ExtensionContext, private readonly logger?: VersionDockLogger) {
     if (context) this.cliService = new AgentCliService(context, logger);
   }
 
@@ -201,7 +201,7 @@ export class AiProviderService {
     let parsedUrl: URL;
     let apiUrl: string;
     try {
-      apiUrl = resolveAiApiUrl(config.provider, config.apiUrl);
+      apiUrl = resolveAiApiUrl(config.provider, config.apiUrl, config.apiProtocol);
       parsedUrl = new URL(apiUrl);
     } catch {
       throw new Error(t('AI API URL is invalid: {0}', config.apiUrl));
@@ -349,6 +349,16 @@ export class AiProviderService {
     temperature: number,
   ): Promise<ProviderResponse> {
     const fittedPrompt = this.fitApiPrompt(config.maxInputTokens, systemPrompt, userMessage);
+    const useResponsesApi = config.apiProtocol === 'responses'
+      && (config.provider === 'openai' || config.provider === 'custom');
+    this.logger?.info('AIProvider', 'Starting HTTP API request', {
+      provider: config.provider,
+      protocol: config.provider === 'claude'
+        ? 'messages'
+        : useResponsesApi
+          ? 'responses'
+          : 'chat-completions',
+    });
     const controller = new AbortController();
     const cancellation = cancellationToken.onCancellationRequested(() => controller.abort());
     try {
@@ -379,19 +389,31 @@ export class AiProviderService {
             Accept: 'text/event-stream',
             Authorization: `Bearer ${config.apiKey}`,
           },
-          body: JSON.stringify({
-            model: config.model,
-            messages: [
-              { role: 'system', content: fittedPrompt.systemPrompt },
-              { role: 'user', content: fittedPrompt.userMessage },
-            ],
-            temperature,
-            stream: true,
-            ...(config.provider === 'openai' ? { stream_options: { include_usage: true } } : {}),
-            ...(config.provider === 'openai'
-              ? { max_completion_tokens: maxOutputTokens }
-              : { max_tokens: maxOutputTokens }),
-          }),
+          body: JSON.stringify(useResponsesApi
+            ? {
+              model: config.model,
+              instructions: fittedPrompt.systemPrompt,
+              input: [{
+                role: 'user',
+                content: [{ type: 'input_text', text: fittedPrompt.userMessage }],
+              }],
+              max_output_tokens: maxOutputTokens,
+              stream: true,
+              store: false,
+            }
+            : {
+              model: config.model,
+              messages: [
+                { role: 'system', content: fittedPrompt.systemPrompt },
+                { role: 'user', content: fittedPrompt.userMessage },
+              ],
+              temperature,
+              stream: true,
+              ...(config.provider === 'openai' ? { stream_options: { include_usage: true } } : {}),
+              ...(config.provider === 'openai'
+                ? { max_completion_tokens: maxOutputTokens }
+                : { max_tokens: maxOutputTokens }),
+            }),
         });
 
       if (!response.ok) {

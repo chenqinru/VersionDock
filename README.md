@@ -229,6 +229,8 @@ Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace pro
 
 AI commit and explanation context is allocated in two phases: repository/commit metadata plus every file summary is added first, then diff hunks are included round-robin across files until the active provider's input limit is reached. This prevents an early large file from consuming the entire input budget. GitHub Copilot uses the selected model's own `maxInputTokens`; other providers use `versiondock.ai.maxInputTokens`.
 
+OpenAI and Custom providers support both Chat Completions and Responses API requests. Set `versiondock.ai.apiProtocol` to `responses`; a configured host or `/v1` base URL is then resolved to `/v1/responses`. Claude, Gemini, GitHub Copilot, and Agent CLI mode ignore this setting.
+
 For non-Copilot providers, `versiondock.ai.maxOutputTokens` is the global output ceiling. Each feature calculates a smaller request budget dynamically: commit messages scale with context complexity, explanations with commit and file counts, Composer with change-unit count, and conflict resolution with the expected replacement-code size. GitHub Copilot controls its own output budget.
 
 AI Commit Composer uses compact request-local unit IDs and validates that every selected change is assigned exactly once. Embedded JSON is recovered locally when possible; malformed JSON receives one focused syntax-repair request, and an output-limit finish can retry once with a larger budget. If an otherwise valid plan omits units, Composer makes one focused coverage-repair request and validates the merged plan again before it can be applied.
@@ -292,12 +294,13 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `versiondock.gitGhostText.enabled` | `true` | Enable inline Git ghost text in the editor. |
 | `versiondock.ai.executionMode` | `"provider"` | AI execution mode: existing provider integration or a local `agent-cli`. |
 | `versiondock.ai.provider` | `"github-copilot"` | AI provider: `github-copilot`, `openai`, `claude`, `gemini`, or `custom`. |
+| `versiondock.ai.apiProtocol` | `"chat-completions"` | HTTP API protocol for OpenAI and Custom: `chat-completions` or `responses`. |
 | `versiondock.ai.cli.provider` | `"claude"` | Local agent CLI: `claude`, `codex`, `antigravity`, or `opencode`. |
 | `versiondock.ai.cli.model` | `""` | Optional model override for the selected CLI. |
 | `versiondock.ai.cli.timeoutSeconds` | `300` | Timeout for one CLI request. |
 | `versiondock.ai.cli.*Path` | CLI name | Executable name or absolute path for each supported CLI on the extension host. |
 | `versiondock.ai.model` | `""` | Provider-mode model name. GitHub Copilot selects a model automatically when empty; Agent CLI mode ignores this setting. |
-| `versiondock.ai.apiUrl` | `""` | Optional base URL or full endpoint for official providers; Custom requires it. A bare host automatically receives the standard provider path. Ignored in Agent CLI mode. |
+| `versiondock.ai.apiUrl` | `""` | Optional base URL or full endpoint for official providers; Custom requires it. A bare host automatically receives the selected protocol path. Ignored in Agent CLI mode. |
 | `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers; ignored in Agent CLI mode. |
 | `versiondock.ai.maxInputTokens` | `128000` | Maximum locally estimated prepared-context size. Copilot uses its model limit; Agent CLI mode uses this as a local safety budget. |
 | `versiondock.ai.maxOutputTokens` | `128000` | Output ceiling for HTTP providers and local feature-budget calculations. Copilot controls its own output budget. |

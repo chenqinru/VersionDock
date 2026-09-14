@@ -1226,19 +1226,33 @@
             "description": "%configuration.ai.provider.description%"
           },
           "versiondock.ai.model": {
-            "order": 161,
+            "order": 162,
             "type": "string",
             "default": "",
             "description": "%configuration.ai.model.description%"
           },
+          "versiondock.ai.apiProtocol": {
+            "order": 161,
+            "type": "string",
+            "enum": [
+              "chat-completions",
+              "responses"
+            ],
+            "enumDescriptions": [
+              "%configuration.ai.apiProtocol.enum.chatCompletions%",
+              "%configuration.ai.apiProtocol.enum.responses%"
+            ],
+            "default": "chat-completions",
+            "description": "%configuration.ai.apiProtocol.description%"
+          },
           "versiondock.ai.apiUrl": {
-            "order": 162,
+            "order": 163,
             "type": "string",
             "default": "",
             "description": "%configuration.ai.apiUrl.description%"
           },
           "versiondock.ai.apiKey": {
-            "order": 163,
+            "order": 164,
             "type": "string",
             "default": "",
             "description": "%configuration.ai.apiKey.description%"

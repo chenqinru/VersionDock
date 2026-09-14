@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { AiCliProvider, AiExecutionMode, AiProvider, AiProviderConfig } from './types';
+import type { AiApiProtocol, AiCliProvider, AiExecutionMode, AiProvider, AiProviderConfig } from './types';
 
 export type { AiProvider, AiProviderConfig } from './types';
 
@@ -18,6 +18,8 @@ const DEFAULT_AI_API_URLS: Partial<Record<AiProvider, string>> = {
   gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 };
 
+const DEFAULT_OPENAI_RESPONSES_API_URL = 'https://api.openai.com/v1/responses';
+
 const ROOT_API_PATHS: Partial<Record<AiProvider, string>> = {
   openai: '/v1/chat/completions',
   claude: '/v1/messages',
@@ -25,13 +27,32 @@ const ROOT_API_PATHS: Partial<Record<AiProvider, string>> = {
   custom: '/v1/chat/completions',
 };
 
-export function resolveAiApiUrl(provider: AiProvider, configuredUrl: string): string {
+function effectiveApiProtocol(provider: AiProvider, protocol: AiApiProtocol): AiApiProtocol {
+  return provider === 'openai' || provider === 'custom' ? protocol : 'chat-completions';
+}
+
+export function resolveAiApiUrl(
+  provider: AiProvider,
+  configuredUrl: string,
+  protocol: AiApiProtocol = 'chat-completions',
+): string {
+  const resolvedProtocol = effectiveApiProtocol(provider, protocol);
   const trimmed = configuredUrl.trim();
-  if (!trimmed) return DEFAULT_AI_API_URLS[provider] ?? '';
+  if (!trimmed) {
+    return provider === 'openai' && resolvedProtocol === 'responses'
+      ? DEFAULT_OPENAI_RESPONSES_API_URL
+      : DEFAULT_AI_API_URLS[provider] ?? '';
+  }
   const parsed = new URL(trimmed);
   const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
   let resolvedPath: string | undefined;
-  if (pathname === '/') {
+  if (resolvedProtocol === 'responses' && (pathname === '/' || pathname === '/v1')) {
+    resolvedPath = '/v1/responses';
+  } else if (resolvedProtocol === 'responses' && pathname === '/v1/chat/completions') {
+    resolvedPath = '/v1/responses';
+  } else if (resolvedProtocol === 'chat-completions' && pathname === '/v1/responses') {
+    resolvedPath = '/v1/chat/completions';
+  } else if (pathname === '/') {
     resolvedPath = ROOT_API_PATHS[provider];
   } else if (pathname === '/v1') {
     resolvedPath = provider === 'claude'
@@ -86,10 +107,14 @@ export function getAiProviderConfig(): AiProviderConfig {
     || configuredCliProvider === 'opencode'
     ? configuredCliProvider
     : 'claude';
+  const apiProtocol: AiApiProtocol = getConfigString(config, 'ai.apiProtocol', 'chat-completions') === 'responses'
+    ? 'responses'
+    : 'chat-completions';
 
   return {
     executionMode,
     provider,
+    apiProtocol,
     apiKey: getConfigString(config, 'ai.apiKey'),
     apiUrl: getConfigString(config, 'ai.apiUrl'),
     model: getConfigString(config, 'ai.model'),

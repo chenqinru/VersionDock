@@ -1,6 +1,7 @@
 import type * as vscode from 'vscode';
 
 export type AiProvider = 'github-copilot' | 'openai' | 'claude' | 'gemini' | 'custom';
+export type AiApiProtocol = 'chat-completions' | 'responses';
 export type AiExecutionMode = 'provider' | 'agent-cli';
 export type AiCliProvider = 'claude' | 'codex' | 'antigravity' | 'opencode';
 export type AiRuntimeProvider = AiProvider | `${AiCliProvider}-cli`;
@@ -15,6 +16,7 @@ export type AiTaskKind =
 export interface AiProviderConfig {
   executionMode: AiExecutionMode;
   provider: AiProvider;
+  apiProtocol: AiApiProtocol;
   apiKey: string;
   apiUrl: string;
   model: string;
