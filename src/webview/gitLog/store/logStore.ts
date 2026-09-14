@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import type { BranchInfo, CommitNode, FileDiff, GraphCommitNode, LineRange, RepoMeta, TagInfo } from '../../shared/types';
-import type { CompareSide, IconThemeData, MergeParentChange, LayoutDensity } from '../../../host/types/messages';
+import type { CompareSide, IconThemeData, MergeParentChange, LayoutDensity, RemoteAccountInfo } from '../../../host/types/messages';
 import { scopedKey } from '../../shared/scopedKey';
 
-export type { CompareSide, LayoutDensity };
+export type { CompareSide, LayoutDensity, RemoteAccountInfo };
 
 export interface CommitFilters {
   text: string;
@@ -115,6 +115,8 @@ interface LogState {
   setLayoutDensity: (density: LayoutDensity) => void;
   setPendingScrollHash: (hash: string | null) => void;
   clearSelection: () => void;
+  remoteAccounts: RemoteAccountInfo[];
+  setRemoteAccounts: (accounts: RemoteAccountInfo[]) => void;
 }
 
 const defaultCommitFilters: CommitFilters = {
@@ -200,6 +202,8 @@ export const useLogStore = create<LogState>((set, get) => ({
   replaceCommitsOnNextBatch: false,
   compareState: null,
   layoutDensity: 'comfortable',
+  remoteAccounts: [],
+  setRemoteAccounts: accounts => set({ remoteAccounts: accounts }),
 
   setRepos: (repos, hasWorkspaceFolder) => set(state => {
     const repoIds = new Set(repos.map(repo => repo.id));

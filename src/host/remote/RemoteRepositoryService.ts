@@ -6,6 +6,8 @@ import { getVscodeGitApi, getVscodeRepository } from '../git/VscodeGitApi';
 import type { VersionDockLogger } from '../utils/Logger';
 import { GitHubRemoteProvider } from './GitHubRemoteProvider';
 import { GitLabRemoteProvider } from './GitLabRemoteProvider';
+import { AvatarService } from './AvatarService';
+import type { RemoteAccountInfo } from '../types/messages';
 import { RemoteApiError } from './api';
 import { RemoteRepositoryCancelledError } from './types';
 import type {
@@ -38,6 +40,7 @@ function visibilityOptions(kind: RemoteProviderKind): Array<{ label: string; val
 export class RemoteRepositoryService implements vscode.Disposable {
   readonly github: GitHubRemoteProvider;
   readonly gitlab: GitLabRemoteProvider;
+  readonly avatarService: AvatarService;
   private readonly providers: RemoteRepositoryProvider[];
   private readonly disposables: vscode.Disposable[] = [];
   private readonly apiDisposables: vscode.Disposable[] = [];
@@ -51,6 +54,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
   ) {
     this.github = new GitHubRemoteProvider(logger);
     this.gitlab = new GitLabRemoteProvider(context, logger);
+    this.avatarService = new AvatarService(context, this.github, this.gitlab, logger);
     this.providers = [this.github, this.gitlab];
     this.disposables.push(vscode.extensions.onDidChange(() => this.tryRegisterGitApi()));
     this.tryRegisterGitApi();
@@ -60,27 +64,130 @@ export class RemoteRepositoryService implements vscode.Disposable {
     return (repoId, rootPath) => this.publishRepository(repoId, rootPath);
   }
 
+  async getConnectedAccounts(): Promise<RemoteAccountInfo[]> {
+    const accounts: RemoteAccountInfo[] = [];
+
+    // 1. GitHub
+    try {
+      const user = await this.github.getAuthenticatedUser();
+      if (user) {
+        const emails: string[] = [];
+        if (user.email) emails.push(user.email);
+        const ghEmails = await this.github.getUserEmails().catch(() => []);
+        for (const e of ghEmails) {
+          if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
+            emails.push(e);
+          }
+        }
+        accounts.push({
+          provider: 'github',
+          id: String(user.id),
+          username: user.login,
+          name: user.name ?? undefined,
+          avatarUrl: user.avatar_url,
+          host: 'https://github.com',
+          emails: emails.length > 0 ? emails : undefined,
+        });
+      }
+    } catch {
+      // Ignore error
+    }
+
+    // 2. GitLab
+    try {
+      const gitlabAccounts = await this.gitlab.getAllAccounts();
+      for (const acc of gitlabAccounts) {
+        const user = await this.gitlab.getCurrentUser(acc.host);
+        if (user) {
+          let avatarUrl = user.avatar_url;
+          if (avatarUrl?.startsWith('/')) {
+            avatarUrl = `${acc.host}${avatarUrl}`;
+          }
+          const emails: string[] = [];
+          if (user.email) emails.push(user.email);
+          const glEmails = await this.gitlab.getUserEmails(acc.host).catch(() => []);
+          for (const e of glEmails) {
+            if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
+              emails.push(e);
+            }
+          }
+          accounts.push({
+            provider: 'gitlab',
+            id: String(user.id),
+            username: user.username,
+            name: user.name,
+            avatarUrl,
+            host: acc.host,
+            emails: emails.length > 0 ? emails : undefined,
+          });
+        } else {
+          accounts.push({
+            provider: 'gitlab',
+            username: acc.host,
+            host: acc.host,
+          });
+        }
+      }
+    } catch {
+      // Ignore error
+    }
+
+    return accounts;
+  }
+
   async manageAccounts(): Promise<void> {
     type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' };
 
-    const githubSession = await this.github.getSession({ createIfNone: false }).catch(() => undefined);
+    const [githubSession, connected] = await Promise.all([
+      this.github.getSession({ createIfNone: false }).catch(() => undefined),
+      this.getConnectedAccounts().catch(() => [] as RemoteAccountInfo[]),
+    ]);
+
+    const ghAccount = connected.find(a => a.provider === 'github');
+    const glAccounts = connected.filter(a => a.provider === 'gitlab');
+
+    const githubLabel = ghAccount
+      ? `$(github) GitHub (${ghAccount.username})`
+      : githubSession
+        ? `$(github) GitHub (${githubSession.account.label})`
+        : `$(github) ${vscode.l10n.t('Sign in to GitHub')}`;
+
+    const githubDetail = ghAccount?.name
+      ? `${ghAccount.name} (@${ghAccount.username})`
+      : githubSession
+        ? vscode.l10n.t('Connected as {0}. Click to manage account.', githubSession.account.label)
+        : vscode.l10n.t('Use the VS Code GitHub authentication provider');
+
+    const gitlabDescription = glAccounts.length > 0
+      ? vscode.l10n.t('{0} account(s) connected', glAccounts.length)
+      : vscode.l10n.t('Add, re-authenticate, or remove GitLab Personal Access Tokens');
+
+    const gitlabDetail = glAccounts.length > 0
+      ? glAccounts.map(a => `${a.name || a.username} (${a.host})`).join(' • ')
+      : undefined;
+
+    const [ghIconUri, glIconUri] = await Promise.all([
+      ghAccount?.avatarUrl ? this.avatarService.getLocalAvatarUri(ghAccount.avatarUrl) : undefined,
+      glAccounts[0]?.avatarUrl ? this.avatarService.getLocalAvatarUri(glAccounts[0].avatarUrl) : undefined,
+    ]);
+
+    const gitlabLabel = glAccounts[0]
+      ? `GitLab (${glAccounts[0].username})`
+      : vscode.l10n.t('Manage GitLab accounts');
 
     const items: AccountAction[] = [
       {
-        label: githubSession
-          ? `$(github) GitHub (${githubSession.account.label})`
-          : `$(github) ${vscode.l10n.t('Sign in to GitHub')}`,
-        description: githubSession
-          ? `$(check) ${vscode.l10n.t('Connected')}`
-          : vscode.l10n.t('Not connected'),
-        detail: githubSession
-          ? vscode.l10n.t('Connected as {0}. Click to manage account.', githubSession.account.label)
-          : vscode.l10n.t('Use the VS Code GitHub authentication provider'),
+        label: ghIconUri ? `GitHub (${ghAccount?.username ?? ''})` : githubLabel,
+        description: githubSession ? `$(check) ${vscode.l10n.t('Connected')}` : vscode.l10n.t('Not connected'),
+        detail: githubDetail,
+        iconPath: ghIconUri,
         action: 'github',
       },
       {
-        label: `$(repo) ${vscode.l10n.t('Manage GitLab accounts')}`,
-        description: vscode.l10n.t('Add, re-authenticate, or remove GitLab Personal Access Tokens'),
+        label: glIconUri ? gitlabLabel : `$(repo) ${gitlabLabel}`,
+        description: gitlabDescription,
+        detail: gitlabDetail,
+        iconPath: glIconUri,
         action: 'gitlab',
       },
     ];

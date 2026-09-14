@@ -17,6 +17,8 @@ interface GithubUser {
   id: number;
   login: string;
   name?: string | null;
+  avatar_url?: string;
+  email?: string | null;
 }
 
 interface GithubOrganization {
@@ -62,6 +64,95 @@ export class GitHubRemoteProvider implements RemoteRepositoryProvider {
 
   async getSession(options?: vscode.AuthenticationGetSessionOptions): Promise<vscode.AuthenticationSession | undefined> {
     return vscode.authentication.getSession('github', BASE_SCOPES, options);
+  }
+
+  async getAuthenticatedUser(): Promise<GithubUser | undefined> {
+    try {
+      const session = await this.getSession({ createIfNone: false });
+      if (!session?.accessToken) return undefined;
+      return await this.request<GithubUser>('/user', session.accessToken);
+    } catch (error) {
+      this.logger.debug('GitHub', 'Failed to fetch authenticated user', { error: String(error) });
+      return undefined;
+    }
+  }
+
+  async getUserEmails(): Promise<string[]> {
+    try {
+      const session = await this.getSession({ createIfNone: false });
+      if (!session?.accessToken) return [];
+      const res = await this.request<Array<{ email: string; primary?: boolean; verified?: boolean }>>('/user/emails', session.accessToken);
+      if (Array.isArray(res)) {
+        return res.map(r => r.email).filter(Boolean);
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  async resolveAvatarByEmail(email: string, authorName?: string): Promise<string | undefined> {
+    const trimmed = email.trim();
+    const cleanAuthorName = (authorName ?? '').trim().toLowerCase();
+    if (!trimmed && !cleanAuthorName) return undefined;
+
+    // 0. Check authenticated user first (zero-latency match for current user)
+    try {
+      const user = await this.getAuthenticatedUser();
+      if (user?.avatar_url) {
+        const loginLower = user.login.toLowerCase();
+        const displayNameLower = user.name?.toLowerCase();
+        const userEmailLower = user.email?.toLowerCase();
+
+        // Match by author name
+        if (cleanAuthorName && (cleanAuthorName === loginLower || cleanAuthorName === displayNameLower)) {
+          return user.avatar_url;
+        }
+
+        if (trimmed) {
+          const norm = trimmed.toLowerCase();
+          const emailPrefix = norm.includes('@') ? norm.split('@')[0]! : norm;
+          const strippedPrefix = emailPrefix.replace(/\d+$/, '');
+
+          if (
+            (userEmailLower && userEmailLower === norm) ||
+            loginLower === norm ||
+            loginLower === emailPrefix ||
+            (strippedPrefix.length >= 3 && strippedPrefix === loginLower) ||
+            (displayNameLower && (displayNameLower === norm || displayNameLower === emailPrefix))
+          ) {
+            return user.avatar_url;
+          }
+        }
+      }
+    } catch {
+      // Ignore authenticated user check failure
+    }
+
+    if (!trimmed) return undefined;
+
+    // Fast-path: GitHub noreply email (e.g. 12345+username@users.noreply.github.com or username@users.noreply.github.com)
+    if (trimmed.toLowerCase().endsWith('@users.noreply.github.com')) {
+      const local = trimmed.split('@')[0] ?? '';
+      const username = local.includes('+') ? local.split('+')[1] : local;
+      if (username) return `https://avatars.githubusercontent.com/${encodeURIComponent(username)}`;
+    }
+
+    try {
+      const session = await this.getSession({ createIfNone: false });
+      if (!session?.accessToken) return undefined;
+
+      const result = await this.request<{ total_count: number; items?: Array<{ login: string; avatar_url: string }> }>(
+        `/search/users?q=${encodeURIComponent(trimmed)}+in:email`,
+        session.accessToken,
+      );
+      if (result.items && result.items.length > 0 && result.items[0]?.avatar_url) {
+        return result.items[0].avatar_url;
+      }
+    } catch (error) {
+      this.logger.debug('GitHub', 'Failed to resolve avatar by email', { email: trimmed, error: String(error) });
+    }
+    return undefined;
   }
 
   async listRepositories(query?: string): Promise<RemoteRepository[]> {

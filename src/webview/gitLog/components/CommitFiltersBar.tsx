@@ -3,7 +3,7 @@ import type { CommitFilters } from '../store/logStore';
 import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { Codicon } from '../../shared/Codicon';
 import { t, getLocale } from '../../shared/i18n';
-import { formatAuthorIdentity } from './AuthorAvatar';
+import { AuthorAvatar, formatAuthorIdentity } from './AuthorAvatar';
 import { readableAccentColor } from '../../shared/branchColors';
 import { branchRevisionRef, tagRevisionRef } from '../utils/refs';
 
@@ -112,6 +112,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
         options={authorOptions}
         onChange={v => onFilterChange('author', v)}
         style={styles.authorFilter}
+        repoId={filters.repoId || (repos.length === 1 ? repos[0]?.id : undefined)}
       />
 
       {repos.length > 1 && (
@@ -256,12 +257,13 @@ function MoreMenu({ onFetchAll, showRepoNameToggle, repoNamesExpanded, onToggleR
   );
 }
 
-export function AuthorPicker({ value, options, onChange, width, style }: {
+export function AuthorPicker({ value, options, onChange, width, style, repoId }: {
   value: string;
   options: AuthorOption[];
   onChange: (v: string) => void;
   width?: number;
   style?: React.CSSProperties;
+  repoId?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -302,7 +304,11 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
         onClick={() => setOpen(current => !current)}
         title={active ? formatAuthorIdentity(active.name, active.email) : (value || t('Filter by author'))}
       >
-        <Codicon name="person" style={styles.fieldIcon} />
+        {active ? (
+          <AuthorAvatar authorName={active.name} authorEmail={active.email} repoId={repoId} size={14} />
+        ) : (
+          <Codicon name="person" style={styles.fieldIcon} />
+        )}
         <span style={value ? styles.pickerLabelActive : styles.pickerLabelPlaceholder}>
           {displayValue || t('Author…')}
         </span>
@@ -336,7 +342,10 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
               style={styles.dropdownItem(!value)}
               onClick={() => { onChange(''); setOpen(false); }}
             >
-              <span style={{ color: 'var(--vscode-descriptionForeground)', fontSize: '12px' }}>{t('All authors')}</span>
+              <div style={{ width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Codicon name="organization" style={{ fontSize: '14px', opacity: 0.8 }} />
+              </div>
+              <span style={{ color: 'var(--vscode-descriptionForeground)', fontSize: '12px', flex: 1 }}>{t('All authors')}</span>
               {!value && <Codicon name="check" style={{ fontSize: '11px', marginLeft: 'auto', flexShrink: 0 }} />}
             </div>
             {displayed.map(option => (
@@ -348,7 +357,7 @@ export function AuthorPicker({ value, options, onChange, width, style }: {
                 onClick={() => { onChange(option.value); setOpen(false); }}
                 title={formatAuthorIdentity(option.name, option.email)}
               >
-                <Codicon name="person" style={{ fontSize: '12px', flexShrink: 0 }} />
+                <AuthorAvatar authorName={option.name} authorEmail={option.email} repoId={repoId} size={20} />
                 <span style={styles.authorOption}>
                   <span style={styles.authorName}>{option.name}</span>
                   {option.email.trim() && <span style={styles.authorEmail}>{option.email}</span>}
@@ -1179,8 +1188,8 @@ const styles = {
   dropdownItem: (active: boolean): React.CSSProperties => ({
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    padding: '4px 10px',
+    gap: '8px',
+    padding: '5px 10px',
     cursor: 'pointer',
     fontSize: '12px',
     background: active ? 'var(--vscode-list-activeSelectionBackground)' : 'transparent',

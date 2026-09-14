@@ -1,9 +1,75 @@
 import React, { useState, useEffect } from 'react';
+import { getVsCodeApi } from '../../shared/vscodeApi';
+import { useLogStore } from '../store/logStore';
+import type { RemoteAccountInfo } from '../../../host/types/messages';
 
 interface Props {
   authorName: string;
   authorEmail: string;
+  repoId?: string;
   size?: number;
+}
+
+/**
+ * Checks whether an author matches any connected remote account (GitHub or GitLab)
+ * based on username, name, emails, or email prefix patterns.
+ */
+export function findConnectedAvatar(
+  authorName: string,
+  authorEmail: string,
+  remoteAccounts: RemoteAccountInfo[],
+  repoRemoteUrl?: string
+): string | null {
+  if (!remoteAccounts || remoteAccounts.length === 0) return null;
+
+  const cleanName = (authorName || '').trim().toLowerCase();
+  const cleanEmail = (authorEmail || '').trim().toLowerCase();
+  const emailPrefix = cleanEmail.includes('@') ? cleanEmail.split('@')[0]! : cleanEmail;
+  const strippedEmailPrefix = emailPrefix.replace(/\d+$/, '');
+  const strippedName = cleanName.replace(/\d+$/, '');
+
+  // Prioritize accounts matching the current repository remote URL if available
+  const sortedAccounts = [...remoteAccounts].sort((a, b) => {
+    if (!repoRemoteUrl) return 0;
+    const lowerRemote = repoRemoteUrl.toLowerCase();
+    const aMatches = lowerRemote.includes(a.provider);
+    const bMatches = lowerRemote.includes(b.provider);
+    if (aMatches && !bMatches) return -1;
+    if (!aMatches && bMatches) return 1;
+    return 0;
+  });
+
+  for (const acc of sortedAccounts) {
+    if (!acc.avatarUrl) continue;
+    const username = (acc.username || '').trim().toLowerCase();
+    const displayName = (acc.name || '').trim().toLowerCase();
+    const emails = (acc.emails || []).map(e => e.trim().toLowerCase());
+
+    // 1. Author name exactly matches account username
+    if (cleanName && cleanName === username) return acc.avatarUrl;
+
+    // 2. Author name exactly matches account display name
+    if (cleanName && displayName && cleanName === displayName) return acc.avatarUrl;
+
+    // 3. Known account emails exact match
+    if (cleanEmail && emails.includes(cleanEmail)) return acc.avatarUrl;
+
+    // 4. Email prefix exact match with username
+    if (emailPrefix && emailPrefix === username) return acc.avatarUrl;
+
+    // 5. Stripped email prefix matches username (e.g. chenqinru0@qq.com -> chenqinru)
+    if (strippedEmailPrefix.length >= 3 && strippedEmailPrefix === username) return acc.avatarUrl;
+
+    // 6. Stripped author name matches username
+    if (strippedName.length >= 3 && strippedName === username) return acc.avatarUrl;
+
+    // 7. Author name matches display name without digits
+    if (displayName && strippedName.length >= 3 && strippedName === displayName.replace(/\d+$/, '')) {
+      return acc.avatarUrl;
+    }
+  }
+
+  return null;
 }
 
 async function gravatarUrl(email: string, size: number): Promise<string> {
@@ -18,6 +84,55 @@ function githubAvatarUrl(email: string, size: number): string | null {
   const local = email.split('@')[0] ?? '';
   const username = local.includes('+') ? local.split('+')[1] : local;
   return username ? `https://avatars.githubusercontent.com/${encodeURIComponent(username)}?size=${size * 2}` : null;
+}
+
+function gitlabAvatarUrl(email: string, size: number): string | null {
+  const lower = email.toLowerCase();
+  if (!lower.endsWith('@users.noreply.gitlab.com') && !lower.endsWith('@noreply.gitlab.com')) return null;
+  return `https://gitlab.com/api/v4/avatar?email=${encodeURIComponent(email)}&size=${size * 2}`;
+}
+
+const hostResolvedAvatars = new Map<string, string | null>();
+const avatarListeners = new Set<(email: string, url: string | null) => void>();
+
+export function notifyAvatarsResolved(avatars: Record<string, string | null>): void {
+  for (const [email, url] of Object.entries(avatars)) {
+    const key = email.toLowerCase();
+    hostResolvedAvatars.set(key, url);
+    // Clear pending/null cached promises so newly resolved avatars take effect immediately
+    for (const cacheKey of Array.from(avatarPromiseCache.keys())) {
+      if (cacheKey.startsWith(`${key}\0`)) {
+        avatarPromiseCache.delete(cacheKey);
+      }
+    }
+    avatarListeners.forEach(fn => fn(key, url));
+  }
+}
+
+const pendingBatch = new Set<string>();
+const pendingAuthors = new Map<string, string>();
+let activeRepoId: string | undefined;
+let batchTimer: number | null = null;
+
+function queueEmailResolution(email: string, repoId?: string, authorName?: string): void {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized || hostResolvedAvatars.has(normalized)) return;
+  pendingBatch.add(normalized);
+  if (authorName) pendingAuthors.set(normalized, authorName);
+  if (repoId) activeRepoId = repoId;
+  if (batchTimer === null) {
+    batchTimer = window.setTimeout(() => {
+      batchTimer = null;
+      if (pendingBatch.size > 0) {
+        const emails = Array.from(pendingBatch);
+        const authors = emails.map(e => ({ email: e, name: pendingAuthors.get(e) }));
+        const reqRepoId = activeRepoId;
+        pendingBatch.clear();
+        pendingAuthors.clear();
+        getVsCodeApi().postMessage({ type: 'LOG_RESOLVE_AVATARS', emails, repoId: reqRepoId, authors });
+      }
+    }, 60);
+  }
 }
 
 function avatarColor(email: string): string {
@@ -86,23 +201,47 @@ function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
   });
 }
 
-async function resolveAvatarUrl(email: string, size: number): Promise<string | null> {
+async function resolveAvatarUrl(email: string, size: number, repoId?: string, authorName?: string): Promise<string | null> {
+  const normalized = email.trim().toLowerCase();
+
+  // Fast-path: Check connected accounts from store first
+  const store = useLogStore.getState();
+  const repoRemoteUrl = repoId ? store.repos.find(r => r.id === repoId)?.remoteUrl : undefined;
+  const connected = findConnectedAvatar(authorName ?? '', email, store.remoteAccounts, repoRemoteUrl);
+  if (connected) return connected;
+
+  if (!normalized) return null;
+
+  if (hostResolvedAvatars.has(normalized)) {
+    return hostResolvedAvatars.get(normalized) ?? null;
+  }
+
   const github = githubAvatarUrl(email, size);
   if (github) {
     const blank = await loadImagePixels(github);
-    return blank ? null : github;
+    if (!blank) return github;
+  }
+
+  const gitlab = gitlabAvatarUrl(email, size);
+  if (gitlab) {
+    const blank = await loadImagePixels(gitlab);
+    if (!blank) return gitlab;
   }
 
   const gravatar = await gravatarUrl(email, size);
   const blank = await loadImagePixels(gravatar);
-  return blank ? null : gravatar;
+  if (!blank) return gravatar;
+
+  // Not found in fast-paths; query Host AvatarService asynchronously
+  queueEmailResolution(normalized, repoId, authorName);
+  return null;
 }
 
-const AVATAR_CACHE_LIMIT = 256;
+const AVATAR_CACHE_LIMIT = 512;
 const avatarPromiseCache = new Map<string, Promise<string | null>>();
 
-function cachedAvatarUrl(email: string, size: number): Promise<string | null> {
-  const key = `${email.trim().toLowerCase()}\0${size}`;
+function cachedAvatarUrl(email: string, size: number, repoId?: string, authorName?: string): Promise<string | null> {
+  const key = `${email.trim().toLowerCase()}\0${authorName?.trim().toLowerCase() ?? ''}\0${size}`;
   const cached = avatarPromiseCache.get(key);
   if (cached) {
     // Refresh insertion order so frequently visible authors stay cached.
@@ -111,7 +250,7 @@ function cachedAvatarUrl(email: string, size: number): Promise<string | null> {
     return cached;
   }
 
-  const pending = resolveAvatarUrl(email, size).catch(() => null);
+  const pending = resolveAvatarUrl(email, size, repoId, authorName).catch(() => null);
   avatarPromiseCache.set(key, pending);
   if (avatarPromiseCache.size > AVATAR_CACHE_LIMIT) {
     const oldest = avatarPromiseCache.keys().next().value as string | undefined;
@@ -120,24 +259,52 @@ function cachedAvatarUrl(email: string, size: number): Promise<string | null> {
   return pending;
 }
 
-export function AuthorAvatar({ authorName, authorEmail, size = 20 }: Props) {
-  const [url, setUrl] = useState<string | null | 'loading'>('loading');
+export function AuthorAvatar({ authorName, authorEmail, repoId, size = 20 }: Props) {
+  const remoteAccounts = useLogStore(s => s.remoteAccounts);
+  const repos = useLogStore(s => s.repos);
+  const currentRepo = repoId ? repos.find(r => r.id === repoId) : undefined;
+  const repoRemoteUrl = currentRepo?.remoteUrl;
+
+  // Instant match for connected accounts (GitHub & GitLab)
+  const connectedAvatar = findConnectedAvatar(authorName, authorEmail, remoteAccounts, repoRemoteUrl);
+
+  const [url, setUrl] = useState<string | null | 'loading'>(() => connectedAvatar ?? 'loading');
   const authorTitle = formatAuthorIdentity(authorName, authorEmail);
   const avatarSeed = authorEmail.trim() || authorName.trim();
 
   useEffect(() => {
+    if (connectedAvatar) {
+      setUrl(connectedAvatar);
+      return;
+    }
+
     setUrl('loading');
 
     let cancelled = false;
-    if (!authorEmail.trim()) {
+    if (!authorEmail.trim() && !authorName.trim()) {
       setUrl(null);
       return () => { cancelled = true; };
     }
-    cachedAvatarUrl(authorEmail, size).then(resolved => {
+    cachedAvatarUrl(authorEmail, size, repoId, authorName).then(resolved => {
       if (!cancelled) setUrl(resolved);
     });
     return () => { cancelled = true; };
-  }, [authorEmail, size]);
+  }, [connectedAvatar, authorEmail, authorName, size, repoId]);
+
+  useEffect(() => {
+    const normalized = authorEmail.trim().toLowerCase();
+    if (!normalized) return;
+
+    const onResolve = (resolvedEmail: string, resolvedUrl: string | null) => {
+      if (resolvedEmail === normalized) {
+        setUrl(resolvedUrl ?? connectedAvatar ?? null);
+      }
+    };
+    avatarListeners.add(onResolve);
+    return () => {
+      avatarListeners.delete(onResolve);
+    };
+  }, [authorEmail, connectedAvatar]);
 
   const containerStyle: React.CSSProperties = {
     width: size,

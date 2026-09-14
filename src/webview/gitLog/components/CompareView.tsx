@@ -229,6 +229,7 @@ function ComparePane({
           options={authorOptions}
           onChange={(value) => onFilterChange({ filterAuthor: value })}
           style={styles.authorFilter}
+          repoId={repos.length === 1 ? repos[0]?.id : undefined}
         />
         <DateRangePicker
           from={pane.filterDateFrom}

@@ -5,6 +5,7 @@ import { BranchSidebar } from './components/BranchSidebar';
 import { CommitList } from './components/CommitList';
 import { CommitDetail } from './components/CommitDetail';
 import { CommitFiltersBar, type AuthorOption } from './components/CommitFiltersBar';
+import { notifyAvatarsResolved } from './components/AuthorAvatar';
 import { CompareView } from './components/CompareView';
 import { assignLanes, type GraphLayoutData, type LaidOutCommit, type LaidOutGraphCommit } from './utils/graphLayout';
 import { filterFilesForHistoryPath } from './utils/historyPath';
@@ -249,6 +250,7 @@ export function GitLogApp() {
           store.setBranches(msg.branches, msg.isInitialPartial ?? false);
           if (msg.layoutDensity) store.setLayoutDensity(msg.layoutDensity);
           if (msg.iconTheme) store.setIconTheme(msg.iconTheme);
+          if (msg.remoteAccounts) store.setRemoteAccounts(msg.remoteAccounts);
           break;
         case 'LOG_LAYOUT_DENSITY_UPDATE':
           store.setLayoutDensity(msg.layoutDensity);
@@ -313,6 +315,12 @@ export function GitLogApp() {
         case 'LOG_FILTER_BY_REPO':
           filterRepoRef.current(msg.repoId, msg.branch ?? null);
           break;
+        case 'LOG_AVATARS_RESOLVED':
+          notifyAvatarsResolved(msg.avatars);
+          break;
+        case 'LOG_REMOTE_ACCOUNTS_RESULT':
+          store.setRemoteAccounts(msg.accounts);
+          break;
         case 'LOG_REMOTES_RESULT':
           break;
         default:
@@ -332,6 +340,7 @@ export function GitLogApp() {
       generation: bgGenRef.current,
       requestId,
     });
+    send({ type: 'LOG_REQUEST_REMOTE_ACCOUNTS' });
     requestGraphCommits(useLogStore.getState().commitFilters, bgGenRef.current);
 
     return () => window.removeEventListener('message', handler);

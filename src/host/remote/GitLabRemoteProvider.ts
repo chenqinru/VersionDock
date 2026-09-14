@@ -49,6 +49,14 @@ function namespaceKind(value: string | undefined): 'user' | 'group' {
   return value === 'group' ? 'group' : 'user';
 }
 
+interface GitLabUser {
+  id: number;
+  username: string;
+  name?: string;
+  avatar_url?: string;
+  email?: string;
+}
+
 export class GitLabRemoteProvider implements RemoteRepositoryProvider {
   readonly kind = 'gitlab' as const;
   readonly name = 'GitLab';
@@ -58,6 +66,153 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly logger: VersionDockLogger,
   ) {}
+
+  async getAllAccounts(): Promise<GitLabAccount[]> {
+    return this.getAccounts(false);
+  }
+
+  async getCurrentUser(host: string): Promise<GitLabUser | undefined> {
+    try {
+      const account = await this.getAccount(host, false);
+      if (!account) return undefined;
+      return await this.request<GitLabUser>(account, '/user');
+    } catch (error) {
+      this.logger.debug('GitLab', 'Failed to fetch current user', { host, error: String(error) });
+      return undefined;
+    }
+  }
+
+  async getUserEmails(host: string): Promise<string[]> {
+    try {
+      const account = await this.getAccount(host, false);
+      if (!account) return [];
+      const res = await this.request<Array<{ id: number; email: string }>>(account, '/user/emails');
+      if (Array.isArray(res)) {
+        return res.map(r => r.email).filter(Boolean);
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  async resolveAvatarByEmail(targetHost: string | undefined, email: string, authorName?: string): Promise<string | undefined> {
+    const trimmed = email.trim();
+    const cleanAuthorName = (authorName ?? '').trim().toLowerCase();
+    if (!trimmed && !cleanAuthorName) return undefined;
+
+    const accounts = await this.getAccounts(false);
+    if (accounts.length === 0) return undefined;
+
+    // 1. Check connected accounts' current user first (instant match for the developer)
+    const norm = trimmed.toLowerCase();
+    const emailPrefix = norm.includes('@') ? norm.split('@')[0]! : norm;
+    const strippedPrefix = emailPrefix.replace(/\d+$/, '');
+
+    for (const acc of accounts) {
+      if (targetHost && normalizeHost(acc.host) !== normalizeHost(targetHost)) continue;
+      const currentUser = await this.getCurrentUser(acc.host);
+      if (currentUser) {
+        const usernameLower = currentUser.username.toLowerCase();
+        const displayNameLower = currentUser.name?.toLowerCase();
+        const userEmailLower = currentUser.email?.toLowerCase();
+
+        // Match by author name
+        const authorNameMatch = cleanAuthorName && (cleanAuthorName === usernameLower || cleanAuthorName === displayNameLower);
+
+        const emailMatch = userEmailLower && userEmailLower === norm;
+        const usernameMatch =
+          usernameLower === norm ||
+          usernameLower === emailPrefix ||
+          (strippedPrefix.length >= 3 && strippedPrefix === usernameLower) ||
+          norm.startsWith(`${usernameLower}@`);
+        const nameMatch = displayNameLower && (displayNameLower === norm || displayNameLower === emailPrefix);
+
+        if (authorNameMatch || emailMatch || usernameMatch || nameMatch) {
+          if (currentUser.avatar_url) {
+            let avatarUrl = currentUser.avatar_url;
+            if (avatarUrl.startsWith('/')) avatarUrl = `${acc.host}${avatarUrl}`;
+            return avatarUrl;
+          }
+        }
+      }
+    }
+
+    // Determine which account to use for general search
+    let account: GitLabAccount | undefined;
+    if (targetHost) {
+      account = await this.getAccount(targetHost, false);
+    }
+    if (!account) {
+      account = accounts[0];
+    }
+    if (!account) return undefined;
+
+    try {
+      // 2. Query Avatar API
+      const avatarRes = await this.request<{ avatar_url?: string }>(
+        account,
+        `/avatar?email=${encodeURIComponent(trimmed)}&size=80`,
+      ).catch(() => undefined);
+
+      let avatarUrl = avatarRes?.avatar_url;
+
+      // 3. Query users by username (if email is username@... or just username)
+      if (!avatarUrl) {
+        const usernameCandidate = trimmed.includes('@') ? trimmed.split('@')[0] : trimmed;
+        if (usernameCandidate) {
+          const users = await this.request<GitLabUser[]>(
+            account,
+            `/users?username=${encodeURIComponent(usernameCandidate)}`,
+          ).catch(() => [] as GitLabUser[]);
+          if (users && users.length > 0 && users[0]?.avatar_url) {
+            avatarUrl = users[0].avatar_url;
+          }
+        }
+      }
+
+      // 4. Query users by search
+      if (!avatarUrl) {
+        const users = await this.request<GitLabUser[]>(
+          account,
+          `/users?search=${encodeURIComponent(trimmed)}`,
+        ).catch(() => [] as GitLabUser[]);
+        if (users && users.length > 0 && users[0]?.avatar_url) {
+          avatarUrl = users[0].avatar_url;
+        }
+      }
+
+      if (!avatarUrl) return undefined;
+
+      if (avatarUrl.startsWith('/')) {
+        avatarUrl = `${account.host}${avatarUrl}`;
+      }
+
+      return avatarUrl;
+    } catch (error) {
+      this.logger.debug('GitLab', 'Failed to resolve avatar by email', { email: trimmed, error: String(error) });
+      return undefined;
+    }
+  }
+
+  async fetchAuthenticatedImage(host: string, imageUrl: string): Promise<string | undefined> {
+    try {
+      const account = await this.getAccount(host, false);
+      const headers: Record<string, string> = {};
+      if (account?.token) {
+        headers['PRIVATE-TOKEN'] = account.token;
+      }
+      const response = await fetch(imageUrl, { headers });
+      if (!response.ok) return undefined;
+      const contentType = response.headers.get('content-type') || 'image/png';
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString('base64');
+      return `data:${contentType};base64,${base64}`;
+    } catch (error) {
+      this.logger.debug('GitLab', 'Failed to fetch authenticated image', { host, imageUrl, error: String(error) });
+      return undefined;
+    }
+  }
 
   async listRepositories(query?: string): Promise<RemoteRepository[]> {
     const accounts = await this.getAccounts(true);
@@ -157,13 +312,37 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider {
 
   async manageAccounts(): Promise<void> {
     const accounts = await this.getAccounts(false);
+    const userMap = new Map<string, GitLabUser | undefined>();
+    await Promise.all(
+      accounts.map(async account => {
+        const user = await this.getCurrentUser(account.host).catch(() => undefined);
+        userMap.set(account.host, user);
+      }),
+    );
+
     type AccountPick = vscode.QuickPickItem & { action: 'add' | 'reauth' | 'remove'; host?: string };
     const items: AccountPick[] = [
       { label: `$(add) ${vscode.l10n.t('Add GitLab account…')}`, action: 'add' },
-      ...accounts.flatMap(account => [
-        { label: `$(key) ${account.host}`, description: vscode.l10n.t('Re-authenticate'), action: 'reauth' as const, host: account.host },
-        { label: `$(trash) ${account.host}`, description: vscode.l10n.t('Remove saved Token'), action: 'remove' as const, host: account.host },
-      ]),
+      ...accounts.flatMap(account => {
+        const user = userMap.get(account.host);
+        const displayName = user ? `${user.name || user.username} (@${user.username})` : account.host;
+        return [
+          {
+            label: `$(key) ${displayName}`,
+            description: account.host,
+            detail: vscode.l10n.t('Re-authenticate'),
+            action: 'reauth' as const,
+            host: account.host,
+          },
+          {
+            label: `$(trash) ${displayName}`,
+            description: account.host,
+            detail: vscode.l10n.t('Remove saved Token'),
+            action: 'remove' as const,
+            host: account.host,
+          },
+        ];
+      }),
     ];
     const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('VersionDock — GitLab Accounts') });
     if (!pick) return;

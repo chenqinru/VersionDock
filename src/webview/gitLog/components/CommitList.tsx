@@ -520,7 +520,7 @@ export function CommitList({ commits, selectedHashes, primarySelectedHash, repos
                 <Codicon name="arrow-up" style={styles.unpushedIcon} title={t('Not pushed')} />
               )}
               <div style={styles.meta}>
-                <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} size={20} />
+                <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} repoId={commit.repoId} size={20} />
                 <span style={styles.author}>{formatAuthorName(commit.authorName)}</span>
               </div>
               <span style={styles.date}>{formatDateTime(commit.authorDate)}</span>
@@ -746,7 +746,7 @@ function CommitPopover({ commit, repoKind, remoteNames, rowTop, listRect, mouseX
 
       {/* Author + date */}
       <div style={popoverStyles.row}>
-        <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} size={16} />
+        <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} repoId={commit.repoId} size={16} />
         <span style={popoverStyles.author}>{commit.authorName}</span>
         <span style={popoverStyles.dot}>·</span>
         <span style={popoverStyles.date}>{formatDateTime(commit.authorDate)}</span>

@@ -860,6 +860,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 this.acknowledgeFreshLogSnapshot(repos, branches);
                 this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme, isInitialPartial: false });
 
+                void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
+                  if (accounts && accounts.length > 0) {
+                    this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts });
+                  }
+                }).catch(() => {});
+
                 // Send tags for all visible repos without blocking the commit batch.
                 for (const meta of repos) {
                   void this.refreshTags(meta.id, undefined, false).catch(() => {});
@@ -1124,9 +1130,65 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         this.refresh();
         break;
 
-      case 'LOG_MANAGE_REMOTE_ACCOUNTS':
+      case 'LOG_MANAGE_REMOTE_ACCOUNTS': {
         await this.manager.remoteService?.manageAccounts();
+        const accounts = await this.manager.remoteService?.getConnectedAccounts().catch(() => []) ?? [];
+        this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts });
         break;
+      }
+
+      case 'LOG_RESOLVE_AVATARS': {
+        const remoteService = this.manager.remoteService;
+        if (!remoteService) {
+          this.post({ type: 'LOG_AVATARS_RESOLVED', avatars: {} });
+          break;
+        }
+        let remotes: string[] = [];
+        if (msg.repoId) {
+          const repo = this.manager.getRepo(msg.repoId);
+          if (repo) {
+            try {
+              const withUrls = await repo.getRemotesWithUrls().catch(() => []);
+              remotes = withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean);
+            } catch {
+              // Fallback to name-only getRemotes if needed
+              try {
+                remotes = await repo.getRemotes().catch(() => []);
+              } catch {
+                // Ignore
+              }
+            }
+          }
+        } else {
+          for (const meta of this.manager.getRepoMetas()) {
+            const repo = this.manager.getRepo(meta.id);
+            if (!repo) continue;
+            try {
+              const withUrls = await repo.getRemotesWithUrls().catch(() => []);
+              remotes.push(...withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean));
+            } catch {
+              // Ignore
+            }
+          }
+        }
+        const authorsMap: Record<string, string> = {};
+        if (msg.authors) {
+          for (const a of msg.authors) {
+            if (a.name && a.email) {
+              authorsMap[a.email.trim().toLowerCase()] = a.name.trim();
+            }
+          }
+        }
+        const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, remotes, authorsMap);
+        this.post({ type: 'LOG_AVATARS_RESOLVED', avatars });
+        break;
+      }
+
+      case 'LOG_REQUEST_REMOTE_ACCOUNTS': {
+        const accounts = await this.manager.remoteService?.getConnectedAccounts().catch(() => []) ?? [];
+        this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts });
+        break;
+      }
 
       case 'LOG_REVERT_FILE': {
         const repo = this.manager.getRepo(msg.repoId);

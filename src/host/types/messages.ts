@@ -397,8 +397,18 @@ export type CompareSide = 'baseOnly' | 'targetOnly';
 
 export type LayoutDensity = 'comfortable' | 'compact';
 
+export interface RemoteAccountInfo {
+  provider: 'github' | 'gitlab';
+  id?: string;
+  username: string;
+  name?: string;
+  avatarUrl?: string;
+  host?: string;
+  emails?: string[];
+}
+
 export type HostToLogMsg =
-  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity; isInitialPartial?: boolean }
+  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity; isInitialPartial?: boolean; remoteAccounts?: RemoteAccountInfo[] }
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'LOG_LAYOUT_DENSITY_UPDATE'; layoutDensity: LayoutDensity }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }
@@ -421,7 +431,9 @@ export type HostToLogMsg =
   | { type: 'LOG_COMPARE_STARTED'; repoId: string; repoName: string; baseRef: string; targetRef: string }
   | { type: 'LOG_COMPARE_COMMITS_RESULT'; requestId: string; side: CompareSide; commits: CommitNode[]; isLast: boolean; error?: string }
   | { type: 'LOG_FILTER_BY_REPO'; repoId: string | null; branch?: string | null }
-  | { type: 'LOG_DIFF_OPENED'; repoId: string; filePath: string; error?: string };
+  | { type: 'LOG_DIFF_OPENED'; repoId: string; filePath: string; error?: string }
+  | { type: 'LOG_AVATARS_RESOLVED'; avatars: Record<string, string | null> }
+  | { type: 'LOG_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[] };
 
 // ─── Git Log: WebView → Host ─────────────────────────────────────────────────
 
@@ -524,7 +536,9 @@ export type LogToHostMsg =
   | { type: 'LOG_OPEN_COMMIT_CHANGES'; repoId: string; hash: string; files?: Array<{ path: string; status: string; added?: number; removed?: number }> }
   | { type: 'LOG_OPEN_COMMIT_CHANGES_MULTI'; groups: Array<{ repoId: string; fromHash?: string; toHash: string; files: Array<string | { path: string; status?: string }> }> }
   | { type: 'LOG_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }
-  | { type: 'LOG_UNDOCK'; target: 'editorTab' | 'newWindow' | 'pick' };
+  | { type: 'LOG_UNDOCK'; target: 'editorTab' | 'newWindow' | 'pick' }
+  | { type: 'LOG_RESOLVE_AVATARS'; emails: string[]; repoId?: string; authors?: Array<{ name?: string; email: string }> }
+  | { type: 'LOG_REQUEST_REMOTE_ACCOUNTS' };
 
 // ─── Merge Editor: Host → WebView ────────────────────────────────────────────
 

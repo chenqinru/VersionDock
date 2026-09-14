@@ -1766,7 +1766,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                       ) : null}
                     </div>
                     <div style={styles.summaryItemMeta} className="versiondock-detail-author-row">
-                      <AuthorAvatar authorName={selectedCommit.authorName} authorEmail={selectedCommit.authorEmail} size={20} />
+                      <AuthorAvatar authorName={selectedCommit.authorName} authorEmail={selectedCommit.authorEmail} repoId={selectedCommit.repoId} size={20} />
                       <div style={styles.summaryItemMetaText}>
                         <span>{selectedCommit.authorName}</span>
                         <span style={styles.dot}>·</span>
@@ -1896,7 +1896,7 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
               );
             })()}
             <div style={styles.authorRow} className="versiondock-detail-author-row">
-              <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} size={20} />
+              <AuthorAvatar authorName={commit.authorName} authorEmail={commit.authorEmail} repoId={commit.repoId} size={20} />
               <div style={styles.meta}>
                 <span>{commit.authorName}</span>
                 <span style={styles.dot}>·</span>
