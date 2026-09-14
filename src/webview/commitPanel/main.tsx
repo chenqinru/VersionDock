@@ -566,6 +566,7 @@ export function CommitApp() {
   const [commitMessageHistoryLoading, setCommitMessageHistoryLoading] = useState(false);
   const activeCommitMessageHistoryRequestIdRef = useRef<string | null>(null);
   const pendingCommitMessagesRef = useRef<Map<string, string>>(new Map());
+  const pendingDraftClearMessagesRef = useRef<Map<string, string>>(new Map());
   const successfulCommitMessagesRef = useRef<string[]>([]);
   const activeAmendMessageRequestIdRef = useRef<{ requestId: string; repoId: string } | null>(null);
   const lastKnownHeadHashesRef = useRef<Map<string, string>>(new Map());
@@ -997,10 +998,15 @@ export function CommitApp() {
                 }
               }
             }
+            const draftClearMessage = pendingDraftClearMessagesRef.current.get(msg.requestId);
+            pendingDraftClearMessagesRef.current.delete(msg.requestId);
             const isCommitOp = committedMessage !== undefined;
             const commitSucceeded = (msg.ok || (msg.committedRepoIds && msg.committedRepoIds.length > 0)) && isCommitOp;
             if (commitSucceeded) {
-              store.setCommitMessage('');
+              const currentMsg = useCommitStore.getState().commitMessage;
+              if (committedMessage !== undefined && currentMsg.trim() === committedMessage.trim()) {
+                store.setCommitMessage('');
+              }
               if (committedMessage) {
                 successfulCommitMessagesRef.current = mergeCommitMessageHistory(
                   [committedMessage],
@@ -1010,6 +1016,11 @@ export function CommitApp() {
                   successfulCommitMessagesRef.current,
                   prev,
                 ));
+              }
+            } else if (msg.ok && draftClearMessage !== undefined) {
+              const currentMsg = useCommitStore.getState().commitMessage;
+              if (currentMsg.trim() === draftClearMessage.trim()) {
+                store.setCommitMessage('');
               }
             }
           }
@@ -3159,13 +3170,14 @@ export function CommitApp() {
               }
               if (targets.length === 0) return;
               store.setLoading(true);
+              const requestId = generateId();
+              pendingDraftClearMessagesRef.current.set(requestId, store.commitMessage);
               getVsCodeApi().postMessage({
                 type: 'COMMIT_DO_SHELVE_MULTI',
-                requestId: generateId(),
+                requestId,
                 name,
                 repos: targets,
               } satisfies CommitToHostMsg);
-              store.setCommitMessage('');
             }}
             onStash={() => {
               const message = store.commitMessage.trim() || t('WIP stash');
@@ -3178,13 +3190,14 @@ export function CommitApp() {
               }
               if (targets.length === 0) return;
               store.setLoading(true);
+              const requestId = generateId();
+              pendingDraftClearMessagesRef.current.set(requestId, store.commitMessage);
               getVsCodeApi().postMessage({
                 type: 'COMMIT_DO_STASH_MULTI',
-                requestId: generateId(),
+                requestId,
                 message,
                 repos: targets,
               } satisfies CommitToHostMsg);
-              store.setCommitMessage('');
             }}
             noVerify={store.noVerify}
             onNoVerifyChange={v => store.setNoVerify(v)}

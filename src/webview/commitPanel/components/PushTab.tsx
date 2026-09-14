@@ -617,8 +617,8 @@ function CommitRow({
         <div className="versiondock-card-body" style={styles.commitDetails}>
           {isMerge && !loadingFiles && files.length === 0 ? (
             <div style={styles.noMergeConflicts}>
-              <Codicon name="pass" style={{ marginRight: '6px', fontSize: '13px', verticalAlign: 'text-bottom' }} />
-              {t('No merge conflicts')}
+              <Codicon name="info" style={{ marginRight: '6px', fontSize: '13px', verticalAlign: 'text-bottom' }} />
+              {t('No changes relative to first parent')}
             </div>
           ) : (
             <PushFileList

@@ -19,6 +19,152 @@ function isDirectoryEmpty(dirPath: string): boolean {
   }
 }
 
+function isValidFolderName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') return false;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return false;
+  if (path.basename(trimmed) !== trimmed) return false;
+  if (/[<>:"|?*]/.test(trimmed)) return false;
+  return true;
+}
+
+interface CredentialHelperContext {
+  env: NodeJS.ProcessEnv;
+  args: string[];
+  cleanup: () => Promise<void>;
+}
+
+async function prepareGitCredentialHelper(
+  targetUrl: string,
+  credentials?: { username: string; password: string },
+): Promise<CredentialHelperContext> {
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+  };
+
+  if (!credentials) {
+    return { env: baseEnv, args: [], cleanup: async () => {} };
+  }
+
+  let targetProtocol = '';
+  let targetHostname = '';
+  let targetEffectivePort = '';
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { env: baseEnv, args: [], cleanup: async () => {} };
+    }
+    targetProtocol = parsed.protocol.replace(/:$/, '').toLowerCase();
+    targetHostname = parsed.hostname.toLowerCase();
+    targetEffectivePort = parsed.port || (targetProtocol === 'https' ? '443' : '80');
+  } catch {
+    return { env: baseEnv, args: [], cleanup: async () => {} };
+  }
+
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'versiondock-git-auth-'));
+  const nodePath = process.execPath;
+  const helperScriptPath = path.join(tempDir, 'credential-helper.cjs');
+
+  const helperContent = `
+const fs = require('fs');
+const input = fs.readFileSync(0, 'utf8');
+const lines = input.split(/\\r?\\n/);
+const data = {};
+for (const line of lines) {
+  const idx = line.indexOf('=');
+  if (idx !== -1) {
+    data[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+  }
+}
+
+let reqProtocol = (data.protocol || '').toLowerCase().trim().replace(/:$/, '');
+let reqHost = (data.host || '').toLowerCase().trim();
+let reqHostname = '';
+let reqPort = '';
+
+if (data.url) {
+  try {
+    const u = new URL(data.url);
+    reqProtocol = reqProtocol || u.protocol.replace(/:$/, '').toLowerCase();
+    reqHostname = u.hostname.toLowerCase();
+    reqPort = u.port;
+  } catch {}
+}
+
+if (!reqHostname && reqHost) {
+  if (reqHost.startsWith('[') && reqHost.includes(']')) {
+    const closeBracket = reqHost.indexOf(']');
+    reqHostname = reqHost.slice(0, closeBracket + 1);
+    if (reqHost.slice(closeBracket + 1).startsWith(':')) {
+      reqPort = reqHost.slice(closeBracket + 2);
+    }
+  } else {
+    const idx = reqHost.lastIndexOf(':');
+    if (idx !== -1) {
+      reqHostname = reqHost.slice(0, idx);
+      reqPort = reqHost.slice(idx + 1);
+    } else {
+      reqHostname = reqHost;
+    }
+  }
+}
+
+const reqEffectivePort = reqPort || (reqProtocol === 'https' ? '443' : reqProtocol === 'http' ? '80' : '');
+
+const targetProtocol = (process.env.VERSIONDOCK_TARGET_PROTOCOL || '').toLowerCase();
+const targetHostname = (process.env.VERSIONDOCK_TARGET_HOSTNAME || '').toLowerCase();
+const targetEffectivePort = (process.env.VERSIONDOCK_TARGET_EFFECTIVE_PORT || '').toLowerCase();
+
+const isMatch = targetProtocol &&
+  targetHostname &&
+  targetEffectivePort &&
+  reqProtocol === targetProtocol &&
+  reqHostname === targetHostname &&
+  reqEffectivePort === targetEffectivePort;
+
+if (isMatch) {
+  if (process.argv[2] === 'get') {
+    const u = process.env.VERSIONDOCK_GIT_USERNAME || '';
+    const p = process.env.VERSIONDOCK_GIT_PASSWORD || '';
+    if (u) process.stdout.write('username=' + u + '\\n');
+    if (p) process.stdout.write('password=' + p + '\\n');
+  }
+}
+`;
+  await fs.promises.writeFile(helperScriptPath, helperContent.trim(), { mode: 0o600 });
+
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    VERSIONDOCK_TARGET_PROTOCOL: targetProtocol,
+    VERSIONDOCK_TARGET_HOSTNAME: targetHostname,
+    VERSIONDOCK_TARGET_EFFECTIVE_PORT: targetEffectivePort,
+    VERSIONDOCK_GIT_USERNAME: credentials.username,
+    VERSIONDOCK_GIT_PASSWORD: credentials.password,
+    ELECTRON_RUN_AS_NODE: '1',
+  };
+
+  const parsed = new URL(targetUrl);
+  const originUrl = `${targetProtocol}://${targetHostname}${parsed.port ? `:${parsed.port}` : ''}`;
+
+  const args = [
+    '-c', `credential.${originUrl}.helper=`,
+    '-c', `credential.${originUrl}.helper=!${JSON.stringify(nodePath)} ${JSON.stringify(helperScriptPath)}`,
+  ];
+
+  return {
+    env,
+    args,
+    cleanup: async () => {
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // 忽略清理临时目录失败
+      }
+    },
+  };
+}
+
 interface CloneSourceQuickPickItem extends vscode.QuickPickItem {
   id: 'github' | 'gitlab' | 'url' | 'direct-url';
   cloneUrl?: string;
@@ -322,7 +468,9 @@ export async function cloneGitRepository(
 
   const hasRepos = manager ? manager.getRepoMetas().length > 0 : false;
 
-  const promptForBrowseDestination = async (): Promise<{ dir: string; isNewWindow: boolean } | undefined> => {
+  let targetExistedBefore = false;
+
+  const promptForBrowseDestination = async (): Promise<{ dir: string; isNewWindow: boolean; existedBefore: boolean } | undefined> => {
     const selectedFolders = await vscode.window.showOpenDialog({
       canSelectFiles: false,
       canSelectFolders: true,
@@ -334,7 +482,7 @@ export async function cloneGitRepository(
     const parentDir = selectedFolders[0].fsPath;
 
     // 根据 URL 末尾推导默认文件夹名
-    let defaultFolderName = trimmedUrl
+    const defaultFolderName = trimmedUrl
       .replace(/\.git$/i, '')
       .replace(/\/+$/, '')
       .split(/[/:]/)
@@ -345,12 +493,26 @@ export async function cloneGitRepository(
       prompt: t('Specify the directory name for the cloned project'),
       value: defaultFolderName,
       ignoreFocusOut: true,
-      validateInput: (val: string) => !val.trim() ? t('Folder name cannot be empty') : undefined,
+      validateInput: (val: string) => {
+        const trimmed = val.trim();
+        if (!trimmed) return t('Folder name cannot be empty');
+        if (!isValidFolderName(trimmed)) {
+          return t('Invalid folder name. It must be a single directory name and cannot contain path separators, "..", or special characters.');
+        }
+        return undefined;
+      },
     });
     if (!folderName) return undefined;
 
     const chosenDir = path.join(parentDir, folderName.trim());
-    return { dir: chosenDir, isNewWindow: true };
+    const existedBefore = fs.existsSync(chosenDir);
+    if (existedBefore && !isDirectoryEmpty(chosenDir)) {
+      void vscode.window.showErrorMessage(
+        t('Target directory {0} already exists and is not empty. Git clone requires an empty directory.', chosenDir)
+      );
+      return undefined;
+    }
+    return { dir: chosenDir, isNewWindow: true, existedBefore };
   };
 
   if (!checkoutDir) {
@@ -394,31 +556,40 @@ export async function cloneGitRepository(
             if (!result) return;
             checkoutDir = result.dir;
             isNewProjectWindow = result.isNewWindow;
+            targetExistedBefore = result.existedBefore;
           } else {
             return;
           }
         } else {
           checkoutDir = currentPath;
           isNewProjectWindow = false;
+          targetExistedBefore = true;
         }
       } else {
         const result = await promptForBrowseDestination();
         if (!result) return;
         checkoutDir = result.dir;
         isNewProjectWindow = result.isNewWindow;
+        targetExistedBefore = result.existedBefore;
       }
     } else {
       const result = await promptForBrowseDestination();
       if (!result) return;
       checkoutDir = result.dir;
       isNewProjectWindow = result.isNewWindow;
+      targetExistedBefore = result.existedBefore;
     }
+  } else {
+    targetExistedBefore = fs.existsSync(checkoutDir);
   }
 
   // 4. 执行 git clone
   const finalDir = checkoutDir;
-  const isCurrentFolder = !isNewProjectWindow;
-  const gitExistedBefore = fs.existsSync(path.join(finalDir, '.git'));
+  const parentDir = path.dirname(finalDir);
+  const folderName = path.basename(finalDir);
+  const stagingDir = !targetExistedBefore
+    ? path.join(parentDir, `.${folderName}.vd-staging-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    : path.join(finalDir, `.vd-staging-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   const doClone = async (): Promise<boolean> => {
     return await vscode.window.withProgress(
@@ -435,27 +606,59 @@ export async function cloneGitRepository(
 
         progress.report({ message: trimmedUrl });
 
+        const credentials = effectiveRemoteService ? await effectiveRemoteService.resolveCredentialsForUrl(trimmedUrl) : undefined;
+        const helper = await prepareGitCredentialHelper(trimmedUrl, credentials);
+
         try {
-          if (isCurrentFolder) {
-            await execCli('git', ['clone', trimmedUrl, '.'], {
-              cwd: finalDir,
-              timeout: 600_000,
-              signal: abortController.signal,
-            });
-          } else {
-            const parentDir = path.dirname(finalDir);
-            const folderName = path.basename(finalDir);
-            if (!fs.existsSync(parentDir)) {
-              fs.mkdirSync(parentDir, { recursive: true });
+          const config = vscode.workspace.getConfiguration('versiondock');
+          const recurseSubmodules = config.get<boolean>('git.cloneRecursiveSubmodules', true);
+          const baseCloneArgs = ['clone'];
+          if (recurseSubmodules) {
+            baseCloneArgs.push('--recurse-submodules');
+          }
+
+          if (!targetExistedBefore && !fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
+          }
+          await execCli('git', [...helper.args, ...baseCloneArgs, trimmedUrl, stagingDir], {
+            cwd: targetExistedBefore ? finalDir : parentDir,
+            timeout: 600_000,
+            env: helper.env,
+            signal: abortController.signal,
+          });
+
+          if (!targetExistedBefore) {
+            if (fs.existsSync(finalDir)) {
+              void vscode.window.showErrorMessage(
+                t('Target directory {0} was created during the operation. Staging files are kept at {1}.', finalDir, stagingDir)
+              );
+              return false;
             }
-            await execCli('git', ['clone', trimmedUrl, folderName], {
-              cwd: parentDir,
-              timeout: 600_000,
-              signal: abortController.signal,
-            });
+            await fs.promises.rename(stagingDir, finalDir);
+          } else {
+            const remaining = fs.readdirSync(finalDir).filter(e => e !== path.basename(stagingDir) && e !== '.DS_Store' && e !== 'Thumbs.db');
+            if (remaining.length > 0) {
+              void vscode.window.showErrorMessage(
+                t('Target directory {0} is no longer empty. Staging files are kept at {1}.', finalDir, stagingDir)
+              );
+              return false;
+            }
+            const entries = await fs.promises.readdir(stagingDir);
+            for (const entry of entries) {
+              await fs.promises.rename(path.join(stagingDir, entry), path.join(finalDir, entry));
+            }
+            await fs.promises.rm(stagingDir, { recursive: true, force: true });
           }
           return true;
         } catch (err: unknown) {
+          if (fs.existsSync(stagingDir)) {
+            try {
+              await fs.promises.rm(stagingDir, { recursive: true, force: true });
+            } catch {
+              // 忽略清理临时目录的异常
+            }
+          }
+
           if (token.isCancellationRequested) {
             return false;
           }
@@ -463,26 +666,18 @@ export async function cloneGitRepository(
             t('Git Clone failed: {0}', (err as Error)?.message || String(err))
           );
           return false;
+        } finally {
+          await helper.cleanup();
         }
       }
     );
   };
 
   const success = manager
-    ? await manager.runWithCheckoutSuppressed(finalDir, doClone)
+    ? await manager.runWithCheckoutSuppressed([finalDir, stagingDir], doClone)
     : await doClone();
 
   if (!success) {
-    if (isCurrentFolder && !gitExistedBefore) {
-      try {
-        const incompleteGit = path.join(finalDir, '.git');
-        if (fs.existsSync(incompleteGit)) {
-          fs.rmSync(incompleteGit, { recursive: true, force: true });
-        }
-      } catch {
-        // 忽略清理半成品 .git 的异常
-      }
-    }
     return;
   }
 

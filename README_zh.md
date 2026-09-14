@@ -37,7 +37,7 @@ VersionDock 为 Visual Studio Code 带来了媲美专业 IDE（如 JetBrains/Php
 - **SVN 无缝支持**：由于 SVN 没有 Git 暂存区概念，面板自动以勾选的文件作为提交目标。
 - **组合提交按钮**：支持一键 **Commit** / **Commit & Push**，以及通过下拉菜单进行 **Amend** / **Amend & Push**。
 - **智能 AI 工作流**：原生接入 GitHub Copilot，支持 OpenAI、Claude、Gemini、自定义 OpenAI 兼容端点，以及本地 Claude、Codex、Antigravity、OpenCode Agent CLI；OpenAI 与自定义端点可通过 `versiondock.ai.apiProtocol` 选择 `chat-completions` 或 `responses`。
-- **本地 Agent 上下文**：CLI 模式保留 VersionDock 选中的变更范围，并允许只读 Agent 自主检查相关仓库文件；Claude/Codex 使用无持久化会话，OpenCode 会话执行后删除，Antigravity 每个工作根只复用一个专用会话。
+- **本地 Agent 上下文**：CLI 模式保留 VersionDock 选中的变更范围，并允许外部 Agent 自主检查相关仓库文件；Claude/Codex/OpenCode 限制只读或白名单沙箱，Antigravity 采用非交互计划模式与终端沙箱限制；Claude/Codex 使用无持久化会话，OpenCode 会话执行后删除，Antigravity 每个工作根复用一个专用会话。
 - **简化 API 地址**：Provider 模式可只填写 `http://localhost:8317` 等基础地址，VersionDock 会按所选协议自动补齐标准接口路径；OpenAI、Claude、Gemini 留空时使用官方接口。
 - **流式打字机效果**：生成的提交信息以打字机动效平滑输入，提供可自定义的 Prompt 模板。
 

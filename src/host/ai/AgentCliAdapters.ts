@@ -57,7 +57,7 @@ export class ClaudeCliAdapter implements AgentCliAdapter {
   readonly capabilityChecks = [['--version'], ['--help']];
 
   supports(output: string): boolean {
-    return ['--print', '--no-session-persistence', '--permission-mode', '--tools', '--output-format', '--json-schema']
+    return ['--print', '--no-session-persistence', '--permission-mode', '--tools', '--output-format', '--json-schema', '--include-partial-messages', '--add-dir']
       .every(option => output.includes(option));
   }
 
@@ -123,12 +123,18 @@ export class CodexCliAdapter implements AgentCliAdapter {
   }
 }
 
+/**
+ * Antigravity CLI adapter runs in non-interactive plan mode with terminal sandbox restrictions.
+ * It does not have an in-process tool whitelist, so VersionDock relies on terminal sandbox
+ * containment and automatic denial of unapproved actions in headless mode rather than
+ * declaring a hard read-only guarantee.
+ */
 export class AntigravityCliAdapter implements AgentCliAdapter {
   readonly provider = 'antigravity' as const;
   readonly capabilityChecks = [['--version'], ['--help']];
 
   supports(output: string): boolean {
-    return ['--input-format', '--output-format', '--mode', '--sandbox', '--json-schema', '--conversation']
+    return ['--input-format', '--output-format', '--mode', '--sandbox', '--json-schema', '--conversation', '--add-dir']
       .every(option => output.includes(option));
   }
 
@@ -140,8 +146,9 @@ export class AntigravityCliAdapter implements AgentCliAdapter {
     if (options.conversationId) args.push('--conversation', options.conversationId);
     const prompt = [
       '# Antigravity headless tool constraints',
+      'This non-interactive session runs in plan mode under terminal sandbox restrictions.',
       'Do not call run_command or any terminal, browser, network, subagent, task, schedule, editing, or writing tool.',
-      'This non-interactive integration cannot approve permission prompts. If more source context is necessary, use only view_file, grep_search, find_by_name, or list_dir within the selected repositories.',
+      'This headless integration cannot approve interactive permission prompts. If more source context is necessary, use only repository read tools such as view_file, grep_search, find_by_name, or list_dir within the selected repositories.',
       'The VersionDock-provided Git/SVN status, diff, history, commit, and conflict context is authoritative and sufficient for the requested result. Do not run Git commands to verify it or infer additional conventions.',
       'If any tool is unavailable or denied, immediately produce the requested final answer from the supplied context without requesting permission.',
       '',

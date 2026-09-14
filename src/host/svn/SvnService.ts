@@ -3138,10 +3138,20 @@ export class SvnService extends GitService {
     return data.fullMessage;
   }
 
+  override async getLastCommitMessage(): Promise<string> {
+    const history = await this.getRecentCommitMessages(1);
+    return history[0]?.message ?? '';
+  }
+
   override async getRecentCommitMessages(limit: number): Promise<CommitMessageHistoryEntry[]> {
     const safeLimit = Math.min(100, Math.max(1, Math.floor(limit)));
-    const raw = await this.svn(['log', '--xml', '--limit', String(safeLimit)]).catch(() => '');
-    return this.parseLogEntries(raw).flatMap(entry => {
+    let raw = await this.svn(['log', '--xml', '-r', 'HEAD:1', '--limit', String(safeLimit)], { timeout: 10_000 }).catch(() => '');
+    if (!raw.trim()) {
+      raw = await this.svn(['log', '--xml', '--limit', String(safeLimit)], { timeout: 10_000 }).catch(() => '');
+    }
+    const entries = this.parseLogEntries(raw);
+    this.populateCommitMetaCacheFromLogEntries(entries);
+    return entries.flatMap(entry => {
       const message = entry.message.trim();
       if (!message) return [];
       const timestamp = Date.parse(entry.date);

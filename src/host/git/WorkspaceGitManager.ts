@@ -861,6 +861,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const normalizedRel = rel.split(path.sep).join('/');
     const parts = normalizedRel.split('/').filter(Boolean);
     if (parts.includes('.git')) return true;
+    if (parts.some(part => part.includes('.vd-staging-'))) return true;
 
     const configuredIgnored = this.getRepositoryScanIgnoredFolders().some(rawPattern => {
       const pattern = rawPattern.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
@@ -1880,13 +1881,18 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return false;
   }
 
-  async runWithCheckoutSuppressed<T>(checkoutDir: string, action: () => Promise<T>): Promise<T> {
-    const normalized = path.normalize(checkoutDir);
-    this.activeCheckoutDirs.add(normalized);
+  async runWithCheckoutSuppressed<T>(checkoutDir: string | string[], action: () => Promise<T>): Promise<T> {
+    const rawDirs = Array.isArray(checkoutDir) ? checkoutDir : [checkoutDir];
+    const normalizedDirs = rawDirs.filter(Boolean).map(d => path.normalize(d));
+    for (const d of normalizedDirs) {
+      this.activeCheckoutDirs.add(d);
+    }
     try {
       return await this.runWithStatusUpdatesSuppressed(action, 'checkout', 'SVN Checkout');
     } finally {
-      this.activeCheckoutDirs.delete(normalized);
+      for (const d of normalizedDirs) {
+        this.activeCheckoutDirs.delete(d);
+      }
     }
   }
 

@@ -4945,24 +4945,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         try {
-          if (repo.kind !== 'svn') {
-            const gitRepo = repo as GitService;
-            const parents = await gitRepo.getCommitParents(msg.hash).catch(() => []);
-            if (parents.length >= 2) {
-              const files = await gitRepo.getCommitFilesForLogDetail(msg.hash, parents).catch(() => []);
-              this.post({
-                type: 'PUSH_COMMIT_FILES_RESULT',
-                requestId: msg.requestId,
-                repoId: msg.repoId,
-                hash: msg.hash,
-                files,
-                isMerge: true,
-              });
-              break;
-            }
-          }
           const files = await repo.getCommitFiles(msg.hash);
-          this.post({ type: 'PUSH_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files, isMerge: false });
+          const isMerge = repo.kind !== 'svn' && (await (repo as GitService).getCommitParents(msg.hash).catch(() => [])).length >= 2;
+          this.post({ type: 'PUSH_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files, isMerge });
         } catch (e: unknown) {
           this.post({ type: 'PUSH_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], error: String(e) });
         }
@@ -5032,23 +5017,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           const gitRepo = repo as GitService;
-          const parents = await gitRepo.getCommitParents(msg.hash).catch(() => []);
-          if (parents.length >= 2) {
-            const files = await gitRepo.getCommitFilesForLogDetail(msg.hash, parents).catch(() => []);
-            this.post({
-              type: 'SYNC_INCOMING_COMMIT_FILES_RESULT',
-              requestId: msg.requestId,
-              repoId: msg.repoId,
-              hash: msg.hash,
-              files,
-              isMerge: true,
-            });
-            break;
-          }
           const files = await gitRepo.getCommitFiles(msg.hash);
-          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files, isMerge: false });
+          const parents = await gitRepo.getCommitParents(msg.hash).catch(() => []);
+          const isMerge = parents.length >= 2;
+          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files, isMerge });
         } catch (e: unknown) {
-          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], error: String(e) });
+          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], isMerge: false, error: String(e) });
         }
         break;
       }

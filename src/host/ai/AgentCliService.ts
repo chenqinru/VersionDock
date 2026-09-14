@@ -596,7 +596,7 @@ export class AgentCliService {
           if (shouldRecover) {
             antigravityRecoverySent = true;
             child.stdin.write(createAntigravityStreamInput([
-              'A tool action was denied because this is a non-interactive, read-only VersionDock request.',
+              'A tool action was denied because this is a non-interactive VersionDock request in plan mode.',
               'Do not call any more tools. Produce the requested final answer now using only the complete authoritative context already provided in the previous user message.',
             ].join(' ')));
           } else {

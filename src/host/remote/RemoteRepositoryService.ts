@@ -130,7 +130,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
 
     if (chosen.action === 'switch') {
       try {
-        const newSession = await this.github.getSession({ clearSessionPreference: true, createIfNone: true });
+        const newSession = await this.github.getSession({ forceNewSession: true, createIfNone: true });
         if (newSession?.account.label) {
           void vscode.window.showInformationMessage(
             vscode.l10n.t('VersionDock: Connected to GitHub account "{0}".', newSession.account.label),
@@ -228,6 +228,15 @@ export class RemoteRepositoryService implements vscode.Disposable {
     } catch (error) {
       this.showRemoteError(provider.name, error);
       return [];
+    }
+  }
+
+  public async resolveCredentialsForUrl(url: string): Promise<{ username: string; password: string } | undefined> {
+    try {
+      const uri = vscode.Uri.parse(url);
+      return await this.getCredentials(uri);
+    } catch {
+      return undefined;
     }
   }
 

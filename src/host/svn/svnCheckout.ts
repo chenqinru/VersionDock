@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { execCli } from '../vcs/cli';
+import { execCli, CliError } from '../vcs/cli';
 import { t } from '../utils/l10n';
 import type { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 
@@ -10,6 +10,51 @@ const SVN_AUTH_CACHE_ARGS = [
   '--config-option', 'servers:global:store-passwords=yes',
   '--config-option', 'servers:global:store-auth-creds=yes',
 ];
+
+function isDirectoryEmpty(dirPath: string): boolean {
+  try {
+    const entries = fs.readdirSync(dirPath);
+    const meaningfulEntries = entries.filter(e => e !== '.DS_Store' && e !== 'Thumbs.db');
+    return meaningfulEntries.length === 0;
+  } catch {
+    return true;
+  }
+}
+
+function isValidFolderName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === '.' || trimmed === '..') return false;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return false;
+  if (path.basename(trimmed) !== trimmed) return false;
+  if (/[<>:"|?*]/.test(trimmed)) return false;
+  return true;
+}
+
+async function checkSvnPasswordFromStdinSupport(cwd: string): Promise<boolean> {
+  return execCli('svn', ['--version', '--quiet'], { cwd, timeout: 15_000 })
+    .then(result => {
+      const match = result.stdout.match(/(\d+)\.(\d+)/);
+      if (!match) return false;
+      const major = Number(match[1]);
+      const minor = Number(match[2]);
+      return major > 1 || (major === 1 && minor >= 10);
+    })
+    .catch(() => false);
+}
+
+function redactPassword(error: unknown, password: string): unknown {
+  if (!(error instanceof CliError)) return error;
+  const args = error.args.map((arg, index, all) => all[index - 1] === '--password' ? '<redacted>' : arg);
+  const redact = (value: string): string => password ? value.split(password).join('<redacted>') : value;
+  return new CliError(
+    redact(error.message),
+    error.command,
+    args,
+    redact(error.stdout),
+    redact(error.stderr),
+    error.code,
+  );
+}
 
 function isAuthError(error: unknown): boolean {
   const text = String(error).toLowerCase();
@@ -72,7 +117,9 @@ export async function checkoutSvnRepository(
 
   const hasRepos = manager ? manager.getRepoMetas().length > 0 : false;
 
-  const promptForBrowseDestination = async (): Promise<{ dir: string; isNewWindow: boolean } | undefined> => {
+  let targetExistedBefore = false;
+
+  const promptForBrowseDestination = async (): Promise<{ dir: string; isNewWindow: boolean; existedBefore: boolean } | undefined> => {
     const selectedFolders = await vscode.window.showOpenDialog({
       canSelectFiles: false,
       canSelectFolders: true,
@@ -97,23 +144,27 @@ export async function checkoutSvnRepository(
       prompt: t('Specify the directory name for the checked out project'),
       value: defaultFolderName,
       ignoreFocusOut: true,
-      validateInput: (val: string) => !val.trim() ? t('Folder name cannot be empty') : undefined,
+      validateInput: (val: string) => {
+        const trimmed = val.trim();
+        if (!trimmed) return t('Folder name cannot be empty');
+        if (!isValidFolderName(trimmed)) {
+          return t('Invalid folder name. It must be a single directory name and cannot contain path separators, "..", or special characters.');
+        }
+        return undefined;
+      },
     });
     if (!folderName) return undefined;
 
     const chosenDir = path.join(parentDir, folderName.trim());
-    if (!fs.existsSync(chosenDir)) {
-      try {
-        fs.mkdirSync(chosenDir, { recursive: true });
-      } catch (mkdirError) {
-        void vscode.window.showErrorMessage(
-          t('Failed to create target directory {0}: {1}', chosenDir, String(mkdirError))
-        );
-        return undefined;
-      }
+    const existedBefore = fs.existsSync(chosenDir);
+    if (existedBefore && !isDirectoryEmpty(chosenDir)) {
+      void vscode.window.showErrorMessage(
+        t('Target directory {0} already exists and is not empty. SVN checkout requires an empty directory.', chosenDir)
+      );
+      return undefined;
     }
 
-    return { dir: chosenDir, isNewWindow: true };
+    return { dir: chosenDir, isNewWindow: true, existedBefore };
   };
 
   if (!checkoutDir) {
@@ -146,25 +197,51 @@ export async function checkoutSvnRepository(
       if (!pick) return;
 
       if (pick.id === 'current') {
-        checkoutDir = workspaceFolder.uri.fsPath;
-        isNewProjectWindow = false;
+        const currentPath = workspaceFolder.uri.fsPath;
+        if (!isDirectoryEmpty(currentPath)) {
+          const proceed = await vscode.window.showWarningMessage(
+            t('The current folder is not empty. SVN checkout into the current directory requires an empty folder to prevent conflicts.'),
+            t('Choose another destination directory…'),
+          );
+          if (proceed === t('Choose another destination directory…')) {
+            const result = await promptForBrowseDestination();
+            if (!result) return;
+            checkoutDir = result.dir;
+            isNewProjectWindow = result.isNewWindow;
+            targetExistedBefore = result.existedBefore;
+          } else {
+            return;
+          }
+        } else {
+          checkoutDir = currentPath;
+          isNewProjectWindow = false;
+          targetExistedBefore = true;
+        }
       } else {
         const result = await promptForBrowseDestination();
         if (!result) return;
         checkoutDir = result.dir;
         isNewProjectWindow = result.isNewWindow;
+        targetExistedBefore = result.existedBefore;
       }
     } else {
       const result = await promptForBrowseDestination();
       if (!result) return;
       checkoutDir = result.dir;
       isNewProjectWindow = result.isNewWindow;
+      targetExistedBefore = result.existedBefore;
     }
+  } else {
+    targetExistedBefore = fs.existsSync(checkoutDir);
   }
 
   // 5. 执行 svn checkout 并处理凭据与进度
   const finalDir = checkoutDir;
-  const svnExistedBefore = fs.existsSync(path.join(finalDir, '.svn'));
+  const parentDir = path.dirname(finalDir);
+  const folderName = path.basename(finalDir);
+  const stagingDir = !targetExistedBefore
+    ? path.join(parentDir, `.${folderName}.vd-staging-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    : path.join(finalDir, `.vd-staging-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   const doCheckout = async (): Promise<boolean> => {
     return await vscode.window.withProgress(
@@ -179,12 +256,17 @@ export async function checkoutSvnRepository(
           abortController.abort();
         });
 
+        if (!fs.existsSync(stagingDir)) {
+          fs.mkdirSync(stagingDir, { recursive: true });
+        }
+
         const executeCheckout = async (credentials?: { username: string; password: string }) => {
+          const supportsPasswordFromStdin = credentials ? await checkSvnPasswordFromStdinSupport(stagingDir) : false;
           const args = ['checkout', '--force', trimmedUrl, '.'];
           if (credentials) {
             args.push(
               '--username', credentials.username,
-              '--password', credentials.password,
+              ...(supportsPasswordFromStdin ? ['--password-from-stdin'] : ['--password', credentials.password]),
               '--non-interactive',
               ...SVN_AUTH_CACHE_ARGS,
             );
@@ -192,31 +274,79 @@ export async function checkoutSvnRepository(
             args.push('--non-interactive');
           }
 
-          return await execCli('svn', args, {
-            cwd: finalDir,
-            timeout: 300_000,
-            signal: abortController.signal,
-          });
+          try {
+            return await execCli('svn', args, {
+              cwd: stagingDir,
+              timeout: 300_000,
+              stdin: supportsPasswordFromStdin && credentials ? `${credentials.password}\n` : undefined,
+              signal: abortController.signal,
+            });
+          } catch (err: unknown) {
+            if (credentials && !supportsPasswordFromStdin) {
+              throw redactPassword(err, credentials.password);
+            }
+            throw err;
+          }
+        };
+
+        const cleanupStagingDir = async () => {
+          if (fs.existsSync(stagingDir)) {
+            try {
+              await fs.promises.rm(stagingDir, { recursive: true, force: true });
+            } catch {
+              // 忽略清理临时目录的异常
+            }
+          }
+        };
+
+        const finalizeSuccess = async (): Promise<boolean> => {
+          if (!targetExistedBefore) {
+            if (fs.existsSync(finalDir)) {
+              void vscode.window.showErrorMessage(
+                t('Target directory {0} was created during the operation. Staging files are kept at {1}.', finalDir, stagingDir)
+              );
+              return false;
+            }
+            await fs.promises.rename(stagingDir, finalDir);
+          } else {
+            const remaining = fs.readdirSync(finalDir).filter(e => e !== path.basename(stagingDir) && e !== '.DS_Store' && e !== 'Thumbs.db');
+            if (remaining.length > 0) {
+              void vscode.window.showErrorMessage(
+                t('Target directory {0} is no longer empty. Staging files are kept at {1}.', finalDir, stagingDir)
+              );
+              return false;
+            }
+            const entries = await fs.promises.readdir(stagingDir);
+            for (const entry of entries) {
+              await fs.promises.rename(path.join(stagingDir, entry), path.join(finalDir, entry));
+            }
+            await fs.promises.rm(stagingDir, { recursive: true, force: true });
+          }
+          return true;
         };
 
         try {
           progress.report({ message: trimmedUrl });
           await executeCheckout();
-          return true;
+          return await finalizeSuccess();
         } catch (err: unknown) {
           if (token.isCancellationRequested) {
+            await cleanupStagingDir();
             return false;
           }
 
           if (isAuthError(err)) {
-            // 需要认证，弹窗收集用户名与密码并重试一次
+            // 需要认证，保留 stagingDir，弹窗收集用户名与密码并重试一次
             const username = await vscode.window.showInputBox({
               title: t('SVN Authentication Required'),
               prompt: t('Please enter SVN username for {0}', trimmedUrl),
               placeHolder: t('Username'),
               ignoreFocusOut: true,
             });
-            if (username === undefined) return false;
+            if (username === undefined) {
+              await cleanupStagingDir();
+              return false;
+            }
 
             const password = await vscode.window.showInputBox({
               title: t('SVN Authentication Required'),
@@ -225,13 +355,17 @@ export async function checkoutSvnRepository(
               password: true,
               ignoreFocusOut: true,
             });
-            if (password === undefined) return false;
+            if (password === undefined) {
+              await cleanupStagingDir();
+              return false;
+            }
 
             try {
               progress.report({ message: t('Authenticating and checking out...') });
               await executeCheckout({ username, password });
-              return true;
+              return await finalizeSuccess();
             } catch (retryErr: unknown) {
+              await cleanupStagingDir();
               if (token.isCancellationRequested) return false;
               void vscode.window.showErrorMessage(
                 t('SVN Checkout failed: {0}', (retryErr as Error)?.message || String(retryErr))
@@ -240,6 +374,7 @@ export async function checkoutSvnRepository(
             }
           }
 
+          await cleanupStagingDir();
           void vscode.window.showErrorMessage(
             t('SVN Checkout failed: {0}', (err as Error)?.message || String(err))
           );
@@ -250,20 +385,10 @@ export async function checkoutSvnRepository(
   };
 
   const success = manager
-    ? await manager.runWithCheckoutSuppressed(finalDir, doCheckout)
+    ? await manager.runWithCheckoutSuppressed([finalDir, stagingDir], doCheckout)
     : await doCheckout();
 
   if (!success) {
-    if (!svnExistedBefore) {
-      try {
-        const incompleteSvn = path.join(finalDir, '.svn');
-        if (fs.existsSync(incompleteSvn)) {
-          fs.rmSync(incompleteSvn, { recursive: true, force: true });
-        }
-      } catch {
-        // 忽略清理半成品 .svn 的异常
-      }
-    }
     return;
   }
 
