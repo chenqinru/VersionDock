@@ -2056,7 +2056,7 @@ export class GitService {
     return result;
   }
 
-  private async getCommitParents(hash: string, knownParents?: string[]): Promise<string[]> {
+  public async getCommitParents(hash: string, knownParents?: string[]): Promise<string[]> {
     if (knownParents && knownParents.length > 0) {
       return knownParents.map(parent => this.safeRevisionArg(parent));
     }
@@ -5382,7 +5382,7 @@ export class GitService {
   async getUnpushedCommits(): Promise<UnpushedCommit[]> {
     const RS = '\x1E';
     const FS = '\x1F';
-    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F`;
+    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F`;
 
     const parseRecords = (raw: string): UnpushedCommit[] => {
       const commits: UnpushedCommit[] = [];
@@ -5397,7 +5397,9 @@ export class GitService {
         const date = parts[4].trim();
         const fullMessage = parts[5].trim();
         const body = parts[6]?.trim() || undefined;
-        const statText = parts.slice(7).join(FS);
+        const parentsRaw = parts[7]?.trim() || '';
+        const parents = parentsRaw ? parentsRaw.split(/\s+/) : [];
+        const statText = parts.slice(8).join(FS);
 
         const commit: UnpushedCommit = {
           hash,
@@ -5407,6 +5409,7 @@ export class GitService {
           body: body || undefined,
           author,
           date,
+          parents,
         };
         const cachedStat = this.commitStatsCache.get(hash);
         if (cachedStat) {

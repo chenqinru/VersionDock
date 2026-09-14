@@ -1740,25 +1740,28 @@ export function CommitApp() {
 
   // ── Push / unpushed callbacks ─────────────────────────────────────────────
 
-  const requestPushCommitFiles = useCallback((repoId: string, hash: string): Promise<PushCommitFile[]> => {
+  const requestPushCommitFiles = useCallback((repoId: string, hash: string): Promise<{ files: PushCommitFile[]; isMerge?: boolean }> => {
     const requestId = generateId();
     return new Promise(resolve => {
       const timeout = setTimeout(() => {
         if (pendingRef.current.has(requestId)) {
           pendingRef.current.delete(requestId);
-          resolve([]);
+          resolve({ files: [] });
         }
       }, 15_000);
       pendingRef.current.set(requestId, msg => {
         clearTimeout(timeout);
-        if (msg.type !== 'PUSH_COMMIT_FILES_RESULT') {
-          resolve([]);
+        if (msg.type !== 'PUSH_COMMIT_FILES_RESULT' && msg.type !== 'SYNC_INCOMING_COMMIT_FILES_RESULT') {
+          resolve({ files: [] });
           return;
         }
         if (msg.error && msg.error !== 'Cancelled') {
           notifyError(msg.error, repoId);
         }
-        resolve(msg.files);
+        resolve({
+          files: msg.files,
+          isMerge: msg.isMerge,
+        });
       });
       send({ type: 'PUSH_GET_COMMIT_FILES', requestId, repoId, hash });
     });

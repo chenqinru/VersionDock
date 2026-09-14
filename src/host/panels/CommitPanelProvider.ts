@@ -4943,8 +4943,24 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         try {
+          if (repo.kind !== 'svn') {
+            const gitRepo = repo as GitService;
+            const parents = await gitRepo.getCommitParents(msg.hash).catch(() => []);
+            if (parents.length >= 2) {
+              const files = await gitRepo.getCommitFilesForLogDetail(msg.hash, parents).catch(() => []);
+              this.post({
+                type: 'PUSH_COMMIT_FILES_RESULT',
+                requestId: msg.requestId,
+                repoId: msg.repoId,
+                hash: msg.hash,
+                files,
+                isMerge: true,
+              });
+              break;
+            }
+          }
           const files = await repo.getCommitFiles(msg.hash);
-          this.post({ type: 'PUSH_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files });
+          this.post({ type: 'PUSH_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files, isMerge: false });
         } catch (e: unknown) {
           this.post({ type: 'PUSH_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], error: String(e) });
         }
@@ -4970,7 +4986,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
         try {
-          await this.openCommitDiffEditor(repo, msg.hash, msg.filePath, msg.fileStatus);
+          await this.openCommitDiffEditor(repo as GitService, msg.hash, msg.filePath, msg.fileStatus);
         } catch (e: unknown) {
           vscode.window.showErrorMessage(t('VersionDock [{0}]: Cannot open diff: {1}', repo.meta.name, String(e)));
         }
@@ -5013,8 +5029,22 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         try {
-          const files = await (repo as GitService).getCommitFiles(msg.hash);
-          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files });
+          const gitRepo = repo as GitService;
+          const parents = await gitRepo.getCommitParents(msg.hash).catch(() => []);
+          if (parents.length >= 2) {
+            const files = await gitRepo.getCommitFilesForLogDetail(msg.hash, parents).catch(() => []);
+            this.post({
+              type: 'SYNC_INCOMING_COMMIT_FILES_RESULT',
+              requestId: msg.requestId,
+              repoId: msg.repoId,
+              hash: msg.hash,
+              files,
+              isMerge: true,
+            });
+            break;
+          }
+          const files = await gitRepo.getCommitFiles(msg.hash);
+          this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files, isMerge: false });
         } catch (e: unknown) {
           this.post({ type: 'SYNC_INCOMING_COMMIT_FILES_RESULT', requestId: msg.requestId, repoId: msg.repoId, hash: msg.hash, files: [], error: String(e) });
         }

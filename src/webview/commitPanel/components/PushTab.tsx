@@ -22,6 +22,13 @@ export interface IncomingRepoData {
   error?: string;
 }
 
+export type PushCommitFilesResult =
+  | PushCommitFile[]
+  | {
+      files: PushCommitFile[];
+      isMerge?: boolean;
+    };
+
 export interface PushTabProps {
   isActive?: boolean;
   repos: RepoStatus[];
@@ -44,11 +51,11 @@ export interface PushTabProps {
   onFetchAll?: () => void;
   onOpenInLog: (hash: string, repoId: string) => void;
   onUndoCommit: (repoId: string) => void;
-  onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFilesResult>;
   onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
   onOpenAggregatedFile: (repoId: string, oldestHash: string | undefined, file: PushCommitFile) => void;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
-  onRequestIncomingCommitFiles?: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestIncomingCommitFiles?: (repoId: string, hash: string) => Promise<PushCommitFilesResult>;
   onRequestIncomingAggregatedDiff?: (repoId: string) => Promise<PushCommitFile[]>;
   onOpenIncomingAggregatedFile?: (repoId: string, file: PushCommitFile) => void;
   onOpenIncomingCommitFile?: (repoId: string, hash: string, file: PushCommitFile) => void;
@@ -466,7 +473,30 @@ function IncomingCommitContextMenu({ state, onCherryPick, onCreateBranch, onView
   );
 }
 
-function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingFiles, fileViewMode, iconTheme, onToggle, onSelect, onContextMenu, onFileViewModeChange: _onFileViewModeChange, onOpenFile, onOpenInLog, onUndoCommit, isIncoming, showDirectionBadge = true, potentialConflicts, speedSearchQuery, activeSpeedSearchKey }: {
+function CommitRow({
+  commit,
+  repoId,
+  isHead,
+  expanded,
+  selected,
+  files,
+  loadingFiles,
+  fileViewMode,
+  iconTheme,
+  onToggle,
+  onSelect,
+  onContextMenu,
+  onFileViewModeChange: _onFileViewModeChange,
+  onOpenFile,
+  onOpenInLog,
+  onUndoCommit,
+  isIncoming,
+  showDirectionBadge = true,
+  potentialConflicts,
+  speedSearchQuery,
+  activeSpeedSearchKey,
+  isMerge,
+}: {
   commit: UnpushedCommit | IncomingCommit;
   repoId: string;
   isHead: boolean;
@@ -488,6 +518,7 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
   potentialConflicts?: Set<string>;
   speedSearchQuery?: string;
   activeSpeedSearchKey?: string | null;
+  isMerge?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const fullMessage = commit.fullMessage || (commit.body ? `${commit.message}\n\n${commit.body}` : commit.message);
@@ -584,17 +615,24 @@ function CommitRow({ commit, repoId, isHead, expanded, selected, files, loadingF
 
       {expanded && (
         <div className="versiondock-card-body" style={styles.commitDetails}>
-          <PushFileList
-            files={files}
-            loading={loadingFiles}
-            viewMode={fileViewMode}
-            iconTheme={iconTheme}
-            potentialConflicts={potentialConflicts}
-            onOpenFile={onOpenFile}
-            speedSearchQuery={speedSearchQuery}
-            activeSpeedSearchKey={activeSpeedSearchKey}
-            itemKeyPrefix={`push:file:${repoId}:${isIncoming ? 'in' : 'out'}:${commit.hash}`}
-          />
+          {isMerge && !loadingFiles && files.length === 0 ? (
+            <div style={styles.noMergeConflicts}>
+              <Codicon name="pass" style={{ marginRight: '6px', fontSize: '13px', verticalAlign: 'text-bottom' }} />
+              {t('No merge conflicts')}
+            </div>
+          ) : (
+            <PushFileList
+              files={files}
+              loading={loadingFiles}
+              viewMode={fileViewMode}
+              iconTheme={iconTheme}
+              potentialConflicts={potentialConflicts}
+              onOpenFile={onOpenFile}
+              speedSearchQuery={speedSearchQuery}
+              activeSpeedSearchKey={activeSpeedSearchKey}
+              itemKeyPrefix={commitKey}
+            />
+          )}
         </div>
       )}
     </div>
@@ -914,11 +952,11 @@ function RepoSection({
   onToggle: (repoId: string) => void;
   onOpenInLog: (hash: string, repoId: string) => void;
   onUndoCommit: (repoId: string) => void;
-  onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestCommitFiles: (repoId: string, hash: string) => Promise<PushCommitFilesResult>;
   onRequestAggregatedDiff?: (repoId: string, oldestHash?: string) => Promise<PushCommitFile[]>;
   onOpenAggregatedFile: (repoId: string, oldestHash: string | undefined, file: PushCommitFile) => void;
   onOpenCommitFile: (repoId: string, hash: string, file: PushCommitFile) => void;
-  onRequestIncomingCommitFiles?: (repoId: string, hash: string) => Promise<PushCommitFile[]>;
+  onRequestIncomingCommitFiles?: (repoId: string, hash: string) => Promise<PushCommitFilesResult>;
   onRequestIncomingAggregatedDiff?: (repoId: string) => Promise<PushCommitFile[]>;
   onOpenIncomingAggregatedFile?: (repoId: string, file: PushCommitFile) => void;
   onOpenIncomingCommitFile?: (repoId: string, hash: string, file: PushCommitFile) => void;
@@ -961,6 +999,8 @@ function RepoSection({
   const [filesByHash, setFilesByHash] = useState<Record<string, PushCommitFile[]>>({});
   const filesByHashRef = useRef(filesByHash);
   filesByHashRef.current = filesByHash;
+  const [isMergeByHash, setIsMergeByHash] = useState<Record<string, boolean>>({});
+
   const inFlightCommitHashesRef = useRef<Set<string>>(new Set());
   const inFlightIncomingHashesRef = useRef<Set<string>>(new Set());
   const activePrefetchCountRef = useRef(0);
@@ -1126,9 +1166,15 @@ function RepoSection({
 
     setLoadingCommitHash(expandedCommitHash);
     void onRequestCommitFiles(repoStatus.repoId, expandedCommitHash)
-      .then(files => {
+      .then(res => {
         if (!active) return;
-        setFilesByHash(prev => ({ ...prev, [expandedCommitHash]: files }));
+        const resultFiles = Array.isArray(res) ? res : (res.files ?? []);
+        const isMergeCommit = Array.isArray(res) ? false : Boolean(res.isMerge);
+
+        setFilesByHash(prev => ({ ...prev, [expandedCommitHash]: resultFiles }));
+        if (isMergeCommit) {
+          setIsMergeByHash(prev => ({ ...prev, [expandedCommitHash]: true }));
+        }
       })
       .finally(() => {
         if (!active) return;
@@ -1157,7 +1203,10 @@ function RepoSection({
       const missingCommits = commits.filter(commit => !currentFilesByHash[commit.hash]);
       if (missingCommits.length === 0) return mergeUniqueFiles(cachedGroups);
 
-      const groups = await Promise.all(missingCommits.map(commit => onRequestCommitFiles(repoStatus.repoId, commit.hash)));
+      const groups = await Promise.all(missingCommits.map(async commit => {
+        const res = await onRequestCommitFiles(repoStatus.repoId, commit.hash);
+        return Array.isArray(res) ? res : (res.files ?? []);
+      }));
       const fetched = Object.fromEntries(missingCommits.map((commit, index) => [commit.hash, groups[index] ?? []]));
       if (active) setFilesByHash(prev => ({ ...prev, ...fetched }));
       return mergeUniqueFiles([...cachedGroups, ...groups]);
@@ -1199,9 +1248,15 @@ function RepoSection({
     const req = onRequestIncomingCommitFiles ?? onRequestCommitFiles;
     setLoadingIncomingHash(expandedIncomingHash);
     void req(repoStatus.repoId, expandedIncomingHash)
-      .then(files => {
+      .then(res => {
         if (!active) return;
-        setIncomingFilesByHash(prev => ({ ...prev, [expandedIncomingHash]: files }));
+        const resultFiles = Array.isArray(res) ? res : (res.files ?? []);
+        const isMergeCommit = Array.isArray(res) ? false : Boolean(res.isMerge);
+
+        setIncomingFilesByHash(prev => ({ ...prev, [expandedIncomingHash]: resultFiles }));
+        if (isMergeCommit) {
+          setIsMergeByHash(prev => ({ ...prev, [expandedIncomingHash]: true }));
+        }
       })
       .finally(() => {
         if (!active) return;
@@ -1225,7 +1280,14 @@ function RepoSection({
     const loadIncomingFallback = async (): Promise<PushCommitFile[]> => {
       const req = onRequestIncomingCommitFiles ?? onRequestCommitFiles;
       const groups = await Promise.all(
-        incomingCommits.map(c => req(repoStatus.repoId, c.hash).catch(() => []))
+        incomingCommits.map(async c => {
+          try {
+            const res = await req(repoStatus.repoId, c.hash);
+            return Array.isArray(res) ? res : (res.files ?? []);
+          } catch {
+            return [];
+          }
+        })
       );
       return mergeUniqueFiles(groups);
     };
@@ -1295,7 +1357,11 @@ function RepoSection({
         if (task.isIncoming) {
           inFlightIncomingHashesRef.current.add(task.hash);
           void onRequestIncomingCommitFiles!(repoStatus.repoId, task.hash)
-            .then(fetched => {
+            .then(res => {
+              const fetched = Array.isArray(res) ? res : (res.files ?? []);
+              if (!Array.isArray(res) && res.isMerge) {
+                setIsMergeByHash(prev => ({ ...prev, [task.hash]: true }));
+              }
               setIncomingFilesByHash(prev => ({ ...prev, [task.hash]: fetched }));
             })
             .catch(() => {
@@ -1309,7 +1375,11 @@ function RepoSection({
         } else {
           inFlightCommitHashesRef.current.add(task.hash);
           void onRequestCommitFiles(repoStatus.repoId, task.hash)
-            .then(fetched => {
+            .then(res => {
+              const fetched = Array.isArray(res) ? res : (res.files ?? []);
+              if (!Array.isArray(res) && res.isMerge) {
+                setIsMergeByHash(prev => ({ ...prev, [task.hash]: true }));
+              }
               setFilesByHash(prev => ({ ...prev, [task.hash]: fetched }));
             })
             .catch(() => {
@@ -1753,6 +1823,7 @@ function RepoSection({
                       potentialConflicts={commit.potentialConflictPaths ? new Set(commit.potentialConflictPaths) : undefined}
                       speedSearchQuery={speedSearchQuery}
                       activeSpeedSearchKey={activeSpeedSearchKey}
+                      isMerge={Boolean(isMergeByHash[commit.hash] || (commit.parents && commit.parents.length >= 2))}
                       onToggle={() => {
                         setMultiSelectIncomingHashes(new Set());
                         setExpandedIncomingHash(current => current === commit.hash ? null : commit.hash);
@@ -1807,6 +1878,7 @@ function RepoSection({
                       showDirectionBadge={true}
                       speedSearchQuery={speedSearchQuery}
                       activeSpeedSearchKey={activeSpeedSearchKey}
+                      isMerge={Boolean(isMergeByHash[commit.hash] || (commit.parents && commit.parents.length >= 2))}
                       onToggle={() => {
                         setMultiSelectHashes(new Set());
                         setExpandedCommitHash(current => current === commit.hash ? null : commit.hash);
@@ -1854,6 +1926,7 @@ function RepoSection({
                           potentialConflicts={item.commit.potentialConflictPaths ? new Set(item.commit.potentialConflictPaths) : undefined}
                           speedSearchQuery={speedSearchQuery}
                           activeSpeedSearchKey={activeSpeedSearchKey}
+                          isMerge={Boolean(isMergeByHash[item.commit.hash] || (item.commit.parents && item.commit.parents.length >= 2))}
                           onToggle={() => {
                             setMultiSelectIncomingHashes(new Set());
                             setExpandedIncomingHash(current => current === item.commit.hash ? null : item.commit.hash);
@@ -1882,6 +1955,7 @@ function RepoSection({
                           showDirectionBadge={true}
                           speedSearchQuery={speedSearchQuery}
                           activeSpeedSearchKey={activeSpeedSearchKey}
+                          isMerge={Boolean(isMergeByHash[item.commit.hash] || (item.commit.parents && item.commit.parents.length >= 2))}
                           onToggle={() => {
                             setMultiSelectHashes(new Set());
                             setExpandedCommitHash(current => current === item.commit.hash ? null : item.commit.hash);
@@ -3511,4 +3585,12 @@ const styles = {
     minWidth: 12,
     textAlign: 'center',
   }),
+  noMergeConflicts: {
+    padding: '8px 10px 7px',
+    fontSize: '12px',
+    fontWeight: 400,
+    textAlign: 'center' as const,
+    color: 'var(--vscode-descriptionForeground)',
+    opacity: 0.72,
+  } as React.CSSProperties,
 };

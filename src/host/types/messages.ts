@@ -91,6 +91,7 @@ export interface UnpushedCommit {
   filesChanged?: number;
   additions?: number;
   deletions?: number;
+  parents?: string[];
 }
 
 export interface PushCommitFile {
@@ -182,14 +183,14 @@ export type HostToCommitMsg =
   | { type: 'PUSH_UNPUSHED_RESULT'; requestId?: string; repoId?: string; commits?: UnpushedCommit[]; repos?: Array<{ repoId: string; commits: UnpushedCommit[]; error?: string }>; error?: string }
   | { type: 'PUSH_SYNC_COUNTS_RESULT'; requestId?: string; counts: Record<string, { unpushed: number; incoming: number }> }
   | { type: 'PUSH_COMMITS_STATS_UPDATE'; repoId: string; stats: Record<string, { filesChanged: number; additions: number; deletions: number }>; kind?: 'outgoing' | 'incoming' }
-  | { type: 'PUSH_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
+  | { type: 'PUSH_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; isMerge?: boolean; error?: string }
   | { type: 'PUSH_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
   | { type: 'PUSH_SQUASH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'PUSH_DROP_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'PUSH_REVERT_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'PUSH_EDIT_MSG_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'SYNC_INCOMING_RESULT'; requestId?: string; repoId?: string; commits?: IncomingCommit[]; repos?: Array<{ repoId: string; commits: IncomingCommit[]; error?: string }>; error?: string }
-  | { type: 'SYNC_INCOMING_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; error?: string }
+  | { type: 'SYNC_INCOMING_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; isMerge?: boolean; error?: string }
   | { type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
   | { type: 'SYNC_FETCH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string; partial?: boolean }
   | { type: 'SYNC_PULL_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
