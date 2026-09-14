@@ -7335,8 +7335,14 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_PUBLISH_REPO': {
         const repo = this.manager.getRepo(msg.repoId);
         if (repo) {
-          await this.manager.publishRepository(msg.repoId, repo.rootPath);
-          this.logProvider?.refresh();
+          try {
+            await this.manager.publishRepository(msg.repoId, repo.rootPath);
+            this.logProvider?.refresh();
+          } catch (e: unknown) {
+            if (!isRemoteRepositoryCancelled(e)) {
+              void vscode.window.showErrorMessage(e instanceof Error ? e.message : String(e));
+            }
+          }
         }
         break;
       }

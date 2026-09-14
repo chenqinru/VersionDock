@@ -15,6 +15,7 @@ import { validateBranchNameInput, sanitizeBranchName } from '../utils/branchName
 import { showConflictActionsMenu } from './showConflictActionsMenu';
 import { checkoutSvnRepository } from '../svn/svnCheckout';
 import { cloneGitRepository } from '../git/gitClone';
+import { isRemoteRepositoryCancelled } from '../remote/types';
 
 function getScmResourceUri(resource: unknown): vscode.Uri | undefined {
   if (resource instanceof vscode.Uri) return resource;
@@ -563,13 +564,25 @@ export function registerCommands(
           pushLabel,
         );
         if (choice === pushLabel && gitRepo) {
-          await gitRepo.push();
+          try {
+            await gitRepo.push();
+          } catch (error: unknown) {
+            if (isRemoteRepositoryCancelled(error)) return;
+            void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+          }
         }
         return;
       }
 
-      await manager.publishRepository(selectedRepoMeta.id, selectedRepoMeta.rootPath);
-      logPanel.refresh();
+      try {
+        await manager.publishRepository(selectedRepoMeta.id, selectedRepoMeta.rootPath);
+        logPanel.refresh();
+      } catch (error: unknown) {
+        if (isRemoteRepositoryCancelled(error)) {
+          return;
+        }
+        void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      }
     }),
   );
 
