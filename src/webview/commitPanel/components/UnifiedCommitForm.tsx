@@ -920,8 +920,8 @@ export function UnifiedCommitForm({
 
       {/* Save and commit actions */}
       <div style={styles.actionsRow}>
-        <div style={styles.leftActions}>
-          {showGitActions && (
+        {showGitActions && (
+          <div style={styles.leftActions}>
             <DropdownButton
               variant="secondary"
               enabled={!!message.trim() && commitTargets.length > 0}
@@ -941,8 +941,8 @@ export function UnifiedCommitForm({
               }
               onMainClick={primarySaveAction === 'stash' ? onStash : onShelve}
             />
-          )}
-        </div>
+          </div>
+        )}
 
         <div style={styles.rightActions}>
           <DropdownButton
