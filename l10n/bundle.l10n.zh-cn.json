@@ -2650,7 +2650,13 @@
   "VersionDock: Gitee account disconnected.": "VersionDock：Gitee 账号已断开连接。",
   "Disconnect": "断开连接",
   "Clear Avatar Cache": "清除头像缓存",
-  "Purge cached avatars and force reload": "清理已缓存的作者头像并重新加载",
+  "Purge cached avatars and force reload": "清空头像缓存并强制重新拉取",
   "Cache": "缓存",
-  "VersionDock: Avatar cache cleared.": "VersionDock：已清除头像缓存。"
+  "VersionDock: Avatar cache cleared.": "VersionDock: 头像缓存已清除。",
+  "Switch to another repository…": "切换管理其他仓库的身份…",
+  "Select a repository to manage its identity": "选择要管理提交身份的仓库",
+  "Click to manage accounts and identities": "点击管理账户与提交身份",
+  "REMOTE ACCOUNTS": "远端托管账号",
+  "Current Project": "当前项目",
+  "{0} Repository": "{0} 仓库"
 }

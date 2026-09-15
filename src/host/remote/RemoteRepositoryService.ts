@@ -348,7 +348,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
     await this.manageGitHubAccount(githubSession);
   }
 
-  private async manageGitHubAccount(currentSession?: vscode.AuthenticationSession): Promise<void> {
+  async manageGitHubAccount(currentSession?: vscode.AuthenticationSession): Promise<void> {
     if (!currentSession) {
       try {
         const session = await this.github.getSession({ createIfNone: true });

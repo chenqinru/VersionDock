@@ -871,6 +871,12 @@
             "default": {},
             "description": "%configuration.projectColors.description%"
           },
+          "versiondock.showProfileStatusBar": {
+            "order": 14.5,
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.showProfileStatusBar.description%"
+          },
           "versiondock.git.catFileFilterMode": {
             "order": 15,
             "type": "string",

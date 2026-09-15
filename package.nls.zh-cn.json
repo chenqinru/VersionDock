@@ -113,6 +113,7 @@
   "configuration.defaultSaveAction.enum.shelve": "主“保存”按钮搁置选中的更改",
   "configuration.promptAddUntrackedToGit.description": "检测到新的未跟踪文件时提示是否加入 Git。",
   "configuration.projectColors.description": "提交图中工作区文件夹或仓库名到十六进制颜色的映射（例如 {\"my-repo\": \"#ff6b6b\"}）",
+  "configuration.showProfileStatusBar.description": "在底部状态栏显示 VersionDock 账户与 Git 身份状态栏项。",
   "configuration.git.autoFetchInterval.description": "从远程仓库自动抓取更改 (git fetch) 的时间间隔（单位：分钟，0 = 禁用，默认 15）。",
   "configuration.git.autoFetchOnFocus.description": "当 VS Code 窗口重新获得焦点时，在后台自动抓取远程更改 (git fetch)（带防抖冷却，默认开启）。",
   "configuration.fetchOnStartup.description": "扩展激活时自动抓取所有远程",

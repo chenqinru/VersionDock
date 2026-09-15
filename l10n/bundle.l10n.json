@@ -2652,5 +2652,11 @@
   "Clear Avatar Cache": "Clear Avatar Cache",
   "Purge cached avatars and force reload": "Purge cached avatars and force reload",
   "Cache": "Cache",
-  "VersionDock: Avatar cache cleared.": "VersionDock: Avatar cache cleared."
+  "VersionDock: Avatar cache cleared.": "VersionDock: Avatar cache cleared.",
+  "Switch to another repository…": "Switch to another repository…",
+  "Select a repository to manage its identity": "Select a repository to manage its identity",
+  "Click to manage accounts and identities": "Click to manage accounts and identities",
+  "REMOTE ACCOUNTS": "REMOTE ACCOUNTS",
+  "Current Project": "Current Project",
+  "{0} Repository": "{0} Repository"
 }

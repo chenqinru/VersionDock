@@ -222,7 +222,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }, logger, updateSummaryService);
   commitPanel.setBranchStatusBar(branchStatusBar);
 
-  const profileStatusBar = new ProfileStatusBar(profileService, manager, logger);
+  const profileStatusBar = new ProfileStatusBar(profileService, manager, logger, remoteRepositoryService);
 
   const annotationController = new FileAnnotationController(manager, logPanel);
 
