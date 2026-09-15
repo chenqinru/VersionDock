@@ -5590,21 +5590,27 @@ export class GitService {
       }
 
       if (localModifiedPaths.size > 0) {
-        await Promise.all(
-          commits.map(async commit => {
-            try {
-              const commitFiles = await this.getCommitFiles(commit.hash);
-              const conflicts = commitFiles
-                .map(f => f.path)
-                .filter(p => localModifiedPaths.has(p));
-              if (conflicts.length > 0) {
-                commit.potentialConflictPaths = conflicts;
-              }
-            } catch {
-              // Ignore failure for individual commit files
+        const rawFilesLog = await this.git.raw(['log', '--name-only', '--format=%x1E%H', 'HEAD..@{u}']).catch(() => '');
+        if (rawFilesLog) {
+          const commitBlocks = rawFilesLog.split('\x1E');
+          const conflictMap = new Map<string, string[]>();
+          for (const block of commitBlocks) {
+            const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length === 0) continue;
+            const hash = lines[0];
+            const files = lines.slice(1);
+            const conflicts = files.filter(p => localModifiedPaths.has(p));
+            if (conflicts.length > 0) {
+              conflictMap.set(hash, conflicts);
             }
-          })
-        );
+          }
+          for (const commit of commits) {
+            const conflicts = conflictMap.get(commit.hash);
+            if (conflicts && conflicts.length > 0) {
+              commit.potentialConflictPaths = conflicts;
+            }
+          }
+        }
       }
     } catch {
       // Fallback gracefully

@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 
-export type RemoteProviderKind = 'github' | 'gitlab';
+export type RemoteProviderKind = 'github' | 'gitlab' | 'gitee';
 
 export type RemoteVisibility = 'private' | 'public' | 'internal';
 
@@ -59,5 +59,5 @@ export class RemoteRepositoryCancelledError extends Error {
 export function isRemoteRepositoryCancelled(error: unknown): boolean {
   if (error instanceof RemoteRepositoryCancelledError) return true;
   if (!(error instanceof Error)) return false;
-  return /remote repository creation cancelled|gitlab account selection cancelled/i.test(error.message);
+  return /remote repository creation cancelled|gitlab account selection cancelled|gitee account selection cancelled/i.test(error.message);
 }

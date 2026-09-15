@@ -182,7 +182,7 @@ export type HostToCommitMsg =
   | { type: 'STASH_FILES_RESULT'; requestId: string; repoId: string; stashRef: string; stashOid?: string; files: Array<{ path: string; status: string }>; error?: string }
   | { type: 'STASH_SHOW_RESULT'; requestId: string; diff: string; error?: string }
   | { type: 'STASH_OP_RESULT'; requestId: string; repoId: string; op: 'apply' | 'pop' | 'drop' | 'push'; ok: boolean; error?: string }
-  | { type: 'PUSH_UNPUSHED_RESULT'; requestId?: string; repoId?: string; commits?: UnpushedCommit[]; repos?: Array<{ repoId: string; commits: UnpushedCommit[]; error?: string }>; error?: string }
+  | { type: 'PUSH_UNPUSHED_RESULT'; requestId?: string; repoId?: string; commits?: UnpushedCommit[]; repos?: Array<{ repoId: string; commits: UnpushedCommit[]; error?: string }>; error?: string; avatars?: Record<string, string | null> }
   | { type: 'PUSH_SYNC_COUNTS_RESULT'; requestId?: string; counts: Record<string, { unpushed: number; incoming: number }> }
   | { type: 'PUSH_COMMITS_STATS_UPDATE'; repoId: string; stats: Record<string, { filesChanged: number; additions: number; deletions: number }>; kind?: 'outgoing' | 'incoming' }
   | { type: 'PUSH_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; isMerge?: boolean; error?: string }
@@ -191,7 +191,7 @@ export type HostToCommitMsg =
   | { type: 'PUSH_DROP_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'PUSH_REVERT_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
   | { type: 'PUSH_EDIT_MSG_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string }
-  | { type: 'SYNC_INCOMING_RESULT'; requestId?: string; repoId?: string; commits?: IncomingCommit[]; repos?: Array<{ repoId: string; commits: IncomingCommit[]; error?: string }>; error?: string }
+  | { type: 'SYNC_INCOMING_RESULT'; requestId?: string; repoId?: string; commits?: IncomingCommit[]; repos?: Array<{ repoId: string; commits: IncomingCommit[]; error?: string }>; error?: string; avatars?: Record<string, string | null> }
   | { type: 'SYNC_INCOMING_COMMIT_FILES_RESULT'; requestId: string; repoId: string; hash: string; files: PushCommitFile[]; isMerge?: boolean; error?: string }
   | { type: 'SYNC_INCOMING_AGGREGATED_DIFF_RESULT'; requestId: string; repoId: string; files: PushCommitFile[]; error?: string }
   | { type: 'SYNC_FETCH_RESULT'; requestId: string; repoId?: string; ok: boolean; error?: string; partial?: boolean }
@@ -219,7 +219,7 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_SET_FILE_VIEW_MODE'; mode: 'flat' | 'tree' }
   | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab }
   | { type: 'COMMIT_READ_CLIPBOARD_RESULT'; requestId: string; text: string }
-  | { type: 'COMMIT_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[] }
+  | { type: 'COMMIT_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[]; clearCache?: boolean }
   | { type: 'COMMIT_AVATARS_RESOLVED'; avatars: Record<string, string | null> };
 
 // ─── Commit Panel: WebView → Host ────────────────────────────────────────────
@@ -404,7 +404,7 @@ export type CompareSide = 'baseOnly' | 'targetOnly';
 export type LayoutDensity = 'comfortable' | 'compact';
 
 export interface RemoteAccountInfo {
-  provider: 'github' | 'gitlab';
+  provider: 'github' | 'gitlab' | 'gitee';
   id?: string;
   username: string;
   name?: string;
@@ -418,7 +418,7 @@ export type HostToLogMsg =
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'LOG_LAYOUT_DENSITY_UPDATE'; layoutDensity: LayoutDensity }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }
-  | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string; repoErrors?: Array<{ repoId: string; error: string }> }
+  | { type: 'LOG_COMMITS_BATCH'; commits: CommitNode[]; isLast: boolean; batchIndex: number; generation?: number; requestId?: string; repoErrors?: Array<{ repoId: string; error: string }>; avatars?: Record<string, string | null> }
   | { type: 'LOG_GRAPH_COMMITS'; commits: GraphCommitNode[]; generation: number; requestId: string }
   | { type: 'LOG_DIFF_RESULT'; requestId: string; files: Array<{ path: string; status: string }>; diff: FileDiff | null; error?: string }
   | { type: 'LOG_COMMIT_FILES'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; mergeParentChanges?: MergeParentChange[]; error?: string }
@@ -439,7 +439,7 @@ export type HostToLogMsg =
   | { type: 'LOG_FILTER_BY_REPO'; repoId: string | null; branch?: string | null }
   | { type: 'LOG_DIFF_OPENED'; repoId: string; filePath: string; error?: string }
   | { type: 'LOG_AVATARS_RESOLVED'; avatars: Record<string, string | null> }
-  | { type: 'LOG_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[] };
+  | { type: 'LOG_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[]; clearCache?: boolean };
 
 // ─── Git Log: WebView → Host ─────────────────────────────────────────────────
 

@@ -1239,6 +1239,9 @@ export function CommitApp() {
           break;
 
         case 'PUSH_UNPUSHED_RESULT':
+          if (msg.avatars) {
+            notifyAvatarsResolved(msg.avatars);
+          }
           if (msg.repos) {
             setUnpushedMap(prev => {
               const next = { ...prev };
@@ -1331,6 +1334,9 @@ export function CommitApp() {
           break;
 
         case 'SYNC_INCOMING_RESULT':
+          if (msg.avatars) {
+            notifyAvatarsResolved(msg.avatars);
+          }
           if (msg.repos) {
             setIncomingMap(prev => {
               const next = { ...prev };
@@ -1520,7 +1526,9 @@ export function CommitApp() {
           break;
 
         case 'COMMIT_REMOTE_ACCOUNTS_RESULT':
-          clearFrontendAvatarCache();
+          if (msg.clearCache) {
+            clearFrontendAvatarCache();
+          }
           useCommitStore.getState().setRemoteAccounts(msg.accounts);
           break;
 

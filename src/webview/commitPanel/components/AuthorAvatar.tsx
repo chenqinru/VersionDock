@@ -20,6 +20,7 @@ export function isAccountCompatibleWithRepo(
     : [];
   const lowerRemotes = remotes.map(r => r.toLowerCase());
   const isGitHubRepo = lowerRemotes.some(r => r.includes('github.com') || r.includes('github'));
+  const isGiteeRepo = lowerRemotes.some(r => r.includes('gitee.com') || r.includes('gitee'));
   let isGitLabRepo = lowerRemotes.some(r => r.includes('gitlab'));
 
   if (!isGitLabRepo && acc.provider === 'gitlab' && acc.host) {
@@ -37,8 +38,12 @@ export function isAccountCompatibleWithRepo(
     return isGitHubRepo;
   }
 
+  if (acc.provider === 'gitee') {
+    return isGiteeRepo;
+  }
+
   if (acc.provider === 'gitlab') {
-    return isGitLabRepo && !isGitHubRepo;
+    return isGitLabRepo && !isGitHubRepo && !isGiteeRepo;
   }
 
   return false;
@@ -98,13 +103,6 @@ export function findConnectedAvatar(
   return null;
 }
 
-async function gravatarUrl(email: string, size: number): Promise<string> {
-  const normalized = email.trim().toLowerCase();
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
-  const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return `https://gravatar.com/avatar/${hash}?s=${size * 2}&d=404`;
-}
-
 function githubAvatarUrl(email: string, size: number): string | null {
   if (!email.toLowerCase().endsWith('@users.noreply.github.com')) return null;
   const local = email.split('@')[0] ?? '';
@@ -112,25 +110,66 @@ function githubAvatarUrl(email: string, size: number): string | null {
   return username ? `https://avatars.githubusercontent.com/${encodeURIComponent(username)}?size=${size * 2}` : null;
 }
 
-function gitlabAvatarUrl(email: string, size: number): string | null {
-  const lower = email.toLowerCase();
-  if (!lower.endsWith('@users.noreply.gitlab.com') && !lower.endsWith('@noreply.gitlab.com')) return null;
-  return `https://gitlab.com/api/v4/avatar?email=${encodeURIComponent(email)}&size=${size * 2}`;
-}
+const LOCAL_STORAGE_KEY = 'versiondock.avatar.cache.v1';
+const MAX_LOCAL_ENTRIES = 1000;
 
-const hostResolvedAvatars = new Map<string, string | null>();
-const avatarListeners = new Set<(email: string, url: string | null) => void>();
-
-export function notifyAvatarsResolved(avatars: Record<string, string | null>): void {
-  for (const [email, url] of Object.entries(avatars)) {
-    const key = email.toLowerCase();
-    hostResolvedAvatars.set(key, url);
-    for (const cacheKey of Array.from(avatarPromiseCache.keys())) {
-      if (cacheKey.startsWith(`${key}\0`)) {
-        avatarPromiseCache.delete(cacheKey);
+function loadStorageAvatars(): Map<string, string | null> {
+  const map = new Map<string, string | null>();
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed === 'object' && parsed !== null) {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string' || v === null) {
+            map.set(k.toLowerCase(), v);
+          }
+        }
       }
     }
+  } catch {
+    // Ignore parse error
+  }
+  return map;
+}
+
+const hostResolvedAvatars = loadStorageAvatars();
+const avatarListeners = new Set<(email: string, url: string | null) => void>();
+
+let saveStorageTimer: number | null = null;
+function persistStorageAvatars(): void {
+  if (saveStorageTimer !== null) return;
+  saveStorageTimer = window.setTimeout(() => {
+    saveStorageTimer = null;
+    try {
+      if (hostResolvedAvatars.size > MAX_LOCAL_ENTRIES) {
+        const entries = Array.from(hostResolvedAvatars.entries()).slice(-MAX_LOCAL_ENTRIES);
+        hostResolvedAvatars.clear();
+        for (const [k, v] of entries) hostResolvedAvatars.set(k, v);
+      }
+      const obj: Record<string, string | null> = {};
+      for (const [k, v] of hostResolvedAvatars.entries()) {
+        obj[k] = v;
+      }
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(obj));
+    } catch {
+      // Ignore quota error
+    }
+  }, 1000);
+}
+
+export function notifyAvatarsResolved(avatars: Record<string, string | null>): void {
+  let changed = false;
+  for (const [email, url] of Object.entries(avatars)) {
+    const key = email.toLowerCase();
+    if (hostResolvedAvatars.get(key) !== url) {
+      hostResolvedAvatars.set(key, url);
+      changed = true;
+    }
     avatarListeners.forEach(fn => fn(key, url));
+  }
+  if (changed) {
+    persistStorageAvatars();
   }
 }
 
@@ -181,110 +220,18 @@ function initials(name: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[parts.length - 1]?.[0] ?? '')).toUpperCase();
 }
 
-function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    let settled = false;
-    const finish = (blank: boolean) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      img.onload = null;
-      img.onerror = null;
-      resolve(blank);
-    };
-    const timeout = window.setTimeout(() => finish(true), 8000);
-
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = sampleSize;
-        canvas.height = sampleSize;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) { finish(false); return; }
-        ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
-        const { data } = ctx.getImageData(0, 0, sampleSize, sampleSize);
-        const unique = new Set<number>();
-        for (let i = 0; i < data.length; i += 4) {
-          const r = Math.round((data[i]!)   / 16);
-          const g = Math.round((data[i+1]!) / 16);
-          const b = Math.round((data[i+2]!) / 16);
-          unique.add((r << 8) | (g << 4) | b);
-        }
-        finish(unique.size <= 3);
-      } catch {
-        finish(false);
-      }
-    };
-
-    img.onerror = () => finish(true);
-    img.src = url;
-  });
-}
-
-async function resolveAvatarUrl(email: string, size: number, repoId?: string, authorName?: string): Promise<string | null> {
-  const normalized = email.trim().toLowerCase();
-
-  const store = useCommitStore.getState();
-  const repoRemoteUrl = repoId ? store.repoMetas.find(r => r.id === repoId)?.remoteUrl : undefined;
-  const connected = findConnectedAvatar(authorName ?? '', email, store.remoteAccounts, repoRemoteUrl);
-  if (connected) return connected;
-
-  if (!normalized) return null;
-
-  if (hostResolvedAvatars.has(normalized)) {
-    return hostResolvedAvatars.get(normalized) ?? null;
-  }
-
-  const remotes = repoRemoteUrl ? (Array.isArray(repoRemoteUrl) ? repoRemoteUrl : [repoRemoteUrl]) : [];
-  const isGitHubRepo = remotes.some(r => /github/i.test(r));
-  if (isGitHubRepo) {
-    const github = githubAvatarUrl(email, size);
-    if (github) {
-      const blank = await loadImagePixels(github);
-      if (!blank) return github;
-    }
-  }
-
-  const gitlab = gitlabAvatarUrl(email, size);
-  if (gitlab) {
-    const blank = await loadImagePixels(gitlab);
-    if (!blank) return gitlab;
-  }
-
-  const gravatar = await gravatarUrl(email, size);
-  const blank = await loadImagePixels(gravatar);
-  if (!blank) return gravatar;
-
-  queueEmailResolution(normalized, repoId, authorName);
-  return null;
-}
-
-const AVATAR_CACHE_LIMIT = 512;
-const avatarPromiseCache = new Map<string, Promise<string | null>>();
+let avatarCacheEpoch = 0;
+const cacheEpochListeners = new Set<() => void>();
 
 export function clearFrontendAvatarCache(): void {
+  try {
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+  } catch {
+    // Ignore
+  }
   hostResolvedAvatars.clear();
-  avatarPromiseCache.clear();
-}
-
-function cachedAvatarUrl(email: string, size: number, repoId?: string, authorName?: string): Promise<string | null> {
-  const key = `${email.trim().toLowerCase()}\0${authorName?.trim().toLowerCase() ?? ''}\0${size}`;
-  const cached = avatarPromiseCache.get(key);
-  if (cached) {
-    avatarPromiseCache.delete(key);
-    avatarPromiseCache.set(key, cached);
-    return cached;
-  }
-
-  const pending = resolveAvatarUrl(email, size, repoId, authorName).catch(() => null);
-  avatarPromiseCache.set(key, pending);
-  if (avatarPromiseCache.size > AVATAR_CACHE_LIMIT) {
-    const oldest = avatarPromiseCache.keys().next().value as string | undefined;
-    if (oldest) avatarPromiseCache.delete(oldest);
-  }
-  return pending;
+  avatarCacheEpoch++;
+  cacheEpochListeners.forEach(fn => fn());
 }
 
 export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16, fontSize }: Props) {
@@ -293,45 +240,70 @@ export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16, 
   const currentRepo = repoId ? repoMetas.find(r => r.id === repoId) : (repoMetas.length === 1 ? repoMetas[0] : undefined);
   const repoRemoteUrl = currentRepo?.remoteUrl || (repoMetas.length > 0 ? (repoMetas.map(r => r.remoteUrl).filter(Boolean) as string[]) : undefined);
 
-  const connectedAvatar = findConnectedAvatar(authorName, authorEmail, remoteAccounts, repoRemoteUrl);
+  const normalizedEmail = (authorEmail || '').trim().toLowerCase();
+  const cleanName = (authorName || '').trim();
 
-  const [url, setUrl] = useState<string | null | 'loading'>(() => connectedAvatar ?? 'loading');
+  // 1. Instant match for connected accounts (GitHub & GitLab & Gitee)
+  const connectedAvatar = findConnectedAvatar(cleanName, authorEmail, remoteAccounts, repoRemoteUrl);
+
+  // 2. Instant match for static fast-paths (e.g. GitHub noreply CDN URL)
+  const remotes = repoRemoteUrl ? (Array.isArray(repoRemoteUrl) ? repoRemoteUrl : [repoRemoteUrl]) : [];
+  const isGitHubRepo = remotes.some(r => /github/i.test(r));
+  const staticAvatar = (isGitHubRepo && normalizedEmail) ? githubAvatarUrl(authorEmail, size) : null;
+
+  // 3. Instant match from hostResolvedAvatars (already fetched in current session)
+  const hostCached = normalizedEmail && hostResolvedAvatars.has(normalizedEmail)
+    ? hostResolvedAvatars.get(normalizedEmail)
+    : undefined;
+
+  const immediateAvatar = connectedAvatar || staticAvatar || (hostCached !== undefined ? hostCached : undefined);
+
+  const [epoch, setEpoch] = useState(() => avatarCacheEpoch);
+  const [url, setUrl] = useState<string | null | 'loading'>(() => immediateAvatar !== undefined ? immediateAvatar : 'loading');
   const authorTitle = formatAuthorIdentity(authorName, authorEmail);
   const avatarSeed = authorEmail.trim() || authorName.trim();
 
   useEffect(() => {
-    if (connectedAvatar) {
-      setUrl(connectedAvatar);
+    const onEpoch = () => {
+      setEpoch(avatarCacheEpoch);
+      setUrl('loading');
+    };
+    cacheEpochListeners.add(onEpoch);
+    return () => {
+      cacheEpochListeners.delete(onEpoch);
+    };
+  }, []);
+
+  // When immediate avatar becomes available or changes (e.g., remoteAccounts loaded)
+  useEffect(() => {
+    if (immediateAvatar !== undefined) {
+      setUrl(prev => (prev === immediateAvatar ? prev : immediateAvatar));
+    }
+  }, [immediateAvatar]);
+
+  // Query Host asynchronously only if we don't have an immediate avatar yet
+  useEffect(() => {
+    if (immediateAvatar !== undefined) return;
+    if (!normalizedEmail && !cleanName) {
+      setUrl(null);
       return;
     }
-
-    setUrl('loading');
-
-    let cancelled = false;
-    if (!authorEmail.trim() && !authorName.trim()) {
-      setUrl(null);
-      return () => { cancelled = true; };
-    }
-    cachedAvatarUrl(authorEmail, size, repoId, authorName).then(resolved => {
-      if (!cancelled) setUrl(resolved);
-    });
-    return () => { cancelled = true; };
-  }, [connectedAvatar, authorEmail, authorName, size, repoId]);
+    queueEmailResolution(authorEmail, repoId, authorName);
+  }, [immediateAvatar, authorEmail, authorName, repoId, epoch]);
 
   useEffect(() => {
-    const normalized = authorEmail.trim().toLowerCase();
-    if (!normalized) return;
+    if (!normalizedEmail) return;
 
     const onResolve = (resolvedEmail: string, resolvedUrl: string | null) => {
-      if (resolvedEmail === normalized) {
-        setUrl(resolvedUrl ?? connectedAvatar ?? null);
+      if (resolvedEmail === normalizedEmail) {
+        setUrl(resolvedUrl ?? immediateAvatar ?? null);
       }
     };
     avatarListeners.add(onResolve);
     return () => {
       avatarListeners.delete(onResolve);
     };
-  }, [authorEmail, connectedAvatar]);
+  }, [normalizedEmail, immediateAvatar]);
 
   const avatarFontSize = fontSize ?? Math.max(7, Math.round(size * 0.44 * 10) / 10);
 
@@ -350,7 +322,7 @@ export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16, 
     userSelect: 'none',
   };
 
-  if (url === null || url === 'loading') {
+  if (!url || url === 'loading') {
     return (
       <div
         style={{ ...containerStyle, background: avatarColor(avatarSeed), color: '#fff' }}

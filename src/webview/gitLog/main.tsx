@@ -268,6 +268,9 @@ export function GitLogApp() {
           } else {
             store.setRepoErrors(null);
           }
+          if (msg.avatars) {
+            notifyAvatarsResolved(msg.avatars);
+          }
           store.appendCommits(msg.commits, msg.isLast);
           if (msg.commits.length === 0 && !msg.isLast && !hasErrors) {
             loadMoreRef.current();
@@ -319,7 +322,9 @@ export function GitLogApp() {
           notifyAvatarsResolved(msg.avatars);
           break;
         case 'LOG_REMOTE_ACCOUNTS_RESULT':
-          clearFrontendAvatarCache();
+          if (msg.clearCache) {
+            clearFrontendAvatarCache();
+          }
           store.setRemoteAccounts(msg.accounts);
           break;
         case 'LOG_REMOTES_RESULT':

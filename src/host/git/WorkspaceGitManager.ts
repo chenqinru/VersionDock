@@ -14,6 +14,7 @@ import type { PublishMissingRemote } from '../remote/types';
 import type { RemoteRepositoryService } from '../remote/RemoteRepositoryService';
 import { GitHubRemoteProvider } from '../remote/GitHubRemoteProvider';
 import { GitLabRemoteProvider } from '../remote/GitLabRemoteProvider';
+import { GiteeRemoteProvider } from '../remote/GiteeRemoteProvider';
 import { setRemoteProtectedBranches } from '../utils/branchProtection';
 
 const MAX_SUBMODULE_DEPTH = 5;
@@ -1468,6 +1469,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
     const githubProvider = new GitHubRemoteProvider(this.logger);
     let gitlabProvider: GitLabRemoteProvider | undefined;
+    let giteeProvider: GiteeRemoteProvider | undefined;
 
     for (const [repoId, repo] of this.repos.entries()) {
       if (repo.kind !== 'git') continue;
@@ -1479,6 +1481,13 @@ export class WorkspaceGitManager implements vscode.Disposable {
         let protectedBranches: string[] = [];
         if (/github\.com/i.test(originUrl)) {
           protectedBranches = await githubProvider.getProtectedBranches(originUrl);
+        } else if (/gitee\.com/i.test(originUrl)) {
+          if (!giteeProvider && this.context) {
+            giteeProvider = new GiteeRemoteProvider(this.context, this.logger);
+          }
+          if (giteeProvider) {
+            protectedBranches = await giteeProvider.getProtectedBranches(originUrl);
+          }
         } else {
           if (!gitlabProvider && this.context) {
             gitlabProvider = new GitLabRemoteProvider(this.context, this.logger);

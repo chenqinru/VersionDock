@@ -8,7 +8,7 @@ import { type GitService, parseGitmodulesFileSync, parseGitConfigEntries } from 
 import { ShelveService } from '../git/ShelveService';
 import { ChangelistService } from '../git/ChangelistService';
 import { ShelveDocumentProvider, applyPatchToContent, extractBaseAndTargetFromPatch } from '../utils/ShelveDocumentProvider';
-import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, LayoutDensity, SubtreeEntry, SubtreeOp, SubtreePushStatus, SyncPullStrategy } from '../types/messages';
+import type { CommitGenerateMessageTarget, CommitPanelTab, CommitToHostMsg, HostToCommitMsg, IncomingCommit, LayoutDensity, SubtreeEntry, SubtreeOp, SubtreePushStatus, SyncPullStrategy, UnpushedCommit } from '../types/messages';
 import type { FileDiff, FileStatus, RepoMeta, RepoStatus, WorkspaceStatus } from '../types/git';
 import { CHANGELIST_UNVERSIONED_ID } from '../types/git';
 import { loadIconTheme } from '../utils/IconThemeService';
@@ -517,7 +517,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.managerListeners.push(
         this.manager.remoteService.onDidChangeAccounts(() => {
           void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
-            this.post({ type: 'COMMIT_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [] });
+            this.post({ type: 'COMMIT_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [], clearCache: true });
           }).catch(() => {});
         })
       );
@@ -2157,7 +2157,19 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         })
       );
-      this.post({ type: 'PUSH_UNPUSHED_RESULT', repos: unpushedList });
+      const allEmails: string[] = [];
+      const allRemotes: string[] = [];
+      for (const item of unpushedList) {
+        for (const c of item.commits ?? []) {
+          if (c.authorEmail) allEmails.push(c.authorEmail);
+        }
+        const r = this.manager.getRepo(item.repoId);
+        if (r?.meta?.remoteUrl) {
+          allRemotes.push(r.meta.remoteUrl);
+        }
+      }
+      const avatars = this.manager.remoteService?.avatarService.getCachedAvatars(allEmails, allRemotes);
+      this.post({ type: 'PUSH_UNPUSHED_RESULT', repos: unpushedList, avatars });
       for (const item of unpushedList) {
         if (item.commits && item.commits.length > 0) {
           const r = this.manager.getRepo(item.repoId);
@@ -2178,6 +2190,46 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     }).catch(() => {});
   }
 
+  private postSingleRepoUnpushedResult(payload: {
+    requestId?: string;
+    repoId: string;
+    commits: UnpushedCommit[];
+    error?: string;
+  }): void {
+    const emails = payload.commits.map(c => c.authorEmail).filter(Boolean) as string[];
+    const repo = this.manager.getRepo(payload.repoId);
+    const remotes = repo?.meta?.remoteUrl ? [repo.meta.remoteUrl] : [];
+    const avatars = this.manager.remoteService?.avatarService.getCachedAvatars(emails, remotes);
+    this.post({
+      type: 'PUSH_UNPUSHED_RESULT',
+      requestId: payload.requestId,
+      repoId: payload.repoId,
+      commits: payload.commits,
+      error: payload.error,
+      avatars,
+    });
+  }
+
+  private postSingleRepoIncomingResult(payload: {
+    requestId?: string;
+    repoId: string;
+    commits: IncomingCommit[];
+    error?: string;
+  }): void {
+    const emails = payload.commits.map(c => c.authorEmail).filter(Boolean) as string[];
+    const repo = this.manager.getRepo(payload.repoId);
+    const remotes = repo?.meta?.remoteUrl ? [repo.meta.remoteUrl] : [];
+    const avatars = this.manager.remoteService?.avatarService.getCachedAvatars(emails, remotes);
+    this.post({
+      type: 'SYNC_INCOMING_RESULT',
+      requestId: payload.requestId ?? '',
+      repoId: payload.repoId,
+      commits: payload.commits,
+      error: payload.error,
+      avatars,
+    });
+  }
+
   private async broadcastIncomingCommits(repoIds?: string[], requestId?: string): Promise<void> {
     try {
       const allMetas = this.manager.getRepoMetas();
@@ -2191,7 +2243,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       await Promise.all(gitRepos.map(async ({ id, repo }) => {
         try {
           const commits = await repo.getIncomingCommits();
-          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: requestId ?? '', repoId: id, commits });
+          this.postSingleRepoIncomingResult({ requestId: requestId ?? '', repoId: id, commits });
           if (commits.length > 0) {
             this.triggerCommitsStatsUpdate(repo, id, 'incoming');
           }
@@ -4990,7 +5042,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           const commits = await repo.getUnpushedCommits();
-          this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.postSingleRepoUnpushedResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
           if (commits.length > 0 && repo.kind !== 'svn') {
             this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'outgoing');
           }
@@ -5061,7 +5113,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         try {
           const commits = await (repo as GitService).getIncomingCommits();
-          this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.postSingleRepoIncomingResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
           if (commits.length > 0) {
             this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'incoming');
           }
@@ -5290,7 +5342,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             if (repo.kind !== 'svn') {
               const gitRepo = repo as GitService;
               const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
-              this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
+              this.postSingleRepoIncomingResult({ requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
             }
             if (this.isSubtreeTabActive()) {
               void this.refreshSubtreeList({ force: false });
@@ -5507,7 +5559,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               if (repo.kind !== 'svn') {
                 const gitRepo = repo as GitService;
                 const incoming = await gitRepo.getIncomingCommits?.().catch(() => []);
-                this.post({ type: 'SYNC_INCOMING_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
+                this.postSingleRepoIncomingResult({ requestId: msg.requestId, repoId: msg.repoId, commits: incoming ?? [] });
               }
               if (this.isSubtreeTabActive()) {
                 void this.refreshSubtreeList({ force: false });
@@ -5935,7 +5987,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
           this.post({ type: 'PUSH_SQUASH_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
-          this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.postSingleRepoUnpushedResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
           if (commits.length > 0 && repo.kind !== 'svn') {
             this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'outgoing');
           }
@@ -5968,7 +6020,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
           this.post({ type: 'PUSH_DROP_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
-          this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.postSingleRepoUnpushedResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
           if (commits.length > 0 && repo.kind !== 'svn') {
             this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'outgoing');
           }
@@ -6000,7 +6052,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           );
           this.post({ type: 'PUSH_REVERT_RESULT', requestId: msg.requestId, repoId: msg.repoId, ok: true });
           const commits = await repo.getUnpushedCommits();
-          this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.postSingleRepoUnpushedResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
           if (commits.length > 0 && repo.kind !== 'svn') {
             this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'outgoing');
           }
@@ -6054,7 +6106,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             () => repo.rewordCommit(result.message),
           );
           const commits = await repo.getUnpushedCommits();
-          this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+          this.postSingleRepoUnpushedResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
           if (commits.length > 0 && repo.kind !== 'svn') {
             this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'outgoing');
           }
@@ -6094,7 +6146,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
               void this.refreshSubtreeList({ force: false });
             }
             const commits = await repo.getUnpushedCommits();
-            this.post({ type: 'PUSH_UNPUSHED_RESULT', requestId: msg.requestId, repoId: msg.repoId, commits });
+            this.postSingleRepoUnpushedResult({ requestId: msg.requestId, repoId: msg.repoId, commits });
             if (commits.length > 0 && repo.kind !== 'svn') {
               this.triggerCommitsStatsUpdate(repo as GitService, msg.repoId, 'outgoing');
             }

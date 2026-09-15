@@ -548,7 +548,7 @@ export function registerCommands(
           })),
           {
             title: t('Select Git Repository to Publish'),
-            placeHolder: t('Choose a repository to publish to GitHub or GitLab'),
+            placeHolder: t('Choose a repository to publish to GitHub, GitLab, or Gitee'),
           }
         );
         if (!picked) return;

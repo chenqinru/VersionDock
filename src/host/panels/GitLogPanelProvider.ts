@@ -288,7 +288,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.managerListeners.push(
         this.manager.remoteService.onDidChangeAccounts(() => {
           void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
-            this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [] });
+            this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [], clearCache: true });
           }).catch(() => {});
         })
       );
@@ -916,6 +916,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const explicitHasMore = (commits as CommitLogList).hasMore;
           const repoErrors = (commits as CommitLogList).repoErrors;
           const isLast = explicitHasMore !== undefined ? !explicitHasMore : commits.length < limit;
+          const emails = commits.map(c => c.authorEmail).filter(Boolean);
+          const allRemotes = repos.map(r => r.remoteUrl).filter(Boolean) as string[];
+          const cachedAvatars = this.manager.remoteService?.avatarService.getCachedAvatars(emails, allRemotes);
+
           this.post({
             type: 'LOG_COMMITS_BATCH',
             commits,
@@ -924,6 +928,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             generation: msg.generation,
             requestId: msg.requestId,
             repoErrors: repoErrors && repoErrors.length > 0 ? repoErrors : undefined,
+            avatars: cachedAvatars && Object.keys(cachedAvatars).length > 0 ? cachedAvatars : undefined,
           });
         } catch (error) {
           this.logger.error('GitLog', 'Failed to load interleaved log', error);

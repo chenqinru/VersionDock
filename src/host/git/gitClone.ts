@@ -166,7 +166,7 @@ if (isMatch) {
 }
 
 interface CloneSourceQuickPickItem extends vscode.QuickPickItem {
-  id: 'github' | 'gitlab' | 'url' | 'direct-url';
+  id: 'github' | 'gitlab' | 'gitee' | 'url' | 'direct-url';
   cloneUrl?: string;
 }
 
@@ -321,9 +321,88 @@ async function pickGitLabRepository(remoteService: RemoteRepositoryService): Pro
   }
 }
 
+async function pickGiteeRepository(remoteService: RemoteRepositoryService): Promise<string | undefined> {
+  try {
+    let repos: RemoteRepository[] = [];
+    try {
+      repos = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: t('Fetching repositories from Gitee…'),
+          cancellable: true,
+        },
+        async (_progress, token) => {
+          const fetchPromise = remoteService.gitee.listRepositories();
+          return await Promise.race([
+            fetchPromise,
+            new Promise<never>((_, reject) => {
+              token.onCancellationRequested(() => reject(new Error(t('Operation cancelled.'))));
+            }),
+          ]);
+        }
+      );
+    } catch (fetchErr: unknown) {
+      const errStr = String(fetchErr);
+      const isAuthErr = errStr.includes('authentication') || errStr.includes('account') || errStr.includes('cancelled');
+      if (isAuthErr) {
+        const manage = t('Manage Gitee Accounts');
+        const choice = await vscode.window.showWarningMessage(
+          t('Gitee authentication is required to list repositories.'),
+          manage,
+        );
+        if (choice === manage) {
+          await remoteService.gitee.manageAccounts();
+        }
+        return undefined;
+      }
+      throw fetchErr;
+    }
+
+    if (repos.length === 0) {
+      const manage = t('Manage Gitee Accounts');
+      const choice = await vscode.window.showInformationMessage(
+        t('No Gitee projects found. Would you like to check or add Gitee accounts?'),
+        manage,
+      );
+      if (choice === manage) {
+        await remoteService.gitee.manageAccounts();
+      }
+      return undefined;
+    }
+
+    interface RepoItem extends vscode.QuickPickItem {
+      cloneUrl: string;
+    }
+
+    const items: RepoItem[] = repos.map(repo => ({
+      label: `$(repo) ${repo.fullName}`,
+      description: `Gitee · ${repo.private ? t('Private') : t('Public')}`,
+      detail: repo.cloneUrl,
+      cloneUrl: repo.cloneUrl,
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+      title: t('Select Gitee Repository'),
+      placeHolder: t('Search or select a repository to clone'),
+      matchOnDescription: true,
+      matchOnDetail: true,
+      ignoreFocusOut: true,
+    });
+
+    return selected?.cloneUrl;
+  } catch (err: unknown) {
+    const msg = (err as Error)?.message || String(err);
+    if (!msg.includes(t('Operation cancelled.'))) {
+      void vscode.window.showErrorMessage(t('Failed to fetch Gitee repositories: {0}', msg));
+    }
+    return undefined;
+  }
+}
+
 type CloneSourceResult =
   | { kind: 'github' }
   | { kind: 'gitlab' }
+  | { kind: 'gitee' }
   | { kind: 'url' }
   | { kind: 'direct-url'; url: string };
 
@@ -344,6 +423,11 @@ function promptForCloneSource(): Promise<CloneSourceResult | undefined> {
         id: 'gitlab',
         label: `$(repo) ${t('Clone from GitLab…')}`,
         detail: t('Search and clone from your GitLab projects'),
+      },
+      {
+        id: 'gitee',
+        label: `$(repo) ${t('Clone from Gitee…')}`,
+        detail: t('Search and clone from your Gitee repositories'),
       },
       {
         id: 'url',
@@ -388,6 +472,8 @@ function promptForCloneSource(): Promise<CloneSourceResult | undefined> {
         acceptedResult = { kind: 'github' };
       } else if (selected.id === 'gitlab') {
         acceptedResult = { kind: 'gitlab' };
+      } else if (selected.id === 'gitee') {
+        acceptedResult = { kind: 'gitee' };
       } else if (selected.id === 'url') {
         acceptedResult = { kind: 'url' };
       }
@@ -425,6 +511,10 @@ async function promptForGitCloneUrl(remoteService?: RemoteRepositoryService): Pr
 
   if (source.kind === 'gitlab') {
     return await pickGitLabRepository(remoteService);
+  }
+
+  if (source.kind === 'gitee') {
+    return await pickGiteeRepository(remoteService);
   }
 
   return undefined;

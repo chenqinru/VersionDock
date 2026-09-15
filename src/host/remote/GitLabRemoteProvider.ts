@@ -154,6 +154,13 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider, vscode.Di
     }
     if (!account) return undefined;
 
+    // Fast-path: GitLab noreply email (e.g. 12345-username@users.noreply.gitlab.com or username@noreply.gitlab.com)
+    let candidateUsername: string | undefined;
+    if (norm.endsWith('@users.noreply.gitlab.com') || norm.endsWith('@noreply.gitlab.com')) {
+      const local = norm.split('@')[0] ?? '';
+      candidateUsername = local.includes('-') ? local.split('-').slice(1).join('-') : local;
+    }
+
     try {
       // 2. Query Avatar API
       const avatarRes = await this.request<{ avatar_url?: string }>(
@@ -163,9 +170,9 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider, vscode.Di
 
       let avatarUrl = avatarRes?.avatar_url;
 
-      // 3. Query users by username (if email is username@... or just username)
+      // 3. Query users by username (if email is username@..., candidate from noreply, or just username)
       if (!avatarUrl) {
-        const usernameCandidate = trimmed.includes('@') ? trimmed.split('@')[0] : trimmed;
+        const usernameCandidate = candidateUsername || (trimmed.includes('@') ? trimmed.split('@')[0] : trimmed);
         if (usernameCandidate) {
           const users = await this.request<GitLabUser[]>(
             account,

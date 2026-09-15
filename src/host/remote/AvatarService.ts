@@ -5,8 +5,9 @@ import * as vscode from 'vscode';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { GitHubRemoteProvider } from './GitHubRemoteProvider';
 import type { GitLabRemoteProvider } from './GitLabRemoteProvider';
+import type { GiteeRemoteProvider } from './GiteeRemoteProvider';
 
-const AVATAR_CACHE_KEY = 'versiondock.remote.avatar.cache.v2';
+const AVATAR_CACHE_KEY = 'versiondock.remote.avatar.cache.v3';
 const POSITIVE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 const NEGATIVE_CACHE_TTL = 24 * 60 * 60 * 1000;      // 24 hours
 const MAX_CACHE_ENTRIES = 2000;
@@ -16,7 +17,7 @@ interface CacheEntry {
   timestamp: number;
 }
 
-export class AvatarService {
+export class AvatarService implements vscode.Disposable {
   private memoryCache = new Map<string, CacheEntry>();
   private inFlight = new Map<string, Promise<string | null>>();
   private saveDebounceTimer?: NodeJS.Timeout;
@@ -25,6 +26,7 @@ export class AvatarService {
     private readonly context: vscode.ExtensionContext,
     private readonly github: GitHubRemoteProvider,
     private readonly gitlab: GitLabRemoteProvider,
+    private readonly gitee: GiteeRemoteProvider,
     private readonly logger: VersionDockLogger,
   ) {
     this.loadFromGlobalState();
@@ -40,30 +42,159 @@ export class AvatarService {
           this.memoryCache.set(key, entry);
         }
       }
+
+      // 如果当前 v3 缓存为空，尝试向后兼容迁移 v2 及更早版本的缓存，防止用户切版本后头像全部失效
+      if (this.memoryCache.size === 0) {
+        this.migrateLegacyCaches(now);
+      }
     } catch (error) {
       this.logger.debug('AvatarService', 'Failed to load avatar cache from globalState', { error: String(error) });
     }
   }
 
-  private scheduleSave(): void {
-    if (this.saveDebounceTimer) clearTimeout(this.saveDebounceTimer);
-    this.saveDebounceTimer = setTimeout(() => {
-      try {
-        if (this.memoryCache.size > MAX_CACHE_ENTRIES) {
-          const entries = Array.from(this.memoryCache.entries())
-            .sort((a, b) => b[1].timestamp - a[1].timestamp)
-            .slice(0, MAX_CACHE_ENTRIES);
-          this.memoryCache = new Map(entries);
+  private migrateLegacyCaches(now: number): void {
+    try {
+      const legacyV2 = this.context.globalState.get<Record<string, CacheEntry>>('versiondock.remote.avatar.cache.v2');
+      const legacyV1 = this.context.globalState.get<Record<string, CacheEntry | string>>('versiondock.remote.avatar.cache');
+      const candidates = legacyV2 || legacyV1;
+      if (!candidates || typeof candidates !== 'object') return;
+
+      let migratedCount = 0;
+      for (const [emailOrKey, entryOrUrl] of Object.entries(candidates)) {
+        let url: string | null = null;
+        let timestamp = now;
+        if (typeof entryOrUrl === 'string') {
+          url = entryOrUrl;
+        } else if (entryOrUrl && typeof entryOrUrl === 'object') {
+          url = (entryOrUrl as CacheEntry).url ?? null;
+          timestamp = (entryOrUrl as CacheEntry).timestamp || now;
         }
-        const obj: Record<string, CacheEntry> = {};
-        for (const [k, v] of this.memoryCache.entries()) {
-          obj[k] = v;
+
+        const normalizedEmail = emailOrKey.includes(':') ? emailOrKey.split(':')[1] : emailOrKey.toLowerCase();
+        if (!normalizedEmail) continue;
+
+        let platform = 'generic';
+        if (url) {
+          if (/gitee\.com/i.test(url)) platform = 'gitee';
+          else if (/githubusercontent\.com/i.test(url)) platform = 'github';
+          else if (/gitlab/i.test(url)) platform = 'gitlab';
         }
-        void this.context.globalState.update(AVATAR_CACHE_KEY, obj);
-      } catch (error) {
-        this.logger.debug('AvatarService', 'Failed to save avatar cache to globalState', { error: String(error) });
+
+        const newKey = `${platform}:${normalizedEmail}`;
+        if (!this.memoryCache.has(newKey)) {
+          this.memoryCache.set(newKey, { url, timestamp });
+          migratedCount++;
+        }
       }
-    }, 2000);
+
+      if (migratedCount > 0) {
+        this.logger.debug('AvatarService', `Successfully migrated ${migratedCount} avatars from legacy cache`);
+        this.scheduleSave(true);
+      }
+    } catch {
+      // Ignore migration errors
+    }
+  }
+
+  public flushSync(): void {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = undefined;
+    }
+    try {
+      if (this.memoryCache.size > MAX_CACHE_ENTRIES) {
+        const entries = Array.from(this.memoryCache.entries())
+          .sort((a, b) => b[1].timestamp - a[1].timestamp)
+          .slice(0, MAX_CACHE_ENTRIES);
+        this.memoryCache = new Map(entries);
+      }
+      const obj: Record<string, CacheEntry> = {};
+      for (const [k, v] of this.memoryCache.entries()) {
+        obj[k] = v;
+      }
+      void this.context.globalState.update(AVATAR_CACHE_KEY, obj);
+    } catch (error) {
+      this.logger.debug('AvatarService', 'Failed to flush avatar cache to globalState', { error: String(error) });
+    }
+  }
+
+  public scheduleSave(immediate = false): void {
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = undefined;
+    }
+    if (immediate) {
+      this.flushSync();
+      return;
+    }
+    this.saveDebounceTimer = setTimeout(() => {
+      this.saveDebounceTimer = undefined;
+      this.flushSync();
+    }, 400);
+  }
+
+  public dispose(): void {
+    this.flushSync();
+  }
+
+  private getPlatformScope(repoRemotes: string[]): string {
+    if (repoRemotes.some(r => /gitee/i.test(r))) return 'gitee';
+    if (repoRemotes.some(r => /github/i.test(r))) return 'github';
+    if (repoRemotes.some(r => /gitlab/i.test(r))) return 'gitlab';
+    if (repoRemotes.length > 0) {
+      const hosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+      for (const remote of repoRemotes) {
+        for (const host of hosts) {
+          try {
+            const h = new URL(host).hostname.toLowerCase();
+            if (h && remote.toLowerCase().includes(h)) return 'gitlab';
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    }
+    return 'generic';
+  }
+
+  getCachedAvatars(emails: string[], repoRemotes: string[] = []): Record<string, string | null> {
+    const result: Record<string, string | null> = {};
+    const platform = this.getPlatformScope(repoRemotes);
+    const now = Date.now();
+    for (const email of emails) {
+      const normalized = email.trim().toLowerCase();
+      if (!normalized) continue;
+
+      const cacheKey = `${platform}:${normalized}`;
+      let cached = this.memoryCache.get(cacheKey);
+
+      // 兜底命中：如果当前平台没有缓存，尝试 generic（如 Gravatar）或在 generic 仓库下查找其它已缓存平台的头像
+      if (!cached) {
+        const genericCached = this.memoryCache.get(`generic:${normalized}`);
+        if (genericCached && genericCached.url) {
+          cached = genericCached;
+        } else if (platform === 'generic') {
+          for (const p of ['github', 'gitee', 'gitlab']) {
+            const tryCached = this.memoryCache.get(`${p}:${normalized}`);
+            if (tryCached && tryCached.url) {
+              cached = tryCached;
+              break;
+            }
+          }
+        }
+      }
+
+      if (cached && cached.url) {
+        if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
+          result[normalized] = cached.url;
+        }
+      } else if (cached && !cached.url) {
+        if (now - cached.timestamp < NEGATIVE_CACHE_TTL) {
+          result[normalized] = null;
+        }
+      }
+    }
+    return result;
   }
 
   async resolveAvatars(
@@ -72,23 +203,20 @@ export class AvatarService {
     authorsMap?: Record<string, string>,
   ): Promise<Record<string, string | null>> {
     const result: Record<string, string | null> = {};
-    const pending: string[] = [];
+    const pending: Array<{ email: string; cacheKey: string }> = [];
 
+    const platform = this.getPlatformScope(repoRemotes);
     const now = Date.now();
     for (const email of emails) {
       const normalized = email.trim().toLowerCase();
       if (!normalized) continue;
 
-      const cached = this.memoryCache.get(normalized);
+      const cacheKey = `${platform}:${normalized}`;
+      const cached = this.memoryCache.get(cacheKey);
       const authorName = authorsMap?.[normalized];
-      const isGitHubRepo = repoRemotes.some(r => /github/i.test(r));
 
       if (cached && cached.url) {
-        const isGitHubUrl = /githubusercontent\.com/i.test(cached.url);
-        if (isGitHubUrl && !isGitHubRepo) {
-          // 当前不是明确的 GitHub 仓库，严禁返回并清理之前的 GitHub 头像缓存
-          this.memoryCache.delete(normalized);
-        } else if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
+        if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
           result[normalized] = cached.url;
           continue;
         }
@@ -98,7 +226,7 @@ export class AvatarService {
           continue;
         }
       }
-      pending.push(normalized);
+      pending.push({ email: normalized, cacheKey });
     }
 
     if (pending.length === 0) {
@@ -109,11 +237,11 @@ export class AvatarService {
     for (let i = 0; i < pending.length; i += concurrency) {
       const chunk = pending.slice(i, i + concurrency);
       await Promise.all(
-        chunk.map(async email => {
-          const authorName = authorsMap?.[email];
-          const url = await this.resolveSingleAvatar(email, repoRemotes, authorName);
-          result[email] = url;
-          this.memoryCache.set(email, { url, timestamp: Date.now() });
+        chunk.map(async item => {
+          const authorName = authorsMap?.[item.email];
+          const url = await this.resolveSingleAvatar(item.email, repoRemotes, authorName, platform);
+          result[item.email] = url;
+          this.memoryCache.set(item.cacheKey, { url, timestamp: Date.now() });
         }),
       );
     }
@@ -122,152 +250,95 @@ export class AvatarService {
     return result;
   }
 
-  private async resolveSingleAvatar(email: string, repoRemotes: string[], authorName?: string): Promise<string | null> {
-    const inFlightPromise = this.inFlight.get(email);
+  private async resolveSingleAvatar(
+    email: string,
+    repoRemotes: string[],
+    authorName?: string,
+    platform = 'generic',
+  ): Promise<string | null> {
+    const inFlightKey = `${platform}:${email.trim().toLowerCase()}`;
+    const inFlightPromise = this.inFlight.get(inFlightKey);
     if (inFlightPromise) return inFlightPromise;
 
     const promise = (async (): Promise<string | null> => {
       try {
-        return await this.doResolveSingleAvatar(email, repoRemotes, authorName);
+        return await this.doResolveSingleAvatar(email, repoRemotes, authorName, platform);
       } catch (error) {
         this.logger.debug('AvatarService', 'Error resolving avatar for email', { email, error: String(error) });
         return null;
       } finally {
-        this.inFlight.delete(email);
+        this.inFlight.delete(inFlightKey);
       }
     })();
 
-    this.inFlight.set(email, promise);
+    this.inFlight.set(inFlightKey, promise);
     return promise;
   }
 
-  private async doResolveSingleAvatar(email: string, repoRemotes: string[], authorName?: string): Promise<string | null> {
-    const norm = email.trim().toLowerCase();
-    const cleanAuthorName = (authorName ?? '').trim().toLowerCase();
-    const emailPrefix = norm.includes('@') ? norm.split('@')[0]! : norm;
-    const strippedPrefix = emailPrefix.replace(/\d+$/, '');
+  private async doResolveSingleAvatar(
+    email: string,
+    repoRemotes: string[],
+    authorName?: string,
+    platform = 'generic',
+  ): Promise<string | null> {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) return null;
 
-    const isGitHubRepo = repoRemotes.some(r => /github/i.test(r));
-
-    // 0. Fast-path: Check authenticated GitHub user (STRICTLY for explicit GitHub repos only)
-    if (isGitHubRepo) {
-      try {
-        const ghUser = await this.github.getAuthenticatedUser();
-        if (ghUser?.avatar_url) {
-          const ghLogin = ghUser.login.toLowerCase();
-          const ghName = ghUser.name?.toLowerCase();
-          const ghEmail = ghUser.email?.toLowerCase();
-          const authorMatch = cleanAuthorName && (cleanAuthorName === ghLogin || cleanAuthorName === ghName);
-          const emailMatch =
-            (ghEmail && ghEmail === norm) ||
-            ghLogin === norm ||
-            ghLogin === emailPrefix ||
-            (strippedPrefix.length >= 3 && strippedPrefix === ghLogin) ||
-            (ghName && (ghName === norm || ghName === emailPrefix));
-          if (authorMatch || emailMatch) {
-            return ghUser.avatar_url;
-          }
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    // 0.1 Fast-path: Check authenticated GitLab users (for GitLab or non-GitHub repos)
-    if (!isGitHubRepo) {
-      try {
-        const glAccounts = await this.gitlab.getAllAccounts();
-        for (const acc of glAccounts) {
-          const glUser = await this.gitlab.getCurrentUser(acc.host);
-          if (glUser?.avatar_url) {
-            let avatarUrl = glUser.avatar_url;
-            if (avatarUrl.startsWith('/')) avatarUrl = `${acc.host}${avatarUrl}`;
-            const glUsername = glUser.username.toLowerCase();
-            const glName = glUser.name?.toLowerCase();
-            const glEmail = glUser.email?.toLowerCase();
-            const authorMatch = cleanAuthorName && (cleanAuthorName === glUsername || cleanAuthorName === glName);
-            const emailMatch =
-              (glEmail && glEmail === norm) ||
-              glUsername === norm ||
-              glUsername === emailPrefix ||
-              (strippedPrefix.length >= 3 && strippedPrefix === glUsername) ||
-              (glName && (glName === norm || glName === emailPrefix));
-            if (authorMatch || emailMatch) {
-              return this.handleGitLabAvatar(acc.host, avatarUrl);
-            }
-          }
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    // 1. Fast-path: GitHub noreply email
-    if (email.endsWith('@users.noreply.github.com')) {
-      const local = email.split('@')[0] ?? '';
-      const username = local.includes('+') ? local.split('+')[1] : local;
-      if (username) return `https://avatars.githubusercontent.com/${encodeURIComponent(username)}`;
-    }
-
-    // 2. Fast-path: GitLab noreply email
-    if (email.endsWith('@users.noreply.gitlab.com') || email.endsWith('@noreply.gitlab.com')) {
-      const local = email.split('@')[0] ?? '';
-      const username = local.includes('-') ? local.split('-').slice(1).join('-') : local;
-      if (username) {
-        const gitlabUrl = await this.gitlab.resolveAvatarByEmail('https://gitlab.com', email);
-        if (gitlabUrl) return gitlabUrl;
-      }
-    }
-
-    // 3. Fast-path: Gitee noreply email
-    if (email.endsWith('@user.noreply.gitee.com') || email.endsWith('@noreply.gitee.com')) {
-      const local = email.split('@')[0] ?? '';
-      const candidate = local.includes('+') ? local.split('+')[1] : local.includes('_') ? local.split('_').slice(1).join('_') : local;
-      if (candidate) {
-        const giteeUrl = await this.resolveGiteeAvatar(candidate);
-        if (giteeUrl) return giteeUrl;
-      }
-    }
-
-    const matchedGitLabRemote = repoRemotes.find(r => !/github/i.test(r));
-
-    let matchedGitLabHost: string | undefined;
-    if (matchedGitLabRemote) {
-      try {
-        const url = new URL(matchedGitLabRemote.startsWith('git@')
-          ? `https://${matchedGitLabRemote.slice(4).replace(':', '/')}`
-          : matchedGitLabRemote);
-        matchedGitLabHost = url.origin;
-      } catch {
-        // Ignore parsing failure
-      }
-    }
-
-    // Dynamic routing:
-    if (isGitHubRepo) {
-      const githubUrl = await this.github.resolveAvatarByEmail(email, authorName);
+    if (platform === 'gitee') {
+      const giteeUrl = await this.gitee.resolveAvatarByEmail(trimmedEmail, authorName);
+      if (giteeUrl) return giteeUrl;
+    } else if (platform === 'github') {
+      const githubUrl = await this.github.resolveAvatarByEmail(trimmedEmail, authorName);
       if (githubUrl) return githubUrl;
-
-      const gitlabUrl = await this.gitlab.resolveAvatarByEmail(matchedGitLabHost, email, authorName);
-      if (gitlabUrl) return this.handleGitLabAvatar(matchedGitLabHost, gitlabUrl);
-    } else if (matchedGitLabHost) {
-      const gitlabUrl = await this.gitlab.resolveAvatarByEmail(matchedGitLabHost, email, authorName);
-      if (gitlabUrl) return this.handleGitLabAvatar(matchedGitLabHost, gitlabUrl);
+    } else if (platform === 'gitlab') {
+      const gitlabHost = this.extractGitLabHost(repoRemotes);
+      const gitlabUrl = await this.gitlab.resolveAvatarByEmail(gitlabHost, trimmedEmail, authorName);
+      if (gitlabUrl) return this.handleGitLabAvatar(gitlabHost, gitlabUrl);
     } else {
-      // Non-GitHub repo: check GitLab first if any account configured
-      const accounts = await this.gitlab.getAllAccounts();
-      for (const acc of accounts) {
-        const gitlabUrl = await this.gitlab.resolveAvatarByEmail(acc.host, email, authorName);
+      // generic 仓库：依次尝试已配置的提供者
+      const gitlabAccounts = await this.gitlab.getAllAccounts();
+      for (const acc of gitlabAccounts) {
+        const gitlabUrl = await this.gitlab.resolveAvatarByEmail(acc.host, trimmedEmail, authorName);
         if (gitlabUrl) return this.handleGitLabAvatar(acc.host, gitlabUrl);
       }
-      // 非 GitHub 仓库不向 GitHub API 兜底
+      const giteeUrl = await this.gitee.resolveAvatarByEmail(trimmedEmail, authorName);
+      if (giteeUrl) return giteeUrl;
+
+      const githubUrl = await this.github.resolveAvatarByEmail(trimmedEmail, authorName);
+      if (githubUrl) return githubUrl;
     }
 
-    // 3. Fallback to Gravatar check
-    const gravatarUrl = await this.checkGravatar(email);
-    if (gravatarUrl) return gravatarUrl;
+    // 兜底 Gravatar 探测
+    return await this.checkGravatar(trimmedEmail);
+  }
 
-    return null;
+  private extractGitLabHost(repoRemotes: string[]): string | undefined {
+    const gitlabRemote = repoRemotes.find(r => /gitlab/i.test(r));
+    if (gitlabRemote) {
+      try {
+        const clean = gitlabRemote.trim();
+        if (clean.startsWith('git@')) {
+          const hostPart = clean.slice(4).split(':')[0];
+          return `https://${hostPart}`;
+        }
+        return new URL(clean).origin;
+      } catch {
+        return undefined;
+      }
+    }
+
+    const configuredHosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+    for (const remote of repoRemotes) {
+      for (const host of configuredHosts) {
+        try {
+          const h = new URL(host).hostname.toLowerCase();
+          if (h && remote.toLowerCase().includes(h)) return host;
+        } catch {
+          // Ignore
+        }
+      }
+    }
+    return undefined;
   }
 
   private async handleGitLabAvatar(host: string | undefined, avatarUrl: string): Promise<string> {
@@ -284,25 +355,11 @@ export class AvatarService {
     return avatarUrl;
   }
 
-  private async resolveGiteeAvatar(username: string): Promise<string | null> {
-    try {
-      const res = await fetch(`https://gitee.com/api/v5/users/${encodeURIComponent(username)}`);
-      if (!res.ok) return null;
-      const data = await res.json() as { avatar_url?: string };
-      if (data.avatar_url && !data.avatar_url.includes('no_portrait.png')) {
-        return data.avatar_url;
-      }
-    } catch {
-      // Ignore
-    }
-    return null;
-  }
-
   private async checkGravatar(email: string): Promise<string | null> {
     try {
       const hash = crypto.createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
       const testUrl = `https://gravatar.com/avatar/${hash}?d=404&s=40`;
-      const res = await fetch(testUrl, { method: 'HEAD' });
+      const res = await fetch(testUrl, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
       if (res.ok) {
         return `https://gravatar.com/avatar/${hash}?d=404`;
       }
@@ -377,8 +434,32 @@ export class AvatarService {
     }
   }
 
+  clearCacheForPlatform(platform: 'github' | 'gitee' | 'gitlab'): void {
+    const prefix = `${platform}:`;
+    let changed = false;
+    for (const key of Array.from(this.memoryCache.keys())) {
+      if (key.startsWith(prefix)) {
+        this.memoryCache.delete(key);
+        changed = true;
+      }
+    }
+    for (const key of Array.from(this.inFlight.keys())) {
+      if (key.startsWith(prefix)) {
+        this.inFlight.delete(key);
+      }
+    }
+    if (platform === 'gitee') {
+      this.gitee.clearCache();
+    }
+    if (changed) {
+      this.scheduleSave(true);
+    }
+  }
+
   clearCache(): void {
     this.memoryCache.clear();
+    this.inFlight.clear();
+    this.gitee.clearCache();
     void this.context.globalState.update(AVATAR_CACHE_KEY, {});
   }
 }

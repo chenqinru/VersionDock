@@ -6,6 +6,7 @@ import { getVscodeGitApi, getVscodeRepository } from '../git/VscodeGitApi';
 import type { VersionDockLogger } from '../utils/Logger';
 import { GitHubRemoteProvider } from './GitHubRemoteProvider';
 import { GitLabRemoteProvider } from './GitLabRemoteProvider';
+import { GiteeRemoteProvider } from './GiteeRemoteProvider';
 import { AvatarService } from './AvatarService';
 import type { RemoteAccountInfo } from '../types/messages';
 import { RemoteApiError } from './api';
@@ -24,7 +25,7 @@ function providerIcon(kind: RemoteProviderKind): string {
 }
 
 function visibilityOptions(kind: RemoteProviderKind): Array<{ label: string; value: RemoteVisibility; description: string }> {
-  if (kind === 'github') {
+  if (kind === 'github' || kind === 'gitee') {
     return [
       { label: `$(lock) ${vscode.l10n.t('Private')}`, value: 'private', description: vscode.l10n.t('Only people with access can view this repository.') },
       { label: `$(globe) ${vscode.l10n.t('Public')}`, value: 'public', description: vscode.l10n.t('Anyone on the internet can view this repository.') },
@@ -40,6 +41,7 @@ function visibilityOptions(kind: RemoteProviderKind): Array<{ label: string; val
 export class RemoteRepositoryService implements vscode.Disposable {
   readonly github: GitHubRemoteProvider;
   readonly gitlab: GitLabRemoteProvider;
+  readonly gitee: GiteeRemoteProvider;
   readonly avatarService: AvatarService;
   private readonly providers: RemoteRepositoryProvider[];
   private readonly disposables: vscode.Disposable[] = [];
@@ -57,21 +59,48 @@ export class RemoteRepositoryService implements vscode.Disposable {
   ) {
     this.github = new GitHubRemoteProvider(logger);
     this.gitlab = new GitLabRemoteProvider(context, logger);
-    this.avatarService = new AvatarService(context, this.github, this.gitlab, logger);
-    this.providers = [this.github, this.gitlab];
+    this.gitee = new GiteeRemoteProvider(context, logger);
+    this.avatarService = new AvatarService(context, this.github, this.gitlab, this.gitee, logger);
+    this.providers = [this.github, this.gitlab, this.gitee];
     this.disposables.push(this.gitlab);
+    this.disposables.push(this.gitee);
+    this.disposables.push(this.avatarService);
     this.disposables.push(this._onDidChangeAccounts);
+
+    // 监听账号变更：仅在某平台账号被真正断开/移除时，才定向清理该平台的头像缓存，杜绝窗口初始化或普通 session 刷新时全量清空缓存
+    let prevGiteeHasAccount = Boolean(context.globalState.get('versiondock.remote.gitee.account'));
     this.disposables.push(
-      this.gitlab.onDidChangeAccounts(() => {
-        this.avatarService.clearCache();
+      this.gitee.onDidChangeAccounts(() => {
+        const curGiteeHasAccount = Boolean(context.globalState.get('versiondock.remote.gitee.account'));
+        if (prevGiteeHasAccount && !curGiteeHasAccount) {
+          this.avatarService.clearCacheForPlatform('gitee');
+        }
+        prevGiteeHasAccount = curGiteeHasAccount;
         this._onDidChangeAccounts.fire();
       })
     );
+
+    let prevGitLabHosts = context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+    this.disposables.push(
+      this.gitlab.onDidChangeAccounts(() => {
+        const curGitLabHosts = context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+        if (prevGitLabHosts.length > 0 && curGitLabHosts.length === 0) {
+          this.avatarService.clearCacheForPlatform('gitlab');
+        }
+        prevGitLabHosts = curGitLabHosts;
+        this._onDidChangeAccounts.fire();
+      })
+    );
+
     this.disposables.push(
       vscode.authentication.onDidChangeSessions(e => {
         if (e.provider.id === 'github') {
-          this.avatarService.clearCache();
-          this._onDidChangeAccounts.fire();
+          void this.github.getSession({ createIfNone: false }).then(session => {
+            if (!session) {
+              this.avatarService.clearCacheForPlatform('github');
+            }
+            this._onDidChangeAccounts.fire();
+          }).catch(() => {});
         }
       })
     );
@@ -163,11 +192,36 @@ export class RemoteRepositoryService implements vscode.Disposable {
       // Ignore error
     }
 
+    // 3. Gitee
+    try {
+      const giteeAccounts = await this.gitee.getAllAccounts();
+      for (const acc of giteeAccounts) {
+        const emails: string[] = [];
+        const gEmails = await this.gitee.getUserEmails(acc.token).catch(() => []);
+        for (const e of gEmails) {
+          if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
+            emails.push(e);
+          }
+        }
+        accounts.push({
+          provider: 'gitee',
+          id: String(acc.id),
+          username: acc.username,
+          name: acc.name,
+          avatarUrl: acc.avatarUrl,
+          host: 'https://gitee.com',
+          emails: emails.length > 0 ? emails : undefined,
+        });
+      }
+    } catch {
+      // Ignore error
+    }
+
     return accounts;
   }
 
   async manageAccounts(): Promise<void> {
-    type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' | 'clear-cache' };
+    type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' | 'gitee' | 'clear-cache' };
 
     const [githubSession, connected] = await Promise.all([
       this.github.getSession({ createIfNone: false }).catch(() => undefined),
@@ -186,40 +240,69 @@ export class RemoteRepositoryService implements vscode.Disposable {
       };
     }
     const glAccounts = connected.filter(a => a.provider === 'gitlab');
+    const gtAccount = connected.find(a => a.provider === 'gitee');
 
+    const ghConnected = Boolean(ghAccount || githubSession);
+    const glConnected = glAccounts.length > 0;
+    const gtConnected = Boolean(gtAccount);
+
+    // 1. Label（第一行左侧）：统一为平台名称与当前账号，避免“管理”、“登录”等前缀导致视觉参差不齐
     const githubLabel = ghAccount
-      ? `$(github) GitHub (${ghAccount.username})`
+      ? `GitHub (${ghAccount.username})`
       : githubSession
-        ? `$(github) GitHub (${githubSession.account.label})`
-        : `$(github) ${vscode.l10n.t('Sign in to GitHub')}`;
+        ? `GitHub (${githubSession.account.label})`
+        : 'GitHub';
 
+    const gitlabLabel = glAccounts.length === 1
+      ? `GitLab (${glAccounts[0].username})`
+      : 'GitLab';
+
+    const giteeLabel = gtAccount
+      ? `Gitee (@${gtAccount.username})`
+      : 'Gitee';
+
+    // 2. Description（第一行右侧）：统一只显示状态徽章
+    const githubDescription = ghConnected
+      ? `$(check) ${vscode.l10n.t('Connected')}`
+      : vscode.l10n.t('Not connected');
+
+    const gitlabDescription = glConnected
+      ? (glAccounts.length > 1
+          ? `$(check) ${vscode.l10n.t('{0} account(s) connected', glAccounts.length)}`
+          : `$(check) ${vscode.l10n.t('Connected')}`)
+      : vscode.l10n.t('Not connected');
+
+    const giteeDescription = gtConnected
+      ? `$(check) ${vscode.l10n.t('Connected')}`
+      : vscode.l10n.t('Not connected');
+
+    // 3. Detail（第二行下方副标题）：统一展示账号信息或操作引导
     const githubDetail = ghAccount?.name
       ? `${ghAccount.name} (@${ghAccount.username})`
       : githubSession
         ? vscode.l10n.t('Connected as {0}. Click to manage account.', githubSession.account.label)
         : vscode.l10n.t('Use the VS Code GitHub authentication provider');
 
-    const gitlabDescription = glAccounts.length > 0
-      ? vscode.l10n.t('{0} account(s) connected', glAccounts.length)
+    const gitlabDetail = glConnected
+      ? glAccounts.map(a => `${a.name || a.username} (${a.host})`).join(' • ')
       : vscode.l10n.t('Add, re-authenticate, or remove GitLab Personal Access Tokens');
 
-    const gitlabDetail = glAccounts.length > 0
-      ? glAccounts.map(a => `${a.name || a.username} (${a.host})`).join(' • ')
-      : undefined;
+    const giteeDetail = gtAccount?.name
+      ? `${gtAccount.name} (@${gtAccount.username})`
+      : gtAccount
+        ? vscode.l10n.t('Connected as @{0}. Click to switch or manage account.', gtAccount.username)
+        : vscode.l10n.t('Connect using a Gitee Personal Access Token');
 
-    const [ghIconUri, glIconUri] = await Promise.all([
+    const [ghIconUri, glIconUri, gtIconUri] = await Promise.all([
       ghAccount?.avatarUrl ? this.avatarService.getLocalAvatarUri(ghAccount.avatarUrl) : undefined,
       glAccounts[0]?.avatarUrl ? this.avatarService.getLocalAvatarUri(glAccounts[0].avatarUrl) : undefined,
+      gtAccount?.avatarUrl ? this.avatarService.getLocalAvatarUri(gtAccount.avatarUrl) : undefined,
     ]);
-
-    const gitlabLabel = glAccounts[0]
-      ? `GitLab (${glAccounts[0].username})`
-      : vscode.l10n.t('Manage GitLab accounts');
 
     const items: AccountAction[] = [
       {
-        label: ghIconUri ? `GitHub (${ghAccount?.username ?? ''})` : githubLabel,
-        description: githubSession ? `$(check) ${vscode.l10n.t('Connected')}` : vscode.l10n.t('Not connected'),
+        label: ghIconUri ? githubLabel : `$(github) ${githubLabel}`,
+        description: githubDescription,
         detail: githubDetail,
         iconPath: ghIconUri,
         action: 'github',
@@ -232,8 +315,16 @@ export class RemoteRepositoryService implements vscode.Disposable {
         action: 'gitlab',
       },
       {
+        label: gtIconUri ? giteeLabel : `$(repo) ${giteeLabel}`,
+        description: giteeDescription,
+        detail: giteeDetail,
+        iconPath: gtIconUri,
+        action: 'gitee',
+      },
+      {
         label: `$(trash) ${vscode.l10n.t('Clear Avatar Cache')}`,
-        description: vscode.l10n.t('Purge cached avatars and force reload'),
+        description: vscode.l10n.t('Cache'),
+        detail: vscode.l10n.t('Purge cached avatars and force reload'),
         action: 'clear-cache',
       },
     ];
@@ -241,11 +332,16 @@ export class RemoteRepositoryService implements vscode.Disposable {
     if (!selected) return;
     if (selected.action === 'clear-cache') {
       this.avatarService.clearCache();
+      this._onDidChangeAccounts.fire();
       void vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: Avatar cache cleared.'));
       return;
     }
     if (selected.action === 'gitlab') {
       await this.gitlab.manageAccounts();
+      return;
+    }
+    if (selected.action === 'gitee') {
+      await this.gitee.manageAccounts();
       return;
     }
 
@@ -363,7 +459,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
     this.apiDisposables.push(api.registerCredentialsProvider({
       getCredentials: host => this.getCredentials(host),
     }));
-    this.logger.info('Remote', 'Registered GitHub and GitLab providers with VS Code Git API');
+    this.logger.info('Remote', 'Registered remote providers (GitHub, GitLab, Gitee) with VS Code Git API');
   }
 
   private makePublisher(provider: RemoteRepositoryProvider, api: API): vscode.Disposable {
@@ -506,7 +602,11 @@ export class RemoteRepositoryService implements vscode.Disposable {
     type ProviderPick = vscode.QuickPickItem & { provider: RemoteRepositoryProvider };
     const items: ProviderPick[] = this.providers.map(provider => ({
       label: `${providerIcon(provider.kind) === 'github' ? '$(github)' : '$(repo)'} ${provider.name}`,
-      description: provider.kind === 'gitlab' ? vscode.l10n.t('GitLab.com or a configured self-hosted instance') : vscode.l10n.t('GitHub.com'),
+      description: provider.kind === 'gitlab'
+        ? vscode.l10n.t('GitLab.com or a configured self-hosted instance')
+        : provider.kind === 'gitee'
+          ? vscode.l10n.t('Gitee.com')
+          : vscode.l10n.t('GitHub.com'),
       provider,
     }));
     const selected = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('Select remote provider') });
@@ -550,6 +650,9 @@ export class RemoteRepositoryService implements vscode.Disposable {
     if (!url) return [];
     if (/github\.com/i.test(url)) {
       return this.github.getProtectedBranches(url);
+    }
+    if (/gitee\.com/i.test(url)) {
+      return this.gitee.getProtectedBranches(url);
     }
     return this.gitlab.getProtectedBranches(url);
   }

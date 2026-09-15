@@ -21,6 +21,7 @@ function isAccountCompatibleWithRepo(
   if (!repoRemoteUrl) return false;
   const lowerRemote = repoRemoteUrl.toLowerCase();
   const isGitHubRepo = lowerRemote.includes('github.com') || lowerRemote.includes('github');
+  const isGiteeRepo = lowerRemote.includes('gitee.com') || lowerRemote.includes('gitee');
   let isGitLabRepo = lowerRemote.includes('gitlab');
 
   if (!isGitLabRepo && acc.provider === 'gitlab' && acc.host) {
@@ -38,8 +39,12 @@ function isAccountCompatibleWithRepo(
     return isGitHubRepo;
   }
 
+  if (acc.provider === 'gitee') {
+    return isGiteeRepo;
+  }
+
   if (acc.provider === 'gitlab') {
-    return isGitLabRepo && !isGitHubRepo;
+    return isGitLabRepo && !isGitHubRepo && !isGiteeRepo;
   }
 
   return false;
@@ -417,16 +422,8 @@ async function createCommitDetailPanel(
   if (matchedAvatar) {
     authorAvatarUrl = matchedAvatar;
   } else if (manager.remoteService?.avatarService && commitInfo.authorEmail) {
-    try {
-      const avatarMap = await manager.remoteService.avatarService.resolveAvatars(
-        [commitInfo.authorEmail],
-        remotes,
-        commitInfo.authorName ? { [commitInfo.authorEmail.trim().toLowerCase()]: commitInfo.authorName } : undefined,
-      );
-      authorAvatarUrl = avatarMap[commitInfo.authorEmail.trim().toLowerCase()] ?? null;
-    } catch {
-      // Ignore
-    }
+    const avatarMap = manager.remoteService.avatarService.getCachedAvatars([commitInfo.authorEmail], remotes);
+    authorAvatarUrl = avatarMap[commitInfo.authorEmail.trim().toLowerCase()] ?? null;
   }
 
   panel.webview.html = getHtml(nonce, csp, codiconUri, {
@@ -445,8 +442,6 @@ async function createCommitDetailPanel(
     authorName: commitInfo.authorName,
     authorEmail: commitInfo.authorEmail,
     authorAvatarUrl,
-    connectedAccounts,
-    repoRemoteUrl: remotes[0],
     authorDate: commitInfo.authorDate,
     committerDate: commitInfo.committerDate,
     parents: commitInfo.parents,
@@ -862,22 +857,8 @@ async function createAggregatedCommitDetailPanel(
   }
 
   if (manager.remoteService?.avatarService && allEmails.length > 0) {
-    try {
-      const authorsMap: Record<string, string> = {};
-      for (const c of commitSummaries) {
-        if (c.authorName && c.authorEmail) {
-          authorsMap[c.authorEmail.trim().toLowerCase()] = c.authorName.trim();
-        }
-      }
-      const remoteAvatars = await manager.remoteService.avatarService.resolveAvatars(
-        allEmails,
-        allRemotes,
-        authorsMap,
-      );
-      avatarUrlsByEmail = { ...remoteAvatars, ...avatarUrlsByEmail };
-    } catch {
-      // Ignore
-    }
+    const remoteAvatars = manager.remoteService.avatarService.getCachedAvatars(allEmails, allRemotes);
+    avatarUrlsByEmail = { ...remoteAvatars, ...avatarUrlsByEmail };
   }
 
   panel.webview.html = getHtml(nonce, csp, codiconUri, {
@@ -898,8 +879,6 @@ async function createAggregatedCommitDetailPanel(
     authorName: options.message ?? t('Aggregated commit selection'),
     authorEmail: '',
     authorAvatarUrl: null,
-    connectedAccounts,
-    repoRemoteUrl: allRemotes[0],
     avatarUrlsByEmail,
     authorDate: firstCommit.authorDate,
     committerDate: firstCommit.committerDate,
@@ -1311,8 +1290,6 @@ interface PanelData {
   involvedRepoCount?: number;
   authorAvatarUrl?: string | null;
   avatarUrlsByEmail?: Record<string, string | null>;
-  connectedAccounts?: RemoteAccountInfo[];
-  repoRemoteUrl?: string;
 }
 
 function splitCommitMessage(fullMessage: string, fallbackSubject: string): { subject: string; body: string } {
@@ -1393,7 +1370,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
                 ${commitMessage.body ? `<pre class="commit-summary-body">${escHtml(commitMessage.body)}</pre>` : ''}
               </div>
               <div class="commit-summary-meta">
-                <span class="commit-summary-avatar" data-author-avatar data-author-name="${escHtml(commit.authorName)}" data-author-email="${escHtml(commit.authorEmail)}" data-avatar-size="20" title="${escHtml(commit.authorName)} &lt;${escHtml(commit.authorEmail)}&gt;" style="background: ${escHtml(commitBg)}; color: #fff;">
+                <span class="commit-summary-avatar" data-author-avatar data-author-name="${escHtml(commit.authorName)}" data-author-email="${escHtml(commit.authorEmail)}" data-author-initials="${escHtml(initials)}" data-avatar-size="20" title="${escHtml(commit.authorName)} &lt;${escHtml(commit.authorEmail)}&gt;" style="background: ${escHtml(commitBg)}; color: #fff;">
                   ${commitAvatarUrl
                     ? `<img src="${escHtml(commitAvatarUrl)}" alt="${escHtml(commit.authorName)}" style="width:20px;height:20px;border-radius:50%;object-fit:cover;" onerror="this.remove();" />`
                     : escHtml(initials)
@@ -1415,7 +1392,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
       <div>
         <div class="section-label">${escHtml(t('Author'))}</div>
         <div class="author-row">
-          <div class="avatar" id="authorAvatar" data-author-avatar data-author-name="${escHtml(data.authorName)}" data-author-email="${escHtml(data.authorEmail)}" data-avatar-size="36" title="${escHtml(data.authorName)} &lt;${escHtml(data.authorEmail)}&gt;" style="background: ${escHtml(authorBg)}; color: #fff;">
+          <div class="avatar" id="authorAvatar" data-author-avatar data-author-name="${escHtml(data.authorName)}" data-author-email="${escHtml(data.authorEmail)}" data-author-initials="${escHtml(authorInitials)}" data-avatar-size="36" title="${escHtml(data.authorName)} &lt;${escHtml(data.authorEmail)}&gt;" style="background: ${escHtml(authorBg)}; color: #fff;">
             ${data.authorAvatarUrl
               ? `<img src="${escHtml(data.authorAvatarUrl)}" alt="${escHtml(data.authorName)}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;" onerror="this.remove();" />`
               : escHtml(authorInitials)
@@ -3185,149 +3162,29 @@ ${leftPanelContent}
 
     // ── Author avatars (Host AvatarService integration + fallback) ──
     try {
-      (async () => {
-        function avatarColor(seed) {
-          let h = 0;
-          for (let i = 0; i < seed.length; i++) h = seed.charCodeAt(i) + ((h << 5) - h);
-          return 'hsl(' + (Math.abs(h) % 360) + ',55%,45%)';
-        }
-
-        function authorInitials(name) {
-          const parts = String(name || '').trim().split(/\\s+/).filter(Boolean);
-          if (parts.length === 0) return '?';
-          if (parts.length === 1) {
-            const word = parts[0] || '';
-            return (word.length > 1 ? word[0] + word[1] : word[0] || '?').toUpperCase();
-          }
-          return ((parts[0][0] || '') + (parts[parts.length - 1][0] || '')).toUpperCase();
-        }
-
-        function isBlankImage(url) {
-          return new Promise(resolve => {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => {
-              try {
-                const c = document.createElement('canvas');
-                c.width = 8; c.height = 8;
-                const ctx = c.getContext('2d');
-                if (!ctx) { resolve(false); return; }
-                ctx.drawImage(img, 0, 0, 8, 8);
-                const px = ctx.getImageData(0, 0, 8, 8).data;
-                const uniq = new Set();
-                for (let i = 0; i < px.length; i += 4)
-                  uniq.add((Math.round(px[i]/16) << 8) | (Math.round(px[i+1]/16) << 4) | Math.round(px[i+2]/16));
-                resolve(uniq.size <= 3);
-              } catch { resolve(false); }
-            };
-            img.onerror = () => resolve(true);
-            img.src = url;
-          });
-        }
-
-        const CONNECTED_ACCOUNTS = ${JSON.stringify(data.connectedAccounts ?? [])};
-        const REPO_REMOTE_URL = ${JSON.stringify(data.repoRemoteUrl ?? '')};
-
-        function isAccountCompatibleWithRepo(acc, repoRemoteUrl) {
-          if (!repoRemoteUrl) return false;
-          const lowerRemote = repoRemoteUrl.toLowerCase();
-          const isGitHubRepo = lowerRemote.includes('github.com') || lowerRemote.includes('github');
-          let isGitLabRepo = lowerRemote.includes('gitlab');
-          if (!isGitLabRepo && acc.provider === 'gitlab' && acc.host) {
-            try {
-              const hostUrl = new URL(acc.host);
-              if (hostUrl.hostname && lowerRemote.includes(hostUrl.hostname.toLowerCase())) {
-                isGitLabRepo = true;
-              }
-            } catch {}
-          }
-          if (acc.provider === 'github') return isGitHubRepo;
-          if (acc.provider === 'gitlab') return isGitLabRepo && !isGitHubRepo;
-          return false;
-        }
-
-        function findConnectedAvatar(authorName, authorEmail, repoRemoteUrl = REPO_REMOTE_URL) {
-          if (!CONNECTED_ACCOUNTS || CONNECTED_ACCOUNTS.length === 0) return null;
-          const compatibleAccounts = CONNECTED_ACCOUNTS.filter(acc => isAccountCompatibleWithRepo(acc, repoRemoteUrl));
-          if (compatibleAccounts.length === 0) return null;
-
-          const cleanName = (authorName || '').trim().toLowerCase();
-          const cleanEmail = (authorEmail || '').trim().toLowerCase();
-          const emailPrefix = cleanEmail.includes('@') ? cleanEmail.split('@')[0] : cleanEmail;
-          const strippedEmailPrefix = emailPrefix.replace(/\\d+$/, '');
-          const strippedName = cleanName.replace(/\\d+$/, '');
-
-          for (const acc of compatibleAccounts) {
-            if (!acc.avatarUrl) continue;
-            const username = (acc.username || '').trim().toLowerCase();
-            const displayName = (acc.name || '').trim().toLowerCase();
-            const emails = (acc.emails || []).map(e => e.trim().toLowerCase());
-
-            if (cleanName && cleanName === username) return acc.avatarUrl;
-            if (cleanName && displayName && cleanName === displayName) return acc.avatarUrl;
-            if (cleanEmail && emails.includes(cleanEmail)) return acc.avatarUrl;
-            if (emailPrefix && emailPrefix === username) return acc.avatarUrl;
-            if (strippedEmailPrefix.length >= 3 && strippedEmailPrefix === username) return acc.avatarUrl;
-            if (strippedName.length >= 3 && strippedName === username) return acc.avatarUrl;
-            if (displayName && strippedName.length >= 3 && strippedName === displayName.replace(/\\d+$/, '')) {
-              return acc.avatarUrl;
-            }
-          }
-          return null;
-        }
-
+      (function() {
         const avatarElements = Array.from(document.querySelectorAll('[data-author-avatar]'));
-        avatarElements.forEach(avatarEl => {
-          if (!avatarEl.querySelector('img')) {
-            const authorName = avatarEl.dataset.authorName || '';
-            const authorEmail = avatarEl.dataset.authorEmail || '';
-            const size = Number(avatarEl.dataset.avatarSize || '20');
-            const avatarSeed = authorEmail.trim() || authorName.trim();
-            const connectedUrl = findConnectedAvatar(authorName, authorEmail);
-            if (connectedUrl) {
-              const img = document.createElement('img');
-              img.src = connectedUrl;
-              img.alt = authorName;
-              img.style.cssText = 'width:' + size + 'px;height:' + size + 'px;border-radius:50%;object-fit:cover;';
-              img.onerror = () => {
-                img.remove();
-                avatarEl.textContent = authorInitials(authorName);
-                avatarEl.style.background = avatarColor(avatarSeed);
-              };
-              avatarEl.textContent = '';
-              avatarEl.style.background = 'none';
-              avatarEl.appendChild(img);
-            } else {
-              avatarEl.textContent = authorInitials(authorName);
-              avatarEl.style.background = avatarColor(avatarSeed);
-              avatarEl.style.color = '#fff';
-            }
-          }
-        });
 
         // Listen for host resolved avatars
-        window.addEventListener('message', event => {
+        window.addEventListener('message', function(event) {
           const msg = event.data;
           if (msg && msg.type === 'avatarsResolved' && msg.avatars) {
-            avatarElements.forEach(avatarEl => {
+            avatarElements.forEach(function(avatarEl) {
               if (avatarEl.querySelector('img')) return;
               const email = (avatarEl.dataset.authorEmail || '').trim().toLowerCase();
-              const authorName = avatarEl.dataset.authorName || '';
-              const url = msg.avatars[email] || findConnectedAvatar(authorName, email);
+              const url = msg.avatars[email];
               if (url) {
                 const size = Number(avatarEl.dataset.avatarSize || '20');
-                const avatarSeed = email.trim() || authorName.trim();
+                const authorName = avatarEl.dataset.authorName || '';
                 const img = document.createElement('img');
                 img.src = url;
                 img.alt = authorName;
-                img.style.cssText = 'width:' + size + 'px;height:' + size + 'px;border-radius:50%;object-fit:cover;';
-                img.onerror = () => {
+                img.style.cssText = 'width:' + size + 'px;height:' + size + 'px;border-radius:50%;object-fit:cover;display:block;';
+                img.onerror = function() {
                   img.remove();
-                  avatarEl.textContent = authorInitials(authorName);
-                  avatarEl.style.background = avatarColor(avatarSeed);
+                  avatarEl.textContent = avatarEl.dataset.authorInitials || '';
                 };
                 avatarEl.textContent = '';
-                avatarEl.style.background = 'none';
                 avatarEl.appendChild(img);
               }
             });
@@ -3337,7 +3194,7 @@ ${leftPanelContent}
         // Request resolution for pending avatars from host
         const pendingEmails = [];
         const pendingAuthors = [];
-        avatarElements.forEach(el => {
+        avatarElements.forEach(function(el) {
           if (!el.querySelector('img') && el.dataset.authorEmail) {
             const em = el.dataset.authorEmail.trim().toLowerCase();
             if (!pendingEmails.includes(em)) {
@@ -3349,59 +3206,8 @@ ${leftPanelContent}
         if (pendingEmails.length > 0) {
           vscode.postMessage({ type: 'resolveAvatars', emails: pendingEmails, authors: pendingAuthors });
         }
-
-        async function resolveLocalAvatarUrl(authorEmail, size, authorName) {
-          const connected = findConnectedAvatar(authorName, authorEmail);
-          if (connected) return connected;
-          if (!authorEmail.trim()) return null;
-          if (authorEmail.toLowerCase().endsWith('@users.noreply.github.com')) {
-            const local = authorEmail.split('@')[0] || '';
-            const username = local.includes('+') ? local.split('+')[1] : local;
-            if (username) {
-              const url = 'https://avatars.githubusercontent.com/' + encodeURIComponent(username) + '?size=' + (size * 2);
-              if (!(await isBlankImage(url))) return url;
-            }
-            return null;
-          }
-          if (authorEmail.toLowerCase().endsWith('@users.noreply.gitlab.com') || authorEmail.toLowerCase().endsWith('@noreply.gitlab.com')) {
-            const local = authorEmail.split('@')[0] || '';
-            const username = local.includes('-') ? local.split('-').slice(1).join('-') : local;
-            if (username) {
-              const url = 'https://gitlab.com/api/v4/avatar?email=' + encodeURIComponent(authorEmail) + '&size=' + (size * 2);
-              if (!(await isBlankImage(url))) return url;
-            }
-          }
-          const norm = authorEmail.trim().toLowerCase();
-          const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(norm));
-          const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
-          const url = 'https://gravatar.com/avatar/' + hex + '?s=' + (size * 2) + '&d=404';
-          return (await isBlankImage(url)) ? null : url;
-        }
-
-        await Promise.all(avatarElements.map(async avatarEl => {
-          if (avatarEl.querySelector('img')) return;
-          const authorName = avatarEl.dataset.authorName || '';
-          const authorEmail = avatarEl.dataset.authorEmail || '';
-          const size = Number(avatarEl.dataset.avatarSize || '20');
-          const avatarSeed = authorEmail.trim() || authorName.trim();
-          const url = await resolveLocalAvatarUrl(authorEmail, size, authorName);
-          if (!url || avatarEl.querySelector('img')) return;
-
-          const img = document.createElement('img');
-          img.src = url;
-          img.alt = authorName;
-          img.style.cssText = 'width:' + size + 'px;height:' + size + 'px;border-radius:50%;object-fit:cover;';
-          img.onerror = () => {
-            img.remove();
-            avatarEl.textContent = authorInitials(authorName);
-            avatarEl.style.background = avatarColor(avatarSeed);
-          };
-          avatarEl.textContent = '';
-          avatarEl.style.background = 'none';
-          avatarEl.appendChild(img);
-        }));
       })();
-    } catch(e) { /* avatars are optional */ }
+    } catch (_) {}
 
     // ── Branch / tag badges — runs after render, isolated ──
     try {
