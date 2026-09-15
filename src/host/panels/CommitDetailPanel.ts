@@ -460,15 +460,7 @@ async function createCommitDetailPanel(
     if (msg.type === 'resolveAvatars' && Array.isArray(msg.emails)) {
       const remoteService = manager.remoteService;
       if (remoteService) {
-        const authorsMap: Record<string, string> = {};
-        if (Array.isArray(msg.authors)) {
-          for (const a of msg.authors) {
-            if (a.name && a.email) {
-              authorsMap[a.email.trim().toLowerCase()] = a.name.trim();
-            }
-          }
-        }
-        const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, remotes, authorsMap).catch(() => ({}));
+        const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, remotes, msg.authors).catch(() => ({}));
         panel.webview.postMessage({ type: 'avatarsResolved', avatars });
       }
       return;
@@ -895,15 +887,7 @@ async function createAggregatedCommitDetailPanel(
     if (msg.type === 'resolveAvatars' && Array.isArray(msg.emails)) {
       const remoteService = manager.remoteService;
       if (remoteService) {
-        const authorsMap: Record<string, string> = {};
-        if (Array.isArray(msg.authors)) {
-          for (const a of msg.authors) {
-            if (a.name && a.email) {
-              authorsMap[a.email.trim().toLowerCase()] = a.name.trim();
-            }
-          }
-        }
-        const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, allRemotes, authorsMap).catch(() => ({}));
+        const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, allRemotes, msg.authors).catch(() => ({}));
         panel.webview.postMessage({ type: 'avatarsResolved', avatars });
       }
       return;

@@ -1964,6 +1964,42 @@ export class WorkspaceGitManager implements vscode.Disposable {
     return undefined;
   }
 
+  async getRemotes(repoId?: string): Promise<string[]> {
+    if (repoId) {
+      const repo = this.getRepo(repoId);
+      if (repo && repo.kind !== 'svn') {
+        try {
+          const withUrls = await repo.getRemotesWithUrls().catch(() => []);
+          const urls = withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean);
+          if (urls.length > 0) return urls;
+          return repo.meta?.remoteUrl ? [repo.meta.remoteUrl] : [];
+        } catch {
+          return repo.meta?.remoteUrl ? [repo.meta.remoteUrl] : [];
+        }
+      }
+      return [];
+    }
+    const remotes: string[] = [];
+    for (const meta of this.getRepoMetas()) {
+      if (meta.kind === 'svn') continue;
+      const repo = this.getRepo(meta.id);
+      if (repo) {
+        try {
+          const withUrls = await repo.getRemotesWithUrls().catch(() => []);
+          const urls = withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean);
+          if (urls.length > 0) {
+            remotes.push(...urls);
+          } else if (meta.remoteUrl) {
+            remotes.push(meta.remoteUrl);
+          }
+        } catch {
+          if (meta.remoteUrl) remotes.push(meta.remoteUrl);
+        }
+      }
+    }
+    return Array.from(new Set(remotes));
+  }
+
   normalizeRepoIds(repoIds: string[]): string[] {
     return Array.from(new Set(repoIds.map(repoId => {
       if (this.getRepo(repoId)) return repoId;

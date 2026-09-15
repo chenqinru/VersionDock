@@ -2601,11 +2601,13 @@
   "Operation cancelled.": "Operation cancelled.",
   "No Git repositories found to publish.": "No Git repositories found to publish.",
   "Select Git Repository to Publish": "Select Git Repository to Publish",
-  "Choose a repository to publish to GitHub or GitLab": "Choose a repository to publish to GitHub, GitLab, or Gitee",
+  "Choose a repository to publish to GitHub or GitLab": "Choose a repository to publish to GitHub or GitLab",
   "Choose a repository to publish to GitHub, GitLab, or Gitee": "Choose a repository to publish to GitHub, GitLab, or Gitee",
   "Repository \"{0}\" already has configured remote(s): {1}": "Repository \"{0}\" already has configured remote(s): {1}",
-  "Publish to GitHub / GitLab…": "Publish to GitHub / GitLab / Gitee…",
-  "Unpublished repository — Click to publish to GitHub or GitLab": "Unpublished repository — Click to publish to GitHub, GitLab, or Gitee",
+  "Publish to GitHub / GitLab…": "Publish to GitHub / GitLab…",
+  "Publish to GitHub / GitLab / Gitee…": "Publish to GitHub / GitLab / Gitee…",
+  "Unpublished repository — Click to publish to GitHub or GitLab": "Unpublished repository — Click to publish to GitHub or GitLab",
+  "Unpublished repository — Click to publish to GitHub, GitLab, or Gitee": "Unpublished repository — Click to publish to GitHub, GitLab, or Gitee",
   "Publish…": "Publish…",
   "Git command-line tool is not found. Please install Git and ensure 'git' is available in your PATH.": "Git command-line tool is not found. Please install Git and ensure 'git' is available in your PATH.",
   "Undoing commit…": "Undoing commit…",
@@ -2649,5 +2651,6 @@
   "Disconnect": "Disconnect",
   "Clear Avatar Cache": "Clear Avatar Cache",
   "Purge cached avatars and force reload": "Purge cached avatars and force reload",
-  "Cache": "Cache"
+  "Cache": "Cache",
+  "VersionDock: Avatar cache cleared.": "VersionDock: Avatar cache cleared."
 }

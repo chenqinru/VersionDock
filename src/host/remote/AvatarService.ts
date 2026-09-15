@@ -157,6 +157,30 @@ export class AvatarService implements vscode.Disposable {
     return 'generic';
   }
 
+  private getValidCacheEntry(normalized: string, platform: string, now: number): CacheEntry | undefined {
+    const cacheKey = `${platform}:${normalized}`;
+    let cached = this.memoryCache.get(cacheKey);
+
+    if (!cached) {
+      const genericCached = this.memoryCache.get(`generic:${normalized}`);
+      if (genericCached && genericCached.url) {
+        cached = genericCached;
+      } else if (platform === 'generic') {
+        for (const p of ['github', 'gitee', 'gitlab']) {
+          const tryCached = this.memoryCache.get(`${p}:${normalized}`);
+          if (tryCached && tryCached.url) {
+            cached = tryCached;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!cached) return undefined;
+    const ttl = cached.url ? POSITIVE_CACHE_TTL : NEGATIVE_CACHE_TTL;
+    return now - cached.timestamp < ttl ? cached : undefined;
+  }
+
   getCachedAvatars(emails: string[], repoRemotes: string[] = []): Record<string, string | null> {
     const result: Record<string, string | null> = {};
     const platform = this.getPlatformScope(repoRemotes);
@@ -164,34 +188,9 @@ export class AvatarService implements vscode.Disposable {
     for (const email of emails) {
       const normalized = email.trim().toLowerCase();
       if (!normalized) continue;
-
-      const cacheKey = `${platform}:${normalized}`;
-      let cached = this.memoryCache.get(cacheKey);
-
-      // 兜底命中：如果当前平台没有缓存，尝试 generic（如 Gravatar）或在 generic 仓库下查找其它已缓存平台的头像
-      if (!cached) {
-        const genericCached = this.memoryCache.get(`generic:${normalized}`);
-        if (genericCached && genericCached.url) {
-          cached = genericCached;
-        } else if (platform === 'generic') {
-          for (const p of ['github', 'gitee', 'gitlab']) {
-            const tryCached = this.memoryCache.get(`${p}:${normalized}`);
-            if (tryCached && tryCached.url) {
-              cached = tryCached;
-              break;
-            }
-          }
-        }
-      }
-
-      if (cached && cached.url) {
-        if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
-          result[normalized] = cached.url;
-        }
-      } else if (cached && !cached.url) {
-        if (now - cached.timestamp < NEGATIVE_CACHE_TTL) {
-          result[normalized] = null;
-        }
+      const entry = this.getValidCacheEntry(normalized, platform, now);
+      if (entry !== undefined) {
+        result[normalized] = entry.url;
       }
     }
     return result;
@@ -200,10 +199,19 @@ export class AvatarService implements vscode.Disposable {
   async resolveAvatars(
     emails: string[],
     repoRemotes: string[] = [],
-    authorsMap?: Record<string, string>,
+    authors?: Record<string, string> | Array<{ name?: string; email: string }>,
   ): Promise<Record<string, string | null>> {
     const result: Record<string, string | null> = {};
     const pending: Array<{ email: string; cacheKey: string }> = [];
+
+    const authorsMap: Record<string, string> = {};
+    if (Array.isArray(authors)) {
+      for (const a of authors) {
+        if (a.name && a.email) authorsMap[a.email.trim().toLowerCase()] = a.name.trim();
+      }
+    } else if (authors) {
+      Object.assign(authorsMap, authors);
+    }
 
     const platform = this.getPlatformScope(repoRemotes);
     const now = Date.now();
@@ -211,22 +219,15 @@ export class AvatarService implements vscode.Disposable {
       const normalized = email.trim().toLowerCase();
       if (!normalized) continue;
 
-      const cacheKey = `${platform}:${normalized}`;
-      const cached = this.memoryCache.get(cacheKey);
-      const authorName = authorsMap?.[normalized];
-
-      if (cached && cached.url) {
-        if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
-          result[normalized] = cached.url;
-          continue;
-        }
-      } else if (cached && !cached.url && !authorName) {
-        if (now - cached.timestamp < NEGATIVE_CACHE_TTL) {
-          result[normalized] = null;
+      const authorName = authorsMap[normalized];
+      const entry = this.getValidCacheEntry(normalized, platform, now);
+      if (entry !== undefined) {
+        if (entry.url !== null || !authorName) {
+          result[normalized] = entry.url;
           continue;
         }
       }
-      pending.push({ email: normalized, cacheKey });
+      pending.push({ email: normalized, cacheKey: `${platform}:${normalized}` });
     }
 
     if (pending.length === 0) {
@@ -238,7 +239,7 @@ export class AvatarService implements vscode.Disposable {
       const chunk = pending.slice(i, i + concurrency);
       await Promise.all(
         chunk.map(async item => {
-          const authorName = authorsMap?.[item.email];
+          const authorName = authorsMap[item.email];
           const url = await this.resolveSingleAvatar(item.email, repoRemotes, authorName, platform);
           result[item.email] = url;
           this.memoryCache.set(item.cacheKey, { url, timestamp: Date.now() });

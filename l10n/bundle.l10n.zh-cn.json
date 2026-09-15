@@ -2601,11 +2601,13 @@
   "Operation cancelled.": "操作已取消。",
   "No Git repositories found to publish.": "未找到可发布的 Git 仓库。",
   "Select Git Repository to Publish": "选择要发布的 Git 仓库",
-  "Choose a repository to publish to GitHub or GitLab": "选择要发布到 GitHub、GitLab 或 Gitee 的本地仓库",
+  "Choose a repository to publish to GitHub or GitLab": "选择要发布到 GitHub 或 GitLab 的本地仓库",
   "Choose a repository to publish to GitHub, GitLab, or Gitee": "选择要发布到 GitHub、GitLab 或 Gitee 的本地仓库",
   "Repository \"{0}\" already has configured remote(s): {1}": "仓库 \"{0}\" 已配置远程仓库: {1}",
-  "Publish to GitHub / GitLab…": "发布到 GitHub / GitLab / Gitee…",
-  "Unpublished repository — Click to publish to GitHub or GitLab": "本地未发布仓库 — 点击发布到 GitHub、GitLab 或 Gitee",
+  "Publish to GitHub / GitLab…": "发布到 GitHub / GitLab…",
+  "Publish to GitHub / GitLab / Gitee…": "发布到 GitHub / GitLab / Gitee…",
+  "Unpublished repository — Click to publish to GitHub or GitLab": "本地未发布仓库 — 点击发布到 GitHub 或 GitLab",
+  "Unpublished repository — Click to publish to GitHub, GitLab, or Gitee": "本地未发布仓库 — 点击发布到 GitHub、GitLab 或 Gitee",
   "Publish…": "发布…",
   "Git command-line tool is not found. Please install Git and ensure 'git' is available in your PATH.": "未找到 Git 命令行工具。请安装 Git 并确保 'git' 可在系统 PATH 中使用。",
   "Undoing commit…": "正在撤销提交…",
@@ -2649,5 +2651,6 @@
   "Disconnect": "断开连接",
   "Clear Avatar Cache": "清除头像缓存",
   "Purge cached avatars and force reload": "清理已缓存的作者头像并重新加载",
-  "Cache": "缓存"
+  "Cache": "缓存",
+  "VersionDock: Avatar cache cleared.": "VersionDock：已清除头像缓存。"
 }
