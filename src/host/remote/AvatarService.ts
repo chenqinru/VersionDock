@@ -7,7 +7,7 @@ import type { GitHubRemoteProvider } from './GitHubRemoteProvider';
 import type { GitLabRemoteProvider } from './GitLabRemoteProvider';
 import type { GiteeRemoteProvider } from './GiteeRemoteProvider';
 
-const AVATAR_CACHE_KEY = 'versiondock.remote.avatar.cache.v3';
+const AVATAR_CACHE_KEY = 'versiondock.remote.avatar.cache.v4';
 const POSITIVE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 const NEGATIVE_CACHE_TTL = 24 * 60 * 60 * 1000;      // 24 hours
 const MAX_CACHE_ENTRIES = 2000;
@@ -15,6 +15,45 @@ const MAX_CACHE_ENTRIES = 2000;
 interface CacheEntry {
   url: string | null;
   timestamp: number;
+}
+
+function extractHostname(urlOrHost: string): string | undefined {
+  if (!urlOrHost) return undefined;
+  try {
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(urlOrHost)) {
+      return new URL(urlOrHost).hostname.toLowerCase();
+    }
+    const sshMatch = /^(?:[\w.-]+@)?([\w.-]+)(?::\d+)?(?::|\/)/.exec(urlOrHost);
+    if (sshMatch && sshMatch[1]) {
+      return sshMatch[1].toLowerCase();
+    }
+    return new URL(`http://${urlOrHost}`).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSingleUrlPlatform(
+  url: string,
+  knownGitlabHosts: string[],
+): 'github' | 'gitlab' | 'gitee' | 'generic' {
+  const hostname = extractHostname(url);
+  if (!hostname) return 'generic';
+
+  // 1. 优先匹配已知/已连接的 GitLab 主机域名（自建私有 GitLab）
+  for (const host of knownGitlabHosts) {
+    const h = extractHostname(host);
+    if (h && (hostname === h || hostname.endsWith(`.${h}`))) {
+      return 'gitlab';
+    }
+  }
+
+  // 2. 匹配公有云域名
+  if (hostname === 'github.com' || hostname.endsWith('.github.com')) return 'github';
+  if (hostname === 'gitee.com' || hostname.endsWith('.gitee.com')) return 'gitee';
+  if (hostname === 'gitlab.com' || hostname.endsWith('.gitlab.com')) return 'gitlab';
+
+  return 'generic';
 }
 
 export class AvatarService implements vscode.Disposable {
@@ -138,22 +177,27 @@ export class AvatarService implements vscode.Disposable {
   }
 
   private getPlatformScope(repoRemotes: string[]): string {
-    if (repoRemotes.some(r => /gitee/i.test(r))) return 'gitee';
-    if (repoRemotes.some(r => /github/i.test(r))) return 'github';
-    if (repoRemotes.some(r => /gitlab/i.test(r))) return 'gitlab';
-    if (repoRemotes.length > 0) {
-      const hosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
-      for (const remote of repoRemotes) {
-        for (const host of hosts) {
-          try {
-            const h = new URL(host).hostname.toLowerCase();
-            if (h && remote.toLowerCase().includes(h)) return 'gitlab';
-          } catch {
-            // Ignore
-          }
-        }
+    if (repoRemotes.length === 0) return 'generic';
+
+    const globalHosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+    const configHosts = vscode.workspace.getConfiguration('versiondock').get<string[]>('remote.gitlab.hosts', []);
+    const knownGitlabHosts = Array.from(new Set([...globalHosts, ...configHosts]));
+
+    // 优先从第 0 个 remote（主远程）判定平台，防止次要/上游远程篡改主平台作用域
+    const primaryUrl = repoRemotes[0];
+    const primaryPlatform = resolveSingleUrlPlatform(primaryUrl, knownGitlabHosts);
+    if (primaryPlatform !== 'generic') {
+      return primaryPlatform;
+    }
+
+    // 若主远程未能明确识别，再检查其余 remotes
+    for (let i = 1; i < repoRemotes.length; i++) {
+      const p = resolveSingleUrlPlatform(repoRemotes[i], knownGitlabHosts);
+      if (p !== 'generic') {
+        return p;
       }
     }
+
     return 'generic';
   }
 
@@ -285,61 +329,95 @@ export class AvatarService implements vscode.Disposable {
     const trimmedEmail = email.trim();
     if (!trimmedEmail) return null;
 
-    if (platform === 'gitee') {
-      const giteeUrl = await this.gitee.resolveAvatarByEmail(trimmedEmail, authorName);
-      if (giteeUrl) return giteeUrl;
-    } else if (platform === 'github') {
-      const githubUrl = await this.github.resolveAvatarByEmail(trimmedEmail, authorName);
-      if (githubUrl) return githubUrl;
-    } else if (platform === 'gitlab') {
-      const gitlabHost = this.extractGitLabHost(repoRemotes);
-      const gitlabUrl = await this.gitlab.resolveAvatarByEmail(gitlabHost, trimmedEmail, authorName);
-      if (gitlabUrl) return this.handleGitLabAvatar(gitlabHost, gitlabUrl);
-    } else {
-      // generic 仓库：依次尝试已配置的提供者
-      const gitlabAccounts = await this.gitlab.getAllAccounts();
-      for (const acc of gitlabAccounts) {
-        const gitlabUrl = await this.gitlab.resolveAvatarByEmail(acc.host, trimmedEmail, authorName);
-        if (gitlabUrl) return this.handleGitLabAvatar(acc.host, gitlabUrl);
-      }
-      const giteeUrl = await this.gitee.resolveAvatarByEmail(trimmedEmail, authorName);
-      if (giteeUrl) return giteeUrl;
+    const gitlabAccounts = await this.gitlab.getAllAccounts().catch(() => []);
+    const gitlabHost = this.resolveGitLabHost(repoRemotes, gitlabAccounts);
 
-      const githubUrl = await this.github.resolveAvatarByEmail(trimmedEmail, authorName);
-      if (githubUrl) return githubUrl;
+    // 构建级联查询优先级队列：
+    // 1. 主作用域平台（platform，如 gitlab）
+    // 2. 当前仓库其他关联远程平台（Secondary Remotes，如 gitee / github）
+    // 3. 其他已连接或支持的平台（保底）
+    const platformQueue: Array<'gitlab' | 'gitee' | 'github'> = [];
+
+    if (platform === 'gitlab' || platform === 'gitee' || platform === 'github') {
+      platformQueue.push(platform);
+    }
+
+    // 收集关联远程对应的平台
+    const globalHosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+    const configHosts = vscode.workspace.getConfiguration('versiondock').get<string[]>('remote.gitlab.hosts', []);
+    const knownHosts = [...globalHosts, ...configHosts, ...gitlabAccounts.map(a => a.host)];
+
+    for (const remote of repoRemotes) {
+      const p = resolveSingleUrlPlatform(remote, knownHosts);
+      if (p !== 'generic' && !platformQueue.includes(p)) {
+        platformQueue.push(p);
+      }
+    }
+
+    // 补齐其余受支持的平台
+    for (const p of ['gitlab', 'gitee', 'github'] as const) {
+      if (!platformQueue.includes(p)) {
+        platformQueue.push(p);
+      }
+    }
+
+    // 按优先级顺序级联查询
+    for (const targetPlatform of platformQueue) {
+      if (targetPlatform === 'gitlab') {
+        const gitlabUrl = await this.gitlab.resolveAvatarByEmail(gitlabHost, trimmedEmail, authorName);
+        if (gitlabUrl) {
+          return await this.handleGitLabAvatar(gitlabHost, gitlabUrl);
+        }
+      } else if (targetPlatform === 'gitee') {
+        const giteeUrl = await this.gitee.resolveAvatarByEmail(trimmedEmail, authorName);
+        if (giteeUrl) return giteeUrl;
+      } else if (targetPlatform === 'github') {
+        const githubUrl = await this.github.resolveAvatarByEmail(trimmedEmail, authorName);
+        if (githubUrl) return githubUrl;
+      }
     }
 
     // 兜底 Gravatar 探测
     return await this.checkGravatar(trimmedEmail);
   }
 
-  private extractGitLabHost(repoRemotes: string[]): string | undefined {
-    const gitlabRemote = repoRemotes.find(r => /gitlab/i.test(r));
-    if (gitlabRemote) {
-      try {
-        const clean = gitlabRemote.trim();
-        if (clean.startsWith('git@')) {
-          const hostPart = clean.slice(4).split(':')[0];
-          return `https://${hostPart}`;
+  private resolveGitLabHost(repoRemotes: string[], gitlabAccounts: Array<{ host: string }>): string | undefined {
+    // 1. 优先从 repoRemotes 中匹配已连接 GitLab 账号的主机（精准识别自建私有 GitLab）
+    for (const remote of repoRemotes) {
+      const remoteHostname = extractHostname(remote);
+      if (!remoteHostname) continue;
+      for (const acc of gitlabAccounts) {
+        const accHostname = extractHostname(acc.host);
+        if (accHostname && (remoteHostname === accHostname || remoteHostname.endsWith(`.${accHostname}`))) {
+          return acc.host;
         }
-        return new URL(clean).origin;
-      } catch {
-        return undefined;
       }
     }
 
-    const configuredHosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+    // 2. 匹配设置中配置的自定义 hosts
+    const globalHosts = this.context.globalState.get<string[]>('versiondock.remote.gitlab.hosts', []);
+    const configHosts = vscode.workspace.getConfiguration('versiondock').get<string[]>('remote.gitlab.hosts', []);
     for (const remote of repoRemotes) {
-      for (const host of configuredHosts) {
-        try {
-          const h = new URL(host).hostname.toLowerCase();
-          if (h && remote.toLowerCase().includes(h)) return host;
-        } catch {
-          // Ignore
+      const remoteHostname = extractHostname(remote);
+      if (!remoteHostname) continue;
+      for (const host of [...globalHosts, ...configHosts]) {
+        const h = extractHostname(host);
+        if (h && (remoteHostname === h || remoteHostname.endsWith(`.${h}`))) {
+          return host;
         }
       }
     }
-    return undefined;
+
+    // 3. 检查是否有包含 gitlab 关键字的 remote
+    for (const remote of repoRemotes) {
+      const h = extractHostname(remote);
+      if (h && (h === 'gitlab.com' || h.endsWith('.gitlab.com') || /gitlab/i.test(h))) {
+        return `https://${h}`;
+      }
+    }
+
+    // 4. 回退为第一个已连接的 GitLab 账号的主机，或默认 https://gitlab.com
+    return gitlabAccounts[0]?.host || 'https://gitlab.com';
   }
 
   private async handleGitLabAvatar(host: string | undefined, avatarUrl: string): Promise<string> {

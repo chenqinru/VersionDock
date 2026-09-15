@@ -26,7 +26,7 @@ export function isAccountCompatibleWithRepo(
 
   if (acc.provider === 'github') return isGitHubRepo;
   if (acc.provider === 'gitee') return isGiteeRepo;
-  if (acc.provider === 'gitlab') return isGitLabRepo && !isGitHubRepo && !isGiteeRepo;
+  if (acc.provider === 'gitlab') return isGitLabRepo;
   return false;
 }
 
@@ -44,6 +44,30 @@ export function findConnectedAvatar(
 
   const compatibleAccounts = remoteAccounts.filter(acc => isAccountCompatibleWithRepo(acc, repoRemoteUrl));
   if (compatibleAccounts.length === 0) return null;
+
+  // 在多远程场景下，优先匹配当前仓库排在第 0 位的主远程平台账号
+  const remotes = repoRemoteUrl
+    ? (Array.isArray(repoRemoteUrl) ? repoRemoteUrl : [repoRemoteUrl])
+    : [];
+  const primaryRemote = remotes[0]?.toLowerCase() || '';
+
+  compatibleAccounts.sort((a, b) => {
+    let aPrimary = false;
+    let bPrimary = false;
+    try {
+      if (a.host && primaryRemote.includes(new URL(a.host).hostname.toLowerCase())) aPrimary = true;
+      if (b.host && primaryRemote.includes(new URL(b.host).hostname.toLowerCase())) bPrimary = true;
+    } catch {
+      // ignore
+    }
+    if (a.provider === 'gitee' && primaryRemote.includes('gitee')) aPrimary = true;
+    if (b.provider === 'gitee' && primaryRemote.includes('gitee')) bPrimary = true;
+    if (a.provider === 'github' && primaryRemote.includes('github')) aPrimary = true;
+    if (b.provider === 'github' && primaryRemote.includes('github')) bPrimary = true;
+    if (aPrimary && !bPrimary) return -1;
+    if (!aPrimary && bPrimary) return 1;
+    return 0;
+  });
 
   const cleanName = (authorName || '').trim().toLowerCase();
   const cleanEmail = (authorEmail || '').trim().toLowerCase();

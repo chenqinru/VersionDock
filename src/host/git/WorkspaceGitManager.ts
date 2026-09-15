@@ -1970,8 +1970,26 @@ export class WorkspaceGitManager implements vscode.Disposable {
       if (repo && repo.kind !== 'svn') {
         try {
           const withUrls = await repo.getRemotesWithUrls().catch(() => []);
-          const urls = withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean);
-          if (urls.length > 0) return urls;
+          const currentBranch = await repo.getCurrentBranch().catch(() => undefined);
+          let primaryName: string | undefined;
+          if (currentBranch?.upstream) {
+            primaryName = currentBranch.upstream.split('/')[0];
+          }
+          if (!primaryName) {
+            const hasOrigin = withUrls.some(r => r.name.toLowerCase() === 'origin');
+            if (hasOrigin) primaryName = 'origin';
+          }
+          const sorted = [...withUrls].sort((a, b) => {
+            if (primaryName) {
+              const aIsPrimary = a.name.toLowerCase() === primaryName.toLowerCase();
+              const bIsPrimary = b.name.toLowerCase() === primaryName.toLowerCase();
+              if (aIsPrimary && !bIsPrimary) return -1;
+              if (!aIsPrimary && bIsPrimary) return 1;
+            }
+            return 0;
+          });
+          const urls = sorted.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean);
+          if (urls.length > 0) return Array.from(new Set(urls));
           return repo.meta?.remoteUrl ? [repo.meta.remoteUrl] : [];
         } catch {
           return repo.meta?.remoteUrl ? [repo.meta.remoteUrl] : [];

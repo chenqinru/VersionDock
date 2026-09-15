@@ -162,36 +162,49 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider, vscode.Di
     }
 
     try {
-      // 2. Query Avatar API
-      const avatarRes = await this.request<{ avatar_url?: string }>(
-        account,
-        `/avatar?email=${encodeURIComponent(trimmed)}&size=80`,
-      ).catch(() => undefined);
+      let avatarUrl: string | undefined;
 
-      let avatarUrl = avatarRes?.avatar_url;
+      // 收集候选用户名（包括 noreply 候选、非纯数字邮箱前缀、authorName 等）
+      const candidateUsernames: string[] = [];
+      if (candidateUsername) candidateUsernames.push(candidateUsername);
+      const rawEmailPrefix = trimmed.includes('@') ? trimmed.split('@')[0] : trimmed;
+      if (rawEmailPrefix && !/^\d+$/.test(rawEmailPrefix) && !candidateUsernames.includes(rawEmailPrefix)) {
+        candidateUsernames.push(rawEmailPrefix);
+      }
+      if (cleanAuthorName && /^[a-zA-Z0-9_.-]+$/.test(cleanAuthorName) && !candidateUsernames.includes(cleanAuthorName)) {
+        candidateUsernames.push(cleanAuthorName);
+      }
 
-      // 3. Query users by username (if email is username@..., candidate from noreply, or just username)
-      if (!avatarUrl) {
-        const usernameCandidate = candidateUsername || (trimmed.includes('@') ? trimmed.split('@')[0] : trimmed);
-        if (usernameCandidate) {
-          const users = await this.request<GitLabUser[]>(
-            account,
-            `/users?username=${encodeURIComponent(usernameCandidate)}`,
-          ).catch(() => [] as GitLabUser[]);
-          if (users && users.length > 0 && users[0]?.avatar_url) {
-            avatarUrl = users[0].avatar_url;
+      // 1. Query users by search (优先根据提交邮箱，其次根据作者姓名检索真实 GitLab 用户实体)
+      const searchTerms = [trimmed, cleanAuthorName].filter(Boolean);
+      for (const term of searchTerms) {
+        const users = await this.request<GitLabUser[]>(
+          account,
+          `/users?search=${encodeURIComponent(term)}`,
+        ).catch(() => [] as GitLabUser[]);
+        if (users && users.length > 0) {
+          const matched = users.find(u =>
+            (cleanAuthorName && (u.name?.toLowerCase() === cleanAuthorName || u.username.toLowerCase() === cleanAuthorName)) ||
+            (u.email?.toLowerCase() === norm)
+          ) || users[0];
+          if (matched?.avatar_url) {
+            avatarUrl = matched.avatar_url;
+            break;
           }
         }
       }
 
-      // 4. Query users by search
+      // 2. Query users by username candidates (备选候选用户名精确查询)
       if (!avatarUrl) {
-        const users = await this.request<GitLabUser[]>(
-          account,
-          `/users?search=${encodeURIComponent(trimmed)}`,
-        ).catch(() => [] as GitLabUser[]);
-        if (users && users.length > 0 && users[0]?.avatar_url) {
-          avatarUrl = users[0].avatar_url;
+        for (const u of candidateUsernames) {
+          const users = await this.request<GitLabUser[]>(
+            account,
+            `/users?username=${encodeURIComponent(u)}`,
+          ).catch(() => [] as GitLabUser[]);
+          if (users && users.length > 0 && users[0]?.avatar_url) {
+            avatarUrl = users[0].avatar_url;
+            break;
+          }
         }
       }
 
