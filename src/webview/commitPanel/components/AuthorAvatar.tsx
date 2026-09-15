@@ -8,6 +8,7 @@ interface Props {
   authorEmail?: string;
   repoId?: string;
   size?: number;
+  fontSize?: number;
 }
 
 export function isAccountCompatibleWithRepo(
@@ -286,7 +287,7 @@ function cachedAvatarUrl(email: string, size: number, repoId?: string, authorNam
   return pending;
 }
 
-export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16 }: Props) {
+export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16, fontSize }: Props) {
   const remoteAccounts = useCommitStore(s => s.remoteAccounts);
   const repoMetas = useCommitStore(s => s.repoMetas);
   const currentRepo = repoId ? repoMetas.find(r => r.id === repoId) : (repoMetas.length === 1 ? repoMetas[0] : undefined);
@@ -332,20 +333,21 @@ export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16 }
     };
   }, [authorEmail, connectedAvatar]);
 
+  const avatarFontSize = fontSize ?? Math.max(7, Math.round(size * 0.44 * 10) / 10);
+
   const containerStyle: React.CSSProperties = {
     width: size,
     height: size,
     borderRadius: '50%',
     flexShrink: 0,
     overflow: 'hidden',
-    display: 'inline-flex',
+    display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: Math.max(9, Math.round(size * 0.45)),
+    fontSize: avatarFontSize,
     fontWeight: 600,
     lineHeight: 1,
     userSelect: 'none',
-    verticalAlign: 'middle',
   };
 
   if (url === null || url === 'loading') {

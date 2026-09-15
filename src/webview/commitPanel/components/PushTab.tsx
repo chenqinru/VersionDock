@@ -582,9 +582,10 @@ function CommitRow({
               authorName={commit.author}
               authorEmail={commit.authorEmail ?? ''}
               repoId={repoId}
-              size={13}
+              size={15}
+              fontSize={7}
             />
-            <span style={{ ...styles.commitMetaText, marginLeft: '4px' }}>
+            <span style={{ ...styles.commitMetaText, marginLeft: '5px' }}>
               {commit.author} · {formatDate(commit.date)}
             </span>
             {commit.filesChanged != null && (
