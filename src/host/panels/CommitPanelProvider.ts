@@ -509,6 +509,20 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.logger?.error('CommitPanel', 'Failed to initialize panel', error);
     });
 
+    void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
+      this.post({ type: 'COMMIT_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [] });
+    }).catch(() => { /* remote accounts optional */ });
+
+    if (this.manager.remoteService) {
+      this.managerListeners.push(
+        this.manager.remoteService.onDidChangeAccounts(() => {
+          void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
+            this.post({ type: 'COMMIT_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [] });
+          }).catch(() => {});
+        })
+      );
+    }
+
     // Re-send icon theme when the user changes icon or color theme
     const configWatcher = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('workbench.iconTheme') || e.affectsConfiguration('workbench.colorTheme')) {
@@ -2593,6 +2607,54 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
       case 'COMMIT_WEBVIEW_ERROR': {
         this.logger?.error('CommitPanelWebview', msg.message, msg.stack, { componentStack: msg.componentStack });
+        break;
+      }
+
+      case 'COMMIT_REQUEST_REMOTE_ACCOUNTS': {
+        const accounts = await this.manager.remoteService?.getConnectedAccounts().catch(() => []) ?? [];
+        this.post({ type: 'COMMIT_REMOTE_ACCOUNTS_RESULT', accounts });
+        break;
+      }
+
+      case 'COMMIT_RESOLVE_AVATARS': {
+        const remoteService = this.manager.remoteService;
+        if (!remoteService) {
+          this.post({ type: 'COMMIT_AVATARS_RESOLVED', avatars: {} });
+          break;
+        }
+        let remotes: string[] = [];
+        if (msg.repoId) {
+          const repo = this.manager.getRepo(msg.repoId);
+          if (repo) {
+            try {
+              const withUrls = await repo.getRemotesWithUrls().catch(() => []);
+              remotes = withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean);
+            } catch {
+              // Ignore
+            }
+          }
+        } else {
+          for (const meta of this.manager.getRepoMetas()) {
+            const repo = this.manager.getRepo(meta.id);
+            if (!repo) continue;
+            try {
+              const withUrls = await repo.getRemotesWithUrls().catch(() => []);
+              remotes.push(...withUrls.flatMap(r => [r.fetchUrl, r.pushUrl]).filter(Boolean));
+            } catch {
+              // Ignore
+            }
+          }
+        }
+        const authorsMap: Record<string, string> = {};
+        if (msg.authors) {
+          for (const a of msg.authors) {
+            if (a.name && a.email) {
+              authorsMap[a.email.trim().toLowerCase()] = a.name.trim();
+            }
+          }
+        }
+        const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, remotes, authorsMap);
+        this.post({ type: 'COMMIT_AVATARS_RESOLVED', avatars });
         break;
       }
 

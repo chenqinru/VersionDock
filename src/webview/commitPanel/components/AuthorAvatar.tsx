@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { getVsCodeApi } from '../../shared/vscodeApi';
-import { useLogStore } from '../store/logStore';
+import { useCommitStore } from '../store/commitStore';
 import type { RemoteAccountInfo } from '../../../host/types/messages';
 
 interface Props {
   authorName: string;
-  authorEmail: string;
+  authorEmail?: string;
   repoId?: string;
   size?: number;
 }
@@ -124,7 +124,6 @@ export function notifyAvatarsResolved(avatars: Record<string, string | null>): v
   for (const [email, url] of Object.entries(avatars)) {
     const key = email.toLowerCase();
     hostResolvedAvatars.set(key, url);
-    // Clear pending/null cached promises so newly resolved avatars take effect immediately
     for (const cacheKey of Array.from(avatarPromiseCache.keys())) {
       if (cacheKey.startsWith(`${key}\0`)) {
         avatarPromiseCache.delete(cacheKey);
@@ -154,7 +153,7 @@ function queueEmailResolution(email: string, repoId?: string, authorName?: strin
         const reqRepoId = activeRepoId;
         pendingBatch.clear();
         pendingAuthors.clear();
-        getVsCodeApi().postMessage({ type: 'LOG_RESOLVE_AVATARS', emails, repoId: reqRepoId, authors });
+        getVsCodeApi().postMessage({ type: 'COMMIT_RESOLVE_AVATARS', emails, repoId: reqRepoId, authors });
       }
     }, 60);
   }
@@ -181,8 +180,6 @@ function initials(name: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[parts.length - 1]?.[0] ?? '')).toUpperCase();
 }
 
-// Fetches the image as a blob, draws it on an offscreen canvas, and checks
-// whether all sampled pixels are nearly identical (blank/default avatar).
 function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
   return new Promise(resolve => {
     const img = new Image();
@@ -216,12 +213,11 @@ function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
         }
         finish(unique.size <= 3);
       } catch {
-        // Canvas tainted (CORS) — assume not blank
         finish(false);
       }
     };
 
-    img.onerror = () => finish(true); // 404 or network error → treat as blank
+    img.onerror = () => finish(true);
     img.src = url;
   });
 }
@@ -229,9 +225,8 @@ function loadImagePixels(url: string, sampleSize = 8): Promise<boolean> {
 async function resolveAvatarUrl(email: string, size: number, repoId?: string, authorName?: string): Promise<string | null> {
   const normalized = email.trim().toLowerCase();
 
-  // Fast-path: Check connected accounts from store first
-  const store = useLogStore.getState();
-  const repoRemoteUrl = repoId ? store.repos.find(r => r.id === repoId)?.remoteUrl : undefined;
+  const store = useCommitStore.getState();
+  const repoRemoteUrl = repoId ? store.repoMetas.find(r => r.id === repoId)?.remoteUrl : undefined;
   const connected = findConnectedAvatar(authorName ?? '', email, store.remoteAccounts, repoRemoteUrl);
   if (connected) return connected;
 
@@ -261,7 +256,6 @@ async function resolveAvatarUrl(email: string, size: number, repoId?: string, au
   const blank = await loadImagePixels(gravatar);
   if (!blank) return gravatar;
 
-  // Not found in fast-paths; query Host AvatarService asynchronously
   queueEmailResolution(normalized, repoId, authorName);
   return null;
 }
@@ -278,7 +272,6 @@ function cachedAvatarUrl(email: string, size: number, repoId?: string, authorNam
   const key = `${email.trim().toLowerCase()}\0${authorName?.trim().toLowerCase() ?? ''}\0${size}`;
   const cached = avatarPromiseCache.get(key);
   if (cached) {
-    // Refresh insertion order so frequently visible authors stay cached.
     avatarPromiseCache.delete(key);
     avatarPromiseCache.set(key, cached);
     return cached;
@@ -293,13 +286,12 @@ function cachedAvatarUrl(email: string, size: number, repoId?: string, authorNam
   return pending;
 }
 
-export function AuthorAvatar({ authorName, authorEmail, repoId, size = 20 }: Props) {
-  const remoteAccounts = useLogStore(s => s.remoteAccounts);
-  const repos = useLogStore(s => s.repos);
-  const currentRepo = repoId ? repos.find(r => r.id === repoId) : (repos.length === 1 ? repos[0] : undefined);
-  const repoRemoteUrl = currentRepo?.remoteUrl || (repos.length > 0 ? (repos.map(r => r.remoteUrl).filter(Boolean) as string[]) : undefined);
+export function AuthorAvatar({ authorName, authorEmail = '', repoId, size = 16 }: Props) {
+  const remoteAccounts = useCommitStore(s => s.remoteAccounts);
+  const repoMetas = useCommitStore(s => s.repoMetas);
+  const currentRepo = repoId ? repoMetas.find(r => r.id === repoId) : (repoMetas.length === 1 ? repoMetas[0] : undefined);
+  const repoRemoteUrl = currentRepo?.remoteUrl || (repoMetas.length > 0 ? (repoMetas.map(r => r.remoteUrl).filter(Boolean) as string[]) : undefined);
 
-  // Instant match for connected accounts (GitHub & GitLab)
   const connectedAvatar = findConnectedAvatar(authorName, authorEmail, remoteAccounts, repoRemoteUrl);
 
   const [url, setUrl] = useState<string | null | 'loading'>(() => connectedAvatar ?? 'loading');
@@ -346,28 +338,17 @@ export function AuthorAvatar({ authorName, authorEmail, repoId, size = 20 }: Pro
     borderRadius: '50%',
     flexShrink: 0,
     overflow: 'hidden',
-    display: 'flex',
+    display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: size * 0.38,
+    fontSize: Math.max(9, Math.round(size * 0.45)),
     fontWeight: 600,
     lineHeight: 1,
     userSelect: 'none',
+    verticalAlign: 'middle',
   };
 
-  if (url === null) {
-    return (
-      <div
-        style={{ ...containerStyle, background: avatarColor(avatarSeed), color: '#fff' }}
-        title={authorTitle}
-      >
-        {initials(authorName)}
-      </div>
-    );
-  }
-
-  if (url === 'loading') {
-    // Show initials as placeholder while fetching
+  if (url === null || url === 'loading') {
     return (
       <div
         style={{ ...containerStyle, background: avatarColor(avatarSeed), color: '#fff' }}

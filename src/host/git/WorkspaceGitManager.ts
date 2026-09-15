@@ -187,6 +187,34 @@ function extractMainWorktreePath(repoPath: string): string | undefined {
   return undefined;
 }
 
+function parseRemoteUrlFromConfig(configPath: string): string | undefined {
+  if (!fs.existsSync(configPath)) return undefined;
+  const configText = fs.readFileSync(configPath, 'utf8');
+  const originMatch = configText.match(/\[remote\s+"origin"\][^[]*?url\s*=\s*([^\r\n]+)/is);
+  if (originMatch?.[1]) return originMatch[1].trim();
+  const anyRemoteMatch = configText.match(/\[remote\s+"[^"]+"\][^[]*?url\s*=\s*([^\r\n]+)/is);
+  return anyRemoteMatch?.[1]?.trim();
+}
+
+function extractRemoteUrlFromGitDir(rootPath: string): string | undefined {
+  try {
+    let gitDir = path.join(rootPath, '.git');
+    if (!fs.existsSync(gitDir)) return undefined;
+    const stat = fs.statSync(gitDir);
+    if (stat.isFile()) {
+      const content = fs.readFileSync(gitDir, 'utf8').trim();
+      const match = content.match(/^gitdir:\s*(.+)$/m);
+      if (!match?.[1]) return undefined;
+      gitDir = path.isAbsolute(match[1].trim()) ? match[1].trim() : path.resolve(rootPath, match[1].trim());
+    }
+    const directConfig = path.join(gitDir, 'config');
+    const commonConfig = path.join(gitDir, '..', '..', 'config');
+    return parseRemoteUrlFromConfig(directConfig) ?? parseRemoteUrlFromConfig(commonConfig);
+  } catch {
+    return undefined;
+  }
+}
+
 interface LogCandidate<T extends GraphCommitNode> {
   commit: T;
   logIndex: number;
@@ -573,7 +601,17 @@ export class WorkspaceGitManager implements vscode.Disposable {
     const mainWorktreePath = extractMainWorktreePath(repoPath);
     const workspacePaths = workspaceFolders.map(folder => folder.uri.fsPath);
     const isWorktree = !!mainWorktreePath && workspacePaths.some(wp => isPathEqual(wp, mainWorktreePath));
-    return { id: buildRepoId(repoPath, 'git'), name, rootPath: repoPath, color, depth: 0, isWorktree, mainWorktreePath, kind: 'git' };
+    return {
+      id: buildRepoId(repoPath, 'git'),
+      name,
+      rootPath: repoPath,
+      color,
+      depth: 0,
+      isWorktree,
+      mainWorktreePath,
+      kind: 'git',
+      remoteUrl: extractRemoteUrlFromGitDir(repoPath),
+    };
   }
 
   private buildSvnRepoMeta(
@@ -974,6 +1012,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
       isWorktree,
       mainWorktreePath,
       kind: 'git',
+      remoteUrl: extractRemoteUrlFromGitDir(normalizedRepoPath),
     };
     this.repoMetas.set(repoId, meta);
     this.repos.set(repoId, this.createGitService(repoId, normalizedRepoPath));
@@ -1035,6 +1074,7 @@ export class WorkspaceGitManager implements vscode.Disposable {
         submodulePath: subRelPath,
         depth,
         kind: 'git',
+        remoteUrl: extractRemoteUrlFromGitDir(subAbsPath),
       };
       // Only register repository, set up watcher, and recurse if submodule is initialized (has .git)
       if (isInitialized) {
@@ -1897,6 +1937,11 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   getRepoMetas(): RepoMeta[] {
+    for (const meta of this.repoMetas.values()) {
+      if (meta.kind === 'git' && !meta.remoteUrl) {
+        meta.remoteUrl = extractRemoteUrlFromGitDir(meta.rootPath);
+      }
+    }
     return Array.from(this.repoMetas.values());
   }
 

@@ -284,6 +284,15 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       this.manager.onBranchChange(scheduleManagerSync),
       this.manager.onReposChange(scheduleManagerSync),
     );
+    if (this.manager.remoteService) {
+      this.managerListeners.push(
+        this.manager.remoteService.onDidChangeAccounts(() => {
+          void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
+            this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [] });
+          }).catch(() => {});
+        })
+      );
+    }
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -861,9 +870,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 this.post({ type: 'LOG_INIT_DATA', repos, branches, iconTheme, isInitialPartial: false });
 
                 void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
-                  if (accounts && accounts.length > 0) {
-                    this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts });
-                  }
+                  this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [] });
                 }).catch(() => {});
 
                 // Send tags for all visible repos without blocking the commit batch.

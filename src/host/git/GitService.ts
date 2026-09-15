@@ -5382,7 +5382,7 @@ export class GitService {
   async getUnpushedCommits(): Promise<UnpushedCommit[]> {
     const RS = '\x1E';
     const FS = '\x1F';
-    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F`;
+    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F%ae%x1F`;
 
     const parseRecords = (raw: string): UnpushedCommit[] => {
       const commits: UnpushedCommit[] = [];
@@ -5399,7 +5399,8 @@ export class GitService {
         const body = parts[6]?.trim() || undefined;
         const parentsRaw = parts[7]?.trim() || '';
         const parents = parentsRaw ? parentsRaw.split(/\s+/) : [];
-        const statText = parts.slice(8).join(FS);
+        const authorEmail = parts[8]?.trim() || undefined;
+        const statText = parts.slice(9).join(FS);
 
         const commit: UnpushedCommit = {
           hash,
@@ -5408,6 +5409,7 @@ export class GitService {
           fullMessage: fullMessage || message,
           body: body || undefined,
           author,
+          authorEmail,
           date,
           parents,
         };
@@ -5519,7 +5521,7 @@ export class GitService {
   async getIncomingCommits(): Promise<IncomingCommit[]> {
     const RS = '\x1E';
     const FS = '\x1F';
-    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F`;
+    const FORMAT = `%x1E%H%x1F%h%x1F%s%x1F%an%x1F%ci%x1F%B%x1F%b%x1F%P%x1F%ae%x1F`;
 
     const logArgs = (range: string[]): string[] =>
       ['log', ...range, `--format=${FORMAT}`];
@@ -5543,7 +5545,8 @@ export class GitService {
       const body = parts[6]?.trim() || undefined;
       const parentsRaw = parts[7]?.trim() || '';
       const parents = parentsRaw ? parentsRaw.split(/\s+/) : [];
-      const statText = parts.slice(8).join(FS);
+      const authorEmail = parts[8]?.trim() || undefined;
+      const statText = parts.slice(9).join(FS);
 
       const commit: IncomingCommit = {
         hash,
@@ -5552,6 +5555,7 @@ export class GitService {
         fullMessage: fullMessage || message,
         body: body || undefined,
         author,
+        authorEmail,
         date,
         parents,
       };

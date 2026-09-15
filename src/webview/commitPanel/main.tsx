@@ -9,6 +9,7 @@ import { ContextMenu, type ContextMenuEntry } from './components/ContextMenu';
 import { ShelvePanel, getShelveExpansionKeys, shelveEntryKey, shelveDirKey } from './components/ShelvePanel';
 import { StashTab, type ExpansionCommand } from './components/StashTab';
 import { PushTab } from './components/PushTab';
+import { notifyAvatarsResolved, clearFrontendAvatarCache } from './components/AuthorAvatar';
 import { WorktreeDiffPanel } from './components/WorktreeDiffPanel';
 import { WorktreePanel } from './components/WorktreePanel';
 import { SubtreePanel } from './components/SubtreePanel';
@@ -1517,10 +1518,20 @@ export function CommitApp() {
         case 'COMMIT_SWITCH_TAB':
           switchTab(msg.tab);
           break;
+
+        case 'COMMIT_REMOTE_ACCOUNTS_RESULT':
+          clearFrontendAvatarCache();
+          useCommitStore.getState().setRemoteAccounts(msg.accounts);
+          break;
+
+        case 'COMMIT_AVATARS_RESOLVED':
+          notifyAvatarsResolved(msg.avatars);
+          break;
       }
     };
     window.addEventListener('message', handler);
     requestCommitStatus();
+    send({ type: 'COMMIT_REQUEST_REMOTE_ACCOUNTS' });
     return () => {
       window.removeEventListener('message', handler);
       for (const timer of Object.values(pendingSyncTimersRef.current)) {

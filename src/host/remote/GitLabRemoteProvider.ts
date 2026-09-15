@@ -57,15 +57,21 @@ interface GitLabUser {
   email?: string;
 }
 
-export class GitLabRemoteProvider implements RemoteRepositoryProvider {
+export class GitLabRemoteProvider implements RemoteRepositoryProvider, vscode.Disposable {
   readonly kind = 'gitlab' as const;
   readonly name = 'GitLab';
   readonly host = DEFAULT_HOST;
+  private readonly _onDidChangeAccounts = new vscode.EventEmitter<void>();
+  readonly onDidChangeAccounts: vscode.Event<void> = this._onDidChangeAccounts.event;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly logger: VersionDockLogger,
   ) {}
+
+  dispose(): void {
+    this._onDidChangeAccounts.dispose();
+  }
 
   async getAllAccounts(): Promise<GitLabAccount[]> {
     return this.getAccounts(false);
@@ -464,6 +470,7 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider {
     await this.context.secrets.store(tokenKey(host), token.trim());
     const hosts = await this.getHosts();
     await this.context.globalState.update(HOSTS_KEY, [...new Set([...hosts, host])]);
+    this._onDidChangeAccounts.fire();
     vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: GitLab account connected: {0}', host));
   }
 
@@ -477,6 +484,7 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider {
     await this.context.secrets.delete(tokenKey(host));
     const hosts = (await this.getHosts()).filter(value => value !== host);
     await this.context.globalState.update(HOSTS_KEY, hosts);
+    this._onDidChangeAccounts.fire();
   }
 
   private async request<T>(account: GitLabAccount, path: string, init: RequestInit = {}): Promise<T> {

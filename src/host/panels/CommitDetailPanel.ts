@@ -14,6 +14,37 @@ import type { VersionDockLogger } from '../utils/Logger';
 import type { MergeParentChange, RemoteAccountInfo } from '../types/messages';
 import { ShelveDocumentProvider } from '../utils/ShelveDocumentProvider';
 
+function isAccountCompatibleWithRepo(
+  acc: RemoteAccountInfo,
+  repoRemoteUrl?: string
+): boolean {
+  if (!repoRemoteUrl) return false;
+  const lowerRemote = repoRemoteUrl.toLowerCase();
+  const isGitHubRepo = lowerRemote.includes('github.com') || lowerRemote.includes('github');
+  let isGitLabRepo = lowerRemote.includes('gitlab');
+
+  if (!isGitLabRepo && acc.provider === 'gitlab' && acc.host) {
+    try {
+      const parsedHost = new URL(acc.host).hostname.toLowerCase();
+      if (parsedHost && lowerRemote.includes(parsedHost)) {
+        isGitLabRepo = true;
+      }
+    } catch {
+      // Ignore URL parse error
+    }
+  }
+
+  if (acc.provider === 'github') {
+    return isGitHubRepo;
+  }
+
+  if (acc.provider === 'gitlab') {
+    return isGitLabRepo && !isGitHubRepo;
+  }
+
+  return false;
+}
+
 function findConnectedAvatar(
   authorName: string,
   authorEmail: string,
@@ -22,23 +53,16 @@ function findConnectedAvatar(
 ): string | null {
   if (!remoteAccounts || remoteAccounts.length === 0) return null;
 
+  const compatibleAccounts = remoteAccounts.filter(acc => isAccountCompatibleWithRepo(acc, repoRemoteUrl));
+  if (compatibleAccounts.length === 0) return null;
+
   const cleanName = (authorName || '').trim().toLowerCase();
   const cleanEmail = (authorEmail || '').trim().toLowerCase();
   const emailPrefix = cleanEmail.includes('@') ? cleanEmail.split('@')[0]! : cleanEmail;
   const strippedEmailPrefix = emailPrefix.replace(/\d+$/, '');
   const strippedName = cleanName.replace(/\d+$/, '');
 
-  const sortedAccounts = [...remoteAccounts].sort((a, b) => {
-    if (!repoRemoteUrl) return 0;
-    const lowerRemote = repoRemoteUrl.toLowerCase();
-    const aMatches = lowerRemote.includes(a.provider);
-    const bMatches = lowerRemote.includes(b.provider);
-    if (aMatches && !bMatches) return -1;
-    if (!aMatches && bMatches) return 1;
-    return 0;
-  });
-
-  for (const acc of sortedAccounts) {
+  for (const acc of compatibleAccounts) {
     if (!acc.avatarUrl) continue;
     const username = (acc.username || '').trim().toLowerCase();
     const displayName = (acc.name || '').trim().toLowerCase();
@@ -422,6 +446,7 @@ async function createCommitDetailPanel(
     authorEmail: commitInfo.authorEmail,
     authorAvatarUrl,
     connectedAccounts,
+    repoRemoteUrl: remotes[0],
     authorDate: commitInfo.authorDate,
     committerDate: commitInfo.committerDate,
     parents: commitInfo.parents,
@@ -874,6 +899,7 @@ async function createAggregatedCommitDetailPanel(
     authorEmail: '',
     authorAvatarUrl: null,
     connectedAccounts,
+    repoRemoteUrl: allRemotes[0],
     avatarUrlsByEmail,
     authorDate: firstCommit.authorDate,
     committerDate: firstCommit.committerDate,
@@ -1286,6 +1312,7 @@ interface PanelData {
   authorAvatarUrl?: string | null;
   avatarUrlsByEmail?: Record<string, string | null>;
   connectedAccounts?: RemoteAccountInfo[];
+  repoRemoteUrl?: string;
 }
 
 function splitCommitMessage(fullMessage: string, fallbackSubject: string): { subject: string; body: string } {
@@ -3199,16 +3226,38 @@ ${leftPanelContent}
         }
 
         const CONNECTED_ACCOUNTS = ${JSON.stringify(data.connectedAccounts ?? [])};
+        const REPO_REMOTE_URL = ${JSON.stringify(data.repoRemoteUrl ?? '')};
 
-        function findConnectedAvatar(authorName, authorEmail) {
+        function isAccountCompatibleWithRepo(acc, repoRemoteUrl) {
+          if (!repoRemoteUrl) return false;
+          const lowerRemote = repoRemoteUrl.toLowerCase();
+          const isGitHubRepo = lowerRemote.includes('github.com') || lowerRemote.includes('github');
+          let isGitLabRepo = lowerRemote.includes('gitlab');
+          if (!isGitLabRepo && acc.provider === 'gitlab' && acc.host) {
+            try {
+              const hostUrl = new URL(acc.host);
+              if (hostUrl.hostname && lowerRemote.includes(hostUrl.hostname.toLowerCase())) {
+                isGitLabRepo = true;
+              }
+            } catch {}
+          }
+          if (acc.provider === 'github') return isGitHubRepo;
+          if (acc.provider === 'gitlab') return isGitLabRepo && !isGitHubRepo;
+          return false;
+        }
+
+        function findConnectedAvatar(authorName, authorEmail, repoRemoteUrl = REPO_REMOTE_URL) {
           if (!CONNECTED_ACCOUNTS || CONNECTED_ACCOUNTS.length === 0) return null;
+          const compatibleAccounts = CONNECTED_ACCOUNTS.filter(acc => isAccountCompatibleWithRepo(acc, repoRemoteUrl));
+          if (compatibleAccounts.length === 0) return null;
+
           const cleanName = (authorName || '').trim().toLowerCase();
           const cleanEmail = (authorEmail || '').trim().toLowerCase();
           const emailPrefix = cleanEmail.includes('@') ? cleanEmail.split('@')[0] : cleanEmail;
-          const strippedEmailPrefix = emailPrefix.replace(/\d+$/, '');
-          const strippedName = cleanName.replace(/\d+$/, '');
+          const strippedEmailPrefix = emailPrefix.replace(/\\d+$/, '');
+          const strippedName = cleanName.replace(/\\d+$/, '');
 
-          for (const acc of CONNECTED_ACCOUNTS) {
+          for (const acc of compatibleAccounts) {
             if (!acc.avatarUrl) continue;
             const username = (acc.username || '').trim().toLowerCase();
             const displayName = (acc.name || '').trim().toLowerCase();
@@ -3220,7 +3269,7 @@ ${leftPanelContent}
             if (emailPrefix && emailPrefix === username) return acc.avatarUrl;
             if (strippedEmailPrefix.length >= 3 && strippedEmailPrefix === username) return acc.avatarUrl;
             if (strippedName.length >= 3 && strippedName === username) return acc.avatarUrl;
-            if (displayName && strippedName.length >= 3 && strippedName === displayName.replace(/\d+$/, '')) {
+            if (displayName && strippedName.length >= 3 && strippedName === displayName.replace(/\\d+$/, '')) {
               return acc.avatarUrl;
             }
           }

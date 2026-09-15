@@ -11,6 +11,7 @@ import { nativeCheckboxBorderStyle } from '../../shared/nativeCheckboxStyle';
 import { getCommitMessageTitle } from '../../shared/commitMessage';
 import type { ExpansionCommand } from './StashTab';
 import { HighlightedText, SpeedSearchWidget, useSpeedSearch } from '../../shared/speedSearch';
+import { AuthorAvatar } from './AuthorAvatar';
 
 const PUSH_COLOR = 'var(--vscode-gitDecoration-addedResourceForeground)';
 const PULL_COLOR = 'var(--vscode-charts-blue, #64b5f6)';
@@ -577,7 +578,13 @@ function CommitRow({
             <HighlightedText text={messageTitle} query={speedSearchQuery} isActive={isSpeedSearchActive} />
           </span>
           <span style={styles.commitMeta}>
-            <span style={styles.commitMetaText}>
+            <AuthorAvatar
+              authorName={commit.author}
+              authorEmail={commit.authorEmail ?? ''}
+              repoId={repoId}
+              size={13}
+            />
+            <span style={{ ...styles.commitMetaText, marginLeft: '4px' }}>
               {commit.author} · {formatDate(commit.date)}
             </span>
             {commit.filesChanged != null && (

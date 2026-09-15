@@ -87,6 +87,7 @@ export interface UnpushedCommit {
   body?: string;
   fullMessage?: string;
   author: string;
+  authorEmail?: string;
   date: string;
   filesChanged?: number;
   additions?: number;
@@ -108,6 +109,7 @@ export interface IncomingCommit {
   body?: string;
   fullMessage?: string;
   author: string;
+  authorEmail?: string;
   date: string;
   filesChanged?: number;
   additions?: number;
@@ -216,11 +218,15 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_INVERT_SELECTION' }
   | { type: 'COMMIT_SET_FILE_VIEW_MODE'; mode: 'flat' | 'tree' }
   | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab }
-  | { type: 'COMMIT_READ_CLIPBOARD_RESULT'; requestId: string; text: string };
+  | { type: 'COMMIT_READ_CLIPBOARD_RESULT'; requestId: string; text: string }
+  | { type: 'COMMIT_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[] }
+  | { type: 'COMMIT_AVATARS_RESOLVED'; avatars: Record<string, string | null> };
 
 // ─── Commit Panel: WebView → Host ────────────────────────────────────────────
 
 export type CommitToHostMsg =
+  | { type: 'COMMIT_RESOLVE_AVATARS'; emails: string[]; repoId?: string; authors?: Array<{ name?: string; email: string }> }
+  | { type: 'COMMIT_REQUEST_REMOTE_ACCOUNTS' }
   | { type: 'COMMIT_READ_CLIPBOARD'; requestId: string }
   | { type: 'COMMIT_WRITE_CLIPBOARD'; text: string }
   | { type: 'COMMIT_WEBVIEW_ERROR'; message: string; stack?: string; componentStack?: string }

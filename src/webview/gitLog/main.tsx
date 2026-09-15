@@ -5,7 +5,7 @@ import { BranchSidebar } from './components/BranchSidebar';
 import { CommitList } from './components/CommitList';
 import { CommitDetail } from './components/CommitDetail';
 import { CommitFiltersBar, type AuthorOption } from './components/CommitFiltersBar';
-import { notifyAvatarsResolved } from './components/AuthorAvatar';
+import { notifyAvatarsResolved, clearFrontendAvatarCache } from './components/AuthorAvatar';
 import { CompareView } from './components/CompareView';
 import { assignLanes, type GraphLayoutData, type LaidOutCommit, type LaidOutGraphCommit } from './utils/graphLayout';
 import { filterFilesForHistoryPath } from './utils/historyPath';
@@ -319,6 +319,7 @@ export function GitLogApp() {
           notifyAvatarsResolved(msg.avatars);
           break;
         case 'LOG_REMOTE_ACCOUNTS_RESULT':
+          clearFrontendAvatarCache();
           store.setRemoteAccounts(msg.accounts);
           break;
         case 'LOG_REMOTES_RESULT':

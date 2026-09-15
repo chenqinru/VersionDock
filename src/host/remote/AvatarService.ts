@@ -6,7 +6,7 @@ import type { VersionDockLogger } from '../utils/Logger';
 import type { GitHubRemoteProvider } from './GitHubRemoteProvider';
 import type { GitLabRemoteProvider } from './GitLabRemoteProvider';
 
-const AVATAR_CACHE_KEY = 'versiondock.remote.avatar.cache';
+const AVATAR_CACHE_KEY = 'versiondock.remote.avatar.cache.v2';
 const POSITIVE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 const NEGATIVE_CACHE_TTL = 24 * 60 * 60 * 1000;      // 24 hours
 const MAX_CACHE_ENTRIES = 2000;
@@ -81,8 +81,14 @@ export class AvatarService {
 
       const cached = this.memoryCache.get(normalized);
       const authorName = authorsMap?.[normalized];
+      const isGitHubRepo = repoRemotes.some(r => /github/i.test(r));
+
       if (cached && cached.url) {
-        if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
+        const isGitHubUrl = /githubusercontent\.com/i.test(cached.url);
+        if (isGitHubUrl && !isGitHubRepo) {
+          // 当前不是明确的 GitHub 仓库，严禁返回并清理之前的 GitHub 头像缓存
+          this.memoryCache.delete(normalized);
+        } else if (now - cached.timestamp < POSITIVE_CACHE_TTL) {
           result[normalized] = cached.url;
           continue;
         }
@@ -141,53 +147,59 @@ export class AvatarService {
     const emailPrefix = norm.includes('@') ? norm.split('@')[0]! : norm;
     const strippedPrefix = emailPrefix.replace(/\d+$/, '');
 
-    // 0. Fast-path: Check authenticated GitHub user
-    try {
-      const ghUser = await this.github.getAuthenticatedUser();
-      if (ghUser?.avatar_url) {
-        const ghLogin = ghUser.login.toLowerCase();
-        const ghName = ghUser.name?.toLowerCase();
-        const ghEmail = ghUser.email?.toLowerCase();
-        const authorMatch = cleanAuthorName && (cleanAuthorName === ghLogin || cleanAuthorName === ghName);
-        const emailMatch =
-          (ghEmail && ghEmail === norm) ||
-          ghLogin === norm ||
-          ghLogin === emailPrefix ||
-          (strippedPrefix.length >= 3 && strippedPrefix === ghLogin) ||
-          (ghName && (ghName === norm || ghName === emailPrefix));
-        if (authorMatch || emailMatch) {
-          return ghUser.avatar_url;
-        }
-      }
-    } catch {
-      // Ignore
-    }
+    const isGitHubRepo = repoRemotes.some(r => /github/i.test(r));
 
-    // 0.1 Fast-path: Check authenticated GitLab users
-    try {
-      const glAccounts = await this.gitlab.getAllAccounts();
-      for (const acc of glAccounts) {
-        const glUser = await this.gitlab.getCurrentUser(acc.host);
-        if (glUser?.avatar_url) {
-          let avatarUrl = glUser.avatar_url;
-          if (avatarUrl.startsWith('/')) avatarUrl = `${acc.host}${avatarUrl}`;
-          const glUsername = glUser.username.toLowerCase();
-          const glName = glUser.name?.toLowerCase();
-          const glEmail = glUser.email?.toLowerCase();
-          const authorMatch = cleanAuthorName && (cleanAuthorName === glUsername || cleanAuthorName === glName);
+    // 0. Fast-path: Check authenticated GitHub user (STRICTLY for explicit GitHub repos only)
+    if (isGitHubRepo) {
+      try {
+        const ghUser = await this.github.getAuthenticatedUser();
+        if (ghUser?.avatar_url) {
+          const ghLogin = ghUser.login.toLowerCase();
+          const ghName = ghUser.name?.toLowerCase();
+          const ghEmail = ghUser.email?.toLowerCase();
+          const authorMatch = cleanAuthorName && (cleanAuthorName === ghLogin || cleanAuthorName === ghName);
           const emailMatch =
-            (glEmail && glEmail === norm) ||
-            glUsername === norm ||
-            glUsername === emailPrefix ||
-            (strippedPrefix.length >= 3 && strippedPrefix === glUsername) ||
-            (glName && (glName === norm || glName === emailPrefix));
+            (ghEmail && ghEmail === norm) ||
+            ghLogin === norm ||
+            ghLogin === emailPrefix ||
+            (strippedPrefix.length >= 3 && strippedPrefix === ghLogin) ||
+            (ghName && (ghName === norm || ghName === emailPrefix));
           if (authorMatch || emailMatch) {
-            return this.handleGitLabAvatar(acc.host, avatarUrl);
+            return ghUser.avatar_url;
           }
         }
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore
+    }
+
+    // 0.1 Fast-path: Check authenticated GitLab users (for GitLab or non-GitHub repos)
+    if (!isGitHubRepo) {
+      try {
+        const glAccounts = await this.gitlab.getAllAccounts();
+        for (const acc of glAccounts) {
+          const glUser = await this.gitlab.getCurrentUser(acc.host);
+          if (glUser?.avatar_url) {
+            let avatarUrl = glUser.avatar_url;
+            if (avatarUrl.startsWith('/')) avatarUrl = `${acc.host}${avatarUrl}`;
+            const glUsername = glUser.username.toLowerCase();
+            const glName = glUser.name?.toLowerCase();
+            const glEmail = glUser.email?.toLowerCase();
+            const authorMatch = cleanAuthorName && (cleanAuthorName === glUsername || cleanAuthorName === glName);
+            const emailMatch =
+              (glEmail && glEmail === norm) ||
+              glUsername === norm ||
+              glUsername === emailPrefix ||
+              (strippedPrefix.length >= 3 && strippedPrefix === glUsername) ||
+              (glName && (glName === norm || glName === emailPrefix));
+            if (authorMatch || emailMatch) {
+              return this.handleGitLabAvatar(acc.host, avatarUrl);
+            }
+          }
+        }
+      } catch {
+        // Ignore
+      }
     }
 
     // 1. Fast-path: GitHub noreply email
@@ -217,8 +229,7 @@ export class AvatarService {
       }
     }
 
-    const isGitHubRepo = repoRemotes.some(r => /github\.com/i.test(r));
-    const matchedGitLabRemote = repoRemotes.find(r => !/github\.com/i.test(r));
+    const matchedGitLabRemote = repoRemotes.find(r => !/github/i.test(r));
 
     let matchedGitLabHost: string | undefined;
     if (matchedGitLabRemote) {
@@ -242,19 +253,14 @@ export class AvatarService {
     } else if (matchedGitLabHost) {
       const gitlabUrl = await this.gitlab.resolveAvatarByEmail(matchedGitLabHost, email, authorName);
       if (gitlabUrl) return this.handleGitLabAvatar(matchedGitLabHost, gitlabUrl);
-
-      const githubUrl = await this.github.resolveAvatarByEmail(email, authorName);
-      if (githubUrl) return githubUrl;
     } else {
-      // Remote remotes empty or unknown: check GitLab first if any account configured
+      // Non-GitHub repo: check GitLab first if any account configured
       const accounts = await this.gitlab.getAllAccounts();
       for (const acc of accounts) {
         const gitlabUrl = await this.gitlab.resolveAvatarByEmail(acc.host, email, authorName);
         if (gitlabUrl) return this.handleGitLabAvatar(acc.host, gitlabUrl);
       }
-
-      const githubUrl = await this.github.resolveAvatarByEmail(email, authorName);
-      if (githubUrl) return githubUrl;
+      // 非 GitHub 仓库不向 GitHub API 兜底
     }
 
     // 3. Fallback to Gravatar check
@@ -333,7 +339,13 @@ export class AvatarService {
       // Fetch from remote
       let res: Response | undefined;
       try {
-        res = await fetch(avatarUrl);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4000);
+        try {
+          res = await fetch(avatarUrl, { signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
       } catch {
         res = undefined;
       }

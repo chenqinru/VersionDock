@@ -48,6 +48,9 @@ export class RemoteRepositoryService implements vscode.Disposable {
   private apiStateListener: vscode.Disposable | undefined;
   private publishTails = new Map<string, Promise<void>>();
 
+  private readonly _onDidChangeAccounts = new vscode.EventEmitter<void>();
+  readonly onDidChangeAccounts: vscode.Event<void> = this._onDidChangeAccounts.event;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly logger: VersionDockLogger,
@@ -56,6 +59,22 @@ export class RemoteRepositoryService implements vscode.Disposable {
     this.gitlab = new GitLabRemoteProvider(context, logger);
     this.avatarService = new AvatarService(context, this.github, this.gitlab, logger);
     this.providers = [this.github, this.gitlab];
+    this.disposables.push(this.gitlab);
+    this.disposables.push(this._onDidChangeAccounts);
+    this.disposables.push(
+      this.gitlab.onDidChangeAccounts(() => {
+        this.avatarService.clearCache();
+        this._onDidChangeAccounts.fire();
+      })
+    );
+    this.disposables.push(
+      vscode.authentication.onDidChangeSessions(e => {
+        if (e.provider.id === 'github') {
+          this.avatarService.clearCache();
+          this._onDidChangeAccounts.fire();
+        }
+      })
+    );
     this.disposables.push(vscode.extensions.onDidChange(() => this.tryRegisterGitApi()));
     this.tryRegisterGitApi();
   }
@@ -88,6 +107,18 @@ export class RemoteRepositoryService implements vscode.Disposable {
           host: 'https://github.com',
           emails: emails.length > 0 ? emails : undefined,
         });
+      } else {
+        const session = await this.github.getSession({ createIfNone: false }).catch(() => undefined);
+        if (session?.account?.label) {
+          const username = session.account.label;
+          accounts.push({
+            provider: 'github',
+            id: session.account.id || username,
+            username,
+            avatarUrl: `https://avatars.githubusercontent.com/${encodeURIComponent(username)}`,
+            host: 'https://github.com',
+          });
+        }
       }
     } catch {
       // Ignore error
@@ -136,14 +167,24 @@ export class RemoteRepositoryService implements vscode.Disposable {
   }
 
   async manageAccounts(): Promise<void> {
-    type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' };
+    type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' | 'clear-cache' };
 
     const [githubSession, connected] = await Promise.all([
       this.github.getSession({ createIfNone: false }).catch(() => undefined),
       this.getConnectedAccounts().catch(() => [] as RemoteAccountInfo[]),
     ]);
 
-    const ghAccount = connected.find(a => a.provider === 'github');
+    let ghAccount = connected.find(a => a.provider === 'github');
+    if (!ghAccount && githubSession?.account?.label) {
+      const username = githubSession.account.label;
+      ghAccount = {
+        provider: 'github',
+        id: githubSession.account.id || username,
+        username,
+        avatarUrl: `https://avatars.githubusercontent.com/${encodeURIComponent(username)}`,
+        host: 'https://github.com',
+      };
+    }
     const glAccounts = connected.filter(a => a.provider === 'gitlab');
 
     const githubLabel = ghAccount
@@ -190,9 +231,19 @@ export class RemoteRepositoryService implements vscode.Disposable {
         iconPath: glIconUri,
         action: 'gitlab',
       },
+      {
+        label: `$(trash) ${vscode.l10n.t('Clear Avatar Cache')}`,
+        description: vscode.l10n.t('Purge cached avatars and force reload'),
+        action: 'clear-cache',
+      },
     ];
     const selected = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('VersionDock — Remote Accounts') });
     if (!selected) return;
+    if (selected.action === 'clear-cache') {
+      this.avatarService.clearCache();
+      void vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: Avatar cache cleared.'));
+      return;
+    }
     if (selected.action === 'gitlab') {
       await this.gitlab.manageAccounts();
       return;
