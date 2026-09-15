@@ -394,22 +394,27 @@ export class AvatarService implements vscode.Disposable {
         }
       }
 
-      // Fetch from remote
+      // 未缓存时启动后台异步预拉取，本次立即返回 undefined，绝不阻塞 UI 菜单弹出
+      void this.fetchAndSaveAvatar(avatarUrl, filePath).catch(() => {});
+      return undefined;
+    } catch (error) {
+      this.logger.debug('AvatarService', 'Failed to get local avatar uri', { avatarUrl, error: String(error) });
+      return undefined;
+    }
+  }
+
+  private async fetchAndSaveAvatar(avatarUrl: string, filePath: string): Promise<void> {
+    try {
       let res: Response | undefined;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4000);
-        try {
-          res = await fetch(avatarUrl, { signal: controller.signal });
-        } finally {
-          clearTimeout(timer);
-        }
-      } catch {
-        res = undefined;
+        res = await fetch(avatarUrl, { signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
       }
 
       if (!res || !res.ok) {
-        // Try proxying if it belongs to GitLab
         try {
           const origin = new URL(avatarUrl).origin;
           const dataUrl = await this.gitlab.fetchAuthenticatedImage(origin, avatarUrl);
@@ -417,23 +422,21 @@ export class AvatarService implements vscode.Disposable {
             const comma = dataUrl.indexOf(',');
             if (comma !== -1) {
               fs.writeFileSync(filePath, Buffer.from(dataUrl.slice(comma + 1), 'base64'));
-              return vscode.Uri.file(filePath);
             }
           }
         } catch {
-          // Ignore
+          // ignore
         }
-        return undefined;
+        return;
       }
 
       const buffer = Buffer.from(await res.arrayBuffer());
       fs.writeFileSync(filePath, buffer);
-      return vscode.Uri.file(filePath);
-    } catch (error) {
-      this.logger.debug('AvatarService', 'Failed to get local avatar uri', { avatarUrl, error: String(error) });
-      return undefined;
+    } catch {
+      // ignore
     }
   }
+
 
   clearCacheForPlatform(platform: 'github' | 'gitee' | 'gitlab'): void {
     const prefix = `${platform}:`;

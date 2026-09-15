@@ -2658,5 +2658,15 @@
   "Click to manage accounts and identities": "点击管理账户与提交身份",
   "REMOTE ACCOUNTS": "远端托管账号",
   "Current Project": "当前项目",
-  "{0} Repository": "{0} 仓库"
+  "{0} Repository": "{0} 仓库",
+  "VersionDock — Accounts & Identities: {0} ({1}/{2})": "VersionDock — 账户与身份: {0} ({1}/{2})",
+  "Current: {0}  ·  {1} repositories in workspace": "当前: {0}  ·  工作区共 {1} 个仓库",
+  "Multi-repository workspace ({0} repos)": "多仓库工作区 (共 {0} 个仓库)",
+  "Multi-repository workspace ({0} repos) · Current: {1}": "多仓库工作区 (共 {0} 个仓库) · 当前: {1}",
+  "Current active": "当前活动",
+  "Current Project ({0})": "当前项目 ({0})",
+  "Linked Remote ({0})": "关联远程 ({0})",
+  "{0} Repository ({1})": "{0} 仓库 ({1})"
 }
+
+

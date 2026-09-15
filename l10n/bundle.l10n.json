@@ -2658,5 +2658,15 @@
   "Click to manage accounts and identities": "Click to manage accounts and identities",
   "REMOTE ACCOUNTS": "REMOTE ACCOUNTS",
   "Current Project": "Current Project",
-  "{0} Repository": "{0} Repository"
+  "{0} Repository": "{0} Repository",
+  "VersionDock — Accounts & Identities: {0} ({1}/{2})": "VersionDock — Accounts & Identities: {0} ({1}/{2})",
+  "Current: {0}  ·  {1} repositories in workspace": "Current: {0}  ·  {1} repositories in workspace",
+  "Multi-repository workspace ({0} repos)": "Multi-repository workspace ({0} repos)",
+  "Multi-repository workspace ({0} repos) · Current: {1}": "Multi-repository workspace ({0} repos) · Current: {1}",
+  "Current active": "Current active",
+  "Current Project ({0})": "Current Project ({0})",
+  "Linked Remote ({0})": "Linked Remote ({0})",
+  "{0} Repository ({1})": "{0} Repository ({1})"
 }
+
+

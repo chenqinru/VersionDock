@@ -38,6 +38,14 @@ function visibilityOptions(kind: RemoteProviderKind): Array<{ label: string; val
   ];
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 export class RemoteRepositoryService implements vscode.Disposable {
   readonly github: GitHubRemoteProvider;
   readonly gitlab: GitLabRemoteProvider;
@@ -76,6 +84,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
           this.avatarService.clearCacheForPlatform('gitee');
         }
         prevGiteeHasAccount = curGiteeHasAccount;
+        this.cachedAccounts = undefined;
         this._onDidChangeAccounts.fire();
       })
     );
@@ -88,6 +97,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
           this.avatarService.clearCacheForPlatform('gitlab');
         }
         prevGitLabHosts = curGitLabHosts;
+        this.cachedAccounts = undefined;
         this._onDidChangeAccounts.fire();
       })
     );
@@ -99,6 +109,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
             if (!session) {
               this.avatarService.clearCacheForPlatform('github');
             }
+            this.cachedAccounts = undefined;
             this._onDidChangeAccounts.fire();
           }).catch(() => {});
         }
@@ -108,26 +119,66 @@ export class RemoteRepositoryService implements vscode.Disposable {
     this.tryRegisterGitApi();
   }
 
+  private cachedAccounts?: RemoteAccountInfo[];
+  private lastAccountsFetchTime = 0;
+  private inFlightAccountsPromise?: Promise<RemoteAccountInfo[]>;
+  private static readonly ACCOUNTS_CACHE_TTL = 30 * 1000;
+
   get publishMissingRemote(): PublishMissingRemote {
     return (repoId, rootPath) => this.publishRepository(repoId, rootPath);
   }
 
-  async getConnectedAccounts(): Promise<RemoteAccountInfo[]> {
-    const accounts: RemoteAccountInfo[] = [];
+  async getConnectedAccounts(forceRefresh = false): Promise<RemoteAccountInfo[]> {
+    const now = Date.now();
+    if (!forceRefresh && this.cachedAccounts && (now - this.lastAccountsFetchTime < RemoteRepositoryService.ACCOUNTS_CACHE_TTL)) {
+      return this.cachedAccounts;
+    }
 
-    // 1. GitHub
+    if (this.inFlightAccountsPromise) {
+      return this.inFlightAccountsPromise;
+    }
+
+    this.inFlightAccountsPromise = (async () => {
+      try {
+        const accounts = await this.fetchConnectedAccountsInternal();
+        this.cachedAccounts = accounts;
+        this.lastAccountsFetchTime = Date.now();
+        return accounts;
+      } finally {
+        this.inFlightAccountsPromise = undefined;
+      }
+    })();
+
+    return this.inFlightAccountsPromise;
+  }
+
+  private async fetchConnectedAccountsInternal(): Promise<RemoteAccountInfo[]> {
+    const [ghResults, glResults, gtResults] = await Promise.allSettled([
+      this.fetchGitHubAccounts(),
+      this.fetchGitLabAccounts(),
+      this.fetchGiteeAccounts(),
+    ]);
+
+    const accounts: RemoteAccountInfo[] = [];
+    if (ghResults.status === 'fulfilled') accounts.push(...ghResults.value);
+    if (glResults.status === 'fulfilled') accounts.push(...glResults.value);
+    if (gtResults.status === 'fulfilled') accounts.push(...gtResults.value);
+    return accounts;
+  }
+
+  private async fetchGitHubAccounts(): Promise<RemoteAccountInfo[]> {
     try {
-      const user = await this.github.getAuthenticatedUser();
+      const user = await withTimeout(this.github.getAuthenticatedUser(), 1500, undefined);
       if (user) {
         const emails: string[] = [];
         if (user.email) emails.push(user.email);
-        const ghEmails = await this.github.getUserEmails().catch(() => []);
+        const ghEmails = await withTimeout(this.github.getUserEmails().catch(() => []), 1500, []);
         for (const e of ghEmails) {
           if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
             emails.push(e);
           }
         }
-        accounts.push({
+        return [{
           provider: 'github',
           id: String(user.id),
           username: user.login,
@@ -135,90 +186,110 @@ export class RemoteRepositoryService implements vscode.Disposable {
           avatarUrl: user.avatar_url,
           host: 'https://github.com',
           emails: emails.length > 0 ? emails : undefined,
-        });
-      } else {
-        const session = await this.github.getSession({ createIfNone: false }).catch(() => undefined);
-        if (session?.account?.label) {
-          const username = session.account.label;
-          accounts.push({
-            provider: 'github',
-            id: session.account.id || username,
-            username,
-            avatarUrl: `https://avatars.githubusercontent.com/${encodeURIComponent(username)}`,
-            host: 'https://github.com',
-          });
+        }];
+      }
+
+      const session = await this.github.getSession({ createIfNone: false }).catch(() => undefined);
+      if (session?.account?.label) {
+        const username = session.account.label;
+        return [{
+          provider: 'github',
+          id: session.account.id || username,
+          username,
+          avatarUrl: `https://avatars.githubusercontent.com/${encodeURIComponent(username)}`,
+          host: 'https://github.com',
+        }];
+      }
+    } catch {
+      // Ignore error
+    }
+    return [];
+  }
+
+  private async fetchGitLabAccounts(): Promise<RemoteAccountInfo[]> {
+    const list: RemoteAccountInfo[] = [];
+    try {
+      const gitlabAccounts = await this.gitlab.getAllAccounts();
+      const results = await Promise.allSettled(
+        gitlabAccounts.map(async acc => {
+          const user = await withTimeout(this.gitlab.getCurrentUser(acc.host), 1500, undefined);
+          if (user) {
+            let avatarUrl = user.avatar_url;
+            if (avatarUrl?.startsWith('/')) {
+              avatarUrl = `${acc.host}${avatarUrl}`;
+            }
+            const emails: string[] = [];
+            if (user.email) emails.push(user.email);
+            const glEmails = await withTimeout(this.gitlab.getUserEmails(acc.host).catch(() => []), 1500, []);
+            for (const e of glEmails) {
+              if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
+                emails.push(e);
+              }
+            }
+            return {
+              provider: 'gitlab' as const,
+              id: String(user.id),
+              username: user.username,
+              name: user.name,
+              avatarUrl,
+              host: acc.host,
+              emails: emails.length > 0 ? emails : undefined,
+            };
+          }
+          return {
+            provider: 'gitlab' as const,
+            id: acc.host,
+            username: acc.host,
+            host: acc.host,
+          };
+        })
+      );
+      for (const res of results) {
+        if (res.status === 'fulfilled' && res.value) {
+          list.push(res.value);
         }
       }
     } catch {
       // Ignore error
     }
+    return list;
+  }
 
-    // 2. GitLab
+  private async fetchGiteeAccounts(): Promise<RemoteAccountInfo[]> {
+    const list: RemoteAccountInfo[] = [];
     try {
-      const gitlabAccounts = await this.gitlab.getAllAccounts();
-      for (const acc of gitlabAccounts) {
-        const user = await this.gitlab.getCurrentUser(acc.host);
-        if (user) {
-          let avatarUrl = user.avatar_url;
-          if (avatarUrl?.startsWith('/')) {
-            avatarUrl = `${acc.host}${avatarUrl}`;
-          }
+      const giteeAccounts = await this.gitee.getAllAccounts();
+      const results = await Promise.allSettled(
+        giteeAccounts.map(async acc => {
           const emails: string[] = [];
-          if (user.email) emails.push(user.email);
-          const glEmails = await this.gitlab.getUserEmails(acc.host).catch(() => []);
-          for (const e of glEmails) {
+          const gEmails = await withTimeout(this.gitee.getUserEmails(acc.token).catch(() => []), 1500, []);
+          for (const e of gEmails) {
             if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
               emails.push(e);
             }
           }
-          accounts.push({
-            provider: 'gitlab',
-            id: String(user.id),
-            username: user.username,
-            name: user.name,
-            avatarUrl,
-            host: acc.host,
+          return {
+            provider: 'gitee' as const,
+            id: String(acc.id),
+            username: acc.username,
+            name: acc.name,
+            avatarUrl: acc.avatarUrl,
+            host: 'https://gitee.com',
             emails: emails.length > 0 ? emails : undefined,
-          });
-        } else {
-          accounts.push({
-            provider: 'gitlab',
-            username: acc.host,
-            host: acc.host,
-          });
+          };
+        })
+      );
+      for (const res of results) {
+        if (res.status === 'fulfilled' && res.value) {
+          list.push(res.value);
         }
       }
     } catch {
       // Ignore error
     }
-
-    // 3. Gitee
-    try {
-      const giteeAccounts = await this.gitee.getAllAccounts();
-      for (const acc of giteeAccounts) {
-        const emails: string[] = [];
-        const gEmails = await this.gitee.getUserEmails(acc.token).catch(() => []);
-        for (const e of gEmails) {
-          if (!emails.some(x => x.toLowerCase() === e.toLowerCase())) {
-            emails.push(e);
-          }
-        }
-        accounts.push({
-          provider: 'gitee',
-          id: String(acc.id),
-          username: acc.username,
-          name: acc.name,
-          avatarUrl: acc.avatarUrl,
-          host: 'https://gitee.com',
-          emails: emails.length > 0 ? emails : undefined,
-        });
-      }
-    } catch {
-      // Ignore error
-    }
-
-    return accounts;
+    return list;
   }
+
 
   async manageAccounts(): Promise<void> {
     type AccountAction = vscode.QuickPickItem & { action: 'github' | 'gitlab' | 'gitee' | 'clear-cache' };
@@ -353,6 +424,8 @@ export class RemoteRepositoryService implements vscode.Disposable {
       try {
         const session = await this.github.getSession({ createIfNone: true });
         if (session?.account.label) {
+          this.cachedAccounts = undefined;
+          this._onDidChangeAccounts.fire();
           void vscode.window.showInformationMessage(
             vscode.l10n.t('VersionDock: Connected to GitHub account "{0}".', session.account.label),
           );
@@ -386,6 +459,8 @@ export class RemoteRepositoryService implements vscode.Disposable {
       try {
         const newSession = await this.github.getSession({ forceNewSession: true, createIfNone: true });
         if (newSession?.account.label) {
+          this.cachedAccounts = undefined;
+          this._onDidChangeAccounts.fire();
           void vscode.window.showInformationMessage(
             vscode.l10n.t('VersionDock: Connected to GitHub account "{0}".', newSession.account.label),
           );
@@ -394,6 +469,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
         this.showRemoteError('GitHub', error);
       }
     } else if (chosen.action === 'profile') {
+
       void vscode.env.openExternal(vscode.Uri.parse(`https://github.com/${currentSession.account.label}`));
     }
   }
