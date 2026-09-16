@@ -1349,6 +1349,31 @@ export class SvnService extends GitService {
     });
   }
 
+  private collectUnversionedDirFiles(dirRelPath: string): string[] {
+    const results: string[] = [];
+    const walk = (currentRel: string) => {
+      const currentAbs = path.join(this.rootPath, currentRel);
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(currentAbs, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.name === '.svn' || entry.name === '.git' || entry.name === '.hg') continue;
+        if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db') continue;
+        const childRel = currentRel ? `${currentRel}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          walk(childRel);
+        } else {
+          results.push(childRel);
+        }
+      }
+    };
+    walk(dirRelPath);
+    return results;
+  }
+
   private async parseSvnStatus(): Promise<SvnStatusEntry[]> {
     const raw = await this.svn(['status', '--xml']);
     const files: SvnStatusEntry[] = [];
@@ -1369,10 +1394,44 @@ export class SvnService extends GitService {
       const treeConflicted = attr(wcTag[1], 'tree-conflicted') === 'true';
       const status = treeConflicted ? 'conflicted' : copied && item === 'added' ? 'copied' : svnItemToStatus(item, props);
       if (!status) continue;
+
+      const absolutePath = filePath === '.' ? this.rootPath : path.join(this.rootPath, filePath);
+
+      // SVN 原生 status 对未受控目录不会递归输出内部文件。
+      // 若未受控条目是本地目录，递归探测内部文件并展开为 untracked 文件条目。
+      if (item === 'unversioned' && filePath !== '.') {
+        let isDirectory = false;
+        try {
+          isDirectory = fs.statSync(absolutePath).isDirectory();
+        } catch {
+          isDirectory = false;
+        }
+        if (isDirectory) {
+          const childFiles = this.collectUnversionedDirFiles(filePath);
+          if (childFiles.length > 0) {
+            for (const childRel of childFiles) {
+              files.push({
+                repoId: this.repoId,
+                path: childRel,
+                absolutePath: path.join(this.rootPath, childRel),
+                status: 'untracked',
+                staged: false,
+                unstaged: true,
+                svnItem: 'unversioned',
+                svnProps: props,
+                svnCopied: false,
+                treeConflicted,
+              });
+            }
+            continue;
+          }
+        }
+      }
+
       files.push({
         repoId: this.repoId,
         path: filePath,
-        absolutePath: filePath === '.' ? this.rootPath : path.join(this.rootPath, filePath),
+        absolutePath,
         status,
         staged: false,
         unstaged: true,
@@ -1382,10 +1441,28 @@ export class SvnService extends GitService {
         treeConflicted,
       });
     }
+
     const conflictPaths = files.filter(file => file.status === 'conflicted').map(file => file.path);
-    return files
-      .filter(file => file.status !== 'untracked' || !this.isConflictArtifact(file.path, conflictPaths))
-      .sort((left, right) => left.path.localeCompare(right.path));
+    const nonConflictFiles = files.filter(
+      file => file.status !== 'untracked' || !this.isConflictArtifact(file.path, conflictPaths)
+    );
+
+    // 过滤：如果列表中的某一条目在本地是目录，且列表中已经包含其子孙文件/子条目（例如已包含 app/test/1.txt），
+    // 则移除该目录条目自身，交由前端树形组件根据路径自动构造目录节点，避免在树中出现同名叶子节点。
+    // 纯空目录（没有任何子条目）则予以保留。
+    const resultFiles = nonConflictFiles.filter(file => {
+      if (file.path === '.') return true;
+      const prefix = `${file.path}/`;
+      const hasChildren = nonConflictFiles.some(f => f.path.startsWith(prefix));
+      if (!hasChildren) return true;
+      try {
+        return !fs.statSync(file.absolutePath).isDirectory();
+      } catch {
+        return true;
+      }
+    });
+
+    return resultFiles.sort((left, right) => left.path.localeCompare(right.path));
   }
 
   private normalizeIgnoreTarget(entryPath: string): { directoryPath: string; entry: string; fullPath: string } {
@@ -2840,6 +2917,40 @@ export class SvnService extends GitService {
             .filter(status => newlyAddedDirectories.some(directory => status.path.startsWith(`${directory}/`)))
             .map(status => status.path),
         ]));
+      }
+
+      // 若有新加入版本控制的文件（例如嵌套在新目录下的文件），
+      // SVN commit --depth empty 要求其祖先新增目录也必须作为 commit target 提交，否则报 E200009 错误。
+      if (pathsToAdd.length > 0) {
+        const rawStatusAfterAdd = await this.svn(['status', '--xml']).catch(() => '');
+        const addedPaths = new Set<string>();
+        const entryRegex = /<entry\b([^>]*)>([\s\S]*?)<\/entry>/g;
+        let entryMatch: RegExpExecArray | null;
+        while ((entryMatch = entryRegex.exec(rawStatusAfterAdd)) !== null) {
+          const rawPath = attr(entryMatch[1], 'path') ?? '';
+          const normalizedPath = path.isAbsolute(rawPath)
+            ? normalizeRelPath(path.relative(this.rootPath, rawPath))
+            : normalizeRelPath(rawPath);
+          const wcTag = entryMatch[2].match(/<wc-status\b([^>]*)\/?>/);
+          if (wcTag && attr(wcTag[1], 'item') === 'added') {
+            addedPaths.add(normalizedPath === '' ? '.' : normalizedPath);
+          }
+        }
+
+        const ancestorDirectoriesToInclude: string[] = [];
+        for (const targetPath of commitTargets) {
+          const parts = targetPath.split('/');
+          for (let i = 1; i < parts.length; i++) {
+            const ancestor = parts.slice(0, i).join('/');
+            if (ancestor && addedPaths.has(ancestor) && !commitTargets.includes(ancestor)) {
+              ancestorDirectoriesToInclude.push(ancestor);
+            }
+          }
+        }
+
+        if (ancestorDirectoriesToInclude.length > 0) {
+          commitTargets = Array.from(new Set([...ancestorDirectoriesToInclude, ...commitTargets]));
+        }
       }
       const output = await this.runWithTargets(commitArgs, commitTargets);
       const outputNumbers = Array.from(output.matchAll(/\d+/g), match => Number(match[0]));
