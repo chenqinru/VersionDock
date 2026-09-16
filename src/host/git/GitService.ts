@@ -2153,13 +2153,24 @@ export class GitService {
     // A combined diff contains only paths changed by the merge resolution
     // itself. Differences introduced by each parent are exposed separately
     // through getMergeParentChanges()/getMergeParentFiles().
-    const nameStatus = await this.rawPathSafe([
-      'diff-tree', '--no-commit-id', '-r', '--cc', '-z', '-M', '--name-status', safeHash,
+    const [nameStatus, numStat] = await Promise.all([
+      this.rawPathSafe([
+        'diff-tree', '--no-commit-id', '-r', '--cc', '-z', '-M', '--name-status', safeHash,
+      ]),
+      this.rawPathSafe([
+        'diff-tree', '--no-commit-id', '-r', '--cc', '-z', '-M', '--numstat', safeHash,
+      ]).catch(() => ''),
     ]);
-    return parseNameStatusZOutput(nameStatus).map(file => ({
-      status: normalizeCombinedDiffStatus(file.code),
-      path: file.path,
-    }));
+    const stats = parseNumStatZOutput(numStat);
+    return parseNameStatusZOutput(nameStatus).map(file => {
+      const stat = stats.get(file.path) ?? (file.oldPath ? stats.get(file.oldPath) : undefined);
+      return {
+        status: normalizeCombinedDiffStatus(file.code),
+        path: file.path,
+        added: stat?.added,
+        removed: stat?.removed,
+      };
+    });
   }
 
   async getFileDiff(repoId: string, hash: string, filePath: string): Promise<FileDiff | null> {
