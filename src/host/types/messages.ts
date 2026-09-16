@@ -220,6 +220,7 @@ export type HostToCommitMsg =
   | { type: 'COMMIT_SWITCH_TAB'; tab: CommitPanelTab }
   | { type: 'COMMIT_READ_CLIPBOARD_RESULT'; requestId: string; text: string }
   | { type: 'COMMIT_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[]; clearCache?: boolean }
+  | { type: 'COMMIT_AVATAR_CACHE_CLEARED' }
   | { type: 'COMMIT_AVATARS_RESOLVED'; avatars: Record<string, string | null> };
 
 // ─── Commit Panel: WebView → Host ────────────────────────────────────────────
@@ -439,6 +440,7 @@ export type HostToLogMsg =
   | { type: 'LOG_FILTER_BY_REPO'; repoId: string | null; branch?: string | null }
   | { type: 'LOG_DIFF_OPENED'; repoId: string; filePath: string; error?: string }
   | { type: 'LOG_AVATARS_RESOLVED'; avatars: Record<string, string | null> }
+  | { type: 'LOG_AVATAR_CACHE_CLEARED' }
   | { type: 'LOG_REMOTE_ACCOUNTS_RESULT'; accounts: RemoteAccountInfo[]; clearCache?: boolean };
 
 // ─── Git Log: WebView → Host ─────────────────────────────────────────────────

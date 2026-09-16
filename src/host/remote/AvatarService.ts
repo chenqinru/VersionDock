@@ -60,6 +60,7 @@ export class AvatarService implements vscode.Disposable {
   private memoryCache = new Map<string, CacheEntry>();
   private inFlight = new Map<string, Promise<string | null>>();
   private saveDebounceTimer?: NodeJS.Timeout;
+  private cacheEpoch = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -245,6 +246,7 @@ export class AvatarService implements vscode.Disposable {
     repoRemotes: string[] = [],
     authors?: Record<string, string> | Array<{ name?: string; email: string }>,
   ): Promise<Record<string, string | null>> {
+    const resolveEpoch = this.cacheEpoch;
     const result: Record<string, string | null> = {};
     const pending: Array<{ email: string; cacheKey: string }> = [];
 
@@ -285,12 +287,14 @@ export class AvatarService implements vscode.Disposable {
         chunk.map(async item => {
           const authorName = authorsMap[item.email];
           const url = await this.resolveSingleAvatar(item.email, repoRemotes, authorName, platform);
+          if (resolveEpoch !== this.cacheEpoch) return;
           result[item.email] = url;
           this.memoryCache.set(item.cacheKey, { url, timestamp: Date.now() });
         }),
       );
     }
 
+    if (resolveEpoch !== this.cacheEpoch) return {};
     this.scheduleSave();
     return result;
   }
@@ -305,18 +309,18 @@ export class AvatarService implements vscode.Disposable {
     const inFlightPromise = this.inFlight.get(inFlightKey);
     if (inFlightPromise) return inFlightPromise;
 
-    const promise = (async (): Promise<string | null> => {
-      try {
-        return await this.doResolveSingleAvatar(email, repoRemotes, authorName, platform);
-      } catch (error) {
-        this.logger.debug('AvatarService', 'Error resolving avatar for email', { email, error: String(error) });
-        return null;
-      } finally {
+    const promise = this.doResolveSingleAvatar(email, repoRemotes, authorName, platform).catch(error => {
+      this.logger.debug('AvatarService', 'Error resolving avatar for email', { email, error: String(error) });
+      return null;
+    });
+    this.inFlight.set(inFlightKey, promise);
+    void promise.finally(() => {
+      // A cache clear may remove this promise and start a fresh request for
+      // the same key. The stale request must not delete the new one.
+      if (this.inFlight.get(inFlightKey) === promise) {
         this.inFlight.delete(inFlightKey);
       }
-    })();
-
-    this.inFlight.set(inFlightKey, promise);
+    });
     return promise;
   }
 
@@ -517,6 +521,7 @@ export class AvatarService implements vscode.Disposable {
 
 
   clearCacheForPlatform(platform: 'github' | 'gitee' | 'gitlab'): void {
+    this.cacheEpoch++;
     const prefix = `${platform}:`;
     let changed = false;
     for (const key of Array.from(this.memoryCache.keys())) {
@@ -539,9 +544,19 @@ export class AvatarService implements vscode.Disposable {
   }
 
   clearCache(): void {
+    this.cacheEpoch++;
+    if (this.saveDebounceTimer) {
+      clearTimeout(this.saveDebounceTimer);
+      this.saveDebounceTimer = undefined;
+    }
     this.memoryCache.clear();
     this.inFlight.clear();
     this.gitee.clearCache();
     void this.context.globalState.update(AVATAR_CACHE_KEY, {});
+    try {
+      fs.rmSync(path.join(this.context.globalStorageUri.fsPath, 'avatars'), { recursive: true, force: true });
+    } catch (error) {
+      this.logger.debug('AvatarService', 'Failed to clear local avatar files', { error: String(error) });
+    }
   }
 }

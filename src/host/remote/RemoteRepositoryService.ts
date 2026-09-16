@@ -60,6 +60,8 @@ export class RemoteRepositoryService implements vscode.Disposable {
 
   private readonly _onDidChangeAccounts = new vscode.EventEmitter<void>();
   readonly onDidChangeAccounts: vscode.Event<void> = this._onDidChangeAccounts.event;
+  private readonly _onDidClearAvatarCache = new vscode.EventEmitter<void>();
+  readonly onDidClearAvatarCache: vscode.Event<void> = this._onDidClearAvatarCache.event;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -74,6 +76,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
     this.disposables.push(this.gitee);
     this.disposables.push(this.avatarService);
     this.disposables.push(this._onDidChangeAccounts);
+    this.disposables.push(this._onDidClearAvatarCache);
 
     // 监听账号变更：仅在某平台账号被真正断开/移除时，才定向清理该平台的头像缓存，杜绝窗口初始化或普通 session 刷新时全量清空缓存
     let prevGiteeHasAccount = Boolean(context.globalState.get('versiondock.remote.gitee.account'));
@@ -126,6 +129,13 @@ export class RemoteRepositoryService implements vscode.Disposable {
 
   get publishMissingRemote(): PublishMissingRemote {
     return (repoId, rootPath) => this.publishRepository(repoId, rootPath);
+  }
+
+  clearAvatarCache(): void {
+    this.avatarService.clearCache();
+    // Webviews keep a separate localStorage cache. Notify them immediately;
+    // this event must not wait for a remote-account refresh.
+    this._onDidClearAvatarCache.fire();
   }
 
   async getConnectedAccounts(forceRefresh = false): Promise<RemoteAccountInfo[]> {
@@ -402,8 +412,7 @@ export class RemoteRepositoryService implements vscode.Disposable {
     const selected = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('VersionDock — Remote Accounts') });
     if (!selected) return;
     if (selected.action === 'clear-cache') {
-      this.avatarService.clearCache();
-      this._onDidChangeAccounts.fire();
+      this.clearAvatarCache();
       void vscode.window.showInformationMessage(vscode.l10n.t('VersionDock: Avatar cache cleared.'));
       return;
     }

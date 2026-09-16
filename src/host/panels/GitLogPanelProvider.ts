@@ -286,6 +286,9 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     );
     if (this.manager.remoteService) {
       this.managerListeners.push(
+        this.manager.remoteService.onDidClearAvatarCache(() => {
+          this.post({ type: 'LOG_AVATAR_CACHE_CLEARED' });
+        }),
         this.manager.remoteService.onDidChangeAccounts(() => {
           void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
             this.post({ type: 'LOG_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [], clearCache: true });
@@ -489,6 +492,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const broadcast = msg.type === 'LOG_INIT_DATA'
       || msg.type === 'LOG_ICON_THEME_UPDATE'
       || msg.type === 'LOG_LAYOUT_DENSITY_UPDATE'
+      || msg.type === 'LOG_AVATAR_CACHE_CLEARED'
       || msg.type === 'LOG_REFRESH'
       || msg.type === 'LOG_REFS_UPDATE'
       || msg.type === 'LOG_TAGS_UPDATE';

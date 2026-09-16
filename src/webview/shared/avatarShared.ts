@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { RemoteAccountInfo } from '../../host/types/messages';
 
 export function isAccountCompatibleWithRepo(
@@ -102,6 +102,32 @@ export function githubAvatarUrl(email: string, size: number): string | null {
   return username ? `https://avatars.githubusercontent.com/${encodeURIComponent(username)}?size=${size * 2}` : null;
 }
 
+function canRenderConnectedAvatarDirectly(
+  avatarUrl: string | null,
+  remoteAccounts: RemoteAccountInfo[],
+): avatarUrl is string {
+  if (!avatarUrl) return false;
+  if (avatarUrl.startsWith('data:')) return true;
+
+  for (const account of remoteAccounts) {
+    if (account.provider !== 'gitlab' || !account.host) continue;
+    try {
+      const accountHost = new URL(account.host).hostname.toLowerCase();
+      const avatarHost = new URL(avatarUrl).hostname.toLowerCase();
+      if (accountHost !== 'gitlab.com' && (accountHost === avatarHost || account.avatarUrl === avatarUrl)) {
+        // Self-hosted GitLab avatars may require PRIVATE-TOKEN authentication.
+        // Let AvatarService proxy them into a data URL instead of rendering the
+        // private URL directly in the Webview.
+        return false;
+      }
+    } catch {
+      // Fall back to the direct URL when the provider returned a non-standard URL.
+    }
+  }
+
+  return true;
+}
+
 const LOCAL_STORAGE_KEY = 'versiondock.avatar.cache.v1';
 const MAX_LOCAL_ENTRIES = 1000;
 
@@ -154,7 +180,11 @@ export function notifyAvatarsResolved(avatars: Record<string, string | null>): v
   let changed = false;
   for (const [email, url] of Object.entries(avatars)) {
     const key = email.toLowerCase();
-    if (hostResolvedAvatars.get(key) !== url) {
+    const current = hostResolvedAvatars.get(key);
+    // Multiple repositories may resolve the same email concurrently. A provider
+    // miss from one repository must not replace a valid avatar found by another.
+    if (url === null && typeof current === 'string') continue;
+    if (current !== url) {
       hostResolvedAvatars.set(key, url);
       changed = true;
     }
@@ -206,27 +236,34 @@ export function initials(name: string): string {
 export function createAvatarResolverQueue(
   sendRequest: (emails: string[], repoId?: string, authors?: Array<{ email: string; name?: string }>) => void
 ): (email: string, repoId?: string, authorName?: string) => void {
-  const pendingBatch = new Set<string>();
-  const pendingAuthors = new Map<string, string>();
-  let activeRepoId: string | undefined;
+  const pendingBatches = new Map<string, {
+    repoId?: string;
+    emails: Set<string>;
+    authors: Map<string, string>;
+  }>();
   let batchTimer: number | null = null;
 
   return function queueEmailResolution(email: string, repoId?: string, authorName?: string): void {
     const normalized = email.trim().toLowerCase();
     if (!normalized || hostResolvedAvatars.has(normalized)) return;
-    pendingBatch.add(normalized);
-    if (authorName) pendingAuthors.set(normalized, authorName);
-    if (repoId) activeRepoId = repoId;
+    const batchKey = repoId ?? '';
+    let batch = pendingBatches.get(batchKey);
+    if (!batch) {
+      batch = { repoId, emails: new Set<string>(), authors: new Map<string, string>() };
+      pendingBatches.set(batchKey, batch);
+    }
+    batch.emails.add(normalized);
+    if (authorName) batch.authors.set(normalized, authorName);
     if (batchTimer === null) {
       batchTimer = window.setTimeout(() => {
         batchTimer = null;
-        if (pendingBatch.size > 0) {
-          const emails = Array.from(pendingBatch);
-          const authors = emails.map(e => ({ email: e, name: pendingAuthors.get(e) }));
-          const reqRepoId = activeRepoId;
-          pendingBatch.clear();
-          pendingAuthors.clear();
-          sendRequest(emails, reqRepoId, authors);
+        const batches = Array.from(pendingBatches.values());
+        pendingBatches.clear();
+        for (const pending of batches) {
+          if (pending.emails.size === 0) continue;
+          const emails = Array.from(pending.emails);
+          const authors = emails.map(e => ({ email: e, name: pending.authors.get(e) }));
+          sendRequest(emails, pending.repoId, authors);
         }
       }, 60);
     }
@@ -251,6 +288,10 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
 
   // 1. Instant match for connected accounts (GitHub, GitLab, Gitee)
   const connectedAvatar = findConnectedAvatar(cleanName, authorEmail, remoteAccounts, repoRemoteUrl);
+  const directConnectedAvatar = canRenderConnectedAvatarDirectly(connectedAvatar, remoteAccounts)
+    ? connectedAvatar
+    : null;
+  const connectedAvatarRequiresHost = Boolean(connectedAvatar && !directConnectedAvatar);
 
   // 2. Instant match for static fast-paths (e.g. GitHub noreply CDN URL)
   const remotes = repoRemoteUrl ? (Array.isArray(repoRemoteUrl) ? repoRemoteUrl : [repoRemoteUrl]) : [];
@@ -261,8 +302,17 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
   const hostCached = normalizedEmail && hostResolvedAvatars.has(normalizedEmail)
     ? hostResolvedAvatars.get(normalizedEmail)
     : undefined;
+  const unusablePrivateHostCache = typeof hostCached === 'string'
+    && !canRenderConnectedAvatarDirectly(hostCached, remoteAccounts);
+  const hostCacheRequiresRefresh = unusablePrivateHostCache
+    || (connectedAvatarRequiresHost && hostCached === null);
+  const usableHostCached = hostCacheRequiresRefresh ? undefined : hostCached;
 
-  const immediateAvatar = connectedAvatar || staticAvatar || (hostCached !== undefined ? hostCached : undefined);
+  // Connected public-account data is freshest and keeps its original priority.
+  // Self-hosted GitLab must instead use the authenticated/proxied host result.
+  const immediateAvatar = connectedAvatarRequiresHost
+    ? (usableHostCached !== undefined ? usableHostCached : undefined)
+    : directConnectedAvatar || staticAvatar || (usableHostCached !== undefined ? usableHostCached : undefined);
 
   const [epoch, setEpoch] = useState(() => avatarCacheEpoch);
   const [url, setUrl] = useState<string | null | 'loading'>(() => immediateAvatar !== undefined ? immediateAvatar : 'loading');
@@ -294,8 +344,11 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
       setUrl(null);
       return;
     }
+    if (hostCacheRequiresRefresh && normalizedEmail) {
+      hostResolvedAvatars.delete(normalizedEmail);
+    }
     queueResolution(authorEmail, repoId, authorName);
-  }, [immediateAvatar, authorEmail, authorName, repoId, epoch, queueResolution]);
+  }, [immediateAvatar, hostCacheRequiresRefresh, normalizedEmail, cleanName, authorEmail, authorName, repoId, epoch, queueResolution]);
 
   useEffect(() => {
     if (!normalizedEmail) return;

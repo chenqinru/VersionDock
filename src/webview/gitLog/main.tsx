@@ -321,6 +321,9 @@ export function GitLogApp() {
         case 'LOG_AVATARS_RESOLVED':
           notifyAvatarsResolved(msg.avatars);
           break;
+        case 'LOG_AVATAR_CACHE_CLEARED':
+          clearFrontendAvatarCache();
+          break;
         case 'LOG_REMOTE_ACCOUNTS_RESULT':
           if (msg.clearCache) {
             clearFrontendAvatarCache();

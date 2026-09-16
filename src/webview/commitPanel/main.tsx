@@ -1535,6 +1535,9 @@ export function CommitApp() {
         case 'COMMIT_AVATARS_RESOLVED':
           notifyAvatarsResolved(msg.avatars);
           break;
+        case 'COMMIT_AVATAR_CACHE_CLEARED':
+          clearFrontendAvatarCache();
+          break;
       }
     };
     window.addEventListener('message', handler);

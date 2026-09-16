@@ -515,6 +515,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     if (this.manager.remoteService) {
       this.managerListeners.push(
+        this.manager.remoteService.onDidClearAvatarCache(() => {
+          this.post({ type: 'COMMIT_AVATAR_CACHE_CLEARED' });
+        }),
         this.manager.remoteService.onDidChangeAccounts(() => {
           void this.manager.remoteService?.getConnectedAccounts().then(accounts => {
             this.post({ type: 'COMMIT_REMOTE_ACCOUNTS_RESULT', accounts: accounts ?? [], clearCache: true });
@@ -583,6 +586,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       || msg.type === 'COMMIT_LAYOUT_DENSITY_UPDATE'
       || msg.type === 'COMMIT_BRANCHES_UPDATE'
       || msg.type === 'COMMIT_HIDDEN_REPOS_UPDATE'
+      || msg.type === 'COMMIT_AVATAR_CACHE_CLEARED'
       || msg.type === 'CHANGELISTS_UPDATE'
       || msg.type === 'SHELVE_LIST_RESULT'
       || msg.type === 'STASH_COUNT_RESULT'

@@ -877,7 +877,7 @@ export class ProfileStatusBar implements vscode.Disposable {
       description: t('Cache'),
       detail: t('Purge cached avatars and force reload'),
       action: () => {
-        this.remoteService!.avatarService.clearCache();
+        this.remoteService!.clearAvatarCache();
         this.refresh();
         void vscode.window.showInformationMessage(t('VersionDock: Avatar cache cleared.'));
       },
