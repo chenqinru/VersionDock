@@ -36,6 +36,7 @@ interface Props {
   onOpenFile: (file: FileStatus) => void;
   onRollback: (files: FileStatus[]) => void;
   onResolveMerge: (file: FileStatus) => void;
+  onStage?: (file: FileStatus) => void;
   onBranchClick: (repoId: string) => void;
   onRepoContextMenu: (e: React.MouseEvent, repoId: string) => void;
   onOpenAllChanges: (repoId: string) => void;
@@ -51,7 +52,7 @@ export function ProjectGroup({
   isSubmodule, submodulePath, isWorktree, mainWorktreePath, kind,
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
-  onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge,
+  onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage,
   onBranchClick, onRepoContextMenu, onOpenAllChanges, iconTheme, activeFolderPath, ctxFile,
   speedSearchQuery, activeSpeedSearchKey,
 }: Props) {
@@ -68,12 +69,17 @@ export function ProjectGroup({
   );
 
   const totalFiles = allFiles.length;
-  const selectedCount = allFiles.filter(f => isFileSelected(repoId, f.path)).length;
-  const allSelected = totalFiles > 0 && selectedCount === totalFiles;
+  const selectableFiles = useMemo(
+    () => allFiles.filter(f => !f.isTruncated),
+    [allFiles],
+  );
+  const selectableCount = selectableFiles.length;
+  const selectedCount = selectableFiles.filter(f => isFileSelected(repoId, f.path)).length;
+  const allSelected = selectableCount > 0 && selectedCount === selectableCount;
   const someSelected = selectedCount > 0 && !allSelected;
 
   const toggleAll = () => {
-    onSetFiles(repoId, allFiles.map(f => f.path), !allSelected);
+    onSetFiles(repoId, selectableFiles.map(f => f.path), !allSelected);
   };
 
   const checkboxRef = useRef<HTMLInputElement>(null);
@@ -92,11 +98,11 @@ export function ProjectGroup({
           ref={checkboxRef}
           type="checkbox"
           checked={allSelected}
-          onChange={totalFiles > 0 ? toggleAll : () => {}}
+          onChange={selectableCount > 0 ? toggleAll : () => {}}
           onClick={(e) => e.stopPropagation()}
-          disabled={totalFiles === 0}
-          style={{ ...styles.repoCheckbox, ...nativeCheckboxBorderStyle(), ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
-          title={totalFiles > 0 ? t('Select all files in this repo') : undefined}
+          disabled={selectableCount === 0}
+          style={{ ...styles.repoCheckbox, ...nativeCheckboxBorderStyle(), ...(selectableCount === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
+          title={selectableCount > 0 ? t('Select all files in this repo') : undefined}
         />
 
         <div style={styles.headerMain} onClick={() => toggleCollapsed(repoCollapseKey)}>
@@ -170,6 +176,8 @@ export function ProjectGroup({
               onOpenFile={onOpenFile}
               onRollback={onRollback}
               onResolveMerge={onResolveMerge}
+              onStage={onStage}
+              isSvn={kind === 'svn'}
               viewMode={viewMode}
               activeFolderPath={activeFolderPath}
               ctxFile={ctxFile}

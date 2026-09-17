@@ -2161,19 +2161,25 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         })
       );
-      const allEmails: string[] = [];
-      const allRemotes: string[] = [];
-      for (const item of unpushedList) {
-        for (const c of item.commits ?? []) {
-          if (c.authorEmail) allEmails.push(c.authorEmail);
-        }
-        const r = this.manager.getRepo(item.repoId);
-        if (r?.meta?.remoteUrl) {
-          allRemotes.push(r.meta.remoteUrl);
+      const repoAvatars: Record<string, Record<string, string | null>> = {};
+      if (this.manager.remoteService?.avatarService) {
+        for (const item of unpushedList) {
+          const emails = (item.commits ?? []).map(c => c.authorEmail).filter(Boolean) as string[];
+          if (emails.length > 0) {
+            const r = this.manager.getRepo(item.repoId);
+            const remotes = r?.meta?.remoteUrl ? [r.meta.remoteUrl] : [];
+            const cached = this.manager.remoteService.avatarService.getCachedAvatars(emails, remotes);
+            if (Object.keys(cached).length > 0) {
+              repoAvatars[item.repoId] = cached;
+            }
+          }
         }
       }
-      const avatars = this.manager.remoteService?.avatarService.getCachedAvatars(allEmails, allRemotes);
-      this.post({ type: 'PUSH_UNPUSHED_RESULT', repos: unpushedList, avatars });
+      this.post({
+        type: 'PUSH_UNPUSHED_RESULT',
+        repos: unpushedList,
+        repoAvatars: Object.keys(repoAvatars).length > 0 ? repoAvatars : undefined,
+      });
       for (const item of unpushedList) {
         if (item.commits && item.commits.length > 0) {
           const r = this.manager.getRepo(item.repoId);
@@ -2675,12 +2681,12 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_RESOLVE_AVATARS': {
         const remoteService = this.manager.remoteService;
         if (!remoteService) {
-          this.post({ type: 'COMMIT_AVATARS_RESOLVED', avatars: {} });
+          this.post({ type: 'COMMIT_AVATARS_RESOLVED', avatars: {}, repoId: msg.repoId });
           break;
         }
         const remotes = await this.manager.getRemotes(msg.repoId);
         const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, remotes, msg.authors);
-        this.post({ type: 'COMMIT_AVATARS_RESOLVED', avatars });
+        this.post({ type: 'COMMIT_AVATARS_RESOLVED', avatars, repoId: msg.repoId });
         break;
       }
 
@@ -2847,13 +2853,62 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
         try {
+          let pathsToStage = msg.paths;
+          const status = await repo.getStatus().catch(() => null);
+          const truncatedReasonMap = new Map<string, 'entry-limit' | 'depth-limit' | undefined>();
+          if (status) {
+            for (const f of status.unstagedFiles) {
+              if (f.isTruncated) truncatedReasonMap.set(f.path, f.truncationReason);
+            }
+            for (const f of status.stagedFiles) {
+              if (f.isTruncated) truncatedReasonMap.set(f.path, f.truncationReason);
+            }
+          }
+
+          let isTruncatedConfirmed = false;
+          if (truncatedReasonMap.size > 0) {
+            const hasTruncated = msg.paths.some(p => truncatedReasonMap.has(p));
+            if (hasTruncated) {
+              if (msg.paths.length === 1 && truncatedReasonMap.has(msg.paths[0])) {
+                const dirPath = msg.paths[0];
+                const reason = truncatedReasonMap.get(dirPath);
+                const confirmMessage = reason === 'depth-limit'
+                  ? t('Directory "{0}" exceeds the directory depth limit (>8 levels). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?', dirPath)
+                  : t('Directory "{0}" exceeds the display limit (contains files beyond the shown 500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?', dirPath);
+                const confirm = await vscode.window.showWarningMessage(
+                  confirmMessage,
+                  { modal: true },
+                  t('Add Entire Directory')
+                );
+                if (confirm !== t('Add Entire Directory')) {
+                  this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
+                  return;
+                }
+                pathsToStage = [dirPath];
+                isTruncatedConfirmed = true;
+              } else {
+                pathsToStage = msg.paths.filter(p => !truncatedReasonMap.has(p));
+                const skippedCount = msg.paths.length - pathsToStage.length;
+                if (skippedCount > 0) {
+                  vscode.window.showInformationMessage(
+                    t('Skipped adding {0} truncated director(y/ies) in batch operation. Please add them individually to confirm recursive inclusion.', skippedCount)
+                  );
+                }
+                if (pathsToStage.length === 0) {
+                  this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.repoId });
+                  return;
+                }
+              }
+            }
+          }
+
           await this.manager.runWithStatusUpdatesSuppressed(async () => {
-            await repo.stageFiles(msg.paths);
+            await repo.stageFiles(pathsToStage, { allowTruncated: isTruncatedConfirmed });
           }, 'stage', t('Staging changes…'));
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
-          const status = await this.refreshStatusAfterOp();
-          this.postChangelistsUpdate(status);
-          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
+          const newStatus = await this.refreshStatusAfterOp();
+          this.postChangelistsUpdate(newStatus);
+          this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status: newStatus });
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e), repoId: msg.repoId });
         }
@@ -4081,6 +4136,15 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'COMMIT_DISCARD_FILE': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId }); return; }
+        const repoStatus = await repo.getStatus().catch(() => null);
+        const targetEntry = repoStatus ? [...repoStatus.unstagedFiles, ...repoStatus.stagedFiles].find(f => f.path === msg.path) : null;
+        if (targetEntry?.isTruncated) {
+          vscode.window.showErrorMessage(
+            t('Cannot discard truncated directory "{0}" because its contents exceed display limits. Please delete files individually or manage the directory directly on disk.', msg.path)
+          );
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cannot discard truncated directory', repoId: msg.repoId });
+          return;
+        }
         const confirm = await vscode.window.showWarningMessage(
           t('VersionDock [{0}]: Discard changes to {1}? This cannot be undone.', repo.meta.name, msg.path),
           { modal: true }, t('Discard')
@@ -4098,8 +4162,43 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       case 'COMMIT_DISCARD_FILES': {
-        const n = msg.files.length;
-        const singleRepoId = msg.files.every(f => f.repoId === msg.files[0]?.repoId) ? msg.files[0]?.repoId : undefined;
+        const uniqueRepoIds = Array.from(new Set(msg.files.map(f => f.repoId)));
+        const repoTruncatedPathsMap = new Map<string, Set<string>>();
+        await Promise.all(
+          uniqueRepoIds.map(async repoId => {
+            const repo = this.manager.getRepo(repoId);
+            if (!repo) return;
+            const status = await repo.getStatus().catch(() => null);
+            if (status) {
+              const truncatedPaths = new Set<string>();
+              for (const f of status.unstagedFiles) {
+                if (f.isTruncated) truncatedPaths.add(f.path);
+              }
+              for (const f of status.stagedFiles) {
+                if (f.isTruncated) truncatedPaths.add(f.path);
+              }
+              repoTruncatedPathsMap.set(repoId, truncatedPaths);
+            }
+          })
+        );
+
+        const allFilesWithMeta = msg.files.map(f => {
+          const truncatedPaths = repoTruncatedPathsMap.get(f.repoId);
+          return { file: f, isTruncated: !!truncatedPaths?.has(f.path) };
+        });
+        const truncatedFiles = allFilesWithMeta.filter(item => item.isTruncated).map(item => item.file);
+        const validFiles = allFilesWithMeta.filter(item => !item.isTruncated).map(item => item.file);
+        if (truncatedFiles.length > 0) {
+          vscode.window.showWarningMessage(
+            t('Skipped discarding {0} truncated director(y/ies) whose contents exceed display limits. Please delete files individually.', truncatedFiles.length)
+          );
+        }
+        if (validFiles.length === 0) {
+          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: 'Cancelled', repoId: msg.files[0]?.repoId });
+          break;
+        }
+        const n = validFiles.length;
+        const singleRepoId = validFiles.every(f => f.repoId === validFiles[0]?.repoId) ? validFiles[0]?.repoId : undefined;
         const singleRepoName = singleRepoId ? this.manager.getRepoMeta(singleRepoId)?.name : undefined;
         const confirm = await vscode.window.showWarningMessage(
           singleRepoName
@@ -4129,7 +4228,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
             cancellable: false,
           },
           async () => {
-            for (const f of msg.files) {
+            for (const f of validFiles) {
               const repo = this.manager.getRepo(f.repoId);
               if (!repo) { errors.push(t('{0}: Repo not found', f.path)); continue; }
               try { await repo.discardFile(f.path); }
@@ -4142,7 +4241,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         );
         if (errors.length > 0) {
-          const discardedCount = msg.files.length - errors.length;
+          const discardedCount = validFiles.length - errors.length;
           let errorMessage = errors.join('\n');
           if (discardedCount > 0) {
             errorMessage = singleRepoName

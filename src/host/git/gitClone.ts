@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { execCli } from '../vcs/cli';
 import { t } from '../utils/l10n';
+import { isValidTargetDirName } from '../utils/repoPath';
 import type { WorkspaceGitManager } from './WorkspaceGitManager';
 import type { RemoteRepositoryService } from '../remote/RemoteRepositoryService';
 import type { RemoteRepository } from '../remote/types';
@@ -19,14 +20,7 @@ function isDirectoryEmpty(dirPath: string): boolean {
   }
 }
 
-function isValidFolderName(name: string): boolean {
-  const trimmed = name.trim();
-  if (!trimmed || trimmed === '.' || trimmed === '..') return false;
-  if (trimmed.includes('/') || trimmed.includes('\\')) return false;
-  if (path.basename(trimmed) !== trimmed) return false;
-  if (/[<>:"|?*]/.test(trimmed)) return false;
-  return true;
-}
+const isValidFolderName = isValidTargetDirName;
 
 interface CredentialHelperContext {
   env: NodeJS.ProcessEnv;
@@ -699,6 +693,7 @@ export async function cloneGitRepository(
         const credentials = effectiveRemoteService ? await effectiveRemoteService.resolveCredentialsForUrl(trimmedUrl) : undefined;
         const helper = await prepareGitCredentialHelper(trimmedUrl, credentials);
 
+        let isFinalizing = false;
         try {
           const config = vscode.workspace.getConfiguration('versiondock');
           const recurseSubmodules = config.get<boolean>('git.cloneRecursiveSubmodules', true);
@@ -718,14 +713,23 @@ export async function cloneGitRepository(
           });
 
           if (!targetExistedBefore) {
+            isFinalizing = true;
             if (fs.existsSync(finalDir)) {
               void vscode.window.showErrorMessage(
                 t('Target directory {0} was created during the operation. Staging files are kept at {1}.', finalDir, stagingDir)
               );
               return false;
             }
-            await fs.promises.rename(stagingDir, finalDir);
+            try {
+              await fs.promises.rename(stagingDir, finalDir);
+            } catch (renameErr) {
+              void vscode.window.showErrorMessage(
+                t('Failed to rename staging directory to {0}: {1}. Staging files are preserved at {2}.', finalDir, (renameErr as Error)?.message || String(renameErr), stagingDir)
+              );
+              return false;
+            }
           } else {
+            isFinalizing = true;
             const remaining = fs.readdirSync(finalDir).filter(e => e !== path.basename(stagingDir) && e !== '.DS_Store' && e !== 'Thumbs.db');
             if (remaining.length > 0) {
               void vscode.window.showErrorMessage(
@@ -733,15 +737,45 @@ export async function cloneGitRepository(
               );
               return false;
             }
-            const entries = await fs.promises.readdir(stagingDir);
-            for (const entry of entries) {
-              await fs.promises.rename(path.join(stagingDir, entry), path.join(finalDir, entry));
+
+            // 预先清理目标目录中遗留的系统文件（.DS_Store, Thumbs.db），避免重命名时与仓库同名文件发生碰撞
+            for (const systemFile of ['.DS_Store', 'Thumbs.db']) {
+              const targetSysPath = path.join(finalDir, systemFile);
+              if (fs.existsSync(targetSysPath)) {
+                try {
+                  await fs.promises.unlink(targetSysPath);
+                } catch {
+                  // 忽略清理失败
+                }
+              }
             }
-            await fs.promises.rm(stagingDir, { recursive: true, force: true });
+
+            const entries = await fs.promises.readdir(stagingDir);
+            const movedEntries: string[] = [];
+            try {
+              for (const entry of entries) {
+                await fs.promises.rename(path.join(stagingDir, entry), path.join(finalDir, entry));
+                movedEntries.push(entry);
+              }
+              await fs.promises.rm(stagingDir, { recursive: true, force: true });
+            } catch (moveErr) {
+              // 逐项移动失败，执行逆向回滚：将已移入 finalDir 的条目移回 stagingDir
+              for (const moved of movedEntries.reverse()) {
+                try {
+                  await fs.promises.rename(path.join(finalDir, moved), path.join(stagingDir, moved));
+                } catch {
+                  // 尽力回滚
+                }
+              }
+              void vscode.window.showErrorMessage(
+                t('Failed to finalize clone to {0}: {1}. Staging files are preserved at {2}.', finalDir, (moveErr as Error)?.message || String(moveErr), stagingDir)
+              );
+              return false;
+            }
           }
           return true;
         } catch (err: unknown) {
-          if (fs.existsSync(stagingDir)) {
+          if (!isFinalizing && fs.existsSync(stagingDir)) {
             try {
               await fs.promises.rm(stagingDir, { recursive: true, force: true });
             } catch {
@@ -752,9 +786,11 @@ export async function cloneGitRepository(
           if (token.isCancellationRequested) {
             return false;
           }
-          void vscode.window.showErrorMessage(
-            t('Git Clone failed: {0}', (err as Error)?.message || String(err))
-          );
+          if (!isFinalizing) {
+            void vscode.window.showErrorMessage(
+              t('Git Clone failed: {0}', (err as Error)?.message || String(err))
+            );
+          }
           return false;
         } finally {
           await helper.cleanup();

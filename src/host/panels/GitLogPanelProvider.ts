@@ -920,9 +920,30 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const explicitHasMore = (commits as CommitLogList).hasMore;
           const repoErrors = (commits as CommitLogList).repoErrors;
           const isLast = explicitHasMore !== undefined ? !explicitHasMore : commits.length < limit;
-          const emails = commits.map(c => c.authorEmail).filter(Boolean);
-          const allRemotes = repos.map(r => r.remoteUrl).filter(Boolean) as string[];
-          const cachedAvatars = this.manager.remoteService?.avatarService.getCachedAvatars(emails, allRemotes);
+
+          const repoEmailsMap = new Map<string, Set<string>>();
+          for (const c of commits) {
+            if (c.repoId && c.authorEmail) {
+              let set = repoEmailsMap.get(c.repoId);
+              if (!set) {
+                set = new Set<string>();
+                repoEmailsMap.set(c.repoId, set);
+              }
+              set.add(c.authorEmail);
+            }
+          }
+
+          const repoAvatars: Record<string, Record<string, string | null>> = {};
+          if (this.manager.remoteService?.avatarService) {
+            for (const [repoId, emailSet] of repoEmailsMap.entries()) {
+              const repoMeta = repos.find(r => r.id === repoId);
+              const remotes = repoMeta?.remoteUrl ? [repoMeta.remoteUrl] : [];
+              const cached = this.manager.remoteService.avatarService.getCachedAvatars(Array.from(emailSet), remotes);
+              if (Object.keys(cached).length > 0) {
+                repoAvatars[repoId] = cached;
+              }
+            }
+          }
 
           this.post({
             type: 'LOG_COMMITS_BATCH',
@@ -932,7 +953,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             generation: msg.generation,
             requestId: msg.requestId,
             repoErrors: repoErrors && repoErrors.length > 0 ? repoErrors : undefined,
-            avatars: cachedAvatars && Object.keys(cachedAvatars).length > 0 ? cachedAvatars : undefined,
+            repoAvatars: Object.keys(repoAvatars).length > 0 ? repoAvatars : undefined,
           });
         } catch (error) {
           this.logger.error('GitLog', 'Failed to load interleaved log', error);
@@ -1156,12 +1177,12 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       case 'LOG_RESOLVE_AVATARS': {
         const remoteService = this.manager.remoteService;
         if (!remoteService) {
-          this.post({ type: 'LOG_AVATARS_RESOLVED', avatars: {} });
+          this.post({ type: 'LOG_AVATARS_RESOLVED', avatars: {}, repoId: msg.repoId });
           break;
         }
         const remotes = await this.manager.getRemotes(msg.repoId);
         const avatars = await remoteService.avatarService.resolveAvatars(msg.emails, remotes, msg.authors);
-        this.post({ type: 'LOG_AVATARS_RESOLVED', avatars });
+        this.post({ type: 'LOG_AVATARS_RESOLVED', avatars, repoId: msg.repoId });
         break;
       }
 

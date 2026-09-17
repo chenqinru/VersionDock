@@ -29,6 +29,8 @@ interface Props {
   onOpenFile: (file: FileStatus) => void;
   onRollback: (files: FileStatus[]) => void;
   onResolveMerge: (file: FileStatus) => void;
+  onStage?: (file: FileStatus) => void;
+  isSvn?: boolean;
   viewMode: ViewMode;
   basePad?: number;
   activeFolderPath?: string | null;
@@ -147,20 +149,21 @@ function flattenVisibleTree(
 
 // ── Checkbox ───────────────────────────────────────────────────────────────
 
-function Checkbox({ checked, indeterminate, onChange, onClick }: {
+function Checkbox({ checked, indeterminate, onChange, onClick, disabled }: {
   checked: boolean;
   indeterminate?: boolean;
   onChange: () => void;
   onClick?: (e: React.MouseEvent) => void;
+  disabled?: boolean;
 }) {
   const ref = React.useRef<HTMLInputElement>(null);
   React.useEffect(() => {
     if (ref.current) ref.current.indeterminate = indeterminate ?? false;
   }, [indeterminate]);
   return (
-    <input ref={ref} type="checkbox" checked={checked}
+    <input ref={ref} type="checkbox" checked={checked} disabled={disabled}
       onChange={onChange} onClick={onClick}
-      style={{ ...styles.checkbox, ...nativeCheckboxBorderStyle() }} />
+      style={{ ...styles.checkbox, ...nativeCheckboxBorderStyle(), ...(disabled ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }} />
   );
 }
 
@@ -174,7 +177,7 @@ const LEVEL_PAD = 20;  // indent per depth level
 type SharedProps = Pick<Props,
   'repoId' | 'repoName' | 'repoRootPath' | 'selectedFile' | 'ctxFile' | 'onSelect' | 'onToggleFile' | 'onSetFiles' |
   'isFileSelected' | 'isCollapsed' | 'toggleCollapsed' | 'onContextMenu' |
-  'onFolderContextMenu' | 'onOpenFile' | 'onRollback' | 'onResolveMerge' | 'iconTheme' |
+  'onFolderContextMenu' | 'onOpenFile' | 'onRollback' | 'onResolveMerge' | 'onStage' | 'isSvn' | 'iconTheme' |
   'activeFolderPath' | 'speedSearchQuery' | 'activeSpeedSearchKey'
 > & { basePad: number };
 
@@ -185,8 +188,10 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
   const collapseKey = scopedKey('tree-dir', repoId, node.path);
   const open = !isCollapsed(collapseKey);
   const allFiles = node.files;
-  const selectedCount = allFiles.filter(f => isFileSelected(repoId, f.path)).length;
-  const allSelected = selectedCount === allFiles.length;
+  const selectableFiles = allFiles.filter(f => !f.isTruncated);
+  const selectableCount = selectableFiles.length;
+  const selectedCount = selectableFiles.filter(f => isFileSelected(repoId, f.path)).length;
+  const allSelected = selectableCount > 0 && selectedCount === selectableCount;
   const someSelected = selectedCount > 0 && !allSelected;
   const [hovered, setHovered] = useState(false);
   const ctxActive = activeFolderPath === node.path;
@@ -204,8 +209,9 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
       <Checkbox
         checked={allSelected}
         indeterminate={someSelected}
-        onChange={() => onSetFiles(repoId, allFiles.map(f => f.path), !allSelected)}
+        onChange={() => onSetFiles(repoId, selectableFiles.map(f => f.path), !allSelected)}
         onClick={(e) => e.stopPropagation()}
+        disabled={selectableCount === 0}
       />
       <div style={styles.treeDirInner} title={node.path}>
         <Codicon name={open ? 'chevron-down' : 'chevron-right'} style={styles.folderChevron} />
@@ -234,7 +240,7 @@ function TreeDirRow({ node, depth, ...shared }: { node: TreeDir; depth: number }
 // ── Single file row ────────────────────────────────────────────────────────
 
 function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: number } & SharedProps) {
-  const { repoId, repoName, repoRootPath, selectedFile, ctxFile, onSelect, onToggleFile, isFileSelected, onContextMenu, onOpenFile, onRollback, onResolveMerge, iconTheme, basePad, speedSearchQuery, activeSpeedSearchKey } = shared;
+  const { repoId, repoName, repoRootPath, selectedFile, ctxFile, onSelect, onToggleFile, isFileSelected, onContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, isSvn, iconTheme, basePad, speedSearchQuery, activeSpeedSearchKey } = shared;
   const itemKey = scopedKey(repoId, file.path);
   const isSelected = selectedFile?.repoId === file.repoId && selectedFile.path === file.path;
   const isCtxActive = !isSelected && ctxFile?.repoId === file.repoId && ctxFile.path === file.path;
@@ -251,6 +257,7 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
 
   const isSubmodule = file.status === 'submodule';
   const canOpenFile = !isSubmodule && !isRepoRootChange;
+  const canAddToSvn = isSvn && !file.staged && file.status === 'untracked';
 
   return (
     <div
@@ -263,11 +270,20 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
       onMouseLeave={() => setHovered(false)}
       title={isRepoRootChange ? `${fileName}\n${dir}` : file.path}
     >
-      <Checkbox
-        checked={checked}
-        onChange={() => onToggleFile(repoId, file.path)}
-        onClick={(e) => e.stopPropagation()}
-      />
+      {file.isTruncated ? (
+        <span
+          style={{ width: '16px', height: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: 0.8 }}
+          title={t('Truncated directory cannot be selected for direct commit. Please use the action button to add the entire directory.')}
+        >
+          <Codicon name="warning" style={{ fontSize: '13px', color: 'var(--vscode-badge-foreground, #ffa500)' }} />
+        </span>
+      ) : (
+        <Checkbox
+          checked={checked}
+          onChange={() => onToggleFile(repoId, file.path)}
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
       {isRepoRootChange ? (
         <Codicon name="repo" style={{ fontSize: `${ICON_SIZE}px`, flexShrink: 0 }} />
       ) : (
@@ -277,6 +293,27 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
         <span style={styles.fileName(color)}>
           <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
         </span>
+        {file.isTruncated && (
+          <span
+            style={{
+              fontSize: '10px',
+              lineHeight: '14px',
+              padding: '1px 4px',
+              borderRadius: '3px',
+              backgroundColor: 'var(--vscode-badge-background, rgba(255, 165, 0, 0.2))',
+              color: 'var(--vscode-badge-foreground, #ffa500)',
+              marginLeft: '6px',
+              flexShrink: 0,
+            }}
+            title={
+              file.truncationReason === 'depth-limit'
+                ? t('Exceeds maximum directory depth limit (>8 levels). Adding this directory will add all unshown files.')
+                : t('Contains files beyond display limit (>500 items). Adding this directory will add all unshown files.')
+            }
+          >
+            {file.truncationReason === 'depth-limit' ? t('>8 levels') : t('>500 items')}
+          </span>
+        )}
         {depth === 0 && dir && (
           <span style={styles.dirPath} title={dir}>
             <HighlightedText text={dir} query={speedSearchQuery} />
@@ -305,14 +342,26 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
               <Codicon name="go-to-file" />
             </button>
           )}
-          <button
-            data-action-btn=""
-            style={styles.actionBtn}
-            title={t('Rollback')}
-            onClick={(e) => { e.stopPropagation(); onRollback([file]); }}
-          >
+          {!file.isTruncated && (
+            <button
+              data-action-btn=""
+              style={styles.actionBtn}
+              title={t('Rollback')}
+              onClick={(e) => { e.stopPropagation(); onRollback([file]); }}
+            >
               <Codicon name="discard" />
             </button>
+          )}
+          {canAddToSvn && (
+            <button
+              data-action-btn=""
+              style={styles.actionBtn}
+              title={file.isTruncated ? t('Add entire truncated directory to SVN…') : t('Add to SVN')}
+              onClick={(e) => { e.stopPropagation(); onStage?.(file); }}
+            >
+              <Codicon name="add" />
+            </button>
+          )}
         </>}
         <span style={styles.statusLetter(color)}>{letter}</span>
         {file.staged && <span style={styles.stagedDot} title={t('Already staged')} />}
@@ -323,11 +372,13 @@ function FileRow({ file, depth = 0, ...shared }: { file: FileStatus; depth?: num
 
 // ── Public component ───────────────────────────────────────────────────────
 
-export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, collapsedKeys: propCollapsedKeys, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath, speedSearchQuery, activeSpeedSearchKey }: Props) {
+export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, collapsedKeys: propCollapsedKeys, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, isSvn: propIsSvn, viewMode, basePad = DEFAULT_BASE_PAD, activeFolderPath, speedSearchQuery, activeSpeedSearchKey }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
   const storeCollapsedKeys = useCommitStore(s => s.collapsedKeys);
   const activeCollapsedKeys = propCollapsedKeys ?? storeCollapsedKeys;
+  const storeIsSvn = useCommitStore(s => s.repoMetas.find(r => r.id === repoId)?.kind === 'svn');
+  const isSvn = propIsSvn ?? storeIsSvn ?? false;
 
   const nodes = useMemo(() => viewMode === 'tree' ? buildTree(files) : [], [files, viewMode]);
 
@@ -364,7 +415,7 @@ export function FileTree({ repoId, repoName, repoRootPath, files, iconTheme, sel
 
   if (files.length === 0) return null;
 
-  const shared: SharedProps = { repoId, repoName, repoRootPath, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, basePad, activeFolderPath, speedSearchQuery, activeSpeedSearchKey };
+  const shared: SharedProps = { repoId, repoName, repoRootPath, iconTheme, selectedFile, ctxFile, onSelect, onToggleFile, onSetFiles, isFileSelected, isCollapsed, toggleCollapsed, onContextMenu, onFolderContextMenu, onOpenFile, onRollback, onResolveMerge, onStage, isSvn, basePad, activeFolderPath, speedSearchQuery, activeSpeedSearchKey };
 
   if (shouldVirtualize) {
     const virtualItems = virtualizer.getVirtualItems();

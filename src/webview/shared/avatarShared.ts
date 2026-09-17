@@ -128,19 +128,44 @@ function canRenderConnectedAvatarDirectly(
   return true;
 }
 
-const LOCAL_STORAGE_KEY = 'versiondock.avatar.cache.v1';
+export interface AvatarCacheEntry {
+  url: string | null;
+  ts: number;
+}
+
+export const AVATAR_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000; // 成功头像缓存 24 小时
+export const AVATAR_NEGATIVE_TTL_MS = 10 * 60 * 1000; // 失败/未找到缓存 10 分钟，避免临时网络抖动导致永久不可用
+
+export function isAvatarCacheValid(entry: AvatarCacheEntry | undefined, now = Date.now()): entry is AvatarCacheEntry {
+  if (!entry) return false;
+  const ttl = entry.url !== null ? AVATAR_POSITIVE_TTL_MS : AVATAR_NEGATIVE_TTL_MS;
+  return now - entry.ts < ttl;
+}
+
+const LOCAL_STORAGE_KEY = 'versiondock.avatar.cache.v3';
 const MAX_LOCAL_ENTRIES = 1000;
 
-function loadStorageAvatars(): Map<string, string | null> {
-  const map = new Map<string, string | null>();
+function loadStorageAvatars(): Map<string, AvatarCacheEntry> {
+  const map = new Map<string, AvatarCacheEntry>();
   try {
+    // 清理旧版本 v1/v2 无时间戳遗留数据，防止永久架空 Host
+    localStorage.removeItem('versiondock.avatar.cache.v1');
+    localStorage.removeItem('versiondock.avatar.cache.v2');
+
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (typeof parsed === 'object' && parsed !== null) {
+        const now = Date.now();
         for (const [k, v] of Object.entries(parsed)) {
-          if (typeof v === 'string' || v === null) {
-            map.set(k.toLowerCase(), v);
+          if (k.includes(':') && typeof v === 'object' && v !== null && 'ts' in v) {
+            const potential = v as { url?: unknown; ts?: unknown };
+            if (typeof potential.ts === 'number' && (typeof potential.url === 'string' || potential.url === null)) {
+              const entry: AvatarCacheEntry = { url: potential.url, ts: potential.ts };
+              if (isAvatarCacheValid(entry, now)) {
+                map.set(k.toLowerCase(), entry);
+              }
+            }
           }
         }
       }
@@ -152,7 +177,66 @@ function loadStorageAvatars(): Map<string, string | null> {
 }
 
 const hostResolvedAvatars = loadStorageAvatars();
-const avatarListeners = new Set<(email: string, url: string | null) => void>();
+const avatarListeners = new Set<(email: string, url: string | null, repoId?: string) => void>();
+const avatarResolutionInFlight = new Set<string>();
+const avatarResolutionTimeouts = new Map<string, number>();
+
+export function buildAvatarCacheKey(email: string, scope?: string): string {
+  const normEmail = email.trim().toLowerCase();
+  const cleanScope = (scope || 'generic').trim().toLowerCase();
+  return `${cleanScope}:${normEmail}`;
+}
+
+export function getStoredAvatar(email: string, scope?: string): string | null | undefined {
+  const normEmail = email.trim().toLowerCase();
+  if (!normEmail) return undefined;
+
+  // 若指定了具体仓库作用域（非 generic），必须严格只查当前 scope，
+  // 严禁回退到 generic 或无作用域旧键，避免不同仓库之间串用头像
+  const cleanScope = scope?.trim().toLowerCase();
+  const key = (cleanScope && cleanScope !== 'generic')
+    ? `${cleanScope}:${normEmail}`
+    : `generic:${normEmail}`;
+
+  const entry = hostResolvedAvatars.get(key);
+  if (entry) {
+    if (isAvatarCacheValid(entry)) {
+      return entry.url;
+    }
+    // 已过期，从内存中移除
+    hostResolvedAvatars.delete(key);
+  }
+  return undefined;
+}
+
+function markAvatarResolutionInFlight(key: string): void {
+  avatarResolutionInFlight.add(key);
+  const previousTimer = avatarResolutionTimeouts.get(key);
+  if (previousTimer !== undefined) window.clearTimeout(previousTimer);
+  const timer = window.setTimeout(() => {
+    avatarResolutionInFlight.delete(key);
+    avatarResolutionTimeouts.delete(key);
+  }, 15000);
+  avatarResolutionTimeouts.set(key, timer);
+}
+
+function releaseAvatarResolution(email: string, repoId?: string): void {
+  const key = buildAvatarCacheKey(email, repoId);
+  avatarResolutionInFlight.delete(key);
+  const timer = avatarResolutionTimeouts.get(key);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    avatarResolutionTimeouts.delete(key);
+  }
+}
+
+function clearAvatarResolutionsInFlight(): void {
+  avatarResolutionInFlight.clear();
+  for (const timer of avatarResolutionTimeouts.values()) {
+    window.clearTimeout(timer);
+  }
+  avatarResolutionTimeouts.clear();
+}
 
 let saveStorageTimer: number | null = null;
 function persistStorageAvatars(): void {
@@ -160,14 +244,23 @@ function persistStorageAvatars(): void {
   saveStorageTimer = window.setTimeout(() => {
     saveStorageTimer = null;
     try {
+      const now = Date.now();
+      for (const [k, entry] of hostResolvedAvatars.entries()) {
+        if (!isAvatarCacheValid(entry, now)) {
+          hostResolvedAvatars.delete(k);
+        }
+      }
+
       if (hostResolvedAvatars.size > MAX_LOCAL_ENTRIES) {
         const entries = Array.from(hostResolvedAvatars.entries()).slice(-MAX_LOCAL_ENTRIES);
         hostResolvedAvatars.clear();
         for (const [k, v] of entries) hostResolvedAvatars.set(k, v);
       }
-      const obj: Record<string, string | null> = {};
-      for (const [k, v] of hostResolvedAvatars.entries()) {
-        obj[k] = v;
+      const obj: Record<string, { url: string | null; ts: number }> = {};
+      for (const [k, entry] of hostResolvedAvatars.entries()) {
+        // 私有 GitLab 生成的 data: URL 仅存在于内存，绝不持久化到 localStorage，避免撑爆配额
+        if (entry.url && entry.url.startsWith('data:')) continue;
+        obj[k] = { url: entry.url, ts: entry.ts };
       }
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(obj));
     } catch {
@@ -176,19 +269,22 @@ function persistStorageAvatars(): void {
   }, 1000);
 }
 
-export function notifyAvatarsResolved(avatars: Record<string, string | null>): void {
+export function notifyAvatarsResolved(avatars: Record<string, string | null>, repoId?: string): void {
   let changed = false;
+  const scope = repoId || 'generic';
+  const now = Date.now();
   for (const [email, url] of Object.entries(avatars)) {
-    const key = email.toLowerCase();
+    const normEmail = email.trim().toLowerCase();
+    if (!normEmail) continue;
+    releaseAvatarResolution(normEmail, repoId);
+    const key = buildAvatarCacheKey(normEmail, scope);
     const current = hostResolvedAvatars.get(key);
-    // Multiple repositories may resolve the same email concurrently. A provider
-    // miss from one repository must not replace a valid avatar found by another.
-    if (url === null && typeof current === 'string') continue;
-    if (current !== url) {
-      hostResolvedAvatars.set(key, url);
+
+    if (!current || current.url !== url || !isAvatarCacheValid(current, now)) {
+      hostResolvedAvatars.set(key, { url, ts: now });
       changed = true;
     }
-    avatarListeners.forEach(fn => fn(key, url));
+    avatarListeners.forEach(fn => fn(normEmail, url, repoId));
   }
   if (changed) {
     persistStorageAvatars();
@@ -201,10 +297,12 @@ const cacheEpochListeners = new Set<() => void>();
 export function clearFrontendAvatarCache(): void {
   try {
     localStorage.removeItem(LOCAL_STORAGE_KEY);
+    localStorage.removeItem('versiondock.avatar.cache.v2');
   } catch {
     // Ignore
   }
   hostResolvedAvatars.clear();
+  clearAvatarResolutionsInFlight();
   avatarCacheEpoch++;
   cacheEpochListeners.forEach(fn => fn());
 }
@@ -245,7 +343,14 @@ export function createAvatarResolverQueue(
 
   return function queueEmailResolution(email: string, repoId?: string, authorName?: string): void {
     const normalized = email.trim().toLowerCase();
-    if (!normalized || hostResolvedAvatars.has(normalized)) return;
+    if (!normalized) return;
+    const scopedKey = buildAvatarCacheKey(normalized, repoId);
+    const entry = hostResolvedAvatars.get(scopedKey);
+    if (isAvatarCacheValid(entry)) return;
+    if (avatarResolutionInFlight.has(scopedKey)) return;
+
+    markAvatarResolutionInFlight(scopedKey);
+
     const batchKey = repoId ?? '';
     let batch = pendingBatches.get(batchKey);
     if (!batch) {
@@ -298,9 +403,9 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
   const isGitHubRepo = remotes.some(r => /github/i.test(r));
   const staticAvatar = isGitHubRepo && normalizedEmail ? githubAvatarUrl(authorEmail, size) : null;
 
-  // 3. Instant match from hostResolvedAvatars (already fetched in current session)
-  const hostCached = normalizedEmail && hostResolvedAvatars.has(normalizedEmail)
-    ? hostResolvedAvatars.get(normalizedEmail)
+  // 3. Instant match from hostResolvedAvatars (scoped by repoId/platform)
+  const hostCached = normalizedEmail
+    ? getStoredAvatar(normalizedEmail, repoId)
     : undefined;
   const unusablePrivateHostCache = typeof hostCached === 'string'
     && !canRenderConnectedAvatarDirectly(hostCached, remoteAccounts);
@@ -345,6 +450,7 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
       return;
     }
     if (hostCacheRequiresRefresh && normalizedEmail) {
+      hostResolvedAvatars.delete(buildAvatarCacheKey(normalizedEmail, repoId));
       hostResolvedAvatars.delete(normalizedEmail);
     }
     queueResolution(authorEmail, repoId, authorName);
@@ -353,8 +459,11 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
   useEffect(() => {
     if (!normalizedEmail) return;
 
-    const onResolve = (resolvedEmail: string, resolvedUrl: string | null) => {
+    const onResolve = (resolvedEmail: string, resolvedUrl: string | null, resolvedRepoId?: string) => {
       if (resolvedEmail === normalizedEmail) {
+        if (resolvedRepoId && repoId && resolvedRepoId !== repoId) {
+          return;
+        }
         setUrl(resolvedUrl ?? immediateAvatar ?? null);
       }
     };
@@ -362,7 +471,7 @@ export function useResolvedAvatar(options: UseResolvedAvatarOptions) {
     return () => {
       avatarListeners.delete(onResolve);
     };
-  }, [normalizedEmail, immediateAvatar]);
+  }, [normalizedEmail, immediateAvatar, repoId]);
 
   return {
     url,

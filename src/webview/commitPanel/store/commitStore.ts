@@ -117,8 +117,12 @@ export interface CommitState {
 
 function allFilePaths(repoStatus: RepoStatus): string[] {
   const paths = new Set<string>();
-  for (const f of repoStatus.stagedFiles) paths.add(f.path);
-  for (const f of repoStatus.unstagedFiles) paths.add(f.path);
+  for (const f of repoStatus.stagedFiles) {
+    if (!f.isTruncated) paths.add(f.path);
+  }
+  for (const f of repoStatus.unstagedFiles) {
+    if (!f.isTruncated) paths.add(f.path);
+  }
   return Array.from(paths);
 }
 
@@ -227,6 +231,10 @@ export const useCommitStore = create<CommitState>((set, get) => ({
 
   toggleFileSelection: (repoId, path) =>
     set(s => {
+      const repoStatus = s.status?.repos?.find(r => r.repoId === repoId);
+      const isTruncated = repoStatus?.unstagedFiles.some(f => f.path === path && f.isTruncated)
+        || repoStatus?.stagedFiles.some(f => f.path === path && f.isTruncated);
+      if (isTruncated) return {};
       const prev = new Set(s.fileSelections[repoId] ?? []);
       if (prev.has(path)) prev.delete(path);
       else prev.add(path);
@@ -236,8 +244,15 @@ export const useCommitStore = create<CommitState>((set, get) => ({
 
   setFileSelections: (repoId, paths, selected) =>
     set(s => {
+      const repoStatus = s.status?.repos?.find(r => r.repoId === repoId);
+      const truncatedSet = new Set<string>();
+      if (repoStatus) {
+        for (const f of repoStatus.unstagedFiles) { if (f.isTruncated) truncatedSet.add(f.path); }
+        for (const f of repoStatus.stagedFiles) { if (f.isTruncated) truncatedSet.add(f.path); }
+      }
       const next = new Set(s.fileSelections[repoId] ?? []);
       for (const p of paths) {
+        if (truncatedSet.has(p)) continue;
         if (selected) next.add(p);
         else next.delete(p);
       }

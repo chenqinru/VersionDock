@@ -26,6 +26,7 @@ interface Props {
   onOpenFile: (file: FileStatus) => void;
   onRollback: (files: FileStatus[]) => void;
   onResolveMerge: (file: FileStatus) => void;
+  onStage?: (file: FileStatus) => void;
   onHeaderContextMenu: (e: React.MouseEvent, changelistId: string) => void;
   onRepoContextMenu: (e: React.MouseEvent, repoId: string, changelistId?: string) => void;
   onOpenChanges: (repoId: string) => void;
@@ -42,7 +43,7 @@ export function ChangelistView({
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
-  onOpenFile, onRollback, onResolveMerge, onHeaderContextMenu, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, ctxFile,
+  onOpenFile, onRollback, onResolveMerge, onStage, onHeaderContextMenu, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, ctxFile,
   speedSearchQuery, activeSpeedSearchKey,
 }: Props) {
   // Build a lookup: repoId+path → changelist id
@@ -180,6 +181,7 @@ export function ChangelistView({
             onOpenFile={onOpenFile}
             onRollback={onRollback}
             onResolveMerge={onResolveMerge}
+            onStage={onStage}
             onHeaderContextMenu={onHeaderContextMenu}
             onRepoContextMenu={onRepoContextMenu}
             onOpenChanges={onOpenChanges}

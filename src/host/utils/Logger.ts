@@ -26,6 +26,7 @@ function isSensitiveKey(key: string): boolean {
 function sanitizeText(value: string): string {
   return value
     .replace(/([a-z][a-z0-9+.-]*:\/\/)([^/\s:@]+):([^@\s/]+)@/gi, '$1<redacted>@')
+    .replace(/([?&](?:access_token|private_token|refresh_token|api[_-]?key|token|secret|password|passwd)=)[^&#\s"']+/gi, '$1<redacted>')
     .replace(/(--password(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1<redacted>')
     .replace(/("--(?:password|token|secret)"\s*,\s*)"[^"]*"/gi, '$1"<redacted>"')
     .replace(/('--(?:password|token|secret)'\s*,\s*)'[^']*'/gi, "$1'<redacted>'")
@@ -34,7 +35,7 @@ function sanitizeText(value: string): string {
     .replace(/(\b(?:-m|--message)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1<redacted>')
     .replace(/(["']user\.name=)[^"']*(["'])/gi, '$1<redacted>$2')
     .replace(/(\buser\.name=)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1<redacted>')
-    .replace(/\b(password|passwd|token|secret|authorization)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1=<redacted>')
+    .replace(/\b((?:access[_-]|private[_-]|refresh[_-])?token|password|passwd|secret|authorization|api[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&]+)/gi, '$1=<redacted>')
     .replace(EMAIL_ADDRESS, '<redacted-email>');
 }
 

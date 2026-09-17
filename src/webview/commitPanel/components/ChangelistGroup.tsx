@@ -42,6 +42,7 @@ interface Props {
   onOpenFile: (file: FileStatus) => void;
   onRollback: (files: FileStatus[]) => void;
   onResolveMerge: (file: FileStatus) => void;
+  onStage?: (file: FileStatus) => void;
   onHeaderContextMenu: (e: React.MouseEvent, changelistId: string) => void;
   onRepoContextMenu: (e: React.MouseEvent, repoId: string, changelistId?: string) => void;
   onOpenChanges: (repoId: string) => void;
@@ -58,15 +59,17 @@ export function ChangelistGroup({
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
-  onOpenFile, onRollback, onResolveMerge, onHeaderContextMenu, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, ctxFile,
+  onOpenFile, onRollback, onResolveMerge, onStage, onHeaderContextMenu, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, ctxFile,
   speedSearchQuery, activeSpeedSearchKey,
 }: Props) {
   const collapseKey = scopedKey('changelist', changelist.id);
   const collapsed = isCollapsed(collapseKey);
   const allFiles = repoGroups.flatMap(g => g.files);
   const totalFiles = allFiles.length;
-  const selectedCount = allFiles.filter(f => isFileSelected(f.repoId, f.path)).length;
-  const allSelected = totalFiles > 0 && selectedCount === totalFiles;
+  const selectableFiles = allFiles.filter(f => !f.isTruncated);
+  const selectableCount = selectableFiles.length;
+  const selectedCount = selectableFiles.filter(f => isFileSelected(f.repoId, f.path)).length;
+  const allSelected = selectableCount > 0 && selectedCount === selectableCount;
   const someSelected = selectedCount > 0 && !allSelected;
 
   const checkboxRef = useRef<HTMLInputElement>(null);
@@ -77,7 +80,10 @@ export function ChangelistGroup({
   const toggleAll = (e: React.MouseEvent) => {
     e.stopPropagation();
     for (const g of repoGroups) {
-      onSetFiles(g.repoId, g.files.map(f => f.path), !allSelected);
+      const gSelectable = g.files.filter(f => !f.isTruncated);
+      if (gSelectable.length > 0) {
+        onSetFiles(g.repoId, gSelectable.map(f => f.path), !allSelected);
+      }
     }
   };
 
@@ -97,10 +103,10 @@ export function ChangelistGroup({
           type="checkbox"
           checked={allSelected}
           onChange={() => {}}
-          onClick={totalFiles > 0 ? toggleAll : e => e.stopPropagation()}
-          disabled={totalFiles === 0}
-          style={{ ...styles.clCheckbox, ...nativeCheckboxBorderStyle(), ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
-          title={totalFiles > 0 ? t('Select all files in this changelist') : undefined}
+          onClick={selectableCount > 0 ? toggleAll : e => e.stopPropagation()}
+          disabled={selectableCount === 0}
+          style={{ ...styles.clCheckbox, ...nativeCheckboxBorderStyle(), ...(selectableCount === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
+          title={selectableCount > 0 ? t('Select all files in this changelist') : undefined}
         />
         <div style={styles.headerMain} onClick={() => toggleCollapsed(collapseKey)}>
           <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={styles.chevron} />
@@ -154,6 +160,7 @@ export function ChangelistGroup({
                 onOpenFile={onOpenFile}
                 onRollback={onRollback}
                 onResolveMerge={onResolveMerge}
+                onStage={onStage}
                 onRepoContextMenu={onRepoContextMenu}
                 onOpenChanges={onOpenChanges}
                 onBranchClick={onBranchClick}
@@ -200,6 +207,7 @@ interface RepoSubGroupProps {
   onOpenFile: (file: FileStatus) => void;
   onRollback: (files: FileStatus[]) => void;
   onResolveMerge: (file: FileStatus) => void;
+  onStage?: (file: FileStatus) => void;
   onRepoContextMenu: (e: React.MouseEvent, repoId: string, changelistId?: string) => void;
   onOpenChanges: (repoId: string) => void;
   onBranchClick: (repoId: string) => void;
@@ -218,15 +226,17 @@ function RepoSubGroup({
   selectedFile, viewMode,
   isFileSelected, isCollapsed, toggleCollapsed,
   onToggleFile, onSetFiles, onSelectFile, onContextMenu, onFolderContextMenu,
-  onOpenFile, onRollback, onResolveMerge, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, changelistId, ctxFile, isFirst = false, defaultCollapsed = false,
+  onOpenFile, onRollback, onResolveMerge, onStage, onRepoContextMenu, onOpenChanges, onBranchClick, iconTheme, activeFolderPath, changelistId, ctxFile, isFirst = false, defaultCollapsed = false,
   speedSearchQuery, activeSpeedSearchKey,
 }: RepoSubGroupProps) {
   const collapseKey = scopedKey('changelist-repo', changelistId ?? '', repoId);
   // When defaultCollapsed, the key's presence means "user explicitly opened it"
   const collapsed = defaultCollapsed ? !isCollapsed(collapseKey) : isCollapsed(collapseKey);
   const totalFiles = files.length;
-  const selectedCount = files.filter(f => isFileSelected(repoId, f.path)).length;
-  const allSelected = totalFiles > 0 && selectedCount === totalFiles;
+  const selectableFiles = files.filter(f => !f.isTruncated);
+  const selectableCount = selectableFiles.length;
+  const selectedCount = selectableFiles.filter(f => isFileSelected(repoId, f.path)).length;
+  const allSelected = selectableCount > 0 && selectedCount === selectableCount;
   const someSelected = selectedCount > 0 && !allSelected;
 
   const branchClr = repoStatus
@@ -241,7 +251,7 @@ function RepoSubGroup({
 
   const toggleAll = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onSetFiles(repoId, files.map(f => f.path), !allSelected);
+    onSetFiles(repoId, selectableFiles.map(f => f.path), !allSelected);
   };
 
   return (
@@ -255,12 +265,12 @@ function RepoSubGroup({
           <input
             ref={checkboxRef}
             type="checkbox"
-          checked={allSelected}
-          onChange={() => {}}
-            onClick={totalFiles > 0 ? toggleAll : e => e.stopPropagation()}
-            style={{ ...styles.repoCheckbox, ...nativeCheckboxBorderStyle(), ...(totalFiles === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
-            title={totalFiles > 0 ? t('Select all files in {0}', repoName) : undefined}
-            disabled={totalFiles === 0}
+            checked={allSelected}
+            onChange={() => {}}
+            onClick={selectableCount > 0 ? toggleAll : e => e.stopPropagation()}
+            style={{ ...styles.repoCheckbox, ...nativeCheckboxBorderStyle(), ...(selectableCount === 0 ? { opacity: 0.3, cursor: 'default', pointerEvents: 'none' } : {}) }}
+            title={selectableCount > 0 ? t('Select all files in {0}', repoName) : undefined}
+            disabled={selectableCount === 0}
           />
           <div style={styles.repoHeaderMain} onClick={() => toggleCollapsed(collapseKey)}>
             <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} style={styles.repoChevron} />
@@ -327,6 +337,7 @@ function RepoSubGroup({
           onOpenFile={onOpenFile}
           onRollback={onRollback}
           onResolveMerge={onResolveMerge}
+          onStage={onStage}
           viewMode={viewMode}
           basePad={multiRepo && !singleRepo ? 36 : 24}
           activeFolderPath={activeFolderPath}

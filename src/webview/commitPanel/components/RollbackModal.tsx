@@ -146,8 +146,8 @@ function RepoSection({ repoStatus, repoName, repoColor, multiRepo, selected, onT
   onSetFiles: (paths: string[], value: boolean) => void;
 }) {
   const fileMap = new Map<string, FileStatus>();
-  for (const f of repoStatus.unstagedFiles) fileMap.set(f.path, f);
-  for (const f of repoStatus.stagedFiles) fileMap.set(f.path, f);
+  for (const f of repoStatus.unstagedFiles) { if (!f.isTruncated) fileMap.set(f.path, f); }
+  for (const f of repoStatus.stagedFiles) { if (!f.isTruncated) fileMap.set(f.path, f); }
   const allFiles = Array.from(fileMap.values());
   const allPaths = allFiles.map(f => f.path);
   const selCount = allPaths.filter(p => selected.has(p)).length;
@@ -200,8 +200,8 @@ export function RollbackModal({ repos, repoMetas, onConfirm, onClose }: Props) {
     const init: Record<string, Set<string>> = {};
     for (const r of repos) {
       const fileMap = new Map<string, FileStatus>();
-      for (const f of r.unstagedFiles) fileMap.set(f.path, f);
-      for (const f of r.stagedFiles) fileMap.set(f.path, f);
+      for (const f of r.unstagedFiles) { if (!f.isTruncated) fileMap.set(f.path, f); }
+      for (const f of r.stagedFiles) { if (!f.isTruncated) fileMap.set(f.path, f); }
       init[r.repoId] = new Set(fileMap.keys());
     }
     return init;

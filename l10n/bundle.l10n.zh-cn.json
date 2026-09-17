@@ -2666,7 +2666,29 @@
   "Current active": "当前活动",
   "Current Project ({0})": "当前项目 ({0})",
   "Linked Remote ({0})": "关联远程 ({0})",
-  "{0} Repository ({1})": "{0} 仓库 ({1})"
+  "{0} Repository ({1})": "{0} 仓库 ({1})",
+  "Failed to rename staging directory to {0}: {1}. Staging files are preserved at {2}.": "重命名暂存目录到 {0} 失败: {1}。暂存文件已保留在 {2}。",
+  "Failed to finalize clone to {0}: {1}. Staging files are preserved at {2}.": "完成克隆到 {0} 失败: {1}。暂存文件已保留在 {2}。",
+  "Failed to finalize checkout to {0}: {1}. Staging files are preserved at {2}.": "完成检出到 {0} 失败: {1}。暂存文件已保留在 {2}。",
+  "Adding nested repository metadata \"{0}\" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.": "已拦截向 SVN 添加嵌套版本库元数据 \"{0}\"，以防止泄露版本库历史或凭据。请将其添加到 svn:ignore。",
+  "Cannot recursively add truncated directory \"{0}\" because its contents exceed display limits. Please add files selectively or configure svn:ignore.": "无法递归添加被截断的目录 \"{0}\"，因为其内部文件超出显示上限。请选择性添加文件或配置 svn:ignore。",
+  "Directory \"{0}\" contains nested repository metadata \"{1}\". Please add it to svn:ignore or add files selectively.": "目录 \"{0}\" 包含嵌套版本库元数据 \"{1}\"。请将其添加到 svn:ignore 或选择性添加文件。",
+  "Cannot discard truncated directory \"{0}\" because its contents exceed display limits. Please delete files individually or manage the directory directly on disk.": "无法回滚被截断的目录 \"{0}\"，因为其内部文件超出显示上限。请单独删除文件或直接在磁盘上管理该目录。",
+  "Skipped discarding {0} truncated director(y/ies) whose contents exceed display limits. Please delete files individually.": "已跳过丢弃 {0} 个超出显示上限的截断目录。请单独删除文件。",
+  "Directory \"{0}\" exceeds the display limit (contains files beyond the shown 500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?": "目录 \"{0}\" 超出了显示上限（包含超出已显示 500 项的文件）。添加它将递归添加包括所有未展示文件在内的整个目录。是否确定继续？",
+  "Add Entire Directory": "添加整个目录",
+  "Skipped adding {0} truncated director(y/ies) in batch operation. Please add them individually to confirm recursive inclusion.": "已在批量操作中跳过 {0} 个截断目录。请单独添加它们以确认是否递归包含所有文件。",
+  "Truncated directories cannot be committed directly. Please use \"Add entire truncated directory\" first to confirm recursive inclusion.": "截断目录无法直接提交。请先使用“添加整个截断目录”以确认是否递归包含所有文件。",
+  "Add entire truncated directory to SVN…": "添加整个截断目录到 SVN…",
+  ">500 items": ">500 项",
+  "Contains files beyond display limit (>500 items). Adding this directory will add all unshown files.": "包含超出显示上限的文件（>500 项）。添加此目录将添加所有未展示的文件。",
+  "Cannot commit truncated directory \"{0}\" directly because its contents exceed display limits. Please use \"Add entire truncated directory\" first to confirm recursive inclusion.": "无法直接提交被截断的目录 \"{0}\"，因为其内部文件超出显示上限。请先使用“添加整个截断目录”以确认是否递归包含所有文件。",
+  "Truncated directory cannot be selected for direct commit. Please use the action button to add the entire directory.": "被截断的目录无法直接勾选提交。请使用操作按钮添加整个目录。",
+  "Directory \"{0}\" exceeds the directory depth limit (>8 levels). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?": "目录 \"{0}\" 超出目录层级深度上限（>8 层）。添加它将递归添加包括所有未展示文件在内的整个目录。是否确定继续？",
+  "Directory \"{0}\" contains files beyond the display limit (>500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?": "目录 \"{0}\" 超出文件显示上限（>500 项）。添加它将递归添加包括所有未展示文件在内的整个目录。是否确定继续？",
+  "Add entire directory": "添加整个目录",
+  ">8 levels": ">8 层",
+  "Exceeds maximum directory depth limit (>8 levels). Adding this directory will add all unshown files.": "超出最大目录层级深度上限（>8 层）。添加此目录将添加所有未展示的文件。",
+  "VersionDock: Failed to add directory \"{0}\": {1}": "VersionDock: 添加目录 \"{0}\" 失败: {1}",
+  "VersionDock: Failed to add files to {0}: {1}": "VersionDock: 向 {0} 添加文件失败: {1}"
 }
-
-

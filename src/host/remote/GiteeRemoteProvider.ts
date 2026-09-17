@@ -517,8 +517,7 @@ export class GiteeRemoteProvider implements RemoteRepositoryProvider, vscode.Dis
   }
 
   private async request<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-    const separator = path.includes('?') ? '&' : '?';
-    const targetUrl = `${API_URL}${path}${separator}access_token=${encodeURIComponent(token)}`;
+    const targetUrl = `${API_URL}${path}`;
 
     return requestJson<T>(
       targetUrl,
@@ -527,6 +526,7 @@ export class GiteeRemoteProvider implements RemoteRepositoryProvider, vscode.Dis
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
           ...(init.headers ?? {}),
         },
       },

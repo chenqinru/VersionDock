@@ -224,16 +224,98 @@ export class GitLabRemoteProvider implements RemoteRepositoryProvider, vscode.Di
   async fetchAuthenticatedImage(host: string, imageUrl: string): Promise<string | undefined> {
     try {
       const account = await this.getAccount(host, false);
-      const headers: Record<string, string> = {};
-      if (account?.token) {
-        headers['PRIVATE-TOKEN'] = account.token;
+      const rawAccountHost = account?.host || host;
+      let accountOrigin = '';
+      try {
+        accountOrigin = new URL(rawAccountHost.startsWith('http') ? rawAccountHost : `https://${rawAccountHost}`).origin.toLowerCase();
+      } catch {
+        accountOrigin = '';
       }
-      const response = await fetch(imageUrl, { headers });
-      if (!response.ok) return undefined;
-      const contentType = response.headers.get('content-type') || 'image/png';
-      const arrayBuffer = await response.arrayBuffer();
-      const base64 = Buffer.from(arrayBuffer).toString('base64');
-      return `data:${contentType};base64,${base64}`;
+
+      let currentUrl = imageUrl;
+      let response: Response | undefined;
+      let redirectsCount = 0;
+      const maxRedirects = 3;
+      const MAX_AVATAR_BYTES = 1024 * 1024; // 1MB
+      const TIMEOUT_MS = 6000; // 6s 超时防挂起
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+      try {
+        while (redirectsCount <= maxRedirects) {
+          let isSameOrigin = false;
+          try {
+            const parsed = new URL(currentUrl);
+            isSameOrigin = Boolean(accountOrigin && parsed.origin.toLowerCase() === accountOrigin);
+          } catch {
+            isSameOrigin = false;
+          }
+
+          const headers: Record<string, string> = {};
+          if (isSameOrigin && account?.token) {
+            headers['PRIVATE-TOKEN'] = account.token;
+          }
+
+          response = await fetch(currentUrl, { headers, redirect: 'manual', signal: controller.signal });
+
+          if ([301, 302, 303, 307, 308].includes(response.status)) {
+            const location = response.headers.get('location');
+            if (!location) break;
+            currentUrl = new URL(location, currentUrl).toString();
+            redirectsCount++;
+            continue;
+          }
+          break;
+        }
+
+        if (!response || !response.ok) return undefined;
+
+        const rawContentType = response.headers.get('content-type') || '';
+        const mimeType = rawContentType.split(';')[0].trim().toLowerCase();
+        if (!mimeType.startsWith('image/')) {
+          return undefined;
+        }
+
+        const contentLengthHeader = response.headers.get('content-length');
+        if (contentLengthHeader) {
+          const cl = parseInt(contentLengthHeader, 10);
+          if (!isNaN(cl) && cl > MAX_AVATAR_BYTES) {
+            return undefined;
+          }
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          return undefined;
+        }
+
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+
+        let reading = true;
+        while (reading) {
+          const { done, value } = await reader.read();
+          if (done) {
+            reading = false;
+            break;
+          }
+          if (value) {
+            totalBytes += value.length;
+            if (totalBytes > MAX_AVATAR_BYTES) {
+              await reader.cancel();
+              return undefined;
+            }
+            chunks.push(value);
+          }
+        }
+
+        const buffer = Buffer.concat(chunks);
+        const base64 = buffer.toString('base64');
+        return `data:${mimeType};base64,${base64}`;
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (error) {
       this.logger.debug('GitLab', 'Failed to fetch authenticated image', { host, imageUrl, error: String(error) });
       return undefined;

@@ -2791,7 +2791,7 @@ export class GitService {
     });
   }
 
-  async stageFiles(paths: string[]): Promise<void> {
+  async stageFiles(paths: string[], _options?: { allowTruncated?: boolean }): Promise<void> {
     return this.withWriteLock(async () => {
     const safePaths = paths.map(filePath => this.normalizeRepoPath(filePath));
     const vsRepo = this.vsRepo();

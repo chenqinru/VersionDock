@@ -48,10 +48,25 @@ export async function requestJson<T>(
   try {
     return JSON.parse(body) as T;
   } catch (error) {
-    logger.error(scope, 'Remote API returned invalid JSON', error, { url, status: response.status });
+    logger.error(scope, 'Remote API returned invalid JSON', error, { url: sanitizeUrl(url), status: response.status });
     throw new Error(`${scope} returned invalid JSON.`);
   }
 }
+
+export function sanitizeUrl(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      if (/(?:token|secret|password|passwd|key|auth)/i.test(key)) {
+        parsed.searchParams.set(key, '<redacted>');
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl.replace(/([?&](?:access_token|private_token|refresh_token|api[_-]?key|token|secret|password|passwd)=)[^&#\s"']+/gi, '$1<redacted>');
+  }
+}
+
 
 export function normalizeHost(value: string, defaultHost = 'https://gitlab.com'): string {
   const raw = value.trim() || defaultHost;

@@ -167,6 +167,27 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
         <span style={{ ...fileNameStyle, color }}>
           <HighlightedText text={fileName} query={speedSearchQuery} isActive={isSpeedSearchActive} />
         </span>
+        {file.isTruncated && (
+          <span
+            style={{
+              fontSize: '10px',
+              lineHeight: '14px',
+              padding: '1px 4px',
+              borderRadius: '3px',
+              backgroundColor: 'var(--vscode-badge-background, rgba(255, 165, 0, 0.2))',
+              color: 'var(--vscode-badge-foreground, #ffa500)',
+              marginLeft: '6px',
+              flexShrink: 0,
+            }}
+            title={
+              file.truncationReason === 'depth-limit'
+                ? t('Exceeds maximum directory depth limit (>8 levels). Adding this directory will add all unshown files.')
+                : t('Contains files beyond display limit (>500 items). Adding this directory will add all unshown files.')
+            }
+          >
+            {file.truncationReason === 'depth-limit' ? t('>8 levels') : t('>500 items')}
+          </span>
+        )}
         {depth === 0 && dir && (
           <span style={dirPathStyle} title={dir}>
             <HighlightedText text={dir} query={speedSearchQuery} />
@@ -187,7 +208,7 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
               <Codicon name="go-to-file" />
             </button>
           )}
-          {!isSubmodule && !staged && (
+          {!isSubmodule && !staged && !file.isTruncated && (
             <button data-action-btn="" style={actionBtnStyle} title={t('Rollback')}
               onClick={e => { e.stopPropagation(); onRollback([file]); }}>
               <Codicon name="discard" />
@@ -205,7 +226,7 @@ function VscodeFileRow({ file, depth, staged, selectedFile, ctxFile, iconTheme, 
             </button>
           ))}
           {canAddToSvn && (
-            <button data-action-btn="" style={actionBtnStyle} title={t('Add to SVN')}
+            <button data-action-btn="" style={actionBtnStyle} title={file.isTruncated ? t('Add entire truncated directory to SVN…') : t('Add to SVN')}
               onClick={e => { e.stopPropagation(); onStage(file); }}>
               <Codicon name="add" />
             </button>

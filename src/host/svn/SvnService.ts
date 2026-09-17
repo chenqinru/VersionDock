@@ -95,6 +95,7 @@ interface SvnStatusEntry extends FileStatus {
   svnProps?: string;
   svnCopied: boolean;
   treeConflicted: boolean;
+  isTruncated?: boolean;
 }
 
 interface SvnListEntry {
@@ -224,6 +225,27 @@ function normalizeRelPath(filePath: string): string {
   return filePath.split(path.sep).join('/').replace(/^\.\/+/, '');
 }
 
+function isNestedVcsPath(filePath: string): boolean {
+  const norm = normalizeRelPath(filePath).toLowerCase();
+  return norm.split('/').some(segment => segment === '.git' || segment === '.hg');
+}
+
+function pruneRedundantChildPaths(paths: string[]): string[] {
+  const normalized = Array.from(new Set(paths.map(p => normalizeRelPath(p))));
+  const pathSet = new Set(normalized);
+  return normalized.filter(p => {
+    let slashIdx = p.lastIndexOf('/');
+    while (slashIdx > 0) {
+      const parent = p.slice(0, slashIdx);
+      if (pathSet.has(parent)) {
+        return false;
+      }
+      slashIdx = p.lastIndexOf('/', slashIdx - 1);
+    }
+    return true;
+  });
+}
+
 function splitIgnoreLines(value: string): string[] {
   return value
     .replace(/\r\n/g, '\n')
@@ -298,6 +320,101 @@ function escapePegRevision(target: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeCharInClass(c: string): string {
+  if (c === '\\' || c === ']' || c === '[') return '\\' + c;
+  return c;
+}
+
+function matchSvnGlob(pattern: string, filename: string): boolean {
+  if (pattern === filename) return true;
+  let regexStr = '^';
+  let i = 0;
+  const len = pattern.length;
+  while (i < len) {
+    const c = pattern[i];
+    if (c === '\\') {
+      if (i + 1 < len) {
+        i++;
+        regexStr += escapeRegExp(pattern[i]);
+      } else {
+        regexStr += '\\\\';
+      }
+    } else if (c === '*') {
+      regexStr += '.*';
+    } else if (c === '?') {
+      regexStr += '.';
+    } else if (c === '[') {
+      let j = i + 1;
+      let isNegated = false;
+      if (j < len && (pattern[j] === '!' || pattern[j] === '^')) {
+        isNegated = true;
+        j++;
+      }
+      if (j < len && pattern[j] === ']') {
+        j++;
+      }
+      let closeIdx = -1;
+      while (j < len) {
+        if (pattern[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (pattern[j] === ']') {
+          closeIdx = j;
+          break;
+        }
+        j++;
+      }
+      if (closeIdx === -1) {
+        regexStr += '\\[';
+      } else {
+        let inside = '';
+        let k = (pattern[i + 1] === '!' || pattern[i + 1] === '^') ? i + 2 : i + 1;
+        while (k < closeIdx) {
+          const char = pattern[k];
+          if (char === '\\') {
+            if (k + 1 < closeIdx) {
+              k++;
+              const next = pattern[k];
+              if (/[\\-\]^]/.test(next)) {
+                inside += '\\' + next;
+              } else {
+                inside += escapeRegExp(next);
+              }
+            } else {
+              inside += '\\\\';
+            }
+          } else if (char === ']') {
+            inside += '\\]';
+          } else if (char === '^' && inside.length === 0 && !isNegated) {
+            inside += '\\^';
+          } else if (char === '-') {
+            if (inside.length === 0 || k === closeIdx - 1) {
+              inside += '\\-';
+            } else {
+              inside += '-';
+            }
+          } else {
+            inside += escapeCharInClass(char);
+          }
+          k++;
+        }
+        regexStr += '[' + (isNegated ? '^' : '') + inside + ']';
+        i = closeIdx;
+      }
+    } else {
+      regexStr += escapeRegExp(c);
+    }
+    i++;
+  }
+  regexStr += '$';
+  try {
+    return new RegExp(regexStr).test(filename);
+  } catch {
+    return false;
+  }
 }
 
 function parseSvnDate(value: string): Date {
@@ -1349,34 +1466,230 @@ export class SvnService extends GitService {
     });
   }
 
-  private collectUnversionedDirFiles(dirRelPath: string): string[] {
-    const results: string[] = [];
-    const walk = (currentRel: string) => {
-      const currentAbs = path.join(this.rootPath, currentRel);
-      let entries: fs.Dirent[] = [];
-      try {
-        entries = fs.readdirSync(currentAbs, { withFileTypes: true });
-      } catch {
-        return;
+  private parseSvnIniGlobalIgnores(content: string): string[] | null {
+    const lines = content.split(/\r?\n/);
+    let isCollecting = false;
+    let found = false;
+    const values: string[] = [];
+
+    for (const line of lines) {
+      const isIndented = /^[ \t]+/.test(line);
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        isCollecting = false;
+        continue;
       }
-      for (const entry of entries) {
-        if (entry.name === '.svn' || entry.name === '.git' || entry.name === '.hg') continue;
-        if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db') continue;
-        const childRel = currentRel ? `${currentRel}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) {
-          walk(childRel);
-        } else {
-          results.push(childRel);
+
+      // 处于续行收集状态时，只要该行有前导缩进，即作为值的延续（保留模式内的 # 或 ; 字符）
+      if (isCollecting && isIndented) {
+        values.push(...trimmed.split(/\s+/).filter(Boolean));
+        continue;
+      }
+
+      // Section 标签行
+      if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        isCollecting = false;
+        continue;
+      }
+
+      // 非缩进的整行注释行：SVN 注释仅在行首以 # 或 ; 开头
+      if (trimmed.startsWith('#') || trimmed.startsWith(';')) {
+        isCollecting = false;
+        continue;
+      }
+
+      // 匹配 global-ignores 键
+      const match = line.match(/^[ \t]*global-ignores[ \t]*=[ \t]*(.*)$/i);
+      if (match) {
+        found = true;
+        isCollecting = true;
+        const lineVal = match[1].trim();
+        if (lineVal) {
+          values.push(...lineVal.split(/\s+/).filter(Boolean));
+        }
+        continue;
+      }
+
+      // 遇到其他未缩进配置项，结束当前收集
+      isCollecting = false;
+    }
+
+    return found ? values : null;
+  }
+
+  private getClientGlobalIgnores(): string[] {
+    const defaultIgnores = [
+      '*.o',
+      '*.lo',
+      '*.la',
+      '*.al',
+      '.libs',
+      '*.so',
+      '*.so.[0-9]*',
+      '*.a',
+      '*.pyc',
+      '*.pyo',
+      '__pycache__',
+      '*.rej',
+      '*~',
+      '#*#',
+      '.#*',
+      '.*.swp',
+      '.DS_Store',
+      '[Tt]humbs.db',
+    ];
+    try {
+      const homeDir = os.homedir();
+      const configPaths = [
+        path.join(homeDir, '.subversion', 'config'),
+        ...(process.env.APPDATA ? [path.join(process.env.APPDATA, 'Subversion', 'config')] : []),
+      ];
+      for (const configPath of configPaths) {
+        if (fs.existsSync(configPath)) {
+          const content = fs.readFileSync(configPath, 'utf8');
+          const parsed = this.parseSvnIniGlobalIgnores(content);
+          // 若配置文件显式配置了 global-ignores（即使是空值），遵循 SVN 语义直接返回，禁用内置默认规则
+          if (parsed !== null) return parsed;
         }
       }
-    };
-    walk(dirRelPath);
+    } catch {
+      // 忽略读取系统配置异常，回退默认规则
+    }
+    return defaultIgnores;
+  }
+
+  private async getInheritedGlobalIgnores(): Promise<Array<{ dirRelPath: string; patterns: string[] }>> {
+    const raw = await this.svn(['propget', 'svn:global-ignores', '--show-inherited-props', '--xml', '-R', '--', '.']).catch(() => '');
+    const results: Array<{ dirRelPath: string; patterns: string[] }> = [];
+    const targetRegex = /<target\b([^>]*)>([\s\S]*?)<\/target>/g;
+    let match: RegExpExecArray | null;
+    while ((match = targetRegex.exec(raw)) !== null) {
+      const propRegex = /<(?:property|inherited_property)\b([^>]*)>([\s\S]*?)<\/(?:property|inherited_property)>/g;
+      let propMatch: RegExpExecArray | null;
+      while ((propMatch = propRegex.exec(match[2])) !== null) {
+        if (attr(propMatch[1], 'name') !== 'svn:global-ignores') continue;
+        const patterns = splitIgnoreLines(decodeXml(propMatch[2]));
+        if (patterns.length === 0) continue;
+
+        const isInheritedTag = propMatch[0].startsWith('<inherited_property');
+        const rawPath = attr(match[1], 'path') ?? '';
+        let safeDir = '';
+        if (!isInheritedTag && rawPath && !rawPath.includes('://')) {
+          let normalizedDir = rawPath;
+          if (path.isAbsolute(rawPath)) {
+            normalizedDir = path.relative(this.rootPath, rawPath);
+          }
+          const rel = normalizeRelPath(normalizedDir);
+          safeDir = rel === '.' ? '' : rel;
+        }
+        // 若为 inherited_property 或 target 为父级 URL/外部路径，其作用域覆盖当前检出根（即 dirRelPath: ''）
+        results.push({ dirRelPath: safeDir, patterns });
+      }
+    }
     return results;
   }
 
+  private isIgnoredBySvnRules(
+    relPath: string,
+    entryName: string,
+    clientGlobalIgnores: string[],
+    inheritedIgnores: Array<{ dirRelPath: string; patterns: string[] }>,
+  ): boolean {
+    if (entryName === '.svn') return true;
+
+    for (const pattern of clientGlobalIgnores) {
+      if (matchSvnGlob(pattern, entryName)) return true;
+    }
+
+    for (const inherited of inheritedIgnores) {
+      const prefix = inherited.dirRelPath ? `${inherited.dirRelPath}/` : '';
+      if (!inherited.dirRelPath || relPath.startsWith(prefix) || relPath === inherited.dirRelPath) {
+        for (const pattern of inherited.patterns) {
+          if (matchSvnGlob(pattern, entryName)) return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private async collectUnversionedDirFiles(
+    dirRelPath: string,
+    clientGlobalIgnores: string[],
+    inheritedIgnores: Array<{ dirRelPath: string; patterns: string[] }>,
+    maxEntries = 500,
+    maxDepth = 8,
+  ): Promise<{ files: string[]; truncated: boolean; truncationReason?: 'entry-limit' | 'depth-limit' }> {
+    const results: string[] = [];
+    let count = 0;
+    let visitedEntries = 0;
+    let truncated = false;
+    let truncationReason: 'entry-limit' | 'depth-limit' | undefined;
+
+    const walk = async (currentRel: string, depth: number) => {
+      if (depth > maxDepth) {
+        truncated = true;
+        truncationReason = truncationReason ?? 'depth-limit';
+        return;
+      }
+      if (count >= maxEntries || visitedEntries >= maxEntries) {
+        truncated = true;
+        truncationReason = truncationReason ?? 'entry-limit';
+        return;
+      }
+      const currentAbs = path.join(this.rootPath, currentRel);
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = await fs.promises.readdir(currentAbs, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (count >= maxEntries || visitedEntries >= maxEntries) {
+          truncated = true;
+          truncationReason = truncationReason ?? 'entry-limit';
+          break;
+        }
+        const childRel = currentRel ? `${currentRel}/${entry.name}` : entry.name;
+        if (this.isIgnoredBySvnRules(childRel, entry.name, clientGlobalIgnores, inheritedIgnores)) {
+          continue;
+        }
+        visitedEntries++;
+        // 符号链接绝不递归进入；嵌套 VCS 目录（.git/.hg，含大小写变体）作为可见但不递归的危险目录节点收集，绝不递归展开其内部 objects
+        const lowerName = entry.name.toLowerCase();
+        const isNestedVcs = lowerName === '.git' || lowerName === '.hg';
+        if (entry.isDirectory() && !entry.isSymbolicLink() && !isNestedVcs) {
+          await walk(childRel, depth + 1);
+        } else {
+          results.push(childRel);
+          count++;
+        }
+      }
+    };
+
+    await walk(dirRelPath, 1);
+    return { files: results, truncated, truncationReason };
+  }
+
   private async parseSvnStatus(): Promise<SvnStatusEntry[]> {
-    const raw = await this.svn(['status', '--xml']);
-    const files: SvnStatusEntry[] = [];
+    const [raw, inheritedIgnores] = await Promise.all([
+      this.svn(['status', '--xml']),
+      this.getInheritedGlobalIgnores().catch(() => []),
+    ]);
+    const clientGlobalIgnores = this.getClientGlobalIgnores();
+
+    const rawEntries: Array<{
+      filePath: string;
+      absolutePath: string;
+      status: GitFileStatus;
+      item: string;
+      props?: string;
+      copied: boolean;
+      treeConflicted: boolean;
+    }> = [];
+
     const entryRegex = /<entry\b([^>]*)>([\s\S]*?)<\/entry>/g;
     let match: RegExpExecArray | null;
     while ((match = entryRegex.exec(raw)) !== null) {
@@ -1396,18 +1709,39 @@ export class SvnService extends GitService {
       if (!status) continue;
 
       const absolutePath = filePath === '.' ? this.rootPath : path.join(this.rootPath, filePath);
+      rawEntries.push({
+        filePath,
+        absolutePath,
+        status,
+        item,
+        props,
+        copied,
+        treeConflicted,
+      });
+    }
 
+    const files: SvnStatusEntry[] = [];
+
+    for (const entry of rawEntries) {
       // SVN 原生 status 对未受控目录不会递归输出内部文件。
-      // 若未受控条目是本地目录，递归探测内部文件并展开为 untracked 文件条目。
-      if (item === 'unversioned' && filePath !== '.') {
-        let isDirectory = false;
+      // 若未受控条目是本地目录，异步探测内部文件（遵循 SVN 忽略规则并设置数量与深度上限）并展开为 untracked 文件条目。
+      if (entry.item === 'unversioned' && entry.filePath !== '.') {
+        let isRealDirectory = false;
         try {
-          isDirectory = fs.statSync(absolutePath).isDirectory();
+          const lstat = await fs.promises.lstat(entry.absolutePath);
+          // 符号链接（无论指向文件还是外部目录）绝不递归展开，作为单个独立条目保留，防止扫描仓库外导致 E195015
+          if (!lstat.isSymbolicLink() && lstat.isDirectory()) {
+            isRealDirectory = true;
+          }
         } catch {
-          isDirectory = false;
+          isRealDirectory = false;
         }
-        if (isDirectory) {
-          const childFiles = this.collectUnversionedDirFiles(filePath);
+        if (isRealDirectory) {
+          const { files: childFiles, truncated, truncationReason } = await this.collectUnversionedDirFiles(
+            entry.filePath,
+            clientGlobalIgnores,
+            inheritedIgnores,
+          );
           if (childFiles.length > 0) {
             for (const childRel of childFiles) {
               files.push({
@@ -1418,11 +1752,33 @@ export class SvnService extends GitService {
                 staged: false,
                 unstaged: true,
                 svnItem: 'unversioned',
-                svnProps: props,
+                svnProps: entry.props,
                 svnCopied: false,
-                treeConflicted,
+                treeConflicted: entry.treeConflicted,
               });
             }
+          }
+
+          if (truncated) {
+            // 发生截断时，既保留已扫描出的前 maxEntries 个子文件供用户选择性添加，
+            // 又保留标记 isTruncated: true 的父目录节点以供受控全量添加入口
+            files.push({
+              repoId: this.repoId,
+              path: entry.filePath,
+              absolutePath: entry.absolutePath,
+              status: entry.status,
+              staged: false,
+              unstaged: true,
+              svnItem: entry.item,
+              svnProps: entry.props,
+              svnCopied: entry.copied,
+              treeConflicted: entry.treeConflicted,
+              isTruncated: true,
+              truncationReason,
+            });
+          }
+
+          if (childFiles.length > 0 || truncated) {
             continue;
           }
         }
@@ -1430,15 +1786,15 @@ export class SvnService extends GitService {
 
       files.push({
         repoId: this.repoId,
-        path: filePath,
-        absolutePath,
-        status,
+        path: entry.filePath,
+        absolutePath: entry.absolutePath,
+        status: entry.status,
         staged: false,
         unstaged: true,
-        svnItem: item,
-        svnProps: props,
-        svnCopied: copied,
-        treeConflicted,
+        svnItem: entry.item,
+        svnProps: entry.props,
+        svnCopied: entry.copied,
+        treeConflicted: entry.treeConflicted,
       });
     }
 
@@ -1447,19 +1803,50 @@ export class SvnService extends GitService {
       file => file.status !== 'untracked' || !this.isConflictArtifact(file.path, conflictPaths)
     );
 
-    // 过滤：如果列表中的某一条目在本地是目录，且列表中已经包含其子孙文件/子条目（例如已包含 app/test/1.txt），
-    // 则移除该目录条目自身，交由前端树形组件根据路径自动构造目录节点，避免在树中出现同名叶子节点。
-    // 纯空目录（没有任何子条目）则予以保留。
+    // 构建所有非冲突条目的祖先目录前缀集合，用于在 O(N) 时间内快速判断某目录是否已有子孙文件/子条目
+    const ancestorDirs = new Set<string>();
+    for (const f of nonConflictFiles) {
+      let p = f.path;
+      let slashIdx = p.lastIndexOf('/');
+      while (slashIdx > 0) {
+        p = p.slice(0, slashIdx);
+        if (ancestorDirs.has(p)) break;
+        ancestorDirs.add(p);
+        slashIdx = p.lastIndexOf('/');
+      }
+    }
+
     const resultFiles = nonConflictFiles.filter(file => {
       if (file.path === '.') return true;
-      const prefix = `${file.path}/`;
-      const hasChildren = nonConflictFiles.some(f => f.path.startsWith(prefix));
-      if (!hasChildren) return true;
-      try {
-        return !fs.statSync(file.absolutePath).isDirectory();
-      } catch {
+
+      // 必须完整保留所有真实的受控目录状态变更（属性修改、树冲突、已添加、已删除、已修改等），
+      // 严禁将真实版本化目录从结果中移除，以保证属性修改/树冲突可操作，避免提交时引发 E200009。
+      const isRealVersionedEntry =
+        file.treeConflicted ||
+        file.status === 'conflicted' ||
+        (file.svnProps && file.svnProps !== 'none') ||
+        file.svnItem === 'added' ||
+        file.svnItem === 'modified' ||
+        file.svnItem === 'deleted' ||
+        file.status !== 'untracked';
+
+      if (isRealVersionedEntry) {
         return true;
       }
+
+      // 如果是被截断的未受控父目录，即使它有展开的子条目，也必须保留该截断父目录节点自身，
+      // 供用户直观感知截断状态并提供受控递归添加入口
+      if (file.isTruncated) {
+        return true;
+      }
+
+      // 仅针对完全展开的未受控目录条目：如果列表中已经包含了其展开的全部子孙条目，则移除该未受控目录条目自身，
+      // 避免树形组件中出现同名叶子节点；纯空未受控目录予以保留。
+      if (ancestorDirs.has(file.path)) {
+        return false;
+      }
+
+      return true;
     });
 
     return resultFiles.sort((left, right) => left.path.localeCompare(right.path));
@@ -2819,23 +3206,121 @@ export class SvnService extends GitService {
     return diff;
   }
 
-  async stageFiles(paths: string[]): Promise<void> {
+  /**
+   * 递归检查目录及其子树中是否包含未被 SVN 忽略的嵌套 VCS 元数据（.git 或 .hg）。
+   * 优先识别文件型与目录型 .git/.hg，未忽略时立即阻断；
+   * 对被 SVN ignore 规则忽略的父目录直接跳过整棵子树，不误报且避免无效扫描；
+   * 采用异步非阻塞遍历，遇到符号链接不跟随，文件系统异常安全跳过。
+   * @returns 发现的第一个未忽略的嵌套 VCS 相对路径，如 'payload/nested/.git'；若未发现则返回 null。
+   */
+  private async findUnignoredNestedVcsInDir(
+    targetRelDir: string,
+    clientGlobalIgnores: string[],
+    inheritedIgnores: Array<{ dirRelPath: string; patterns: string[] }>,
+  ): Promise<string | null> {
+    const absDir = targetRelDir ? path.join(this.rootPath, targetRelDir) : this.rootPath;
+    try {
+      const stat = await fs.promises.lstat(absDir);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    const queue: string[] = [targetRelDir];
+    while (queue.length > 0) {
+      const currentRel = queue.shift()!;
+      const currentAbs = currentRel ? path.join(this.rootPath, currentRel) : this.rootPath;
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(currentAbs, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const childRel = currentRel ? `${currentRel}/${entry.name}` : entry.name;
+
+        const lowerName = entry.name.toLowerCase();
+        // 优先按名称识别 .git 或 .hg（包含大小写变体、目录型与常见于 submodule/worktree 的文件型 .git）
+        if (lowerName === '.git' || lowerName === '.hg') {
+          const isIgnored = this.isIgnoredBySvnRules(childRel, entry.name, clientGlobalIgnores, inheritedIgnores);
+          if (!isIgnored) {
+            return childRel;
+          }
+          // 若已被 SVN 规则忽略，则无需进入或处理该条目
+          continue;
+        }
+
+        // 普通条目：只有真实目录且非符号链接才需要继续递归
+        if (!entry.isDirectory() || entry.isSymbolicLink()) {
+          continue;
+        }
+
+        // 若子目录本身被 SVN ignore 规则忽略（如 ignored、node_modules），
+        // 原生 SVN 会自动跳过整个目录树，因此直接跳过不入队，避免误报与无谓遍历
+        if (this.isIgnoredBySvnRules(childRel, entry.name, clientGlobalIgnores, inheritedIgnores)) {
+          continue;
+        }
+
+        queue.push(childRel);
+      }
+    }
+
+    return null;
+  }
+
+  async stageFiles(paths: string[], options?: { allowTruncated?: boolean }): Promise<void> {
     const statuses = await this.parseSvnStatus();
     const requested = new Set(paths.map(filePath => this.normalizeSvnTarget(filePath)));
+    const truncatedSet = new Set(statuses.filter(f => f.isTruncated).map(f => f.path));
+
+    if (!options?.allowTruncated) {
+      if (paths.length === 1 && truncatedSet.has(this.normalizeSvnTarget(paths[0]))) {
+        throw new Error(
+          t('Cannot recursively add truncated directory "{0}" because its contents exceed display limits. Please add files selectively or configure svn:ignore.', paths[0])
+        );
+      }
+    }
+
     const unversioned = statuses
-      .filter(file => file.svnItem === 'unversioned' && requested.has(file.path))
+      .filter(file => file.svnItem === 'unversioned' && requested.has(file.path) && (options?.allowTruncated || !file.isTruncated))
       .map(file => file.path);
     const missing = statuses
       .filter(file => file.svnItem === 'missing' && requested.has(file.path))
       .map(file => file.path);
-    if (unversioned.length > 0) await this.runWithTargets(['add', '--parents'], unversioned);
+
+    const vcsPath = unversioned.find(p => isNestedVcsPath(p));
+    if (vcsPath) {
+      throw new Error(
+        t('Adding nested repository metadata "{0}" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.', vcsPath)
+      );
+    }
+
+    const [inheritedIgnores] = await Promise.all([
+      this.getInheritedGlobalIgnores().catch(() => []),
+    ]);
+    const clientGlobalIgnores = this.getClientGlobalIgnores();
+
+    for (const targetPath of unversioned) {
+      const nestedVcs = await this.findUnignoredNestedVcsInDir(targetPath, clientGlobalIgnores, inheritedIgnores);
+      if (nestedVcs) {
+        throw new Error(
+          t('Directory "{0}" contains nested repository metadata "{1}". Please add it to svn:ignore or add files selectively.', targetPath, nestedVcs)
+        );
+      }
+    }
+
+    const prunedUnversioned = pruneRedundantChildPaths(unversioned);
+    if (prunedUnversioned.length > 0) await this.runWithTargets(['add', '--parents'], prunedUnversioned);
     if (missing.length > 0) await this.runWithTargets(['delete', '--force'], missing);
   }
 
   async stageAll(): Promise<void> {
     const files = await this.parseSvnStatus();
     const schedulable = files
-      .filter(file => file.svnItem === 'unversioned' || file.svnItem === 'missing')
+      .filter(file => (file.svnItem === 'unversioned' || file.svnItem === 'missing') && !isNestedVcsPath(file.path) && !file.isTruncated)
       .map(file => file.path);
     if (schedulable.length > 0) await this.stageFiles(schedulable);
   }
@@ -2851,6 +3336,11 @@ export class SvnService extends GitService {
   async discardFile(filePath: string): Promise<void> {
     const relPath = this.normalizeSvnTarget(filePath);
     const status = (await this.parseSvnStatus()).find(file => file.path === relPath);
+    if (status?.isTruncated) {
+      throw new Error(
+        t('Cannot discard truncated directory "{0}" because its contents exceed display limits. Please delete files individually or manage the directory directly on disk.', relPath)
+      );
+    }
     if (status?.svnItem === 'unversioned') {
       const absPath = path.join(this.rootPath, relPath);
       this.assertSafeWorkingFsPath(absPath);
@@ -2893,10 +3383,40 @@ export class SvnService extends GitService {
       const uniquePaths = Array.from(new Set(paths.map(filePath => this.normalizeSvnTarget(filePath))));
       if (uniquePaths.length === 0) throw new Error(t('No SVN files selected to commit.'));
       const statuses = await this.parseSvnStatus();
+      const truncatedPaths = new Set(statuses.filter(file => file.isTruncated).map(file => file.path));
+      const truncatedSelected = uniquePaths.filter(p => truncatedPaths.has(p));
+      if (truncatedSelected.length > 0) {
+        throw new Error(
+          t('Cannot commit truncated directory "{0}" directly because its contents exceed display limits. Please use "Add entire truncated directory" first to confirm recursive inclusion.', truncatedSelected[0])
+        );
+      }
       const selected = new Set(uniquePaths);
       const pathsToAdd = statuses.filter(file => file.svnItem === 'unversioned' && selected.has(file.path)).map(file => file.path);
       const pathsToDelete = statuses.filter(file => file.svnItem === 'missing' && selected.has(file.path)).map(file => file.path);
-      if (pathsToAdd.length > 0) await this.runWithTargets(['add', '--parents'], pathsToAdd);
+
+      const vcsPath = pathsToAdd.find(p => isNestedVcsPath(p));
+      if (vcsPath) {
+        throw new Error(
+          t('Adding nested repository metadata "{0}" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.', vcsPath)
+        );
+      }
+
+      const [inheritedIgnores] = await Promise.all([
+        this.getInheritedGlobalIgnores().catch(() => []),
+      ]);
+      const clientGlobalIgnores = this.getClientGlobalIgnores();
+
+      for (const targetPath of pathsToAdd) {
+        const nestedVcs = await this.findUnignoredNestedVcsInDir(targetPath, clientGlobalIgnores, inheritedIgnores);
+        if (nestedVcs) {
+          throw new Error(
+            t('Directory "{0}" contains nested repository metadata "{1}". Please add it to svn:ignore or add files selectively.', targetPath, nestedVcs)
+          );
+        }
+      }
+
+      const prunedPathsToAdd = pruneRedundantChildPaths(pathsToAdd);
+      if (prunedPathsToAdd.length > 0) await this.runWithTargets(['add', '--parents'], prunedPathsToAdd);
       if (pathsToDelete.length > 0) await this.runWithTargets(['delete', '--force'], pathsToDelete);
       let commitTargets = uniquePaths;
       const commitArgs = ['commit', '-m', message, '--depth', 'empty'];
@@ -2904,7 +3424,7 @@ export class SvnService extends GitService {
       // unchecked child changes. Keep every target depth-empty. A newly selected
       // unversioned directory is the one exception: it had no visible child status
       // rows before `svn add`, so explicitly include the descendants it just added.
-      const newlyAddedDirectories = pathsToAdd.filter(filePath => {
+      const newlyAddedDirectories = prunedPathsToAdd.filter(filePath => {
         if (filePath === '.') return false;
         const absolutePath = path.join(this.rootPath, filePath);
         try { return fs.lstatSync(absolutePath).isDirectory(); } catch { return false; }

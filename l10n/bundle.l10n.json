@@ -2666,7 +2666,29 @@
   "Current active": "Current active",
   "Current Project ({0})": "Current Project ({0})",
   "Linked Remote ({0})": "Linked Remote ({0})",
-  "{0} Repository ({1})": "{0} Repository ({1})"
+  "{0} Repository ({1})": "{0} Repository ({1})",
+  "Failed to rename staging directory to {0}: {1}. Staging files are preserved at {2}.": "Failed to rename staging directory to {0}: {1}. Staging files are preserved at {2}.",
+  "Failed to finalize clone to {0}: {1}. Staging files are preserved at {2}.": "Failed to finalize clone to {0}: {1}. Staging files are preserved at {2}.",
+  "Failed to finalize checkout to {0}: {1}. Staging files are preserved at {2}.": "Failed to finalize checkout to {0}: {1}. Staging files are preserved at {2}.",
+  "Adding nested repository metadata \"{0}\" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.": "Adding nested repository metadata \"{0}\" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.",
+  "Cannot recursively add truncated directory \"{0}\" because its contents exceed display limits. Please add files selectively or configure svn:ignore.": "Cannot recursively add truncated directory \"{0}\" because its contents exceed display limits. Please add files selectively or configure svn:ignore.",
+  "Directory \"{0}\" contains nested repository metadata \"{1}\". Please add it to svn:ignore or add files selectively.": "Directory \"{0}\" contains nested repository metadata \"{1}\". Please add it to svn:ignore or add files selectively.",
+  "Cannot discard truncated directory \"{0}\" because its contents exceed display limits. Please delete files individually or manage the directory directly on disk.": "Cannot discard truncated directory \"{0}\" because its contents exceed display limits. Please delete files individually or manage the directory directly on disk.",
+  "Skipped discarding {0} truncated director(y/ies) whose contents exceed display limits. Please delete files individually.": "Skipped discarding {0} truncated director(y/ies) whose contents exceed display limits. Please delete files individually.",
+  "Directory \"{0}\" exceeds the display limit (contains files beyond the shown 500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?": "Directory \"{0}\" exceeds the display limit (contains files beyond the shown 500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?",
+  "Add Entire Directory": "Add Entire Directory",
+  "Skipped adding {0} truncated director(y/ies) in batch operation. Please add them individually to confirm recursive inclusion.": "Skipped adding {0} truncated director(y/ies) in batch operation. Please add them individually to confirm recursive inclusion.",
+  "Truncated directories cannot be committed directly. Please use \"Add entire truncated directory\" first to confirm recursive inclusion.": "Truncated directories cannot be committed directly. Please use \"Add entire truncated directory\" first to confirm recursive inclusion.",
+  "Add entire truncated directory to SVN…": "Add entire truncated directory to SVN…",
+  ">500 items": ">500 items",
+  "Contains files beyond display limit (>500 items). Adding this directory will add all unshown files.": "Contains files beyond display limit (>500 items). Adding this directory will add all unshown files.",
+  "Cannot commit truncated directory \"{0}\" directly because its contents exceed display limits. Please use \"Add entire truncated directory\" first to confirm recursive inclusion.": "Cannot commit truncated directory \"{0}\" directly because its contents exceed display limits. Please use \"Add entire truncated directory\" first to confirm recursive inclusion.",
+  "Truncated directory cannot be selected for direct commit. Please use the action button to add the entire directory.": "Truncated directory cannot be selected for direct commit. Please use the action button to add the entire directory.",
+  "Directory \"{0}\" exceeds the directory depth limit (>8 levels). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?": "Directory \"{0}\" exceeds the directory depth limit (>8 levels). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?",
+  "Directory \"{0}\" contains files beyond the display limit (>500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?": "Directory \"{0}\" contains files beyond the display limit (>500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?",
+  "Add entire directory": "Add entire directory",
+  ">8 levels": ">8 levels",
+  "Exceeds maximum directory depth limit (>8 levels). Adding this directory will add all unshown files.": "Exceeds maximum directory depth limit (>8 levels). Adding this directory will add all unshown files.",
+  "VersionDock: Failed to add directory \"{0}\": {1}": "VersionDock: Failed to add directory \"{0}\": {1}",
+  "VersionDock: Failed to add files to {0}: {1}": "VersionDock: Failed to add files to {0}: {1}"
 }
-
-

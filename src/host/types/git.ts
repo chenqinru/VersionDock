@@ -155,6 +155,8 @@ export interface FileStatus {
   added?: number;
   removed?: number;
   submodule?: SubmoduleStatus;
+  isTruncated?: boolean;
+  truncationReason?: 'entry-limit' | 'depth-limit';
 }
 
 export interface DiffLine {

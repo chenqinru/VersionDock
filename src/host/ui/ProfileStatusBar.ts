@@ -44,6 +44,19 @@ function extractHostname(urlOrHost: string): string | undefined {
   }
 }
 
+function escapeMarkdown(text: string): string {
+  return text.replace(/[\\`*_{}[\]()#+\-.!|<>~$]/g, '\\$&');
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function resolveRemotePlatform(
   remote: { name: string; fetchUrl?: string; pushUrl?: string },
   connectedAccounts: RemoteAccountInfo[],
@@ -284,7 +297,7 @@ export class ProfileStatusBar implements vscode.Disposable {
   }): Promise<vscode.MarkdownString> {
     const md = new vscode.MarkdownString(undefined, true);
     md.supportHtml = true;
-    md.isTrusted = true;
+    md.isTrusted = { enabledCommands: ['versiondock.manageProfiles'] };
 
     const { profile, source, svnStatus, activeService, allServices } = options;
 
@@ -375,7 +388,12 @@ export class ProfileStatusBar implements vscode.Disposable {
 
     // ── 名片头部渲染 ──────────────────────────────────────────
     if (avatarUrl) {
-      md.appendMarkdown(`<img src="${avatarUrl}" width="32" height="32" /> &nbsp; `);
+      const isHttp = /^https?:\/\//i.test(avatarUrl);
+      const isDataImage = /^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(avatarUrl);
+      if (isHttp || isDataImage) {
+        const safeSrc = escapeHtmlAttr(avatarUrl);
+        md.appendMarkdown(`<img src="${safeSrc}" width="32" height="32" /> &nbsp; `);
+      }
     }
 
     if (profile) {
@@ -394,15 +412,17 @@ export class ProfileStatusBar implements vscode.Disposable {
             ? ` · ${t('{0} Repository ({1})', repoPlatform.platformLabel, repoPlatform.primaryRemoteName)}`
             : ` · ${t('{0} Repository', repoPlatform.platformLabel)}`)
         : '';
-      md.appendMarkdown(`**${accountName}**${sourceBadge}${platformBadge}\n\n`);
+      md.appendMarkdown(`**${escapeMarkdown(accountName)}**${escapeMarkdown(sourceBadge)}${escapeMarkdown(platformBadge)}\n\n`);
       if (profile.gitEmail) {
-        md.appendMarkdown(`\`${profile.gitEmail}\`\n\n`);
+        const safeEmail = profile.gitEmail.replace(/[`\\]/g, '\\$&');
+        md.appendMarkdown(`\`${safeEmail}\`\n\n`);
       }
     } else if (svnStatus) {
       const account = svnStatus.username ?? (svnStatus.hasCachedCredentials ? t('Authenticated') : t('No account detected'));
-      md.appendMarkdown(`$(account) **SVN: ${account}**\n\n`);
+      md.appendMarkdown(`$(account) **SVN: ${escapeMarkdown(account)}**\n\n`);
       if (svnStatus.realm || svnStatus.authKey) {
-        md.appendMarkdown(`*${svnStatus.realm ?? svnStatus.authKey}*\n\n`);
+        const realmText = svnStatus.realm ?? svnStatus.authKey ?? '';
+        md.appendMarkdown(`*${escapeMarkdown(realmText)}*\n\n`);
       }
     } else {
       md.appendMarkdown(`$(account) **${t('No profile')}**\n\n`);
@@ -426,15 +446,15 @@ export class ProfileStatusBar implements vscode.Disposable {
           let suffix = '';
           if (repoPlatform.platform === 'gitee') {
             const tag = repoPlatform.primaryRemoteName ? t('Current Project ({0})', repoPlatform.primaryRemoteName) : t('Current Project');
-            suffix = ` *(${tag})*`;
+            suffix = ` *(${escapeMarkdown(tag)})*`;
           } else {
             const sec = repoPlatform.secondaryPlatforms.find(s => s.platform === 'gitee');
             if (sec) {
-              suffix = ` *(${t('Linked Remote ({0})', sec.remoteName)})*`;
+              suffix = ` *(${escapeMarkdown(t('Linked Remote ({0})', sec.remoteName))})*`;
             }
           }
           if (gtAccount) {
-            md.appendMarkdown(`- $(repo) Gitee: **@${gtAccount.username}**${suffix} $(${'check'})\n`);
+            md.appendMarkdown(`- $(repo) Gitee: **@${escapeMarkdown(gtAccount.username)}**${suffix} $(${'check'})\n`);
           } else {
             md.appendMarkdown(`- $(repo) Gitee: *${t('Not connected')}*${suffix}\n`);
           }
@@ -451,12 +471,12 @@ export class ProfileStatusBar implements vscode.Disposable {
           } else {
             const sec = repoPlatform.secondaryPlatforms.find(s => s.platform === 'github');
             if (sec) {
-              suffix = ` *(${t('Linked Remote ({0})', sec.remoteName)})*`;
+              suffix = ` *(${escapeMarkdown(t('Linked Remote ({0})', sec.remoteName))})*`;
             }
           }
           const ghUser = ghAccount?.username || githubSession?.account?.label;
           if (ghUser) {
-            md.appendMarkdown(`- $(github) GitHub: **@${ghUser}**${suffix} $(${'check'})\n`);
+            md.appendMarkdown(`- $(github) GitHub: **@${escapeMarkdown(ghUser)}**${suffix} $(${'check'})\n`);
           } else {
             md.appendMarkdown(`- $(github) GitHub: *${t('Not connected')}*${suffix}\n`);
           }
@@ -473,11 +493,11 @@ export class ProfileStatusBar implements vscode.Disposable {
           } else {
             const sec = repoPlatform.secondaryPlatforms.find(s => s.platform === 'gitlab');
             if (sec) {
-              suffix = ` *(${t('Linked Remote ({0})', sec.remoteName)})*`;
+              suffix = ` *(${escapeMarkdown(t('Linked Remote ({0})', sec.remoteName))})*`;
             }
           }
           if (glAccounts.length > 0) {
-            const label = glAccounts.length === 1 ? `@${glAccounts[0].username}` : t('{0} account(s) connected', glAccounts.length);
+            const label = glAccounts.length === 1 ? `@${escapeMarkdown(glAccounts[0].username)}` : t('{0} account(s) connected', glAccounts.length);
             md.appendMarkdown(`- $(repo) GitLab: **${label}**${suffix} $(${'check'})\n`);
           } else {
             md.appendMarkdown(`- $(repo) GitLab: *${t('Not connected')}*${suffix}\n`);
@@ -497,7 +517,8 @@ export class ProfileStatusBar implements vscode.Disposable {
     if (allServices && allServices.length > 1) {
       const activeMeta = activeService && this.manager ? this.manager.getRepoMeta(activeService.repoId) : undefined;
       const currentName = activeMeta?.name ?? (activeService ? path.basename(activeService.rootPath) : '');
-      md.appendMarkdown(`$(repo) *${t('Multi-repository workspace ({0} repos) · Current: {1}', allServices.length, currentName)}*\n\n`);
+      const label = t('Multi-repository workspace ({0} repos) · Current: {1}', allServices.length, currentName);
+      md.appendMarkdown(`$(repo) *${escapeMarkdown(label)}*\n\n`);
     }
 
     md.appendMarkdown(`[$(gear) ${t('Click to manage accounts and identities')}](command:versiondock.manageProfiles)`);

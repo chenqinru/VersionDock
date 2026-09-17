@@ -114,6 +114,7 @@
   "configuration.promptAddUntrackedToGit.description": "Show a prompt when new untracked files are detected, offering to add them to Git.",
   "configuration.projectColors.description": "Map of workspace folder/repository name to hex color for the commit graph (e.g. {\"my-repo\": \"#ff6b6b\"})",
   "configuration.showProfileStatusBar.description": "Show the VersionDock account and Git identity status bar item in the bottom status bar.",
+  "configuration.avatar.crossPlatformFallback.description": "Allow querying across platforms (e.g. Gravatar, GitLab, Gitee, GitHub) when resolving avatars for repositories without matching remote providers. Disabled by default to protect privacy in private repositories.",
   "configuration.git.autoFetchInterval.description": "Interval in minutes for automatically fetching remote changes in the background (git fetch, 0 = disabled, default: 15).",
   "configuration.git.autoFetchOnFocus.description": "Automatically fetch remote changes (git fetch) in the background when VS Code window regains focus (with cooldown, enabled by default).",
   "configuration.fetchOnStartup.description": "Automatically fetch all remotes when the extension activates",

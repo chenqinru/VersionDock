@@ -1239,8 +1239,12 @@ export function CommitApp() {
           break;
 
         case 'PUSH_UNPUSHED_RESULT':
-          if (msg.avatars) {
-            notifyAvatarsResolved(msg.avatars);
+          if (msg.repoAvatars) {
+            for (const [rId, rAvatars] of Object.entries(msg.repoAvatars)) {
+              notifyAvatarsResolved(rAvatars, rId);
+            }
+          } else if (msg.avatars) {
+            notifyAvatarsResolved(msg.avatars, msg.repoId);
           }
           if (msg.repos) {
             setUnpushedMap(prev => {
@@ -1334,8 +1338,12 @@ export function CommitApp() {
           break;
 
         case 'SYNC_INCOMING_RESULT':
-          if (msg.avatars) {
-            notifyAvatarsResolved(msg.avatars);
+          if (msg.repoAvatars) {
+            for (const [rId, rAvatars] of Object.entries(msg.repoAvatars)) {
+              notifyAvatarsResolved(rAvatars, rId);
+            }
+          } else if (msg.avatars) {
+            notifyAvatarsResolved(msg.avatars, msg.repoId);
           }
           if (msg.repos) {
             setIncomingMap(prev => {
@@ -1533,7 +1541,7 @@ export function CommitApp() {
           break;
 
         case 'COMMIT_AVATARS_RESOLVED':
-          notifyAvatarsResolved(msg.avatars);
+          notifyAvatarsResolved(msg.avatars, msg.repoId);
           break;
         case 'COMMIT_AVATAR_CACHE_CLEARED':
           clearFrontendAvatarCache();
@@ -2326,6 +2334,7 @@ export function CommitApp() {
         send({ type: 'COMMIT_ACCEPT_THEIRS', requestId: generateId(), repoId: file.repoId, filePath: file.path });
         break;
       case 'rollback':
+        if (file.isTruncated) break;
         send({ type: 'COMMIT_DISCARD_FILE', requestId: generateId(), repoId: file.repoId, path: file.path });
         break;
       case 'shelve':
@@ -2380,6 +2389,8 @@ export function CommitApp() {
         requestCommitStatus({ refreshSubtrees: activeTab === 'subtree' });
         break;
     }
+    setCtxMenu(null);
+    setCtxFile(null);
   }, [activeTab, confirmShelve, ctxMenu, openDiff, doStash, requestCommitStatus, send, handleSubmoduleUpdate, switchTab, openSubmoduleDiffSummary, store.repoMetas, handleSubmoduleOpenInNewWindow]);
 
   const handleFolderContextMenuSelect = useCallback((id: string) => {
@@ -2392,9 +2403,13 @@ export function CommitApp() {
       case 'unstage':
         send({ type: 'COMMIT_UNSTAGE_FILES', requestId: generateId(), repoId: ctx.repoId, paths: ctx.files.map(f => f.path) });
         break;
-      case 'rollback':
-        send({ type: 'COMMIT_DISCARD_FILES', requestId: generateId(), files: ctx.files.map(f => ({ repoId: f.repoId, path: f.path })) });
+      case 'rollback': {
+        const validFiles = ctx.files.filter(f => !f.isTruncated);
+        if (validFiles.length > 0) {
+          send({ type: 'COMMIT_DISCARD_FILES', requestId: generateId(), files: validFiles.map(f => ({ repoId: f.repoId, path: f.path })) });
+        }
         break;
+      }
       case 'shelve':
         confirmShelve(ctx.repoId, t('Changes'), ctx.files.map(f => f.path));
         break;
@@ -2787,7 +2802,9 @@ export function CommitApp() {
         })
         .map(r => {
           const meta = metaMap.get(r.repoId);
-          const allPaths = [...r.stagedFiles, ...r.unstagedFiles].map(file => file.path);
+          const allPaths = [...r.stagedFiles, ...r.unstagedFiles]
+            .filter(file => !file.isTruncated)
+            .map(file => file.path);
           return {
             repoId: r.repoId,
             message: freshState.commitMessage,
@@ -2989,10 +3006,12 @@ export function CommitApp() {
                 }}
                 onOpenFile={f => send({ type: 'COMMIT_OPEN_FILE', repoId: f.repoId, filePath: f.path })}
                 onRollback={files => {
-                  if (files.length === 1) {
-                    send({ type: 'COMMIT_DISCARD_FILE', requestId: generateId(), repoId: files[0].repoId, path: files[0].path });
+                  const validFiles = files.filter(f => !f.isTruncated);
+                  if (validFiles.length === 0) return;
+                  if (validFiles.length === 1) {
+                    send({ type: 'COMMIT_DISCARD_FILE', requestId: generateId(), repoId: validFiles[0].repoId, path: validFiles[0].path });
                   } else {
-                    send({ type: 'COMMIT_DISCARD_FILES', requestId: generateId(), files: files.map(f => ({ repoId: f.repoId, path: f.path })) });
+                    send({ type: 'COMMIT_DISCARD_FILES', requestId: generateId(), files: validFiles.map(f => ({ repoId: f.repoId, path: f.path })) });
                   }
                 }}
                 onResolveMerge={f => send({ type: 'COMMIT_OPEN_MERGE_EDITOR', repoId: f.repoId, filePath: f.path })}
@@ -3031,13 +3050,16 @@ export function CommitApp() {
                 onFolderContextMenu={(e, rid, folderPath, files) => { setActiveFolderPath(folderPath); setFolderCtxMenu({ x: e.clientX, y: e.clientY, repoId: rid, folderPath, files }); }}
                 onOpenFile={f => send({ type: 'COMMIT_OPEN_FILE', repoId: f.repoId, filePath: f.path })}
                 onRollback={files => {
-                  if (files.length === 1) {
-                    send({ type: 'COMMIT_DISCARD_FILE', requestId: generateId(), repoId: files[0].repoId, path: files[0].path });
+                  const validFiles = files.filter(f => !f.isTruncated);
+                  if (validFiles.length === 0) return;
+                  if (validFiles.length === 1) {
+                    send({ type: 'COMMIT_DISCARD_FILE', requestId: generateId(), repoId: validFiles[0].repoId, path: validFiles[0].path });
                   } else {
-                    send({ type: 'COMMIT_DISCARD_FILES', requestId: generateId(), files: files.map(f => ({ repoId: f.repoId, path: f.path })) });
+                    send({ type: 'COMMIT_DISCARD_FILES', requestId: generateId(), files: validFiles.map(f => ({ repoId: f.repoId, path: f.path })) });
                   }
                 }}
                 onResolveMerge={f => send({ type: 'COMMIT_OPEN_MERGE_EDITOR', repoId: f.repoId, filePath: f.path })}
+                onStage={f => send({ type: 'COMMIT_STAGE_FILES', requestId: generateId(), repoId: f.repoId, paths: [f.path] } satisfies CommitToHostMsg)}
                 onHeaderContextMenu={(e, clId) => setClHeaderCtxMenu({ x: e.clientX, y: e.clientY, changelistId: clId })}
                 onRepoContextMenu={(e, rid, clId) => setRepoCtxMenu({ x: e.clientX, y: e.clientY, repoId: rid, changelistId: clId })}
                 onOpenChanges={rid => send({ type: 'COMMIT_OPEN_ALL_CHANGES', repoId: rid } satisfies CommitToHostMsg)}
@@ -3087,6 +3109,7 @@ export function CommitApp() {
                         }
                       }}
                       onResolveMerge={f => send({ type: 'COMMIT_OPEN_MERGE_EDITOR', repoId: f.repoId, filePath: f.path })}
+                      onStage={f => send({ type: 'COMMIT_STAGE_FILES', requestId: generateId(), repoId: f.repoId, paths: [f.path] } satisfies CommitToHostMsg)}
                       onBranchClick={rid => send({ type: 'COMMIT_SHOW_BRANCH_MENU', repoId: rid })}
                       onRepoContextMenu={(e, rid) => setRepoCtxMenu({ x: e.clientX, y: e.clientY, repoId: rid })}
                       onOpenAllChanges={rid => send({ type: 'COMMIT_OPEN_ALL_CHANGES', repoId: rid } satisfies CommitToHostMsg)}
@@ -3485,16 +3508,42 @@ export function CommitApp() {
               ? [...baseItems, { separator: true }, { id: 'move-to-cl', label: t('Move to Changelist…'), icon: 'list-unordered' }]
               : baseItems;
           }
+        } else {
+          // simplified view mode
+          if (isUntracked) {
+            items = [
+              { id: 'add-to-git', label: t('Add to Git'),        icon: 'add' },
+              { id: 'rollback',   label: t('Rollback'),           icon: 'discard' },
+              { id: 'shelve',     label: t('Shelve'),             icon: 'archive' },
+              { id: 'stash',      label: t('Stash'),              icon: 'save' },
+              { id: 'diff',       label: t('Show Diff'),          icon: 'diff' },
+              { id: 'jump',       label: t('Jump to Source'),     icon: 'go-to-file' },
+              { separator: true },
+              { id: 'gitignore',  label: t('Add to .gitignore'), icon: 'exclude' },
+              { separator: true },
+              { id: 'delete',     label: t('Delete'),             icon: 'trash', danger: true },
+              { separator: true },
+              { id: 'refresh',    label: t('Refresh'),            icon: 'refresh' },
+            ];
+          }
         }
         if (isSvn) {
           items = svnContextMenuItems(items, isUntracked);
+        }
+        if (file.isTruncated) {
+          items = items
+            .filter(it => !('id' in it) || it.id !== 'rollback')
+            .map(it => ('id' in it && (it.id === 'add-to-git' || it.id === 'stage'))
+              ? { ...it, label: t('Add entire truncated directory to SVN…') }
+              : it
+            );
         }
         return (
           <ContextMenu
             x={ctxMenu.x} y={ctxMenu.y}
             items={items}
             onSelect={id => {
-              if (id === 'add-to-git') {
+              if (id === 'add-to-git' || id === 'stage') {
                 send({ type: 'COMMIT_STAGE_FILES', requestId: generateId(), repoId: file.repoId, paths: [file.path] } satisfies CommitToHostMsg);
                 setCtxMenu(null); setCtxFile(null);
               } else if (id === 'move-to-cl') {
@@ -3540,6 +3589,9 @@ export function CommitApp() {
         }
         if (isSvn) {
           items = svnContextMenuItems(items, allUntracked);
+        }
+        if (files.length > 0 && files.every(f => f.isTruncated)) {
+          items = items.filter(it => !('id' in it) || it.id !== 'rollback');
         }
         return (
           <ContextMenu

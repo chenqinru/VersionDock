@@ -877,6 +877,12 @@
             "default": true,
             "description": "%configuration.showProfileStatusBar.description%"
           },
+          "versiondock.avatar.crossPlatformFallback": {
+            "order": 14.8,
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.avatar.crossPlatformFallback.description%"
+          },
           "versiondock.git.catFileFilterMode": {
             "order": 15,
             "type": "string",

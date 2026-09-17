@@ -268,7 +268,11 @@ export function GitLogApp() {
           } else {
             store.setRepoErrors(null);
           }
-          if (msg.avatars) {
+          if (msg.repoAvatars) {
+            for (const [rId, rAvatars] of Object.entries(msg.repoAvatars)) {
+              notifyAvatarsResolved(rAvatars, rId);
+            }
+          } else if (msg.avatars) {
             notifyAvatarsResolved(msg.avatars);
           }
           store.appendCommits(msg.commits, msg.isLast);
@@ -319,7 +323,7 @@ export function GitLogApp() {
           filterRepoRef.current(msg.repoId, msg.branch ?? null);
           break;
         case 'LOG_AVATARS_RESOLVED':
-          notifyAvatarsResolved(msg.avatars);
+          notifyAvatarsResolved(msg.avatars, msg.repoId);
           break;
         case 'LOG_AVATAR_CACHE_CLEARED':
           clearFrontendAvatarCache();

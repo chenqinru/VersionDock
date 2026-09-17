@@ -1518,25 +1518,28 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private detectNewUntrackedFiles(status: WorkspaceStatus): void {
-    const newlyUntracked: Array<{ repo: GitService; relPath: string }> = [];
+    const newlyUntracked: Array<{ repo: GitService; relPath: string; isTruncated?: boolean; truncationReason?: 'entry-limit' | 'depth-limit' }> = [];
 
     for (const repoStatus of status.repos) {
       const repoId = repoStatus.repoId;
       const repo = this.repos.get(repoId);
       if (!repo) continue;
 
-      const currentUntracked = new Set(
-        repoStatus.unstagedFiles.filter(f => f.status === 'untracked').map(f => f.path)
-      );
+      const currentUntrackedMap = new Map<string, { isTruncated: boolean; truncationReason?: 'entry-limit' | 'depth-limit' }>();
+      for (const f of repoStatus.unstagedFiles) {
+        if (f.status === 'untracked') {
+          currentUntrackedMap.set(f.path, { isTruncated: Boolean(f.isTruncated), truncationReason: f.truncationReason });
+        }
+      }
       const prev = this.prevUntracked.get(repoId);
 
       if (prev && this.initialStatusDone) {
-        for (const p of currentUntracked) {
-          if (!prev.has(p)) newlyUntracked.push({ repo, relPath: p });
+        for (const [p, meta] of currentUntrackedMap) {
+          if (!prev.has(p)) newlyUntracked.push({ repo, relPath: p, isTruncated: meta.isTruncated, truncationReason: meta.truncationReason });
         }
       }
 
-      this.prevUntracked.set(repoId, currentUntracked);
+      this.prevUntracked.set(repoId, new Set(currentUntrackedMap.keys()));
     }
 
     this.initialStatusDone = true;
@@ -1552,30 +1555,78 @@ export class WorkspaceGitManager implements vscode.Disposable {
   }
 
   private async promptAddToGit(
-    files: Array<{ repo: GitService; relPath: string }>,
+    files: Array<{ repo: GitService; relPath: string; isTruncated?: boolean; truncationReason?: 'entry-limit' | 'depth-limit' }>,
   ): Promise<void> {
-    const names = files.map(f => f.relPath);
-    const kind = files.some(f => f.repo.kind === 'svn') ? 'SVN' : 'Git';
-    const distinctRepos = [...new Set(files.map(f => f.repo))];
-    const singleRepoMeta = distinctRepos.length === 1 ? this.repoMetas.get(distinctRepos[0].repoId) : undefined;
-    const singleRepoName = singleRepoMeta?.name ?? (distinctRepos.length === 1 ? distinctRepos[0].repoId : undefined);
+    const truncatedFiles = files.filter(f => f.isTruncated);
+    const isDescendantOfTruncated = (f: { repo: GitService; relPath: string }) => {
+      return truncatedFiles.some(
+        t => t.repo === f.repo && (f.relPath === t.relPath || f.relPath.startsWith(t.relPath + '/'))
+      );
+    };
+    const normalFiles = files.filter(f => !f.isTruncated && !isDescendantOfTruncated(f));
+    let shouldRefresh = false;
 
-    const label = singleRepoName
-      ? (names.length === 1
-          ? t('VersionDock [{0}]: Do you want to add "{1}" to {2}?', singleRepoName, names[0], kind)
-          : t('VersionDock [{0}]: Do you want to add {1} new files to {2}?', singleRepoName, names.length, kind))
-      : (names.length === 1
-          ? t('VersionDock: Do you want to add "{0}" to {1}?', names[0], kind)
-          : t('VersionDock: Do you want to add {0} new files to {1}?', names.length, kind));
-
-    const add = t('Add');
-    const answer = await vscode.window.showInformationMessage(label, add, t('Cancel'));
-    if (answer !== add) return;
-
-    for (const { repo, relPath } of files) {
-      await repo.stageFiles([relPath]).catch(() => {});
+    for (const { repo, relPath, truncationReason } of truncatedFiles) {
+      const confirmMessage = truncationReason === 'depth-limit'
+        ? t('Directory "{0}" exceeds the directory depth limit (>8 levels). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?', relPath)
+        : t('Directory "{0}" exceeds the display limit (contains files beyond the shown 500 items). Adding it will recursively add the entire directory including all unshown files. Do you want to proceed?', relPath);
+      const confirm = await vscode.window.showWarningMessage(
+        confirmMessage,
+        { modal: true },
+        t('Add Entire Directory')
+      );
+      if (confirm === t('Add Entire Directory')) {
+        try {
+          await repo.stageFiles([relPath], { allowTruncated: true });
+          shouldRefresh = true;
+        } catch (e: unknown) {
+          vscode.window.showErrorMessage(
+            t('VersionDock: Failed to add directory "{0}": {1}', relPath, String(e))
+          );
+        }
+      }
     }
-    this.scheduleRefresh();
+
+    if (normalFiles.length > 0) {
+      const names = normalFiles.map(f => f.relPath);
+      const kind = normalFiles.some(f => f.repo.kind === 'svn') ? 'SVN' : 'Git';
+      const distinctRepos = [...new Set(normalFiles.map(f => f.repo))];
+      const singleRepoMeta = distinctRepos.length === 1 ? this.repoMetas.get(distinctRepos[0].repoId) : undefined;
+      const singleRepoName = singleRepoMeta?.name ?? (distinctRepos.length === 1 ? distinctRepos[0].repoId : undefined);
+
+      const label = singleRepoName
+        ? (names.length === 1
+            ? t('VersionDock [{0}]: Do you want to add "{1}" to {2}?', singleRepoName, names[0], kind)
+            : t('VersionDock [{0}]: Do you want to add {1} new files to {2}?', singleRepoName, names.length, kind))
+        : (names.length === 1
+            ? t('VersionDock: Do you want to add "{0}" to {1}?', names[0], kind)
+            : t('VersionDock: Do you want to add {0} new files to {1}?', names.length, kind));
+
+      const add = t('Add');
+      const answer = await vscode.window.showInformationMessage(label, add, t('Cancel'));
+      if (answer === add) {
+        const filesByRepo = new Map<GitService, string[]>();
+        for (const { repo, relPath } of normalFiles) {
+          const list = filesByRepo.get(repo) ?? [];
+          list.push(relPath);
+          filesByRepo.set(repo, list);
+        }
+        for (const [repo, paths] of filesByRepo) {
+          try {
+            await repo.stageFiles(paths);
+            shouldRefresh = true;
+          } catch (e: unknown) {
+            vscode.window.showErrorMessage(
+              t('VersionDock: Failed to add files to {0}: {1}', repo.meta?.name ?? repo.repoId, String(e))
+            );
+          }
+        }
+      }
+    }
+
+    if (shouldRefresh) {
+      this.scheduleRefresh();
+    }
   }
 
   notifyBranchesChanged(options: { refreshStatus?: boolean; refreshDerivedData?: boolean } = {}): void {

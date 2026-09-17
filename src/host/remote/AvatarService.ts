@@ -33,6 +33,13 @@ function extractHostname(urlOrHost: string): string | undefined {
   }
 }
 
+function isOfficialGitLabHost(urlOrHost: string | undefined): boolean {
+  if (!urlOrHost) return false;
+  const hostname = extractHostname(urlOrHost);
+  if (!hostname) return false;
+  return hostname === 'gitlab.com' || hostname.endsWith('.gitlab.com');
+}
+
 function resolveSingleUrlPlatform(
   url: string,
   knownGitlabHosts: string[],
@@ -59,6 +66,7 @@ function resolveSingleUrlPlatform(
 export class AvatarService implements vscode.Disposable {
   private memoryCache = new Map<string, CacheEntry>();
   private inFlight = new Map<string, Promise<string | null>>();
+  private localAvatarDownloads = new Map<string, Promise<void>>();
   private saveDebounceTimer?: NodeJS.Timeout;
   private cacheEpoch = 0;
 
@@ -188,6 +196,10 @@ export class AvatarService implements vscode.Disposable {
     const primaryUrl = repoRemotes[0];
     const primaryPlatform = resolveSingleUrlPlatform(primaryUrl, knownGitlabHosts);
     if (primaryPlatform !== 'generic') {
+      if (primaryPlatform === 'gitlab') {
+        const host = extractHostname(primaryUrl);
+        return host ? `gitlab:${host}` : 'gitlab';
+      }
       return primaryPlatform;
     }
 
@@ -195,6 +207,10 @@ export class AvatarService implements vscode.Disposable {
     for (let i = 1; i < repoRemotes.length; i++) {
       const p = resolveSingleUrlPlatform(repoRemotes[i], knownGitlabHosts);
       if (p !== 'generic') {
+        if (p === 'gitlab') {
+          const host = extractHostname(repoRemotes[i]);
+          return host ? `gitlab:${host}` : 'gitlab';
+        }
         return p;
       }
     }
@@ -208,17 +224,29 @@ export class AvatarService implements vscode.Disposable {
 
     if (!cached) {
       const genericCached = this.memoryCache.get(`generic:${normalized}`);
-      if (genericCached && genericCached.url) {
-        cached = genericCached;
-      } else if (platform === 'generic') {
-        for (const p of ['github', 'gitee', 'gitlab']) {
-          const tryCached = this.memoryCache.get(`${p}:${normalized}`);
-          if (tryCached && tryCached.url) {
-            cached = tryCached;
-            break;
+      if (platform === 'generic') {
+        if (genericCached && genericCached.url) {
+          cached = genericCached;
+        } else {
+          for (const p of ['github', 'gitee', 'gitlab', 'gitlab:gitlab.com']) {
+            const tryCached = this.memoryCache.get(`${p}:${normalized}`);
+            if (tryCached && tryCached.url) {
+              cached = tryCached;
+              break;
+            }
           }
         }
+      } else if (
+        platform === 'github' ||
+        platform === 'gitee' ||
+        platform === 'gitlab' ||
+        platform === 'gitlab:gitlab.com'
+      ) {
+        if (genericCached && genericCached.url) {
+          cached = genericCached;
+        }
       }
+      // 注意：私有自建 GitLab 实例（如 gitlab:internal.company.com）严禁跨实例或从通用缓存回退，保证数据隔离
     }
 
     if (!cached) return undefined;
@@ -337,13 +365,14 @@ export class AvatarService implements vscode.Disposable {
     const gitlabHost = this.resolveGitLabHost(repoRemotes, gitlabAccounts);
 
     // 构建级联查询优先级队列：
-    // 1. 主作用域平台（platform，如 gitlab）
+    // 1. 主作用域平台（platform，如 gitlab:host 归为 gitlab）
     // 2. 当前仓库其他关联远程平台（Secondary Remotes，如 gitee / github）
-    // 3. 其他已连接或支持的平台（保底）
+    // 3. 其他已连接或支持的平台（仅在显式配置 crossPlatformFallback 时回退）
     const platformQueue: Array<'gitlab' | 'gitee' | 'github'> = [];
 
-    if (platform === 'gitlab' || platform === 'gitee' || platform === 'github') {
-      platformQueue.push(platform);
+    const basePlatform = platform.startsWith('gitlab') ? 'gitlab' : platform;
+    if (basePlatform === 'gitlab' || basePlatform === 'gitee' || basePlatform === 'github') {
+      platformQueue.push(basePlatform);
     }
 
     // 收集关联远程对应的平台
@@ -358,11 +387,22 @@ export class AvatarService implements vscode.Disposable {
       }
     }
 
-    // 补齐其余受支持的平台
-    for (const p of ['gitlab', 'gitee', 'github'] as const) {
-      if (!platformQueue.includes(p)) {
-        platformQueue.push(p);
+    // 默认仅查询仓库关联平台。仅在用户明确启用跨平台回退（opt-in）时，才尝试其他受支持平台
+    const allowCrossPlatformFallback = vscode.workspace
+      .getConfiguration('versiondock')
+      .get<boolean>('avatar.crossPlatformFallback', false);
+
+    if (allowCrossPlatformFallback) {
+      for (const p of ['gitlab', 'gitee', 'github'] as const) {
+        if (!platformQueue.includes(p)) {
+          platformQueue.push(p);
+        }
       }
+    }
+
+    // 如果没有任何关联平台且用户未允许跨平台回退，不主动向任何外部平台发起查询，保护隐私
+    if (platformQueue.length === 0) {
+      return null;
     }
 
     // 按优先级顺序级联查询
@@ -381,8 +421,12 @@ export class AvatarService implements vscode.Disposable {
       }
     }
 
-    // 兜底 Gravatar 探测
-    return await this.checkGravatar(trimmedEmail);
+    // Gravatar 属于第三方公网服务。为严格保护私有仓库（包括私有 GitHub/Gitee/GitLab 仓库）
+    // 的员工邮箱隐私，仅在用户明确开启跨平台回退（opt-in）时才查询 Gravatar
+    if (allowCrossPlatformFallback) {
+      return await this.checkGravatar(trimmedEmail);
+    }
+    return null;
   }
 
   private resolveGitLabHost(repoRemotes: string[], gitlabAccounts: Array<{ host: string }>): string | undefined {
@@ -428,7 +472,7 @@ export class AvatarService implements vscode.Disposable {
     try {
       const avatarOrigin = new URL(avatarUrl).origin;
       const targetHost = host || avatarOrigin;
-      if (!avatarOrigin.includes('gitlab.com')) {
+      if (!isOfficialGitLabHost(avatarOrigin)) {
         const dataUrl = await this.gitlab.fetchAuthenticatedImage(targetHost, avatarUrl);
         if (dataUrl) return dataUrl;
       }
@@ -476,16 +520,29 @@ export class AvatarService implements vscode.Disposable {
         }
       }
 
-      // 未缓存时启动后台异步预拉取，本次立即返回 undefined，绝不阻塞 UI 菜单弹出
-      void this.fetchAndSaveAvatar(avatarUrl, filePath).catch(() => {});
-      return undefined;
+      let download = this.localAvatarDownloads.get(filePath);
+      if (!download) {
+        const downloadEpoch = this.cacheEpoch;
+        download = this.fetchAndSaveAvatar(avatarUrl, filePath, downloadEpoch);
+        this.localAvatarDownloads.set(filePath, download);
+        void download.finally(() => {
+          if (this.localAvatarDownloads.get(filePath) === download) {
+            this.localAvatarDownloads.delete(filePath);
+          }
+        });
+      }
+
+      // QuickPick 已显示后不会自动刷新 iconPath。首次未命中时等待这批头像
+      // 并行下载完成，使当前这次菜单打开就能显示；下载自身带超时，失败仍降级为平台图标。
+      await download;
+      return fs.existsSync(filePath) ? vscode.Uri.file(filePath) : undefined;
     } catch (error) {
       this.logger.debug('AvatarService', 'Failed to get local avatar uri', { avatarUrl, error: String(error) });
       return undefined;
     }
   }
 
-  private async fetchAndSaveAvatar(avatarUrl: string, filePath: string): Promise<void> {
+  private async fetchAndSaveAvatar(avatarUrl: string, filePath: string, cacheEpoch: number): Promise<void> {
     try {
       let res: Response | undefined;
       const controller = new AbortController();
@@ -502,7 +559,7 @@ export class AvatarService implements vscode.Disposable {
           const dataUrl = await this.gitlab.fetchAuthenticatedImage(origin, avatarUrl);
           if (dataUrl) {
             const comma = dataUrl.indexOf(',');
-            if (comma !== -1) {
+            if (comma !== -1 && cacheEpoch === this.cacheEpoch) {
               fs.writeFileSync(filePath, Buffer.from(dataUrl.slice(comma + 1), 'base64'));
             }
           }
@@ -513,7 +570,9 @@ export class AvatarService implements vscode.Disposable {
       }
 
       const buffer = Buffer.from(await res.arrayBuffer());
-      fs.writeFileSync(filePath, buffer);
+      if (cacheEpoch === this.cacheEpoch) {
+        fs.writeFileSync(filePath, buffer);
+      }
     } catch {
       // ignore
     }
@@ -551,6 +610,7 @@ export class AvatarService implements vscode.Disposable {
     }
     this.memoryCache.clear();
     this.inFlight.clear();
+    this.localAvatarDownloads.clear();
     this.gitee.clearCache();
     void this.context.globalState.update(AVATAR_CACHE_KEY, {});
     try {
