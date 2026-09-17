@@ -760,7 +760,7 @@ export class BranchStatusBar implements vscode.Disposable {
         const activeLabel = isActive ? `  $(edit) ${t('active')}` : '';
         const opLabel = repoOpState ? `  *(${formatOperationStateLabel(repoOpState)})*` : '';
         items.push({
-          label: showRepoKinds ? formatRepoLabel(meta, repoIcon) : `${repoIcon} ${meta.name}`,
+          label: formatRepoLabel(meta, repoIcon, showRepoKinds),
           description: `${refIcon} ${branchName}${opLabel}${repoPushLabel}${repoPullLabel}${activeLabel}`,
           action: () => this.showRepoBranchMenu(meta),
         });
@@ -1636,7 +1636,7 @@ export class BranchStatusBar implements vscode.Disposable {
       const remotes = await repo.getRemotes().catch(() => [] as string[]);
       const targets = remotes.length > 0 ? remotes : [undefined];
       for (const remote of targets) {
-        const repoLabel = showRepoKinds ? formatRepoLabel(meta) : meta.name;
+        const repoLabel = formatRepoLabel(meta, undefined, showRepoKinds);
         items.push({
           label: `$(cloud-upload) ${repoLabel}`,
           description: remote ? `→ ${remote}` : t('No remote — create and push'),

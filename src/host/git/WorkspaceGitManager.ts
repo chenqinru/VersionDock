@@ -8,7 +8,7 @@ import { getVscodeGitApi, getVscodeRepository } from './VscodeGitApi';
 import type { BranchInfo, CommitNode, CommitLogList, GraphCommitNode, LineRange, RepoMeta, RepoStatus, RepoSubmodules, SubmoduleItem, WorkspaceStatus } from '../types/git';
 import { PROJECT_COLORS } from '../types/workspace';
 import { t } from '../utils/l10n';
-import { formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
+import { checkMixedRepoWorkspace, formatRepoLabel, getRepoKindDetail } from '../utils/repoLabels';
 import type { VersionDockLogger } from '../utils/Logger';
 import type { PublishMissingRemote } from '../remote/types';
 import type { RemoteRepositoryService } from '../remote/RemoteRepositoryService';
@@ -2003,6 +2003,10 @@ export class WorkspaceGitManager implements vscode.Disposable {
       }
     }
     return Array.from(this.repoMetas.values());
+  }
+
+  hasMixedRepoKinds(): boolean {
+    return checkMixedRepoWorkspace(this.getRepoMetas());
   }
 
   getRepo(repoId: string): GitService | undefined {

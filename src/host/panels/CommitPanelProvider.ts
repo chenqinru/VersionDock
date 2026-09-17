@@ -273,6 +273,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     void vscode.commands.executeCommand('setContext', 'versiondock.hasSvnRepo', hasSvnRepo);
     void vscode.commands.executeCommand('setContext', 'versiondock.svnOnly', hasSvnRepo && !hasGitRepo);
     void vscode.commands.executeCommand('setContext', 'versiondock.isMultiRepo', metas.length > 1);
+    void vscode.commands.executeCommand('setContext', 'versiondock.isMixedRepo', hasGitRepo && hasSvnRepo);
   }
 
   constructor(
