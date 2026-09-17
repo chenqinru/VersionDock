@@ -2,7 +2,7 @@
   "name": "versiondock",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "publisher": "chenqinru",
   "author": {
     "name": "chenqinru",
@@ -515,9 +515,14 @@
           "group": "navigation@4"
         },
         {
-          "command": "versiondock.openSettings",
+          "command": "versiondock.manageRemoteAccounts",
           "when": "view == versiondock.commitPanel",
           "group": "navigation@5"
+        },
+        {
+          "command": "versiondock.openSettings",
+          "when": "view == versiondock.commitPanel",
+          "group": "navigation@6"
         },
         {
           "submenu": "versiondock.commitPanel.expandMode",
