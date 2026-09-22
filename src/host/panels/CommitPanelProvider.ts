@@ -245,6 +245,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private subtreeStatusCache = new Map<string, CachedSubtreeStatus>();
   private subtreeStatusTasks = new Map<string, { key: string; task: Promise<SubtreePushStatus> }>();
   private notifiedSubtreeUpdateKeys = new Map<string, string>();
+  private subtreeStatusRefreshGeneration = 0;
   private activeCommitMessageGenerations = new Map<string, vscode.CancellationTokenSource>();
   private activeTab: CommitPanelTab = 'changes';
   private lastRepoCommitHashes = new Map<string, string>();
@@ -1642,6 +1643,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   private async refreshSubtreeList(options: SubtreeStatusRefreshOptions = {}): Promise<void> {
+    const refreshGeneration = ++this.subtreeStatusRefreshGeneration;
     if (options.force) {
       // Invalidate remote hash cache on forced refresh to query live remote references.
       this.invalidateAllSubtreeRemoteCaches();
@@ -1657,9 +1659,10 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       }
     }
     const entries = this.getSubtreeEntries();
+    if (refreshGeneration !== this.subtreeStatusRefreshGeneration) return;
     this.post({ type: 'SUBTREE_LIST_RESULT', entries });
     if (options.skipStatuses) return;
-    await this.postSubtreeStatuses(entries, options);
+    await this.postSubtreeStatuses(entries, options, refreshGeneration);
   }
 
   private postSubtreeList(options: SubtreeStatusRefreshOptions = {}): void {
@@ -1804,6 +1807,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private async postSubtreeStatuses(
     entries: SubtreeEntry[] = this.getSubtreeEntries(),
     options: SubtreeStatusRefreshOptions = {},
+    refreshGeneration = this.subtreeStatusRefreshGeneration,
   ): Promise<void> {
     const now = Date.now();
     const staleEntries: SubtreeEntry[] = [];
@@ -1819,11 +1823,13 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     const initialStatuses = this.collectSubtreeStatusSnapshot(entries);
     for (const entryId of staleEntryIds) {
-      const isForced = Boolean(options.force || options.forceEntryIds?.has(entryId));
-      if (isForced || !initialStatuses[entryId] || initialStatuses[entryId].loading) {
+      // Keep the last known status visible during a background check. Mark only
+      // entries without a usable snapshot as loading to avoid row flicker.
+      if (!initialStatuses[entryId] || initialStatuses[entryId].loading) {
         initialStatuses[entryId] = { loading: true };
       }
     }
+    if (refreshGeneration !== this.subtreeStatusRefreshGeneration) return;
     this.post({ type: 'SUBTREE_STATUS_RESULT', statuses: initialStatuses });
 
     if (staleEntries.length === 0) {
@@ -1835,14 +1841,16 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       staleEntries.map(async entry => {
         try {
           const isForced = Boolean(options.force || options.forceEntryIds?.has(entry.id));
-          const status = await this.getSubtreeStatusTask(entry, { forceRemote: isForced });
-          this.post({ type: 'SUBTREE_STATUS_RESULT', statuses: { [entry.id]: status } });
+          await this.getSubtreeStatusTask(entry, { forceRemote: isForced });
+          // Commit one combined snapshot below instead of one Webview update
+          // per subtree as serialized `git subtree split` jobs finish.
         } catch {
           // Handled internally in getSubtreeStatusTask
         }
       })
     );
 
+    if (refreshGeneration !== this.subtreeStatusRefreshGeneration) return;
     const currentEntries = this.getSubtreeEntries();
     const statuses = this.collectSubtreeStatusSnapshot(currentEntries);
     this.post({ type: 'SUBTREE_STATUS_RESULT', statuses });
@@ -7667,11 +7675,9 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
     const refreshSubtrees = Boolean(options.refreshSubtrees ?? this.isSubtreeTabActive());
     if (refreshSubtrees) {
       const entries = this.getSubtreeEntries();
-      const initialStatuses: Record<string, SubtreePushStatus> = {};
-      for (const entry of entries) {
-        initialStatuses[entry.id] = { loading: true };
-      }
-      this.post({ type: 'SUBTREE_STATUS_RESULT', statuses: initialStatuses });
+      // Preserve the last known badges during a forced refresh. The following
+      // refreshSubtreeList call publishes the new combined snapshot when ready.
+      this.post({ type: 'SUBTREE_STATUS_RESULT', statuses: this.collectSubtreeStatusSnapshot(entries) });
     }
     await vscode.window.withProgress(
       { location: { viewId: CommitPanelProvider.viewType } },

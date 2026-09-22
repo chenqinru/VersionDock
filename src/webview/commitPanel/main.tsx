@@ -737,15 +737,9 @@ export function CommitApp() {
       setSubtreeLoading(true);
     }
     setSubtreeError(null);
-    if (force && subtreeEntriesRef.current.length > 0) {
-      setSubtreeStatuses(prev => {
-        const next = { ...prev };
-        for (const entry of subtreeEntriesRef.current) {
-          next[entry.id] = { ...prev[entry.id], loading: true };
-        }
-        return next;
-      });
-    }
+    // Keep the last known status visible while the host refreshes remote refs.
+    // The host publishes one combined result when all checks finish; replacing
+    // every row with a loading badge here made forced refreshes visibly flicker.
     send({ type: 'SUBTREE_REQUEST_LIST', checkStatuses, force });
   }, [send]);
 
