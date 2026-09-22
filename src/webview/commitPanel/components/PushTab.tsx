@@ -647,7 +647,7 @@ function CommitRow({
   );
 }
 
-function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potentialConflicts, speedSearchQuery, activeSpeedSearchKey, itemKeyPrefix }: {
+function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potentialConflicts, speedSearchQuery, activeSpeedSearchKey, itemKeyPrefix, hasCommits }: {
   files: PushCommitFile[];
   loading: boolean;
   viewMode: PushFileViewMode;
@@ -657,6 +657,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potenti
   speedSearchQuery?: string;
   activeSpeedSearchKey?: string | null;
   itemKeyPrefix?: string;
+  hasCommits?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const savedCollapsedBeforeSearchRef = useRef<Record<string, boolean> | null>(null);
@@ -664,9 +665,10 @@ function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potenti
   const collapsedRef = useRef(collapsed);
   collapsedRef.current = collapsed;
 
+  const filePathsKey = useMemo(() => files.map(f => f.path).join('\0'), [files]);
   useEffect(() => {
     setCollapsed({});
-  }, [files]);
+  }, [filePathsKey]);
 
   useEffect(() => {
     const trimmed = speedSearchQuery?.trim().toLowerCase() ?? '';
@@ -701,7 +703,7 @@ function PushFileList({ files, loading, viewMode, iconTheme, onOpenFile, potenti
 
   return (
     <div style={{ ...styles.fileListRoot, position: 'relative' }}>
-      {loading ? (
+      {loading || (hasCommits && files.length === 0) ? (
         <div style={styles.loadingRow}>{t('Loading files...')}</div>
       ) : files.length === 0 ? (
         <div style={styles.loadingRow}>{t('No changed files')}</div>
@@ -882,6 +884,7 @@ function AggregatedChangesView({
   activeSpeedSearchKey,
   repoId,
   isIncoming,
+  hasCommits,
 }: {
   files: PushCommitFile[];
   loading: boolean;
@@ -893,6 +896,7 @@ function AggregatedChangesView({
   activeSpeedSearchKey?: string | null;
   repoId: string;
   isIncoming?: boolean;
+  hasCommits?: boolean;
 }) {
   return (
     <div className="versiondock-card-body" style={{ borderTop: '1px solid var(--vscode-panel-border)', paddingBottom: '6px' }}>
@@ -906,6 +910,7 @@ function AggregatedChangesView({
         speedSearchQuery={speedSearchQuery}
         activeSpeedSearchKey={activeSpeedSearchKey}
         itemKeyPrefix={`push:agg:${repoId}:${isIncoming ? 'in' : 'out'}`}
+        hasCommits={hasCommits}
       />
     </div>
   );
@@ -1031,6 +1036,9 @@ function RepoSection({
   const [loadingCommitHash, setLoadingCommitHash] = useState<string | null>(null);
   const [aggregatedFiles, setAggregatedFiles] = useState<PushCommitFile[]>([]);
   const [loadingAggregatedFiles, setLoadingAggregatedFiles] = useState(false);
+  const aggregatedFilesRef = useRef(aggregatedFiles);
+  aggregatedFilesRef.current = aggregatedFiles;
+  const lastLoadedOutgoingKeyRef = useRef<string | null>(null);
   const [multiSelectHashes, setMultiSelectHashes] = useState<Set<string>>(new Set());
   const [ctxMenu, setCtxMenu] = useState<CommitCtxMenuState | null>(null);
 
@@ -1042,6 +1050,9 @@ function RepoSection({
   const [loadingIncomingHash, setLoadingIncomingHash] = useState<string | null>(null);
   const [aggregatedIncomingFiles, setAggregatedIncomingFiles] = useState<PushCommitFile[]>([]);
   const [loadingAggregatedIncomingFiles, setLoadingAggregatedIncomingFiles] = useState(false);
+  const aggregatedIncomingFilesRef = useRef(aggregatedIncomingFiles);
+  aggregatedIncomingFilesRef.current = aggregatedIncomingFiles;
+  const lastLoadedIncomingKeyRef = useRef<string | null>(null);
   const [multiSelectIncomingHashes, setMultiSelectIncomingHashes] = useState<Set<string>>(new Set());
   const [incomingCtxMenu, setIncomingCtxMenu] = useState<IncomingCommitCtxMenuState | null>(null);
 
@@ -1081,11 +1092,16 @@ function RepoSection({
   const hasUpstream = !!repoStatus.branch.upstream && !isGone;
   const commits = useMemo(() => unpushed?.commits ?? [], [unpushed?.commits]);
   const commitHashesKey = commits.map(commit => commit.hash).join(',');
+  const commitsRef = useRef(commits);
+  commitsRef.current = commits;
   const commitCount = hasUpstream ? ahead : commits.length;
   const selectedCommitFiles = expandedCommitHash ? (filesByHash[expandedCommitHash] ?? []) : [];
   const loadingSelectedCommitFiles = loadingCommitHash === expandedCommitHash;
 
   const incomingCommits = useMemo(() => incoming?.commits ?? [], [incoming?.commits]);
+  const incomingCommitHashesKey = incomingCommits.map(commit => commit.hash).join(',');
+  const incomingCommitsRef = useRef(incomingCommits);
+  incomingCommitsRef.current = incomingCommits;
   const incomingCount = behind > 0 ? behind : incomingCommits.length;
 
   type MixedCommitItem =
@@ -1194,21 +1210,30 @@ function RepoSection({
 
   useEffect(() => {
     let active = true;
-    if (pushViewMode !== 'changes' || directionFilter === 'incoming') {
+    if (!expanded || directionFilter === 'incoming') {
       return () => { active = false; };
     }
     if (commits.length === 0) {
       setAggregatedFiles([]);
+      lastLoadedOutgoingKeyRef.current = null;
       return () => { active = false; };
     }
 
-    setLoadingAggregatedFiles(true);
+    if (lastLoadedOutgoingKeyRef.current === commitHashesKey && aggregatedFilesRef.current.length > 0) {
+      return () => { active = false; };
+    }
+
+    if (pushViewMode === 'changes' && aggregatedFilesRef.current.length === 0) {
+      setLoadingAggregatedFiles(true);
+    }
+
     const loadPerCommitFallback = async (): Promise<PushCommitFile[]> => {
       const currentFilesByHash = filesByHashRef.current;
-      const cachedGroups = commits
+      const currentCommits = commitsRef.current;
+      const cachedGroups = currentCommits
         .map(commit => currentFilesByHash[commit.hash])
         .filter((files): files is PushCommitFile[] => Array.isArray(files));
-      const missingCommits = commits.filter(commit => !currentFilesByHash[commit.hash]);
+      const missingCommits = currentCommits.filter(commit => !currentFilesByHash[commit.hash]);
       if (missingCommits.length === 0) return mergeUniqueFiles(cachedGroups);
 
       const groups = await Promise.all(missingCommits.map(async commit => {
@@ -1222,14 +1247,21 @@ function RepoSection({
 
     void (async () => {
       try {
+        const oldestHash = commitsRef.current[commitsRef.current.length - 1]?.hash;
         const files = onRequestAggregatedDiff
-          ? await onRequestAggregatedDiff(repoStatus.repoId, commits[commits.length - 1]?.hash)
+          ? await onRequestAggregatedDiff(repoStatus.repoId, oldestHash)
           : await loadPerCommitFallback();
-        if (active) setAggregatedFiles(files);
+        if (active) {
+          setAggregatedFiles(files);
+          lastLoadedOutgoingKeyRef.current = commitHashesKey;
+        }
       } catch {
         try {
           const files = await loadPerCommitFallback();
-          if (active) setAggregatedFiles(files);
+          if (active) {
+            setAggregatedFiles(files);
+            lastLoadedOutgoingKeyRef.current = commitHashesKey;
+          }
         } catch {
           if (active) setAggregatedFiles([]);
         }
@@ -1239,7 +1271,7 @@ function RepoSection({
     })();
 
     return () => { active = false; };
-  }, [commitHashesKey, commits, directionFilter, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
+  }, [commitHashesKey, directionFilter, expanded, onRequestAggregatedDiff, onRequestCommitFiles, pushViewMode, repoStatus.repoId]);
 
   // Incoming commit selection & files (do not auto-expand first commit)
   useEffect(() => {
@@ -1276,19 +1308,28 @@ function RepoSection({
   // Incoming aggregated diff
   useEffect(() => {
     let active = true;
-    if (directionFilter === 'outgoing' || pushViewMode !== 'changes') {
+    if (!expanded || directionFilter === 'outgoing') {
       return () => { active = false; };
     }
     if (incomingCommits.length === 0) {
       setAggregatedIncomingFiles([]);
+      lastLoadedIncomingKeyRef.current = null;
       return () => { active = false; };
     }
-    setLoadingAggregatedIncomingFiles(true);
+
+    if (lastLoadedIncomingKeyRef.current === incomingCommitHashesKey && aggregatedIncomingFilesRef.current.length > 0) {
+      return () => { active = false; };
+    }
+
+    if (pushViewMode === 'changes' && aggregatedIncomingFilesRef.current.length === 0) {
+      setLoadingAggregatedIncomingFiles(true);
+    }
 
     const loadIncomingFallback = async (): Promise<PushCommitFile[]> => {
       const req = onRequestIncomingCommitFiles ?? onRequestCommitFiles;
+      const currentIncomingCommits = incomingCommitsRef.current;
       const groups = await Promise.all(
-        incomingCommits.map(async c => {
+        currentIncomingCommits.map(async c => {
           try {
             const res = await req(repoStatus.repoId, c.hash);
             return Array.isArray(res) ? res : (res.files ?? []);
@@ -1309,11 +1350,17 @@ function RepoSection({
         if (!files || files.length === 0) {
           files = await loadIncomingFallback();
         }
-        if (active) setAggregatedIncomingFiles(files);
+        if (active) {
+          setAggregatedIncomingFiles(files);
+          lastLoadedIncomingKeyRef.current = incomingCommitHashesKey;
+        }
       } catch {
         try {
           const fallback = await loadIncomingFallback();
-          if (active) setAggregatedIncomingFiles(fallback);
+          if (active) {
+            setAggregatedIncomingFiles(fallback);
+            lastLoadedIncomingKeyRef.current = incomingCommitHashesKey;
+          }
         } catch {
           if (active) setAggregatedIncomingFiles([]);
         }
@@ -1323,7 +1370,7 @@ function RepoSection({
     })();
 
     return () => { active = false; };
-  }, [directionFilter, incomingCommits, onRequestCommitFiles, onRequestIncomingAggregatedDiff, onRequestIncomingCommitFiles, pushViewMode, repoStatus.repoId]);
+  }, [directionFilter, expanded, incomingCommitHashesKey, onRequestCommitFiles, onRequestIncomingAggregatedDiff, onRequestIncomingCommitFiles, pushViewMode, repoStatus.repoId]);
 
   // 当开启搜索时，在 commits 模式下预取当前方向可视提交的文件，确保完整索引（受限并发与可取消）
   useEffect(() => {
@@ -1622,7 +1669,16 @@ function RepoSection({
                 onClick={event => {
                   event.stopPropagation();
                   if (!canTogglePushView) return;
-                  setPushViewMode(value => value === 'commits' ? 'changes' : 'commits');
+                  const nextMode = pushViewMode === 'commits' ? 'changes' : 'commits';
+                  setPushViewMode(nextMode);
+                  if (nextMode === 'changes') {
+                    if (commits.length > 0 && aggregatedFiles.length === 0) {
+                      setLoadingAggregatedFiles(true);
+                    }
+                    if (incomingCommits.length > 0 && aggregatedIncomingFiles.length === 0) {
+                      setLoadingAggregatedIncomingFiles(true);
+                    }
+                  }
                   if (!expanded) handleToggleExpanded();
                 }}
               >
@@ -1745,6 +1801,7 @@ function RepoSection({
                 activeSpeedSearchKey={activeSpeedSearchKey}
                 repoId={repoStatus.repoId}
                 isIncoming={true}
+                hasCommits={incomingCommits.length > 0}
               />
             ) : directionFilter === 'outgoing' ? (
               <AggregatedChangesView
@@ -1757,6 +1814,7 @@ function RepoSection({
                 activeSpeedSearchKey={activeSpeedSearchKey}
                 repoId={repoStatus.repoId}
                 isIncoming={false}
+                hasCommits={commits.length > 0}
               />
             ) : (
               /* directionFilter === 'all' */
@@ -1765,7 +1823,11 @@ function RepoSection({
                   <div>
                     <div style={styles.aggSectionHeader}>
                       <Codicon name="arrow-down" style={{ color: PULL_COLOR, marginRight: '5px' }} />
-                      <span>{t('Incoming Changes ({0})', aggregatedIncomingFiles.length)}</span>
+                      <span>
+                        {loadingAggregatedIncomingFiles && aggregatedIncomingFiles.length === 0
+                          ? t('Incoming Changes')
+                          : t('Incoming Changes ({0})', aggregatedIncomingFiles.length)}
+                      </span>
                     </div>
                     <AggregatedChangesView
                       files={aggregatedIncomingFiles}
@@ -1778,6 +1840,7 @@ function RepoSection({
                       activeSpeedSearchKey={activeSpeedSearchKey}
                       repoId={repoStatus.repoId}
                       isIncoming={true}
+                      hasCommits={true}
                     />
                   </div>
                 )}
@@ -1785,7 +1848,11 @@ function RepoSection({
                   <div>
                     <div style={styles.aggSectionHeader}>
                       <Codicon name="arrow-up" style={{ color: PUSH_COLOR, marginRight: '5px' }} />
-                      <span>{t('Outgoing Changes ({0})', aggregatedFiles.length)}</span>
+                      <span>
+                        {loadingAggregatedFiles && aggregatedFiles.length === 0
+                          ? t('Outgoing Changes')
+                          : t('Outgoing Changes ({0})', aggregatedFiles.length)}
+                      </span>
                     </div>
                     <AggregatedChangesView
                       files={aggregatedFiles}
@@ -1797,6 +1864,7 @@ function RepoSection({
                       activeSpeedSearchKey={activeSpeedSearchKey}
                       repoId={repoStatus.repoId}
                       isIncoming={false}
+                      hasCommits={true}
                     />
                   </div>
                 )}
@@ -2363,7 +2431,17 @@ export function PushTab(props: Props) {
   const [repoLoadedFiles, setRepoLoadedFiles] = useState<Record<string, RepoLoadedFiles>>({});
   const handleFilesLoaded = useCallback((repoId: string, files: RepoLoadedFiles) => {
     setRepoLoadedFiles(prev => {
-      if (prev[repoId] === files) return prev;
+      const existing = prev[repoId];
+      if (
+        existing &&
+        existing.pushViewMode === files.pushViewMode &&
+        existing.filesByHash === files.filesByHash &&
+        existing.incomingFilesByHash === files.incomingFilesByHash &&
+        existing.aggregatedFiles === files.aggregatedFiles &&
+        existing.aggregatedIncomingFiles === files.aggregatedIncomingFiles
+      ) {
+        return prev;
+      }
       return { ...prev, [repoId]: files };
     });
   }, []);
