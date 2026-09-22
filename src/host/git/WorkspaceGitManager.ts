@@ -20,6 +20,24 @@ import { setRemoteProtectedBranches } from '../utils/branchProtection';
 const MAX_SUBMODULE_DEPTH = 5;
 const DEFAULT_REPOSITORY_SCAN_MAX_DEPTH = 1;
 const DEFAULT_REPOSITORY_SCAN_IGNORED_FOLDERS = ['node_modules'];
+// A single broken/unreachable repository must not keep the log panel's branch
+// loading state pending forever. Git may wait on an external process/lock and
+// SVN may wait on a remote server, so bound each repository independently.
+const BRANCH_QUERY_TIMEOUT_MS = 12_000;
+
+async function withBranchQueryTimeout<T>(promise: Promise<T>, repoId: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Branch query timed out after ${BRANCH_QUERY_TIMEOUT_MS}ms (${repoId})`)), BRANCH_QUERY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export interface StatusChangeContext {
   source?: 'invalidation' | 'auto';
@@ -2304,24 +2322,44 @@ export class WorkspaceGitManager implements vscode.Disposable {
 
   async getAllBranches(options?: { force?: boolean; repoIds?: string[] }): Promise<BranchInfo[]> {
     const targetRepoIds = options?.repoIds && options.repoIds.length > 0 ? new Set(options.repoIds) : undefined;
-    const allBranchesResults = await Promise.allSettled(Array.from(this.repos.values()).map(r => {
-      const shouldForce = options?.force && (!targetRepoIds || targetRepoIds.has(r.repoId));
-      return r instanceof SvnService ? r.getBranches({ force: shouldForce }) : r.getBranches();
+    const repoEntries = Array.from(this.repos.values());
+    const allBranchesResults = await Promise.all(repoEntries.map(async repo => {
+      const shouldForce = options?.force && (!targetRepoIds || targetRepoIds.has(repo.repoId));
+      try {
+        const branches = await withBranchQueryTimeout(
+          repo instanceof SvnService ? repo.getBranches({ force: shouldForce }) : repo.getBranches(),
+          repo.repoId,
+        );
+        return { repo, branches, succeeded: true };
+      } catch (error) {
+        this.logger.warn('WorkspaceGitManager', 'Branch query failed or timed out', {
+          repoId: repo.repoId,
+          error: String(error),
+        });
+        return { repo, branches: [] as BranchInfo[], succeeded: false };
+      }
     }));
 
-    const branches = allBranchesResults
-      .filter((r): r is PromiseFulfilledResult<BranchInfo[]> => r.status === 'fulfilled')
-      .flatMap(r => r.value);
+    const branches = allBranchesResults.flatMap(result => result.branches);
+    const reposWithBranchResults = new Set(
+      allBranchesResults
+        .filter(result => result.succeeded)
+        .map(result => result.repo.repoId),
+    );
 
     // Merge in getCurrentBranch results: they carry isHead:true and detachedTag.
     // In normal HEAD, getBranches() already marks the right branch isHead:true so
     // the current branch entry is a duplicate. Only query getCurrentBranch() for repositories
     // that did not have an isHead entry returned by getBranches() (e.g. detached HEAD on a tag).
     const reposWithHead = new Set(branches.filter(b => b.isHead).map(b => b.repoId));
-    const reposNeedingCurrent = Array.from(this.repos.values()).filter(r => !reposWithHead.has(r.repoId));
+    const reposNeedingCurrent = repoEntries.filter(r =>
+      reposWithBranchResults.has(r.repoId) && !reposWithHead.has(r.repoId)
+    );
 
     if (reposNeedingCurrent.length > 0) {
-      const currentBranches = await Promise.allSettled(reposNeedingCurrent.map(r => r.getCurrentBranch()));
+      const currentBranches = await Promise.allSettled(reposNeedingCurrent.map(r =>
+        withBranchQueryTimeout(r.getCurrentBranch(), r.repoId)
+      ));
       for (const r of currentBranches) {
         if (r.status !== 'fulfilled') continue;
         const cur = r.value;

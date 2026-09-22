@@ -195,6 +195,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
   private pendingFilterRepoId: string | null = null;
   private pendingFilterBranch: string | null = null;
   private pendingAllBranchesTask: Promise<BranchInfo[]> | null = null;
+  private branchLoadSequence = 0;
 
   setCommitPanel(provider: CommitPanelProvider): void {
     this.commitPanel = provider;
@@ -857,6 +858,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         // later commit pages. Avoid repeating branch/tag CLI calls and theme
         // parsing on every scroll batch.
         if (msg.skip === 0) {
+          const branchLoadSequence = ++this.branchLoadSequence;
           // Immediately post available repos and known cached branches so the
           // Webview initializes instantly (store.initialized = true) without
           // waiting for remote SVN branch ls CLI round-trips.
@@ -881,9 +883,30 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
                 for (const meta of repos) {
                   void this.refreshTags(meta.id, undefined, false).catch(() => {});
                 }
+              } else if (branchLoadSequence === this.branchLoadSequence) {
+                // A repository change superseded this request. Do not leave the
+                // partial snapshot's spinner alive while the newer request is
+                // running (or if it has no metadata change to publish).
+                const currentRepos = this.getVisibleRepos();
+                this.post({
+                  type: 'LOG_INIT_DATA',
+                  repos: currentRepos,
+                  branches: this.getCachedFilteredBranches(currentRepos),
+                  isInitialPartial: false,
+                });
               }
             } catch (error) {
               this.logger.error('GitLog', 'Failed to load branches on commit request', error);
+              if (branchLoadSequence !== this.branchLoadSequence) return;
+              // The partial snapshot is useful even when one repository is
+              // unavailable, but it must not leave the sidebar loading forever.
+              const currentRepos = this.getVisibleRepos();
+              this.post({
+                type: 'LOG_INIT_DATA',
+                repos: currentRepos,
+                branches: this.getCachedFilteredBranches(currentRepos),
+                isInitialPartial: false,
+              });
             }
           })();
         }
