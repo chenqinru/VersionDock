@@ -289,6 +289,7 @@ Use the Status Bar branch menu for fast project-wide actions such as updating al
 | `versiondock.repositoryScanMaxDepth` | `1` | Maximum depth of workspace subfolders to scan for Git repositories. `0` only checks workspace folders. |
 | `versiondock.repositoryScanIgnoredFolders` | `["node_modules"]` | Folder names or workspace-relative paths skipped while scanning for nested Git repositories. |
 | `versiondock.autoRefreshInterval` | `0` | Auto-refresh interval in seconds. `0` disables interval refresh and uses file watchers only. |
+| `versiondock.scrollbarVisibility` | `"system"` | Scrollbars across all VersionDock panels/pages: `system` preserves existing behavior, `auto` shows on hover/scroll, `visible` always shows when content overflows. Forced modes overlay content without reserving layout space, and follow VS Code's Modern UI sizing, animation timing and reduced-motion settings. Changes apply immediately. |
 | `versiondock.changesViewMode` | `"simplified"` | How to display changed files: `simplified`, `changelists`, or `vscode`. Chosen via QuickPick on first install. |
 | `versiondock.gitAnnotations.enabled` | `true` | Enable inline Git blame annotations in the editor. |
 | `versiondock.gitGhostText.enabled` | `true` | Enable inline Git ghost text in the editor. |
@@ -337,6 +338,8 @@ out/                      Built extension and webview bundles
 ```
 
 ## 🔧 Development Scripts
+
+`npm run test:scrollbars` checks scrollbar configuration and Webview lifecycle. `npm run test:scrollbars:browser` runs real Chromium interaction tests for overlays, zero reserved gutter, dragging, animations, nested clipping and modal behavior. The browser suite requires Node.js 22+ and an installed Chromium browser; set `CHROME_PATH` when it is not in a default location. It uses an isolated temporary browser profile.
 
 | Script | Description |
 |:--|:--|

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import * as path from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
 import { getWebviewHtml } from '../utils/webviewHtml';
@@ -313,6 +314,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       ],
     };
 
+    this.disposables.push(registerWebviewScrollbars(webviewView));
     webviewView.webview.html = getWebviewHtml(
       webviewView.webview,
       this.extensionUri,

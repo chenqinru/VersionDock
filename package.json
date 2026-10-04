@@ -836,6 +836,18 @@
             "default": "comfortable",
             "description": "%configuration.layoutDensity.description%"
           },
+          "versiondock.scrollbarVisibility": {
+            "order": 10.6,
+            "type": "string",
+            "enum": ["system", "auto", "visible"],
+            "enumDescriptions": [
+              "%configuration.scrollbarVisibility.enum.system%",
+              "%configuration.scrollbarVisibility.enum.auto%",
+              "%configuration.scrollbarVisibility.enum.visible%"
+            ],
+            "default": "system",
+            "description": "%configuration.scrollbarVisibility.description%"
+          },
           "versiondock.defaultCommitAction": {
             "order": 11,
             "type": "string",
@@ -1369,6 +1381,8 @@
     "typecheck": "npm run typecheck:host && npm run typecheck:webview",
     "typecheck:host": "tsc --noEmit --composite false --incremental false -p tsconfig.host.json",
     "typecheck:webview": "tsc --noEmit --incremental false -p tsconfig.webview.json",
+    "test:scrollbars": "node scripts/test-webview-scrollbars.mjs",
+    "test:scrollbars:browser": "node scripts/test-webview-scrollbar-overlays.mjs",
     "bump": "node scripts/bump-version.mjs",
     "version:bump": "node scripts/bump-version.mjs"
   },

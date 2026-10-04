@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getWebviewScrollbarHead, registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import { generateNonce } from '../utils/webviewHtml';
 import { loadIconTheme, type IconThemeData } from '../utils/IconThemeService';
 import { getWebviewI18nPayload, t, type WebviewI18nPayload } from '../utils/l10n';
@@ -354,6 +355,7 @@ async function createCommitDetailPanel(
       ],
     }
   );
+  registerWebviewScrollbars(panel);
   panel.iconPath = new vscode.ThemeIcon('git-commit');
   const panelKey = singleCommitDetailKey(repoId, hash);
   singleCommitDetailPanels.set(panelKey, panel);
@@ -783,6 +785,7 @@ async function createAggregatedCommitDetailPanel(
       ],
     }
   );
+  registerWebviewScrollbars(panel);
   panel.iconPath = new vscode.ThemeIcon('git-commit');
   const panelKey = aggregatedCommitDetailKey(commits, options.title ?? 'selection');
   aggregatedCommitDetailPanels.set(panelKey, panel);
@@ -1905,6 +1908,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, data: PanelData
     .ctx-item.danger { color: var(--vscode-errorForeground); }
 
   </style>
+  ${getWebviewScrollbarHead(nonce)}
 </head>
 <body data-density="${escHtml(data.layoutDensity)}">
   <div class="toolbar">
@@ -2001,7 +2005,7 @@ ${leftPanelContent}
   })}</script>
 
   <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
+    const vscode = window.__VERSIONDOCK_VSCODE_API__ || acquireVsCodeApi();
 
     // ── Load all dynamic data from JSON data block ──
     const __d = JSON.parse(document.getElementById('__data').textContent);

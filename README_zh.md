@@ -139,6 +139,18 @@ npm run watch
 
 ---
 
+## ⚙️ 滚动条设置
+
+在 VS Code 设置中搜索 `versiondock.scrollbarVisibility`，控制 VersionDock 所有面板和页面的滚动条，包括独立窗口、提交详情、编辑提交信息、AI 页面和合并编辑器：
+
+- `system`（默认）：跟随系统，保留现有滚动条行为。
+- `auto`：自动隐藏，鼠标悬停或滚动时显示，其余时间隐藏。
+- `visible`：始终显示，内容溢出时保持可见。
+
+修改后即时生效，无需重启 VS Code。此设置仅控制 VersionDock 自己的页面；VS Code 原生树视图、编辑器和差异编辑器由 VS Code 控制。
+
+`auto` 和 `visible` 使用覆盖在内容上方的浮动滚动条，不占用布局空间，并跟随 VS Code 的 Modern UI 开关调整粗细和圆角。自动模式采用与 VS Code 面板一致的淡入淡出时间，并遵循“减少动画”设置；`system` 保留原有系统行为。
+
 ## 🌐 生态系统
 
 如果您需要一个无需打开 VS Code 即可独立运行的高性能桌面端应用：

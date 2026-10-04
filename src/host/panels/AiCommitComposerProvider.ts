@@ -1,5 +1,6 @@
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import type { AiCommitComposerService } from '../aiCommitComposer/AiCommitComposerService';
 import { GitComposerExecutor, type PreparedGitComposerSession } from '../aiCommitComposer/GitComposerExecutor';
 import type { ComposerApplyResult, ComposerChangeUnit, ComposerCommitGroup, ComposerPreparedSource } from '../aiCommitComposer/types';
@@ -112,6 +113,7 @@ export class AiCommitComposerProvider implements vscode.Disposable {
       this.cancelAllMessageGenerations();
       if (this.panel === panel) this.panel = undefined;
     });
+    registerWebviewScrollbars(panel);
     panel.webview.html = getWebviewHtml(panel.webview, this.extensionUri, 'aiCommitComposer', t('AI Commit Composer'));
   }
 

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import type { AiCodeReviewService } from '../aiCodeReview/AiCodeReviewService';
 import { buildCodeReviewContext, fingerprintDiff } from '../aiCodeReview/buildCodeReviewContext';
 import type { CodeReviewCandidate, CodeReviewContext, CodeReviewFinding } from '../aiCodeReview/types';
@@ -48,6 +49,7 @@ export class AiCodeReviewProvider implements vscode.Disposable {
       this.cancel();
       if (this.panel === panel) this.panel = undefined;
     });
+    registerWebviewScrollbars(panel);
     panel.webview.html = getWebviewHtml(panel.webview, this.extensionUri, 'aiCodeReview', t('AI Code Review'));
   }
 

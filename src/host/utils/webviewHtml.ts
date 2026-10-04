@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { getWebviewI18nPayload, t } from './l10n';
 import { loadColorTheme } from './ColorThemeService';
+import { getWebviewScrollbarHead } from './webviewScrollbars';
 
 export function generateNonce(): string {
   return crypto.randomBytes(16).toString('base64');
@@ -46,6 +47,7 @@ export function getWebviewHtml(
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <link rel="stylesheet" href="${codiconCssUri}">
   <title>${t(title)}</title>
+  ${getWebviewScrollbarHead(nonce)}
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; padding: 0; overflow: hidden; height: 100vh; }

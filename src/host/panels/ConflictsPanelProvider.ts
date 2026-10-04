@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import * as path from 'path';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
 import { getWebviewHtml } from '../utils/webviewHtml';
@@ -50,6 +51,7 @@ export class ConflictsPanelProvider implements vscode.Disposable {
     );
     panel.iconPath = new vscode.ThemeIcon('warning');
 
+    registerWebviewScrollbars(panel);
     panel.webview.html = getWebviewHtml(panel.webview, this.extensionUri, 'conflicts', t('Conflicts'));
     const configWatcher = vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('workbench.iconTheme') || e.affectsConfiguration('workbench.colorTheme')) {

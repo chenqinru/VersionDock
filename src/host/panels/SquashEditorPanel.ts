@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getWebviewScrollbarHead, registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import type { AiCommitMessageEditorGenerator } from '../aiCommitMessage/types';
 import { generateNonce } from '../utils/webviewHtml';
 import { getWebviewI18nPayload, t } from '../utils/l10n';
@@ -29,6 +30,7 @@ export async function openSquashEditor(
       vscode.ViewColumn.One,
       { enableScripts: true, retainContextWhenHidden: false }
     );
+    registerWebviewScrollbars(panel);
     panel.iconPath = new vscode.ThemeIcon('fold');
 
     const codiconUri = panel.webview.asWebviewUri(
@@ -278,6 +280,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
       opacity: 0.45; cursor: default;
     }
   </style>
+  ${getWebviewScrollbarHead(nonce)}
 </head>
 <body>
   <div class="header">
@@ -324,7 +327,7 @@ function getHtml(nonce: string, csp: string, codiconUri: string, locale: string,
     </button>
   </div>
   <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
+    const vscode = window.__VERSIONDOCK_VSCODE_API__ || acquireVsCodeApi();
     const ta = document.getElementById('msg');
     const confirmBtn = document.getElementById('confirmBtn');
     const aiBtn = document.getElementById('aiBtn');

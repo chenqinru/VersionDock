@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { t } from '../utils/l10n';
 import type { CommitToHostMsg, HostToCommitMsg, HostToLogMsg, LogToHostMsg } from '../types/messages';
@@ -79,6 +80,7 @@ export class UndockedPanelProvider implements vscode.Disposable {
     );
     this.panel.iconPath = new vscode.ThemeIcon('source-control');
 
+    registerWebviewScrollbars(this.panel);
     this.panel.webview.html = getWebviewHtml(
       this.panel.webview,
       this.extensionUri,

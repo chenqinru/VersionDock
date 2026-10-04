@@ -8,7 +8,9 @@ let _api: ReturnType<typeof acquireVsCodeApi> | undefined;
 
 export function getVsCodeApi(): ReturnType<typeof acquireVsCodeApi> {
   if (!_api) {
-    _api = acquireVsCodeApi();
+    const hostWindow = window as Window & { __VERSIONDOCK_VSCODE_API__?: ReturnType<typeof acquireVsCodeApi> };
+    _api = hostWindow.__VERSIONDOCK_VSCODE_API__ ?? acquireVsCodeApi();
+    hostWindow.__VERSIONDOCK_VSCODE_API__ = _api;
   }
   return _api;
 }

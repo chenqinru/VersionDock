@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import * as path from 'path';
 import { getWebviewHtml } from '../utils/webviewHtml';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
@@ -158,6 +159,7 @@ export class MergeEditorProvider implements vscode.Disposable {
 
     // Register the host listener before assigning HTML so a very fast webview
     // cannot send MERGE_READY before the extension is listening.
+    registerWebviewScrollbars(panel);
     panel.webview.html = getWebviewHtml(
       panel.webview,
       this.extensionUri,

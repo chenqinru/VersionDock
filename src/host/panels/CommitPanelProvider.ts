@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import * as path from 'path';
 import * as fs from 'fs';
 import { AsyncLocalStorage } from 'async_hooks';
@@ -470,6 +471,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
       ],
     };
 
+    this.viewListeners.push(registerWebviewScrollbars(webviewView));
     webviewView.webview.html = getWebviewHtml(
       webviewView.webview,
       this.extensionUri,
