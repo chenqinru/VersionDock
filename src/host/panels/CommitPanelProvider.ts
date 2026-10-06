@@ -39,7 +39,6 @@ import { buildFairContext, getFairDetailBlockTokenBudget, type FairContextGroup 
 import { getContextTokenBudget } from '../ai/inputTokenBudget';
 import { isRemoteRepositoryCancelled } from '../remote/types';
 import { runPushWithProtection } from '../utils/pushProtection';
-import { withGitPushProgress } from '../utils/pushProgress';
 import type { UpdateSummaryService, TrackedUpdateResult } from '../update/UpdateSummaryService';
 import type { BranchStatusBar } from '../ui/BranchStatusBar';
 import { checkCommitSafety, isSensitivePath } from '../utils/commitSafetyCheck';
@@ -5845,74 +5844,6 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           }
         } catch (e: unknown) {
           this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-        }
-        break;
-      }
-
-      case 'SYNC_PUSH_TAGS': {
-        const repo = this.manager.getRepo(msg.repoId);
-        if (!repo || repo.kind === 'svn') {
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found'), repoId: msg.repoId });
-          return;
-        }
-        const repoMeta = this.manager.getRepoMeta(msg.repoId);
-        const repoName = repoMeta?.name || path.basename(repo.rootPath) || msg.repoId;
-        try {
-          await withGitPushProgress(
-            repo,
-            msg.remote
-              ? t('VersionDock [{0}]: Pushing tags to {1}…', repoName, msg.remote)
-              : t('VersionDock [{0}]: Pushing tags…', repoName),
-            () => (repo as GitService).pushTags(msg.remote),
-          );
-          vscode.window.showInformationMessage(t('VersionDock [{0}]: tags pushed successfully.', repoName));
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, repoId: msg.repoId });
-        } catch (err: unknown) {
-          vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', repoName, String(err)));
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: String(err), repoId: msg.repoId });
-        }
-        break;
-      }
-
-      case 'SYNC_PUSH_TAGS_MULTI': {
-        const succeededRepoIds: string[] = [];
-        const errors: string[] = [];
-        for (const repoId of msg.repoIds) {
-          const repo = this.manager.getRepo(repoId);
-          if (!repo || repo.kind === 'svn') continue;
-          const repoMeta = this.manager.getRepoMeta(repoId);
-          const repoName = repoMeta?.name || path.basename(repo.rootPath) || repoId;
-          try {
-            const gitRepo = repo as GitService;
-            await gitRepo.pushTags();
-            succeededRepoIds.push(repoId);
-          } catch (err: unknown) {
-            errors.push(`${repoName}: ${String(err)}`);
-          }
-        }
-        if (errors.length === 0) {
-          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name || msg.repoIds[0]) : undefined;
-          if (singleName) {
-            vscode.window.showInformationMessage(t('VersionDock [{0}]: Tags pushed successfully.', singleName));
-          } else {
-            vscode.window.showInformationMessage(t('VersionDock: tags pushed successfully for all selected repositories.'));
-          }
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: true, handled: true });
-        } else if (succeededRepoIds.length > 0) {
-          vscode.window.showWarningMessage(
-            t('VersionDock: Tags pushed in {0} repositories, {1} failed: {2}', succeededRepoIds.length, errors.length, errors.join('; '))
-          );
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n'), handled: true });
-        } else {
-          const singleName = msg.repoIds.length === 1 ? (this.manager.getRepoMeta(msg.repoIds[0])?.name || msg.repoIds[0]) : undefined;
-          if (singleName) {
-            vscode.window.showErrorMessage(t('VersionDock [{0}]: push tags failed — {1}', singleName, errors[0] ?? ''));
-          } else {
-            vscode.window.showErrorMessage(
-              t('VersionDock: Push tags failed in all {0} repositories: {1}', errors.length, errors.join('; '))
-            );
-          }
-          this.post({ type: 'COMMIT_OP_RESULT', requestId: msg.requestId, ok: false, error: errors.join('\n'), handled: true });
         }
         break;
       }

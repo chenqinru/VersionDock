@@ -3903,32 +3903,46 @@ export class GitService {
     await this.runStatusSensitiveOperation(() => this.git.raw(['checkout', '-b', name, hash]), 'checkout', name);
   }
 
-  async createTag(name: string, hash: string): Promise<void> {
+  async createTag(name: string, hash: string, message?: string): Promise<void> {
     return this.withWriteLock(async () => {
-    if (!name || name.startsWith('-') || name.includes('\0')) {
-      throw new Error(`Invalid Git tag name: ${name}`);
-    }
-    await this.git.raw(['check-ref-format', `refs/tags/${name}`]);
-    await this.git.raw(['tag', name, this.safeRevisionArg(hash)]);
+      await this.validateTagName(name);
+      const commit = await this.resolveTagCommit(hash);
+      await this.git.raw(message === undefined ? ['tag', '--no-sign', name, commit] : ['tag', '--no-sign', '-a', name, commit, '-m', message]);
     });
   }
 
-  async getTags(): Promise<Array<{ name: string; hash: string; date: string }>> {
+  async validateTagName(name: string): Promise<void> {
+    if (!name || name.startsWith('-') || name.includes('\0')) {
+      throw new Error(t('Invalid Git tag name: {0}', name));
+    }
+    const ref = `refs/tags/${name}`;
+    const normalized = await this.git.raw(['check-ref-format', '--normalize', ref]).catch(() => '');
+    if (normalized.trim() !== ref) throw new Error(t('Invalid Git tag name: {0}', name));
+    const refs = await this.git.raw(['for-each-ref', '--format=%(refname)', ref]);
+    const exists = refs.split(/\r?\n/).includes(ref);
+    if (exists) throw new Error(t('Tag "{0}" already exists.', name));
+  }
+
+  async resolveTagCommit(ref: string): Promise<string> {
+    return (await this.git.raw(['rev-parse', '--verify', `${this.safeRevisionArg(ref)}^{commit}`])).trim();
+  }
+
+  async getTags(): Promise<Array<{ name: string; hash: string; date: string; tagType?: 'lightweight' | 'annotated' }>> {
     // Use %(refname:strip=2) instead of %(refname:short) to always strip refs/tags/
     // prefix — %(refname:short) may return "tags/<name>" when a branch with the
     // same name exists, which causes display and matching issues.
     const out = await this.git.raw([
       'tag', '--sort=-creatordate',
-      '--format=%(refname:strip=2)%09%(objectname:short)%09%(creatordate:iso)',
-    ]).catch(() => '');
+      '--format=%(refname:strip=2)%09%(objectname)%09%(objecttype)%09%(creatordate:iso)',
+    ]);
     return out.trim().split('\n').filter(Boolean).map(line => {
-      const [name, hash, ...dateParts] = line.split('\t');
-      return { name: name.trim(), hash: hash.trim(), date: dateParts.join('\t').trim() };
+      const [name, hash, objectType, ...dateParts] = line.split('\t');
+      return { name: name.trim(), hash: hash.trim(), date: dateParts.join('\t').trim(), tagType: objectType === 'tag' ? 'annotated' : 'lightweight' };
     });
   }
 
   async getTagsForCommit(hash: string): Promise<string[]> {
-    const out = await this.git.raw(['tag', '--points-at', hash]).catch(() => '');
+    const out = await this.git.raw(['tag', '--points-at', this.safeRevisionArg(hash)]);
     return out.trim().split('\n').map(t => t.trim()).filter(Boolean);
   }
 
@@ -3996,7 +4010,12 @@ export class GitService {
   }
 
   async deleteTag(name: string): Promise<void> {
-    return this.withWriteLock(() => this.git.raw(['tag', '-d', '--', name]).then(() => undefined));
+    return this.withWriteLock(async () => {
+      if ((await this.getCurrentBranch()).detachedTag === name) {
+        throw new Error(t('Cannot delete the currently checked out tag locally.'));
+      }
+      await this.git.raw(['tag', '-d', '--', name]);
+    });
   }
 
   async pushTag(name: string, remote: string): Promise<void> {
@@ -4010,7 +4029,8 @@ export class GitService {
   async checkoutTag(name: string): Promise<void> {
     await this.runStatusSensitiveOperation(async () => {
       await this.assertCheckoutAllowed();
-      await this.git.raw(['checkout', '--detach', `refs/tags/${name}`]);
+      const commit = await this.resolveTagCommit(`refs/tags/${name}`);
+      await this.git.raw(['checkout', '--detach', commit]);
       this._pendingDetachedTag = name;
     }, 'checkout', name);
   }
@@ -4018,7 +4038,11 @@ export class GitService {
   async mergeTag(name: string): Promise<void> {
     await this.runStatusSensitiveOperation(async () => {
       try {
-        await this.git.raw(['merge', `refs/tags/${name}`]);
+        const branch = await this.getCurrentBranch();
+        if (branch.detachedTag || branch.detachedHash || branch.name === 'HEAD') {
+          throw new Error(t('Create or checkout a branch before merging a tag.'));
+        }
+        await this.git.raw(['merge', await this.resolveTagCommit(`refs/tags/${name}`)]);
       } finally {
         if (!this.suppressStatusUpdates) await this.refreshStatusAfterOperation();
       }

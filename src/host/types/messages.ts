@@ -257,8 +257,6 @@ export type CommitToHostMsg =
   | { type: 'COMMIT_GET_REMOTES'; requestId: string; repoId: string }
   | { type: 'COMMIT_PUSH_REPO'; requestId: string; repoId: string; remote?: string; force?: boolean }
   | { type: 'COMMIT_PUSH_MULTI'; requestId: string; targets: Array<{ repoId: string; remote?: string }>; force?: boolean }
-  | { type: 'SYNC_PUSH_TAGS'; requestId: string; repoId: string; remote?: string }
-  | { type: 'SYNC_PUSH_TAGS_MULTI'; requestId: string; repoIds: string[] }
   | { type: 'COMMIT_DISCARD_FILE'; requestId: string; repoId: string; path: string }
   | { type: 'COMMIT_DISCARD_FILES'; requestId: string; files: Array<{ repoId: string; path: string }> }
   | { type: 'COMMIT_OPEN_DIFF'; repoId: string; filePath: string; staged: boolean }
@@ -387,6 +385,7 @@ export type CommitToHostMsg =
 export type { IconThemeData };
 
 export interface TagInfo {
+  tagType?: 'lightweight' | 'annotated';
   name: string;
   hash: string;
   date: string;
@@ -415,7 +414,7 @@ export interface RemoteAccountInfo {
 }
 
 export type HostToLogMsg =
-  | { type: 'LOG_INIT_DATA'; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity; isInitialPartial?: boolean; remoteAccounts?: RemoteAccountInfo[] }
+  | { type: 'LOG_INIT_DATA'; tagBusy?: boolean; repos: RepoMeta[]; branches: BranchInfo[]; iconTheme?: IconThemeData; hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity; isInitialPartial?: boolean; remoteAccounts?: RemoteAccountInfo[] }
   | { type: 'LOG_ICON_THEME_UPDATE'; iconTheme: IconThemeData | null }
   | { type: 'LOG_LAYOUT_DENSITY_UPDATE'; layoutDensity: LayoutDensity }
   | { type: 'LOG_APPLY_HISTORY_FILTER'; repoId: string; filePath: string; lineRange?: LineRange }
@@ -425,6 +424,8 @@ export type HostToLogMsg =
   | { type: 'LOG_COMMIT_FILES'; requestId: string; files: Array<{ path: string; status: string; added?: number; removed?: number }>; mergeParentChanges?: MergeParentChange[]; error?: string }
   | { type: 'LOG_BRANCH_OP_RESULT'; requestId: string; ok: boolean; output?: string; error?: string }
   | { type: 'LOG_REFS_UPDATE'; repoId: string; branches: BranchInfo[] }
+  | { type: 'LOG_TAG_WORKFLOW_STATE'; busy: boolean }
+  | { type: 'LOG_TAG_WORKFLOW_RESULT'; requestId: string; result: import('./tags').TagWorkflowResult }
   | { type: 'LOG_TAGS_UPDATE'; repoId: string; tags: TagInfo[] }
   | { type: 'LOG_COMMIT_TAGS_RESULT'; requestId: string; tags: string[] }
   | { type: 'LOG_REMOTES_RESULT'; requestId: string; remotes: string[]; error?: string }
@@ -486,19 +487,16 @@ export type LogToHostMsg =
   | { type: 'LOG_UNDO_COMMIT'; requestId: string; repoId: string }
   | { type: 'LOG_EDIT_COMMIT_MESSAGE'; requestId: string; repoId: string; hash: string; currentMessage: string }
   | { type: 'LOG_NEW_BRANCH_FROM_COMMIT'; requestId: string; repoId: string; hash: string }
+  | { type: 'LOG_TAG_WORKFLOW'; requestId: string; request: import('./tags').TagWorkflowRequest }
   | { type: 'LOG_CREATE_TAG'; requestId: string; repoId: string; hash: string }
-  | { type: 'LOG_DELETE_TAG'; requestId: string; repoId: string; tagName: string }
   | { type: 'LOG_DELETE_TAG_MULTI'; requestId: string; repoIds: string[]; tagName: string }
-  | { type: 'LOG_PUSH_TAG'; requestId: string; repoId: string; tagName: string; remote: string }
   | { type: 'LOG_CHECKOUT_TAG'; requestId: string; repoId: string; tagName: string }
-  | { type: 'LOG_MERGE_TAG'; requestId: string; repoId: string; tagName: string }
   | { type: 'LOG_MERGE_TAG_MULTI'; requestId: string; repoIds: string[]; tagName: string }
   | { type: 'LOG_REQUEST_COMMIT_TAGS'; requestId: string; repoId: string; hash: string }
   | { type: 'LOG_REQUEST_TAGS'; repoId: string }
   | { type: 'LOG_MANAGE_COMMIT_TAGS'; repoId: string; hash: string; currentBranch: string }
   | { type: 'LOG_RESET_TO_PICK'; repoId: string; hash: string }
   | { type: 'LOG_PUSH_PICK'; repoId: string }
-  | { type: 'LOG_PUSH_TAG_PICK'; repoId: string; tagName: string }
   | { type: 'LOG_REQUEST_COMMIT_BRANCHES'; requestId: string; repoId: string; hash: string }
   | { type: 'LOG_REQUEST_COMMIT_MESSAGE'; requestId: string; repoId: string; hash: string }
   | { type: 'LOG_SHOW_BRANCH_OPTIONS'; repoId: string; branchName: string }

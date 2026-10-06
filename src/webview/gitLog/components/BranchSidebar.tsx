@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, forwardRef } from 'react';
+import type { TagWorkflowRequest } from '../../../host/types/tags';
 import type { BranchInfo, RepoMeta, TagInfo } from '../../shared/types';
 import { isPrimaryBranch } from '../../shared/branchUtils';
 import { Codicon } from '../../shared/Codicon';
@@ -33,7 +34,9 @@ interface Props {
   onPush: (repoId: string) => void;
   onCheckoutTag: (repoIds: string[], tagName: string) => void;
   onMergeTag: (repoIds: string[], tagName: string) => void;
-  onPushTag: (repoId: string, tagName: string) => void;
+  onPushTag: (repoIds: string[], tagName: string) => void;
+  onTagAction: (request: TagWorkflowRequest) => void;
+  tagBusy: boolean;
   onDeleteTag: (repoIds: string[], tagName: string) => void;
   onCollapse: () => void;
 }
@@ -120,6 +123,7 @@ interface MergedTag {
   vcsKind: 'git' | 'svn';
   name: string;
   repoIds: string[];
+  instances: TagInfo[];
 }
 
 function buildMergedTags(tags: TagInfo[], repoKindMap: Record<string, 'git' | 'svn'>): MergedTag[] {
@@ -130,8 +134,9 @@ function buildMergedTags(tags: TagInfo[], repoKindMap: Record<string, 'git' | 's
     const existing = map.get(key);
     if (existing) {
       if (!existing.repoIds.includes(t.repoId)) existing.repoIds.push(t.repoId);
+      existing.instances.push(t);
     } else {
-      map.set(key, { key, vcsKind, name: t.name, repoIds: [t.repoId] });
+      map.set(key, { key, vcsKind, name: t.name, repoIds: [t.repoId], instances: [t] });
     }
   }
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -141,7 +146,7 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
   repos, branches, tags, loading, filter, selectedBranchFilter, onFilterChange, onBranchFilterSelect,
   selectedBranchRepoIds, selectedRepoId, onRepoFilterSelect,
   onCheckout, onMerge, onRebase, onCompareWithCurrent, onShowWorktreeDiff, onDelete, onFetchRepo: _onFetchRepo, onPull, onPush,
-  onCheckoutTag, onMergeTag, onPushTag, onDeleteTag, onCollapse,
+  onCheckoutTag, onMergeTag, onPushTag, onDeleteTag, onTagAction, tagBusy, onCollapse,
 }, ref) {
   const [collapsed, setCollapsed] = useState<Set<SectionKey>>(() => {
     const initial = new Set<SectionKey>();
@@ -427,22 +432,29 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
         })}
 
         {/* TAGS section */}
-        {mergedTags.length > 0 && (
+        {repos.length > 0 && (
           <>
-            <div
-              role="button"
-              tabIndex={0}
-              aria-expanded={!collapsed.has('tags')}
-              className="versiondock-sidebar-section-header"
-              style={styles.sectionHeader}
-              onClick={() => toggle('tags')}
-              onKeyDown={(e) => handleHeaderKeyDown('tags', e)}
-            >
-              <span style={styles.chevron}>{collapsed.has('tags') ? '▶' : '▼'}</span>
-              <Codicon name="tag" style={styles.sectionIcon} />
-              <span style={styles.sectionLabel}>{t('Tags')}</span>
-              <span style={styles.count}>{mergedTags.length}</span>
+            <div className="versiondock-sidebar-section-header" style={styles.sectionHeader} onClick={() => toggle('tags')}>
+              <button aria-expanded={!collapsed.has('tags')} title={t('Tags')} style={styles.sectionToggle}>
+                <span style={styles.chevron}>{collapsed.has('tags') ? '▶' : '▼'}</span>
+                <Codicon name="tag" style={styles.sectionIcon} />
+                <span style={styles.sectionLabel}>{t('Tags')}</span>
+              </button>
+              {repos.some(repo => repo.kind !== 'svn') && (
+                <button className="versiondock-sidebar-tag-actions" data-top-action-btn="" style={styles.sectionAction} disabled={tagBusy} title={t('New Tag...')} aria-label={t('New Tag...')}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onTagAction({ action: 'create', repoIds: repos.filter(repo => repo.kind !== 'svn').map(repo => repo.id), preferredRepoId: selectedRepoId ?? undefined });
+                  }}>
+                  <Codicon name="add" style={{ fontSize: '14px' }} />
+                </button>
+              )}
+              <span style={{ ...styles.count, marginLeft: 'auto' }}>{mergedTags.length}</span>
             </div>
+            {!collapsed.has('tags') && mergedTags.length === 0 && <div style={{ padding: '6px 12px', fontSize: '11px', opacity: 0.7, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+              <Codicon name="tag" style={{ fontSize: '13px', flexShrink: 0 }} />
+              <span>{filter ? t('No matching tags') : t('No tags yet')}</span>
+            </div>}
             {!collapsed.has('tags') && mergedTags.map(mt => (
               <TagRow
                 key={mt.key}
@@ -511,10 +523,12 @@ export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSi
           y={tagContextMenu.y}
           isSvn={tagContextMenu.mergedTag.vcsKind === 'svn'}
           canDelete={!activeDetachedTags.has(tagContextMenu.mergedTag.key)}
+          busy={tagBusy}
+          canMerge={tagContextMenu.mergedTag.repoIds.some(repoId => branches.some(branch => branch.repoId === repoId && branch.isHead && !branch.detachedTag && !branch.detachedHash && branch.name !== 'HEAD'))}
           onClose={() => setTagContextMenu(null)}
           onCheckout={() => { onCheckoutTag(tagContextMenu.mergedTag.repoIds, tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
           onMerge={() => { onMergeTag(tagContextMenu.mergedTag.repoIds, tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
-          onPush={() => { onPushTag(tagContextMenu.mergedTag.repoIds[0], tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
+          onPush={() => { onPushTag(tagContextMenu.mergedTag.repoIds, tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
           onDelete={() => { onDeleteTag(tagContextMenu.mergedTag.repoIds, tagContextMenu.mergedTag.name); setTagContextMenu(null); }}
         />
       )}
@@ -644,7 +658,7 @@ function TagRow({ mergedTag, repoColorMap, multiRepo, isSvn, showVcsBadge, isAct
         event.preventDefault();
         onClick();
       }}
-      title={`${t('Tag: {0}', mergedTag.name)}${isActive ? ` (${t('current')})` : ''}\n${t('Right-click for actions')}`}
+      title={`${t('Tag: {0}', mergedTag.name)}${isActive ? ` (${t('current')})` : ''}\n${mergedTag.instances.map(tag => `${baseNameFromPath(tag.repoId.split('::')[0])}: ${tag.tagType ? t(tag.tagType === 'annotated' ? 'Annotated tag' : 'Lightweight tag') : tag.name}`).join('\n')}\n${t('Right-click for actions')}`}
     >
       <Codicon
         name="tag"
@@ -690,12 +704,26 @@ function useClampedPosition(x: number, y: number) {
 
 function useContextMenuDismiss(menuRef: React.RefObject<HTMLElement | null>, onClose: () => void) {
   useEffect(() => {
+    const previousFocus = document.activeElement;
+    const menu = menuRef.current;
+    const enabledItems = () => Array.from(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])') ?? []);
+    enabledItems()[0]?.focus();
     const outsideHandler = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         onClose();
       }
     };
-    const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) || !menu?.contains(document.activeElement)) return;
+      const items = enabledItems();
+      if (!items.length) return;
+      e.preventDefault();
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1
+        : (index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[next].focus();
+    };
     const blurHandler = () => onClose();
     const visibilityHandler = () => {
       if (document.visibilityState !== 'visible') onClose();
@@ -706,6 +734,8 @@ function useContextMenuDismiss(menuRef: React.RefObject<HTMLElement | null>, onC
     window.addEventListener('blur', blurHandler);
     window.addEventListener('pagehide', blurHandler);
     return () => {
+      if ((menu?.contains(document.activeElement) || document.activeElement === document.body)
+        && previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
       document.removeEventListener('mousedown', outsideHandler, true);
       document.removeEventListener('keydown', keyHandler);
       document.removeEventListener('visibilitychange', visibilityHandler);
@@ -715,7 +745,7 @@ function useContextMenuDismiss(menuRef: React.RefObject<HTMLElement | null>, onC
   }, [menuRef, onClose]);
 }
 
-type MenuItem = { icon: string; label: string; action: () => void; danger?: boolean } | { sep: true };
+type MenuItem = { icon: string; label: string; action: () => void; danger?: boolean; disabled?: boolean } | { sep: true };
 
 const INTERACTION_STYLE = `
 .versiondock-sidebar-row[data-selected="false"]:hover {
@@ -728,6 +758,14 @@ const INTERACTION_STYLE = `
   background: var(--vscode-toolbar-hoverBackground) !important;
   opacity: 1 !important;
 }
+.versiondock-sidebar-tag-actions:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.versiondock-sidebar-tag-actions:disabled:hover {
+  background: transparent !important;
+  opacity: 0.4 !important;
+}
 [data-context-menu-item]:hover {
   background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)) !important;
 }
@@ -739,13 +777,14 @@ function MenuItemRow({ item }: { item: MenuItem }) {
     <div
       data-context-menu-item=""
       role="menuitem"
-      tabIndex={0}
-      style={styles.menuItem(item.danger)}
-      onClick={item.action}
+      tabIndex={item.disabled ? -1 : 0}
+      aria-disabled={item.disabled}
+      style={{ ...styles.menuItem(item.danger), opacity: item.disabled ? 0.45 : 1 }}
+      onClick={() => { if (!item.disabled) item.action(); }}
       onKeyDown={event => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
-        item.action();
+        if (!item.disabled) item.action();
       }}
     >
       <Codicon name={item.icon} style={styles.menuIcon} />
@@ -754,34 +793,22 @@ function MenuItemRow({ item }: { item: MenuItem }) {
   );
 }
 
-function TagContextMenu({ mergedTag, x, y, isSvn, canDelete, onClose, onCheckout, onMerge, onPush, onDelete }: {
-  mergedTag: MergedTag;
-  x: number; y: number;
-  isSvn: boolean;
-  canDelete: boolean;
-  onClose: () => void;
-  onCheckout: () => void;
-  onMerge: () => void;
-  onPush: () => void;
-  onDelete: () => void;
+function TagContextMenu({ mergedTag, x, y, isSvn, canDelete, busy, canMerge, onClose, onCheckout, onMerge, onPush, onDelete }: {
+  mergedTag: MergedTag; x: number; y: number; isSvn: boolean; canDelete: boolean; busy: boolean; canMerge: boolean;
+  onClose: () => void; onCheckout: () => void; onMerge: () => void; onPush: () => void; onDelete: () => void;
 }) {
   const { ref, pos } = useClampedPosition(x, y);
   useContextMenuDismiss(ref, onClose);
   const items: MenuItem[] = [
-    { icon: 'arrow-right', label: isSvn ? t('Switch to "{0}"', mergedTag.name) : t('Checkout "{0}"', mergedTag.name), action: onCheckout },
+    { icon: 'arrow-right', label: isSvn ? t('Switch to "{0}"', mergedTag.name) : t('Checkout "{0}"', mergedTag.name), action: onCheckout, disabled: !isSvn && busy },
     { sep: true },
-    { icon: 'git-merge', label: isSvn ? t('Merge tag into working copy') : t('Merge into current'), action: onMerge },
+    { icon: 'git-merge', label: isSvn ? t('Merge tag into working copy') : t('Merge into current'), action: onMerge, disabled: !isSvn && (!canMerge || busy) },
     ...(!isSvn ? [
-      { icon: 'cloud-upload', label: t('Push to remote...'), action: onPush },
+      { icon: 'cloud-upload', label: t('Push to remote...'), action: onPush, disabled: busy },
     ] satisfies MenuItem[] : []),
-    ...(canDelete ? [{ sep: true as const }, { icon: 'trash', label: isSvn ? t('Delete SVN tag') : t('Delete tag'), action: onDelete, danger: true }] : []),
+    ...(canDelete ? [{ sep: true as const }, { icon: 'trash', label: isSvn ? t('Delete SVN tag') : t('Delete tag'), action: onDelete, danger: true, disabled: !isSvn && busy }] : []),
   ];
-
-  return (
-    <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)} onContextMenu={e => e.preventDefault()}>
-      {items.map((item, i) => <MenuItemRow key={i} item={item} />)}
-    </div>
-  );
+  return <div ref={ref} role="menu" style={styles.contextMenu(pos.left, pos.top)} onContextMenu={event => event.preventDefault()}>{items.map((item, index) => <MenuItemRow key={index} item={item} />)}</div>;
 }
 
 function ContextMenu({ merged, x, y, isSvn, isRemote, canDelete, canCompare, onClose, onCheckout, onCompareWithCurrent, onShowWorktreeDiff, onMerge, onRebase, onDelete, onPull, onPush }: {
@@ -983,6 +1010,34 @@ const styles = {
     borderBottom: '1px solid var(--vscode-panel-border)',
     color: 'var(--vscode-foreground)',
   },
+  sectionToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    flex: '0 1 auto',
+    minWidth: 0,
+    padding: 0,
+    margin: 0,
+    border: 'none',
+    background: 'none',
+    color: 'inherit',
+    font: 'inherit',
+    textAlign: 'left',
+    cursor: 'pointer',
+  } as React.CSSProperties,
+  sectionAction: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    padding: '3px',
+    margin: '-3px 0',
+    border: 'none',
+    borderRadius: '3px',
+    background: 'transparent',
+    color: 'var(--vscode-descriptionForeground)',
+    cursor: 'pointer',
+  } as React.CSSProperties,
   vcsBadge: (kind: 'git' | 'svn'): React.CSSProperties => ({
     fontSize: '9px',
     fontWeight: 'bold' as const,

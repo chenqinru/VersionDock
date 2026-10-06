@@ -1,6 +1,7 @@
 // Mirror of src/host/types/git.ts for use in webview (no Node.js imports)
 
 export interface TagInfo {
+  tagType?: 'lightweight' | 'annotated';
   name: string;
   hash: string;
   date: string;

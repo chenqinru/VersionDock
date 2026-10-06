@@ -174,6 +174,8 @@ export function registerCommands(
       return branchStatusBar.showMenu(repoId);
     }),
 
+    vscode.commands.registerCommand('versiondock.manageTagRemotes', (repoId: string) => branchStatusBar.manageTagRemotes(repoId)),
+
     vscode.commands.registerCommand('versiondock.showBranchOptions', (repoId: string, branchName: string) => {
       return branchStatusBar.showBranchOptions(repoId, branchName);
     }),

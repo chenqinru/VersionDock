@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { getGitTagWorkflow } from '../tags/GitTagWorkflow';
+import type { TagWorkflowRequest } from '../types/tags';
 import { registerWebviewScrollbars } from '../utils/webviewScrollbars';
 import * as path from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
@@ -282,6 +284,13 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         this.logger.error('GitLog', 'Failed to synchronize repositories', error);
       });
     };
+    this.managerListeners.push(getGitTagWorkflow(this.manager).onChange((busy, repoIds) => {
+      this.post({ type: 'LOG_TAG_WORKFLOW_STATE', busy });
+      for (const repoId of repoIds) {
+        void this.refreshTags(repoId).catch(error => this.logger.error('GitLog', 'Failed to refresh tags', error));
+      }
+      if (repoIds.length) this.refresh({ repoIds });
+    }));
     this.managerListeners.push(
       this.manager.onBranchChange(scheduleManagerSync),
       this.manager.onReposChange(scheduleManagerSync),
@@ -486,6 +495,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
   private post(msg: HostToLogMsg): void {
     if (msg.type === 'LOG_INIT_DATA') {
+      msg.tagBusy = getGitTagWorkflow(this.manager).busy;
       const m = msg as typeof msg & { hasWorkspaceFolder?: boolean; layoutDensity?: LayoutDensity };
       if (m.hasWorkspaceFolder === undefined) m.hasWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
       if (m.layoutDensity === undefined) m.layoutDensity = this.getLayoutDensity();
@@ -498,7 +508,8 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       || msg.type === 'LOG_AVATAR_CACHE_CLEARED'
       || msg.type === 'LOG_REFRESH'
       || msg.type === 'LOG_REFS_UPDATE'
-      || msg.type === 'LOG_TAGS_UPDATE';
+      || msg.type === 'LOG_TAGS_UPDATE'
+      || msg.type === 'LOG_TAG_WORKFLOW_STATE';
     if (this.replyTarget.getStore() === 'undocked') {
       this.undockedPanel?.postToLog(msg);
       if (broadcast) this.view?.webview.postMessage(msg);
@@ -802,13 +813,38 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
     if (!repo) return;
     const generation = (this.tagSyncGenerations.get(repoId) ?? 0) + 1;
     this.tagSyncGenerations.set(repoId, generation);
-    const rawTags: Array<{ name: string; hash: string; date: string }> = await (repo.kind === 'svn' ? (repo as SvnService).getTags({ force }) : repo.getTags());
+    const rawTags = await (repo.kind === 'svn' ? (repo as SvnService).getTags({ force }) : (repo as GitService).getTags());
     if (this.tagSyncGenerations.get(repoId) !== generation) return;
     if (!this.getVisibleRepos().some(visible => visible.id === repoId)) return;
     this.post({ type: 'LOG_TAGS_UPDATE', repoId, tags: rawTags.map(tag => ({ ...tag, repoId })) });
   }
 
   private async handleMessage(msg: LogToHostMsg): Promise<void> {
+    if (msg.type === 'LOG_TAG_WORKFLOW') {
+      const visibleIds = new Set(this.getVisibleRepos().map(repo => repo.id));
+      const request = { ...msg.request, repoIds: (msg.request.repoIds ?? [...visibleIds]).filter(id => visibleIds.has(id)) };
+      if (request.repoId && !visibleIds.has(request.repoId)) {
+        this.post({ type: 'LOG_TAG_WORKFLOW_STATE', busy: getGitTagWorkflow(this.manager).busy });
+        this.post({ type: 'LOG_TAG_WORKFLOW_RESULT', requestId: msg.requestId, result: { outcome: 'failed', targets: [{ repoId: request.repoId, outcome: 'failed', error: t('Repo not found') }] } });
+        return;
+      }
+      const result = await getGitTagWorkflow(this.manager).run(request);
+      this.post({ type: 'LOG_TAG_WORKFLOW_RESULT', requestId: msg.requestId, result });
+      return;
+    }
+    let tagRequest: TagWorkflowRequest | undefined;
+    switch (msg.type) {
+      case 'LOG_CREATE_TAG': tagRequest = { action: 'create', repoId: msg.repoId, hash: msg.hash }; break;
+      case 'LOG_DELETE_TAG_MULTI': tagRequest = { action: 'delete', repoIds: msg.repoIds, tagName: msg.tagName }; break;
+      case 'LOG_CHECKOUT_TAG': tagRequest = { action: 'checkout', repoId: msg.repoId, tagName: msg.tagName }; break;
+      case 'LOG_MERGE_TAG_MULTI': tagRequest = { action: 'merge', repoIds: msg.repoIds, tagName: msg.tagName }; break;
+    }
+    if (tagRequest && (tagRequest.repoId ? this.manager.getRepo(tagRequest.repoId)?.kind !== 'svn'
+      : tagRequest.repoIds?.every(id => this.manager.getRepo(id)?.kind !== 'svn'))) {
+      const result = await getGitTagWorkflow(this.manager).run(tagRequest);
+      if ('requestId' in msg && msg.requestId) this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: result.outcome === 'success' || result.outcome === 'noop' });
+      return;
+    }
     switch (msg.type) {
       case 'LOG_SET_LAYOUT_DENSITY': {
         await vscode.workspace.getConfiguration('versiondock').update('layoutDensity', msg.density, vscode.ConfigurationTarget.Global);
@@ -860,6 +896,7 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         // later commit pages. Avoid repeating branch/tag CLI calls and theme
         // parsing on every scroll batch.
         if (msg.skip === 0) {
+          this.post({ type: 'LOG_TAG_WORKFLOW_STATE', busy: getGitTagWorkflow(this.manager).busy });
           const branchLoadSequence = ++this.branchLoadSequence;
           // Immediately post available repos and known cached branches so the
           // Webview initializes instantly (store.initialized = true) without
@@ -2425,28 +2462,14 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) return;
         const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
-        const tags = await repo.getTagsForCommit(msg.hash).catch(() => [] as string[]);
+        let tags: string[];
+        try { tags = await repo.getTagsForCommit(msg.hash); }
+        catch (error: unknown) { this.showOperationError(error, t('Tag operation failed: {0}', String(error)), repoName); return; }
         if (tags.length === 0) {
           vscode.window.showInformationMessage(t('VersionDock [{0}]: No tags on this commit.', repoName));
           return;
         }
         await this.showManageCommitTagsMenu(repo, msg.repoId, msg.hash, tags, msg.currentBranch);
-        break;
-      }
-
-      case 'LOG_DELETE_TAG': {
-        const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
-        try {
-          await repo.deleteTag(msg.tagName);
-          await this.refreshTags(msg.repoId, repo);
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-          this.post({ type: 'LOG_REFRESH' });
-        } catch (e: unknown) {
-          this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-          this.showOperationError(e, t('VersionDock: Delete tag failed'), repoName);
-        }
         break;
       }
 
@@ -2531,26 +2554,6 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       }
 
-      case 'LOG_PUSH_TAG': {
-        const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', repoName, msg.tagName, msg.remote), cancellable: false },
-          async () => {
-            try {
-              await repo.pushTag(msg.tagName, msg.remote);
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-              vscode.window.showInformationMessage(t('VersionDock [{0}]: Tag "{1}" pushed to "{2}".', repoName, msg.tagName, msg.remote));
-            } catch (e: unknown) {
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e, t('VersionDock: Push tag failed'), repoName);
-            }
-          }
-        );
-        break;
-      }
-
       case 'LOG_CHECKOUT_TAG': {
         const repo = this.manager.getRepo(msg.repoId);
         if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
@@ -2577,29 +2580,6 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
             } catch (e: unknown) {
               this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
               this.showOperationError(e, t('VersionDock: Checkout tag failed'), repoName);
-            }
-          }
-        );
-        break;
-      }
-
-      case 'LOG_MERGE_TAG': {
-        const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) { this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: t('Repo not found') }); return; }
-        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Merging tag "{1}"…', repoName, msg.tagName), cancellable: false },
-          async () => {
-            try {
-              await repo.mergeTag(msg.tagName);
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: true });
-              this.refresh({ repoIds: [msg.repoId] });
-              await this.manager.refreshStatusNow();
-              this.manager.notifyBranchesChanged({ refreshStatus: false, refreshDerivedData: false });
-              vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged tag "{1}".', repoName, msg.tagName));
-            } catch (e: unknown) {
-              this.post({ type: 'LOG_BRANCH_OP_RESULT', requestId: msg.requestId, ok: false, error: String(e) });
-              this.showOperationError(e, t('VersionDock: Merge tag failed'), repoName);
             }
           }
         );
@@ -2707,33 +2687,6 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
         }
         this.refresh({ repoIds: [msg.repoId] });
         await this.manager.refreshStatusNow();
-        break;
-      }
-
-      case 'LOG_PUSH_TAG_PICK': {
-        const repo = this.manager.getRepo(msg.repoId);
-        if (!repo) return;
-        const repoName = this.manager.getRepoMeta(msg.repoId)?.name || path.basename(repo.rootPath) || msg.repoId;
-        const remotes = await repo.getRemotes().catch(() => [] as string[]);
-        if (remotes.length === 0) { vscode.window.showWarningMessage(t('VersionDock [{0}]: No remotes configured.', repoName)); return; }
-        const remotePick = remotes.length === 1
-          ? remotes[0]
-          : (await vscode.window.showQuickPick(
-              remotes.map(r => ({ label: `$(cloud-upload) ${r}`, remote: r })),
-              { title: t('Push tag "{0}" — Select remote', msg.tagName) }
-            ) as { label: string; remote: string } | undefined)?.remote;
-        if (!remotePick) return;
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', repoName, msg.tagName, remotePick), cancellable: false },
-          async () => {
-            try {
-              await repo.pushTag(msg.tagName, remotePick);
-              vscode.window.showInformationMessage(t('VersionDock [{0}]: Tag "{1}" pushed to "{2}".', repoName, msg.tagName, remotePick));
-            } catch (e: unknown) {
-              this.showOperationError(e, t('VersionDock: Push tag failed'), repoName);
-            }
-          }
-        );
         break;
       }
 
@@ -2978,6 +2931,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
 
     // "New Tag..." selected
     if (tagPick.tagName === null) {
+      if (repo.kind !== 'svn') {
+        await getGitTagWorkflow(this.manager).run({ action: 'create', repoId, hash });
+        return;
+      }
       const newName = await vscode.window.showInputBox({
         prompt: t('Tag name for commit {0}', hash.slice(0, 7)),
         placeHolder: t('v1.0.0'),
@@ -3006,6 +2963,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       {
         label: `$(git-merge) ${t('Merge "{0}" into "{1}"', tagName, currentBranch)}`,
         action: async () => {
+          if (repo.kind !== 'svn') {
+            await getGitTagWorkflow(this.manager).run({ action: 'merge', repoId, tagName });
+            return;
+          }
           try {
             await repo.mergeTag(tagName);
             this.refresh({ repoIds: [repoId] });
@@ -3019,6 +2980,10 @@ export class GitLogPanelProvider implements vscode.WebviewViewProvider, vscode.D
       {
         label: `$(trash) ${t('Delete "{0}"', tagName)}`,
         action: async () => {
+          if (repo.kind !== 'svn') {
+            await getGitTagWorkflow(this.manager).run({ action: 'delete', repoId, tagName });
+            return;
+          }
           const choice = await confirmDeleteTag(t('VersionDock [{0}]: Delete tag "{1}"?', repoName, tagName));
           if (!choice) return;
           try {

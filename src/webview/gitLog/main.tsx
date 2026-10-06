@@ -109,6 +109,7 @@ function formatUnknownError(error: unknown): { message: string; stack?: string }
 
 export function GitLogApp() {
   const store = useLogStore();
+  const [tagBusy, setTagBusy] = useState(false);
   const { setCommitFiles, setCommitFilters, setLoadingFiles, selectCommit, setPendingScrollHash } = store;
   const pendingRef = useRef<Map<string, (msg: HostToLogMsg) => void>>(new Map());
   const { panelRef: sidebarRef, onMouseDown: onSidebarResize, onKeyDown: onSidebarResizeKeyDown } = useResize('right', 220, 120, 400);
@@ -246,6 +247,7 @@ export function GitLogApp() {
 
       switch (msg.type) {
         case 'LOG_INIT_DATA':
+          setTagBusy(msg.tagBusy ?? false);
           store.setRepos(msg.repos, msg.hasWorkspaceFolder);
           store.setBranches(msg.branches, msg.isInitialPartial ?? false);
           if (msg.layoutDensity) store.setLayoutDensity(msg.layoutDensity);
@@ -290,6 +292,8 @@ export function GitLogApp() {
         case 'LOG_REFS_UPDATE':
           store.updateBranches(msg.repoId, msg.branches);
           break;
+        case 'LOG_TAG_WORKFLOW_STATE': setTagBusy(msg.busy); break;
+        case 'LOG_TAG_WORKFLOW_RESULT': break;
         case 'LOG_TAGS_UPDATE':
           store.updateTags(msg.repoId, msg.tags);
           break;
@@ -843,6 +847,11 @@ export function GitLogApp() {
               repos={store.repos.filter(repo => !repo.isWorktree)}
               branches={store.branches}
               tags={store.tags}
+              tagBusy={tagBusy}
+              onTagAction={request => {
+                setTagBusy(true);
+                getVsCodeApi().postMessage({ type: 'LOG_TAG_WORKFLOW', requestId: generateId(), request } satisfies LogToHostMsg);
+              }}
               loading={!store.initialized || store.loadingBranches}
               filter={store.branchFilter}
               selectedBranchFilter={store.commitFilters.branch}
@@ -886,18 +895,19 @@ export function GitLogApp() {
                 getVsCodeApi().postMessage({ type: 'LOG_PUSH_PICK', repoId } satisfies LogToHostMsg);
               }}
               onCheckoutTag={(repoIds, tagName) => {
-                repoIds.forEach(repoId => {
-                  getVsCodeApi().postMessage({ type: 'LOG_CHECKOUT_TAG', requestId: generateId(), repoId, tagName } satisfies LogToHostMsg);
-                });
+                if (repoIds.some(id => store.repos.find(repo => repo.id === id)?.kind === 'svn')) { repoIds.forEach(repoId => getVsCodeApi().postMessage({ type: 'LOG_CHECKOUT_TAG', requestId: generateId(), repoId, tagName } satisfies LogToHostMsg)); return; }
+                getVsCodeApi().postMessage({ type: 'LOG_TAG_WORKFLOW', requestId: generateId(), request: { action: 'checkout', repoIds, tagName, preferredRepoId: store.commitFilters.repoId ?? undefined } } satisfies LogToHostMsg);
               }}
               onMergeTag={(repoIds, tagName) => {
-                getVsCodeApi().postMessage({ type: 'LOG_MERGE_TAG_MULTI', requestId: generateId(), repoIds, tagName } satisfies LogToHostMsg);
+                if (repoIds.some(id => store.repos.find(repo => repo.id === id)?.kind === 'svn')) { getVsCodeApi().postMessage({ type: 'LOG_MERGE_TAG_MULTI', requestId: generateId(), repoIds, tagName } satisfies LogToHostMsg); return; }
+                getVsCodeApi().postMessage({ type: 'LOG_TAG_WORKFLOW', requestId: generateId(), request: { action: 'merge', repoIds, tagName, preferredRepoId: store.commitFilters.repoId ?? undefined } } satisfies LogToHostMsg);
               }}
-              onPushTag={(repoId, tagName) => {
-                getVsCodeApi().postMessage({ type: 'LOG_PUSH_TAG_PICK', repoId, tagName } satisfies LogToHostMsg);
+              onPushTag={(repoIds, tagName) => {
+                getVsCodeApi().postMessage({ type: 'LOG_TAG_WORKFLOW', requestId: generateId(), request: { action: 'push', repoIds, tagName, preferredRepoId: store.commitFilters.repoId ?? undefined } } satisfies LogToHostMsg);
               }}
               onDeleteTag={(repoIds, tagName) => {
-                getVsCodeApi().postMessage({ type: 'LOG_DELETE_TAG_MULTI', requestId: generateId(), repoIds, tagName } satisfies LogToHostMsg);
+                if (repoIds.some(id => store.repos.find(repo => repo.id === id)?.kind === 'svn')) { getVsCodeApi().postMessage({ type: 'LOG_DELETE_TAG_MULTI', requestId: generateId(), repoIds, tagName } satisfies LogToHostMsg); return; }
+                getVsCodeApi().postMessage({ type: 'LOG_TAG_WORKFLOW', requestId: generateId(), request: { action: 'delete', repoIds, tagName, preferredRepoId: store.commitFilters.repoId ?? undefined } } satisfies LogToHostMsg);
               }}
               onCollapse={() => setSidebarCollapsed(true)}
             />

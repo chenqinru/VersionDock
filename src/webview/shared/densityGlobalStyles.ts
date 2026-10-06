@@ -108,6 +108,15 @@ export const GLOBAL_DENSITY_STYLES = `
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)) !important;
 }
 
+[data-density="comfortable"] .versiondock-sidebar-tag-actions {
+  border-radius: 6px !important;
+  transition: background 0.12s ease !important;
+}
+
+[data-density="comfortable"] .versiondock-sidebar-tag-actions:not(:disabled):hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15)) !important;
+}
+
 [data-density="comfortable"] .versiondock-sidebar-repo-list {
   padding: 0 0 3px 0 !important;
   border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2)) !important;
@@ -639,6 +648,10 @@ export const GLOBAL_DENSITY_STYLES = `
   height: 100% !important;
   width: auto !important;
   padding: 0 5px !important;
+}
+
+[data-density="compact"] .versiondock-sidebar-tag-actions {
+  border-radius: 0 !important;
 }
 
 [data-density="compact"] .versiondock-sidebar-repo-list {

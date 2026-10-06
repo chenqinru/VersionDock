@@ -1081,12 +1081,11 @@ function CommitContextMenu({ commit, x, y, multiSelected, repoKind, remoteNames,
         <Codicon name="git-branch" style={ctxStyles.icon} />
         <span>{t('New Branch...')}</span>
       </div>
-      {tagsFromRefs.length === 0 ? (
-        <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_TAG', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
-          <Codicon name="tag" style={ctxStyles.icon} />
-          <span>{t('New Tag...')}</span>
-        </div>
-      ) : (
+      <div data-context-menu-item="" style={ctxStyles.item} onClick={() => send({ type: 'LOG_CREATE_TAG', requestId: generateId(), repoId: commit.repoId, hash: commit.hash })}>
+        <Codicon name="tag" style={ctxStyles.icon} />
+        <span>{t('New Tag...')}</span>
+      </div>
+      {tagsFromRefs.length > 0 && (
         <div
           data-context-menu-item=""
           style={ctxStyles.item}

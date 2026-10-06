@@ -862,7 +862,8 @@ export function CommitApp() {
         case 'COMMIT_LAYOUT_DENSITY_UPDATE':
           store.setLayoutDensity(msg.layoutDensity);
           break;
-        case 'COMMIT_STATUS_UPDATE': {
+        case 'COMMIT_STATUS_UPDATE':
+          {
           const isManualRefresh = commitStatusRefreshPendingRef.current;
           commitStatusRefreshPendingRef.current = false;
           store.setStatus(msg.repos, msg.status, msg.iconTheme, msg.fileViewMode, msg.defaultCommitAction, msg.defaultSaveAction, msg.hasWorkspaceFolder, msg.noVerify, msg.layoutDensity);
@@ -2561,15 +2562,6 @@ export function CommitApp() {
     }
   };
 
-  const doPushTags = (repoId: string) => {
-    const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
-    send({ type: 'SYNC_PUSH_TAGS', requestId: generateId(), repoId, remote });
-  };
-
-  const doPushTagsMulti = (repoIds: string[]) => {
-    send({ type: 'SYNC_PUSH_TAGS_MULTI', requestId: generateId(), repoIds });
-  };
-
   const doSync = (repoId: string, strategy?: SyncPullStrategy) => {
     const remote = useCommitStore.getState().getRepoStatus(repoId)?.branch.remoteName;
     send({ type: 'SYNC_DO_SYNC', requestId: generateId(), repoId, strategy, remote });
@@ -3352,8 +3344,6 @@ export function CommitApp() {
               onPushAll={doPushAll}
               onForcePush={doForcePush}
               onForcePushMulti={doForcePushMulti}
-              onPushTags={doPushTags}
-              onPushTagsMulti={doPushTagsMulti}
               onSync={doSync}
               onSyncMulti={doSyncMulti}
               onPull={(repoId, strategy) => send({ type: 'SYNC_DO_PULL', requestId: generateId(), repoId, strategy })}

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getGitTagWorkflow } from '../tags/GitTagWorkflow';
 import * as fs from 'fs';
 import * as path from 'path';
 import { WorkspaceGitManager } from '../git/WorkspaceGitManager';
@@ -1212,216 +1213,27 @@ export class BranchStatusBar implements vscode.Disposable {
     }
   }
 
-  private async showCommonTagActionMenu(
-    tagName: string,
-    metas: RepoMeta[],
-  ): Promise<void> {
-    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
-
-    // Get current branch names for label
-    const currentBranchNames = await Promise.allSettled(
-      metas.map(async m => {
-        const repo = this.manager.getRepo(m.id);
-        return repo ? (await repo.getCurrentBranch()).name : '';
-      })
-    );
-    const branchLabel = [...new Set(
-      currentBranchNames
-        .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
-        .map(r => r.value)
-        .filter(Boolean)
-    )].join(', ') || 'current branch';
-
-    const remotes = await Promise.allSettled(metas.map(async m => {
-      const repo = this.manager.getRepo(m.id);
-      return repo ? repo.getRemotes() : [];
-    }));
-    const allRemotes = [...new Set(
-      remotes
-        .filter((r): r is PromiseFulfilledResult<string[]> => r.status === 'fulfilled')
-        .flatMap(r => r.value)
-    )];
-
-    const pushItems: ActionItem[] = allRemotes.map(remote => ({
-      label: `$(cloud-upload) ${t('Push to "{0}"', remote)}`,
-      action: async () => {
-        const progressTitle = metas.length === 1
-          ? t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', metas[0].name, tagName, remote)
-          : t('VersionDock: Pushing tag "{0}" to {1}…', tagName, remote);
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
-          async () => {
-            const errors: string[] = [];
-            let succeededCount = 0;
-            for (const meta of metas) {
-              const repo = this.manager.getRepo(meta.id);
-              if (!repo) continue;
-              try {
-                await repo.pushTag(tagName, remote);
-                succeededCount++;
-              } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
-            }
-            if (errors.length > 0) {
-              vscode.window.showWarningMessage(
-                metas.length === 1
-                  ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
-                  : succeededCount > 0
-                    ? t('VersionDock: Tag pushed in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
-                    : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
-              );
-            } else if (metas.length === 1) {
-              vscode.window.showInformationMessage(t('VersionDock [{0}]: Tag "{1}" pushed to "{2}".', metas[0].name, tagName, remote));
-            } else {
-              vscode.window.showInformationMessage(t('VersionDock: tag "{0}" pushed to "{1}" in {2} repos.', tagName, remote, succeededCount));
-            }
-          }
-        );
-      },
-    }));
-
+  private async showCommonTagActionMenu(tagName: string, metas: RepoMeta[]): Promise<void> {
+    const gitMetas = metas.filter(meta => meta.kind !== 'svn');
+    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
+    const branches = await Promise.allSettled(gitMetas.map(async meta => this.manager.getRepo(meta.id)?.getCurrentBranch()));
+    const branchLabel = [...new Set(branches.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value.name] : []))].join(', ') || 'current branch';
+    const remoteResults = await Promise.allSettled(gitMetas.map(async meta => this.manager.getRepo(meta.id)?.getRemotes() ?? []));
+    const remotes = [...new Set(remoteResults.flatMap(result => result.status === 'fulfilled' ? result.value : []))];
+    const run = async (action: 'checkout' | 'merge' | 'push' | 'delete', remote?: string) => {
+      await getGitTagWorkflow(this.manager).run({ action, repoIds: gitMetas.map(meta => meta.id), tagName, remote });
+      await this.refresh();
+    };
     const items: ActionItem[] = [
-      {
-        label: `$(arrow-left) ${t('Back')}`,
-        action: () => this.showMenu(),
-      },
-      { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
-      {
-        label: `$(arrow-right) ${t('Checkout')}`,
-        description: t('Checkout tag "{0}" in all repos (detached HEAD)', tagName),
-        action: async () => {
-          const progressTitle = metas.length === 1
-            ? t('VersionDock [{0}]: Checking out tag "{1}"…', metas[0].name, tagName)
-            : t('VersionDock: Checking out tag "{0}"…', tagName);
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
-            async () => {
-              const errors: string[] = [];
-              let succeededCount = 0;
-              for (const meta of metas) {
-                const repo = this.manager.getRepo(meta.id);
-                if (!repo) continue;
-                try {
-                  await repo.checkoutTag(tagName);
-                  succeededCount++;
-                } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
-              }
-              if (errors.length > 0) {
-                vscode.window.showWarningMessage(
-                  metas.length === 1
-                    ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
-                    : succeededCount > 0
-                      ? t('VersionDock: Tag checked out in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
-                      : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
-                );
-              } else if (metas.length === 1) {
-                vscode.window.showInformationMessage(t('VersionDock [{0}]: Checked out tag "{1}" (detached HEAD).', metas[0].name, tagName));
-              } else {
-                vscode.window.showInformationMessage(t('VersionDock: checked out tag "{0}" in {1} repos.', tagName, succeededCount));
-              }
-            }
-          );
-          await this.refresh();
-        },
-      },
-      {
-        label: `$(git-merge) ${t('Merge "{0}" into "{1}"', tagName, branchLabel)}`,
-        action: async () => {
-          const progressTitle = metas.length === 1
-            ? t('VersionDock [{0}]: Merging tag "{1}"…', metas[0].name, tagName)
-            : t('VersionDock: Merging tag "{0}"…', tagName);
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
-            async () => {
-              const errors: string[] = [];
-              let succeededCount = 0;
-              for (const meta of metas) {
-                const repo = this.manager.getRepo(meta.id);
-                if (!repo) continue;
-                try {
-                  await repo.mergeTag(tagName);
-                  succeededCount++;
-                } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
-              }
-              if (errors.length > 0) {
-                vscode.window.showWarningMessage(
-                  metas.length === 1
-                    ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
-                    : succeededCount > 0
-                      ? t('VersionDock: Tag merged in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
-                      : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
-                );
-              } else if (metas.length === 1) {
-                vscode.window.showInformationMessage(t('VersionDock [{0}]: Merged tag "{1}".', metas[0].name, tagName));
-              } else {
-                vscode.window.showInformationMessage(t('VersionDock: merged tag "{0}" in {1} repos.', tagName, succeededCount));
-              }
-            }
-          );
-          await this.refresh();
-        },
-      },
-      ...pushItems,
-      { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
-      {
-        label: `$(trash) ${t('Delete tag')}`,
-        description: t('Delete tag "{0}" in all repos', tagName),
-        action: async () => {
-          const pick = await vscode.window.showWarningMessage(
-            metas.length === 1
-              ? t('VersionDock [{0}]: Delete tag "{1}"?', metas[0].name, tagName)
-              : t('VersionDock: Delete tag "{0}" in {1} repositories?', tagName, metas.length),
-            { modal: true }, t('Delete Local'), t('Delete on Remote'), t('Delete Local and Remote')
-          );
-          if (!pick) return;
-          const deleteLocal = pick !== t('Delete on Remote');
-          const deleteRemote = pick === t('Delete on Remote') || pick === t('Delete Local and Remote');
-          const progressTitle = metas.length === 1
-            ? t('VersionDock [{0}]: Deleting tag "{1}"…', metas[0].name, tagName)
-            : t('VersionDock: Deleting tag "{0}"…', tagName);
-          await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: progressTitle, cancellable: false },
-            async () => {
-              const errors: string[] = [];
-              let succeededCount = 0;
-              for (const meta of metas) {
-                const repo = this.manager.getRepo(meta.id);
-                if (!repo) continue;
-                try {
-                  if (deleteLocal) await repo.deleteTag(tagName);
-                  if (deleteRemote) {
-                    const remotes = await repo.getRemotes().catch(() => [] as string[]);
-                    for (const remote of remotes) {
-                      await repo.deleteTagRemote(tagName, remote).catch(() => {});
-                    }
-                  }
-                  succeededCount++;
-                } catch (e: unknown) { errors.push(`${meta.name}: ${String(e)}`); }
-              }
-              if (errors.length > 0) {
-                vscode.window.showWarningMessage(
-                  metas.length === 1
-                    ? t('VersionDock [{0}]: {1}', metas[0].name, errors.join('; '))
-                    : succeededCount > 0
-                      ? t('VersionDock: Tag deleted in {0} repos, {1} failed: {2}', succeededCount, errors.length, errors.join('; '))
-                      : t('VersionDock: {0} error(s): {1}', errors.length, errors.join('; '))
-                );
-              } else if (metas.length === 1) {
-                vscode.window.showInformationMessage(t('VersionDock [{0}]: Deleted tag "{1}".', metas[0].name, tagName));
-              } else {
-                vscode.window.showInformationMessage(t('VersionDock: deleted tag "{0}" in {1} repos.', tagName, succeededCount));
-              }
-            }
-          );
-          await this.refresh();
-        },
-      },
+      { label: `$(arrow-left) ${t('Back')}`, action: () => this.showMenu() },
+      { label: '', kind: vscode.QuickPickItemKind.Separator, action: () => {} },
+      { label: `$(arrow-right) ${t('Checkout')}`, description: t('Checkout tag "{0}" in all repos (detached HEAD)', tagName), action: () => run('checkout') },
+      { label: `$(git-merge) ${t('Merge "{0}" into "{1}"', tagName, branchLabel)}`, action: () => run('merge') },
+      ...remotes.map(remote => ({ label: `$(cloud-upload) ${t('Push to "{0}"', remote)}`, action: () => run('push', remote) })),
+      { label: '', kind: vscode.QuickPickItemKind.Separator, action: () => {} },
+      { label: `$(trash) ${t('Delete tag')}`, description: t('Delete tag "{0}" in all repos', tagName), action: () => run('delete') },
     ];
-
-    const pick = await vscode.window.showQuickPick(items, {
-      title: t('Tag: {0}', tagName),
-      matchOnDescription: true,
-    }) as ActionItem | undefined;
-
+    const pick = await vscode.window.showQuickPick(items, { title: t('Tag: {0}', tagName), matchOnDescription: true });
     if (pick) await pick.action();
   }
 
@@ -2023,7 +1835,7 @@ export class BranchStatusBar implements vscode.Disposable {
         const icon = isActiveTag ? '$(check)' : '$(tag)';
         items.push({
           label: `${icon} ${tag.name}`,
-          description: isActiveTag ? t('current') : tag.hash,
+          description: isActiveTag ? t('current') : tag.hash.slice(0, 8),
           action: () => this.showSingleTagActionMenu(tag.name, meta, effectiveBranchName, isDetached),
         });
       }
@@ -2175,108 +1987,25 @@ export class BranchStatusBar implements vscode.Disposable {
     if (pick) await pick.action();
   }
 
-  private async showSingleTagActionMenu(
-    tagName: string,
-    meta: RepoMeta,
-    currentBranchName: string,
-    isDetached = false,
-  ): Promise<void> {
+  private async showSingleTagActionMenu(tagName: string, meta: RepoMeta, currentBranchName: string, isDetached = false): Promise<void> {
     const repo = this.manager.getRepo(meta.id);
-    if (!repo) return;
-
-    type ActionItem = vscode.QuickPickItem & { action: () => Thenable<void> | void };
-
+    if (!repo || repo.kind === 'svn') return;
+    type ActionItem = vscode.QuickPickItem & { action: () => Promise<void> | void };
     const remotes = await repo.getRemotes().catch(() => [] as string[]);
-    const pushItems: ActionItem[] = remotes.map(r => ({
-      label: `$(cloud-upload) ${t('Push to "{0}"', r)}`,
-      action: async () => {
-        await vscode.window.withProgress(
-          { location: vscode.ProgressLocation.Notification, title: t('VersionDock [{0}]: Pushing tag "{1}" to {2}…', meta.name, tagName, r), cancellable: false },
-          async () => {
-            try {
-              await repo.pushTag(tagName, r);
-              vscode.window.showInformationMessage(t('VersionDock [{0}]: tag "{1}" pushed to "{2}".', meta.name, tagName, r));
-            } catch (e: unknown) {
-              this.showError(meta, e);
-            }
-          }
-        );
-      },
-    }));
-
-    const mergeItem: ActionItem = {
-      label: `$(git-merge) ${t('Merge "{0}" into "{1}"', tagName, currentBranchName)}`,
-      action: async () => {
-        try {
-          await repo.mergeTag(tagName);
-          vscode.window.showInformationMessage(t('VersionDock [{0}]: merged tag "{1}".', meta.name, tagName));
-        } catch (e: unknown) {
-          this.showError(meta, e);
-        }
-        await this.refresh();
-      },
+    const run = async (action: 'checkout' | 'merge' | 'push' | 'delete', remote?: string) => {
+      await getGitTagWorkflow(this.manager).run({ action, repoId: meta.id, tagName, remote });
+      await this.refresh();
     };
-
     const items: ActionItem[] = [
-      {
-        label: `$(arrow-left) ${t('Back')}`,
-        action: () => this.showRepoBranchMenu(meta),
-      },
-      { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
-      {
-        label: `$(arrow-right) ${t('Checkout')}`,
-        description: t('Checkout tag "{0}" (detached HEAD)', tagName),
-        action: async () => {
-          try {
-            await repo.checkoutTag(tagName);
-            vscode.window.showInformationMessage(t('VersionDock [{0}]: checked out tag "{1}" (detached HEAD).', meta.name, tagName));
-          } catch (e: unknown) {
-            this.showError(meta, e);
-          }
-          await this.refresh();
-        },
-      },
-      ...(isDetached ? [] : [mergeItem]),
-      ...pushItems,
-      { label: '', kind: vscode.QuickPickItemKind.Separator, action: async () => {} },
-      {
-        label: `$(trash) ${t('Delete tag')}`,
-        description: t('Delete tag "{0}"', tagName),
-        action: async () => {
-          const pick = await vscode.window.showWarningMessage(
-            t('VersionDock [{0}]: Delete tag "{1}"?', meta.name, tagName),
-            { modal: true }, t('Delete Local'), t('Delete on Remote'), t('Delete Local and Remote')
-          );
-          if (!pick) return;
-          const deleteLocal = pick !== t('Delete on Remote');
-          const deleteRemote = pick === t('Delete on Remote') || pick === t('Delete Local and Remote');
-          try {
-            if (deleteLocal) await repo.deleteTag(tagName);
-            if (deleteRemote) {
-              const remotes = await repo.getRemotes().catch(() => [] as string[]);
-              if (remotes.length === 0) {
-                vscode.window.showWarningMessage(t('VersionDock [{0}]: no remotes configured.', meta.name));
-              } else {
-                const remote = remotes.length === 1
-                  ? remotes[0]
-                  : (await vscode.window.showQuickPick(remotes, { title: t('Delete "{0}" from remote', tagName) }));
-                if (remote) await repo.deleteTagRemote(tagName, remote);
-              }
-            }
-            vscode.window.showInformationMessage(t('VersionDock [{0}]: tag "{1}" deleted.', meta.name, tagName));
-          } catch (e: unknown) {
-            this.showError(meta, e);
-          }
-          await this.refresh();
-        },
-      },
+      { label: `$(arrow-left) ${t('Back')}`, action: () => this.showRepoBranchMenu(meta) },
+      { label: '', kind: vscode.QuickPickItemKind.Separator, action: () => {} },
+      { label: `$(arrow-right) ${t('Checkout')}`, description: t('Checkout tag "{0}" (detached HEAD)', tagName), action: () => run('checkout') },
+      ...(isDetached ? [] : [{ label: `$(git-merge) ${t('Merge "{0}" into "{1}"', tagName, currentBranchName)}`, action: () => run('merge') }]),
+      ...remotes.map(remote => ({ label: `$(cloud-upload) ${t('Push to "{0}"', remote)}`, action: () => run('push', remote) })),
+      { label: '', kind: vscode.QuickPickItemKind.Separator, action: () => {} },
+      { label: `$(trash) ${t('Delete tag')}`, description: t('Delete tag "{0}"', tagName), action: () => run('delete') },
     ];
-
-    const pick = await vscode.window.showQuickPick(items, {
-      title: t('Tag: {0} — {1}', tagName, meta.name),
-      matchOnDescription: true,
-    }) as ActionItem | undefined;
-
+    const pick = await vscode.window.showQuickPick(items, { title: t('Tag: {0} — {1}', tagName, meta.name), matchOnDescription: true });
     if (pick) await pick.action();
   }
 
@@ -3293,6 +3022,11 @@ export class BranchStatusBar implements vscode.Disposable {
     }
 
     await this.showRepoRemotesMenu(meta);
+  }
+
+  async manageTagRemotes(repoId: string): Promise<void> {
+    const meta = this.manager.getRepoMeta(repoId);
+    if (meta && meta.kind !== 'svn') await this.showRepoRemotesMenu(meta);
   }
 
   private async showRepoRemotesMenu(meta: RepoMeta): Promise<void> {

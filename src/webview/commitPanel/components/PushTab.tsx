@@ -42,8 +42,6 @@ export interface PushTabProps {
   onPushAll: () => void;
   onForcePush?: (repoId: string) => void;
   onForcePushMulti?: (repoIds: string[]) => void;
-  onPushTags?: (repoId: string) => void;
-  onPushTagsMulti?: (repoIds: string[]) => void;
   onPull?: (repoId: string, strategy?: SyncPullStrategy) => void;
   onPullMulti?: (repoIds: string[], strategy?: SyncPullStrategy) => void;
   onSync?: (repoId: string, strategy?: SyncPullStrategy) => void;
@@ -2393,8 +2391,6 @@ export function PushTab(props: Props) {
     onPushMulti,
     onForcePush,
     onForcePushMulti,
-    onPushTags,
-    onPushTagsMulti,
     onPull,
     onPullMulti,
     onSync,
@@ -2779,11 +2775,6 @@ export function PushTab(props: Props) {
         danger: true,
         onSelect: () => onForcePush?.(solo.repoId),
       },
-      {
-        icon: 'tag',
-        label: t('Push All Tags'),
-        onSelect: () => onPushTags?.(solo.repoId),
-      },
     ];
 
     const renderSoloButtons = () => {
@@ -3081,20 +3072,6 @@ export function PushTab(props: Props) {
           onForcePushMulti(pushableChecked.map(r => r.repoId));
         } else {
           pushableChecked.forEach(r => onForcePush?.(r.repoId));
-        }
-      },
-    },
-    {
-      icon: 'tag',
-      label: t('Push All Tags'),
-      onSelect: () => {
-        if (checkedRepos.length === 0) return;
-        if (checkedRepos.length === 1) {
-          onPushTags?.(checkedRepos[0].repoId);
-        } else if (onPushTagsMulti) {
-          onPushTagsMulti(checkedRepos.map(r => r.repoId));
-        } else {
-          checkedRepos.forEach(r => onPushTags?.(r.repoId));
         }
       },
     },
