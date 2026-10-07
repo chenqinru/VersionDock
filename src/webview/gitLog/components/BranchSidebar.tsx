@@ -758,6 +758,13 @@ const INTERACTION_STYLE = `
   background: var(--vscode-toolbar-hoverBackground) !important;
   opacity: 1 !important;
 }
+.versiondock-sidebar-tag-actions {
+  visibility: hidden;
+}
+.versiondock-sidebar-section-header:hover .versiondock-sidebar-tag-actions,
+.versiondock-sidebar-section-header:has(:focus-visible) .versiondock-sidebar-tag-actions {
+  visibility: visible;
+}
 .versiondock-sidebar-tag-actions:disabled {
   cursor: default;
   opacity: 0.4;
