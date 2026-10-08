@@ -1288,7 +1288,7 @@ function mergeLocalRemote(groups: RefGroup[]): RefGroup[] {
     };
     const ra = rank(a), rb = rank(b);
     if (ra !== rb) return ra - rb;
-    return a.label.localeCompare(b.label);
+    return a.label.localeCompare(b.label, undefined, { numeric: a.isTag && b.isTag });
   });
   return merged;
 }

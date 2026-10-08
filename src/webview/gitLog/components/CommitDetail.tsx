@@ -1942,7 +1942,8 @@ export function CommitDetail({ commit, commits, files, mergeParentChanges, group
                 if (rankA !== rankB) return rankA - rankB;
                 const fullA = a.kind === 'remote' ? `${a.remoteName}/${a.name}` : a.kind === 'ref' && a.group.isRemote ? `${a.group.remoteName}/${a.group.label}` : nameA;
                 const fullB = b.kind === 'remote' ? `${b.remoteName}/${b.name}` : b.kind === 'ref' && b.group.isRemote ? `${b.group.remoteName}/${b.group.label}` : nameB;
-                return fullA.localeCompare(fullB);
+                const isTag = (badge: Badge) => badge.kind === 'tag' || (badge.kind === 'ref' && badge.group.isTag);
+                return fullA.localeCompare(fullB, undefined, { numeric: isTag(a) && isTag(b) });
               }
 
               const revisionBadges = refGroups.filter(group => group.isSvnRevision).map(group => ({ kind: 'ref' as const, group }));

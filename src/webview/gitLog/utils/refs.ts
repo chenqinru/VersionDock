@@ -242,7 +242,7 @@ export function groupRefs(
     if (ra !== rb) return ra - rb;
     const nameA = a.isRemote && a.remoteName ? `${a.remoteName}/${a.label}` : a.label;
     const nameB = b.isRemote && b.remoteName ? `${b.remoteName}/${b.label}` : b.label;
-    return nameA.localeCompare(nameB);
+    return nameA.localeCompare(nameB, undefined, { numeric: a.isTag && b.isTag });
   });
 
   return groups;

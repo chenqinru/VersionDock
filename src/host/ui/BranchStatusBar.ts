@@ -1188,12 +1188,12 @@ export class BranchStatusBar implements vscode.Disposable {
 
     const tagNames = [...tagRepoIds.entries()]
       .filter(([, ids]) => ids.length >= minCount)
-      .sort((a, b) => a[0].localeCompare(b[0]))
+      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
       .map(([name]) => name);
 
     if (tagNames.length === 0) return;
 
-    const sectionLabel = metas.length === 1 ? 'TAGS' : 'COMMON TAGS';
+    const sectionLabel = metas.length === 1 ? t('TAGS') : t('COMMON TAGS');
     items.push({
       label: sectionLabel,
       kind: vscode.QuickPickItemKind.Separator,
@@ -1830,7 +1830,7 @@ export class BranchStatusBar implements vscode.Disposable {
 
     if (tags.length > 0) {
       items.push({ label: t('TAGS'), kind: vscode.QuickPickItemKind.Separator, action: async () => {} });
-      for (const tag of tags) {
+      for (const tag of [...tags].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
         const isActiveTag = currentBranch.detachedTag === tag.name;
         const icon = isActiveTag ? '$(check)' : '$(tag)';
         items.push({

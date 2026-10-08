@@ -628,6 +628,7 @@
   "LOCAL": "本地",
   "REMOTE": "远程",
   "TAGS": "标签",
+  "COMMON TAGS": "共有标签",
   "current": "当前",
   "{0} — Branches": "{0} - 分支",
   "VersionDock [{0}]: branch \"{1}\" created and checked out.": "VersionDock [{0}]：分支 '{1}' 已创建并检出。",

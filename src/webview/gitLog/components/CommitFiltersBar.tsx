@@ -87,7 +87,7 @@ export function CommitFiltersBar({ filters, branches, tags, repos, authorOptions
       kind: 'tag',
     };
     return [option.value, option];
-  })).values()).sort((left, right) => left.label.localeCompare(right.label));
+  })).values()).sort((left, right) => left.label.localeCompare(right.label, undefined, { numeric: true }));
   const historyFileName = filters.path.split('/').pop() || filters.path;
   const historyLabel = filters.lineRange
     ? t('{0}:lines {1}-{2}', historyFileName, filters.lineRange.start, filters.lineRange.end)

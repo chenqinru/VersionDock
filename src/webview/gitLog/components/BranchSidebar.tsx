@@ -139,7 +139,7 @@ function buildMergedTags(tags: TagInfo[], repoKindMap: Record<string, 'git' | 's
       map.set(key, { key, vcsKind, name: t.name, repoIds: [t.repoId], instances: [t] });
     }
   }
-  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
 export const BranchSidebar = forwardRef<HTMLDivElement, Props>(function BranchSidebar({

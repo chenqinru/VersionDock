@@ -628,6 +628,7 @@
   "LOCAL": "LOCAL",
   "REMOTE": "REMOTE",
   "TAGS": "TAGS",
+  "COMMON TAGS": "COMMON TAGS",
   "current": "current",
   "{0} — Branches": "{0} — Branches",
   "VersionDock [{0}]: branch \"{1}\" created and checked out.": "VersionDock [{0}]: branch \"{1}\" created and checked out.",

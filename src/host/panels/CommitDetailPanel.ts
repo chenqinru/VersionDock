@@ -3312,7 +3312,7 @@ ${leftPanelContent}
           .sort(compareBranches);
         const sortedTags = validItems
           .filter(b => b.type === 'tag')
-          .sort((a, b) => a.name.localeCompare(b.name));
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 
         const result = [];
         if (hasHead) {
