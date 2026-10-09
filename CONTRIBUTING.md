@@ -1,82 +1,62 @@
 # Contributing to VersionDock
 
-Thank you for your interest in contributing to VersionDock! We welcome contributions from the community.
+Report VersionDock issues and submit pull requests to this repository. For security vulnerabilities, follow [SECURITY.md](SECURITY.md).
 
-## 📋 Code of Conduct
+## Set up
 
-This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code.
+Use Node.js 24, npm, VS Code 1.85.0+ and Git. Install SVN 1.14+ when working on SVN features.
 
-## 🛠️ Getting Started
-
-### Prerequisites
-
-- **Node.js**: `v20` or higher
-- **npm**: `v9` or higher
-- **VS Code**: `1.85.0` or higher
-- **Git**: Installed and available in PATH
-- **SVN** (optional): `1.14.0` or higher for SVN features
-
-### Setting Up Local Development
-
-1. **Fork and clone the repository:**
-   ```bash
-   git clone https://github.com/<your-username>/VersionDock.git
-   cd VersionDock
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Start watching sources (incremental build):**
-   ```bash
-   npm run watch
-   ```
-
-4. **Launch Extension in Debug Mode:**
-   - Open the project in VS Code.
-   - Press `F5` (or go to **Run and Debug** -> Select **Run Extension**).
-   - A new Extension Development Host window will open with VersionDock active.
-
-## 🧪 Quality Checks
-
-Before submitting a Pull Request, ensure all checks pass:
-
-```bash
-# Run ESLint
-npm run lint
-
-# Run TypeScript type-checking for host and webviews
-npm run typecheck
-
-# Full production build
-npm run build
+```sh
+git clone https://github.com/chenqinru/VersionDock.git
+cd VersionDock
+nvm install
+nvm use
+npm ci
 ```
 
-## 📝 Commit Message Guidelines
+Open the checkout in VS Code and press F5 to launch **Run Extension**. The launch configuration builds the extension before opening an Extension Development Host. Use `npm run watch` for incremental builds, or **Run Extension (no rebuild)** when a build is already available.
 
-We follow the [Conventional Commits](https://www.conventionalcommits.org/) specification:
+## Code structure
 
-- `feat:` A new feature
-- `fix:` A bug fix
-- `docs:` Documentation changes
-- `style:` Formatting, missing semicolons, etc. (no code change)
-- `refactor:` Refactoring code without changing behavior
-- `perf:` Performance improvements
-- `test:` Adding or updating tests
-- `chore:` Maintenance, dependencies, build tasks
+| Directory | Responsibility |
+| --- | --- |
+| `src/host/git/`, `src/host/svn/`, `src/host/vcs/` | Repository operations, CLI integration and Git/SVN boundaries |
+| `src/host/panels/` | VS Code Webview providers and host message handling |
+| `src/host/ai*/`, `src/host/remote/` | AI workflows and hosting-provider integration |
+| `src/webview/` | React panels, state and shared components |
+| `l10n/`, `package.nls*.json` | English and Simplified Chinese localization |
+| `media/` | Runtime icons, fonts and related resources |
+| `scripts/`, `.github/workflows/` | Regression tests, builds and release automation |
 
-Example:
-```text
-feat(commit-panel): add quick search for changed files
-fix(git-graph): correct merge lane rendering for detached HEAD
+Both host and Webviews are bundled with esbuild. Repository operations belong in the host; Webviews communicate through the existing message protocol.
+
+## Validate changes
+
+```sh
+npm run check
+npm run package -- --out /tmp/versiondock-check.vsix
 ```
 
-## 🚀 Submitting a Pull Request
+The checks cover lint, types, Git tag operations, shelves, scrollbar configuration and release behavior. Use temporary repositories for write operations and regression fixtures; preserve existing changes in real working copies.
 
-1. Create a descriptive feature branch (`git checkout -b feat/my-new-feature`).
-2. Make your changes with clear, focused commits.
-3. Verify `npm run lint`, `npm run typecheck`, and `npm run build`.
-4. Push your branch (`git push origin feat/my-new-feature`).
-5. Open a Pull Request on GitHub against the `main` branch with the provided PR template filled out.
+For UI changes, check the affected view in the Extension Development Host with light / dark themes and English / Simplified Chinese. For repository changes, test the real Git/SVN path, including failures and conflicts where relevant. State which checks were performed; a successful build alone does not verify runtime behavior.
+
+Optional checks with additional prerequisites:
+
+```sh
+# Node.js 24 and an installed Chromium browser; CHROME_PATH can select it
+npm run test:scrollbars:browser
+
+# An independent Desktop checkout and its Rust toolchain
+npm run test:shelves -- --desktop /path/to/VersionDockDesktop
+```
+
+Keep tests focused on behavior and meaningful boundaries. Update both languages for user-visible text. Preserve upstream attribution and third-party notices when modifying or adding bundled resources.
+
+## Issues and pull requests
+
+For bugs, include the extension version, VS Code / OS versions, Git or SVN version, reproduction steps and relevant logs. Remove credentials and private repository details from shared logs and screenshots. Use [SECURITY.md](SECURITY.md) for vulnerabilities.
+
+Keep pull requests focused, explain the behavior change and report validation. Use the existing PR template and Conventional Commits, for example `fix(shelve): preserve file permissions during restore`.
+
+Treat other contributors respectfully and keep feedback focused on the issue. Release procedures and version consistency are documented in [CI and release](docs/ci-release.md).

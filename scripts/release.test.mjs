@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -76,4 +76,27 @@ test('release CLI generates notes without any tags and rejects unsafe tags befor
   const output = join(root, 'outputs.txt'); writeFileSync(output, 'existing=true\n');
   assert.throws(() => execFileSync(process.execPath, [script.pathname, 'prepare'], { cwd: root, env: { ...process.env, RELEASE_EVENT: 'workflow_dispatch', RELEASE_INPUT_TAG: 'v1.0.0\ninvalid=true', GITHUB_OUTPUT: output }, stdio: 'pipe' }));
   assert.equal(readFileSync(output, 'utf8'), 'existing=true\n');
+});
+
+
+test('version changes synchronize both README badges and preserve dependency versions', t => {
+  const { root } = fixture(t);
+  const scripts = join(root, 'scripts'); mkdirSync(scripts);
+  writeFileSync(join(scripts, 'bump-version.mjs'), readFileSync(new URL('./bump-version.mjs', import.meta.url)));
+  writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ version: '1.0.0', packages: { '': { version: '1.0.0' }, 'node_modules/fixture': { version: '1.0.0' } } }));
+  for (const name of ['README.md', 'README_zh.md']) {
+    writeFileSync(join(root, name), '<img src="https://img.shields.io/badge/version-1.0.0-blue">\nversiondock-1.0.0.vsix\n');
+  }
+  for (const version of ['1.0.1', '2.0.0-beta.1']) {
+    execFileSync(process.execPath, [join(scripts, 'bump-version.mjs'), version], { cwd: root, stdio: 'pipe' });
+    assert.equal(JSON.parse(readFileSync(join(root, 'package.json'))).version, version);
+    const lock = JSON.parse(readFileSync(join(root, 'package-lock.json')));
+    assert.equal(lock.version, version); assert.equal(lock.packages[''].version, version);
+    assert.equal(lock.packages['node_modules/fixture'].version, '1.0.0');
+    for (const name of ['README.md', 'README_zh.md']) {
+      const text = readFileSync(join(root, name), 'utf8');
+      assert.ok(text.includes(`badge/version-${version.replace(/-/g, '--')}-blue`), text);
+      assert.ok(text.includes(`versiondock-${version}.vsix`), text);
+    }
+  }
 });

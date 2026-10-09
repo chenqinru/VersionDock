@@ -11,7 +11,7 @@ const rootDir = path.resolve(__dirname, '..');
 
 const packageJsonPath = path.join(rootDir, 'package.json');
 const packageLockJsonPath = path.join(rootDir, 'package-lock.json');
-const readmePath = path.join(rootDir, 'README.md');
+const readmePaths = ['README.md', 'README_zh.md'].map(name => path.join(rootDir, name));
 
 // ANSI 颜色输出辅助函数
 const colors = {
@@ -134,14 +134,17 @@ function updateFiles(currentVersion, newVersion) {
     updatedFiles.push('package-lock.json');
   }
 
-  // 3. 更新 README.md (替换所有 versiondock-x.y.z.vsix)
-  if (fs.existsSync(readmePath)) {
-    let readme = fs.readFileSync(readmePath, 'utf8');
-    const vsixPattern = /versiondock-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.vsix/g;
-    if (vsixPattern.test(readme)) {
-      readme = readme.replace(vsixPattern, `versiondock-${newVersion}.vsix`);
+  // Keep both README package examples and version badges aligned with metadata.
+  for (const readmePath of readmePaths) {
+    if (!fs.existsSync(readmePath)) continue;
+    const original = fs.readFileSync(readmePath, 'utf8');
+    const badgeVersion = encodeURIComponent(newVersion.replace(/-/g, '--'));
+    const readme = original
+      .replace(/versiondock-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.vsix/g, `versiondock-${newVersion}.vsix`)
+      .replace(/https:\/\/img\.shields\.io\/badge\/version-[^"\s]+-blue/g, `https://img.shields.io/badge/version-${badgeVersion}-blue`);
+    if (readme !== original) {
       fs.writeFileSync(readmePath, readme, 'utf8');
-      updatedFiles.push('README.md');
+      updatedFiles.push(path.basename(readmePath));
     }
   }
 

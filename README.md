@@ -1,390 +1,138 @@
 <p align="center">
-  <img src="media/icons/versiondock-logo-dark.png" alt="VersionDock logo" width="160">
+  <img src="media/icons/versiondock-logo-dark.png" alt="VersionDock" width="128" height="128">
 </p>
 
 <h1 align="center">VersionDock</h1>
 
+<p align="center">Manage Git and SVN changes, commits, history and conflicts inside VS Code.</p>
+
 <p align="center">
-  <strong>A focused Git and SVN workbench for VS Code.</strong>
+  <a href="package.json"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"></a>
+  <a href="https://code.visualstudio.com/"><img src="https://img.shields.io/badge/VS_Code-%3E%3D1.85.0-007ACC" alt="VS Code minimum version"></a>
+  <a href="#workflows"><img src="https://img.shields.io/badge/VCS-Git_%2B_SVN-F05032?logo=git&amp;logoColor=white" alt="Git and SVN"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="GPL-3.0-only"></a>
+  <a href="https://github.com/chenqinru/VersionDock/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/CI-GitHub_Actions-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions workflow"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/chenqinru/VersionDock/actions/workflows/ci.yml"><img alt="CI Status" src="https://img.shields.io/github/actions/workflow/status/chenqinru/VersionDock/ci.yml?branch=main&label=CI&logo=github"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=chenqinru.versiondock"><img alt="VS Code Marketplace Version" src="https://img.shields.io/visual-studio-marketplace/v/chenqinru.versiondock?color=blue&logo=visual-studio-code"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=chenqinru.versiondock"><img alt="VS Code Marketplace Installs" src="https://img.shields.io/visual-studio-marketplace/i/chenqinru.versiondock"></a>
-  <a href="https://github.com/chenqinru/VersionDock/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/chenqinru/VersionDock?color=green"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-red"></a>
+  <strong>English</strong> · <a href="README_zh.md">简体中文</a> ·
+  <a href="https://github.com/chenqinru/VersionDock/issues">Issues</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-<p align="center">
-  <a href="README.md"><strong>English</strong></a> | <a href="README_zh.md"><strong>简体中文</strong></a>
-</p>
+VersionDock supports mixed Git/SVN workspaces, operations across repositories, a three-pane conflict editor and optional AI workflows.
 
-VersionDock brings an IDE-style VCS workflow to Visual Studio Code: a focused Commit panel, a Git Log panel with graph and branch operations for Git, SVN revision history, multi-repository awareness, shelving/stashing tools for Git, push helpers, and a 3-way merge editor for conflict resolution.
+## Workflows
 
-It activates automatically when the opened workspace contains a Git repository or an SVN working copy.
+| Area | Current capabilities |
+| --- | --- |
+| Changes and commits | Tree / flat file views, diff previews, selected-file commits, Git stage / unstage, amend, commit and push, commit-message history |
+| Multiple repositories | Mixed Git/SVN discovery, repository colors and visibility, combined changes and history; nested repositories manage their own files |
+| History | Git branch graph, SVN revisions, file / selection history, author / text / date / branch filters, commit details and comparison |
+| Branches and tags | Git create, checkout, merge, rebase, compare, rename and delete; tag creation, checkout, merge, push and local / remote deletion |
+| Sync | Incoming / outgoing commits, fetch, pull, push, sync, undo of unpushed commits and local-change backups before updates |
+| Local changes | Named changelists, native Git Stash, patch shelves, full / per-file restore and diff previews; shared shelves with Desktop |
+| Conflicts | Git/SVN conflict lists, three-pane text merging, saving and marking resolutions, progress and abort actions for ongoing operations |
+| Repository structure | Git submodule initialization / updates, worktree creation / pruning, subtree add / pull / push / split and related operations |
+| Accounts and remotes | Git identity profiles, SVN authentication management, GitHub / GitLab / Gitee accounts and clone / publish entry points |
+| Editor history | Git/SVN line annotations, current-line commit hints and navigation to history |
 
-<img src="media/screenshots/full.png" alt="VersionDock">
+The Commit panel offers `simplified`, `changelists` and `vscode` layouts, light / dark themes, adjustable density and scrollbars, and a separate window.
 
-## ✨ Features
+## Optional AI workflows
 
-### 📝 Commit Panel
+AI features require a configured model service or local Agent CLI. Git and SVN operations work independently.
 
-- Staged/unstaged file list with tree and flat views (persisted across reloads).
-- Per-file diff preview directly in the panel.
-- Per-file actions: open, rollback, delete, add to `.gitignore`.
-- Commit selected files only, or all staged changes.
-- SVN working copies use selected files as the commit target because SVN has no Git-style index.
-- **Commit** and **Commit & Push** unified dropdown button; **Amend** and **Amend & Push** via the dropdown.
-- Built-in AI workflows for GitHub Copilot, OpenAI, Claude, Gemini, custom OpenAI-compatible endpoints, and local Claude, Codex, Antigravity, or OpenCode agent CLIs.
-- Generated messages stream into the commit box with a typewriter effect and use the same editable Commit Prompt for every provider.
-- Commit message pre-filled automatically with `Merge branch 'X' into 'Y'` when merge conflicts are detected.
-- New and modified files are **not** automatically selected — only files that were already selected before the change are preserved.
+- **Commit messages** based on selected changes, with customizable prompts.
+- **Commit explanations** grounded in historical changes and file diffs.
+- **Code reviews** of selected changes.
+- **Conflict resolution** that proposes text-conflict results for review and application.
+- **Commit composition** that groups selected changes into an editable commit plan before execution.
 
-#### View Modes
+| Mode | Integrations |
+| --- | --- |
+| Model service | GitHub Copilot, OpenAI, Claude, Gemini and custom OpenAI-compatible endpoints |
+| Local Agent CLI | Claude, Codex, Antigravity and OpenCode |
 
-On first install, a QuickPick lets you choose your preferred view mode. You can change it at any time via `versiondock.changesViewMode` in Settings.
+OpenAI and custom endpoints support `chat-completions` and `responses`. CLI tools must be installed and authenticated separately. These workflows send selected code, diffs or conflict context to the configured service / Agent. Choose an integration appropriate for your repository. AI API keys are configured through VS Code settings; use user settings to avoid committing keys in workspace configuration.
 
-| Mode | Description |
-|:--|:--|
-| **Simplified** | Staged and Unstaged sections grouped per repository (default) |
-| **Changelists** | PhpStorm-style named changelists; files can be moved between lists |
-| **VS Code** | Native-style Staged Changes / Changes sections with inline stage/unstage buttons |
+## Conflict editor
 
-<img src="media/screenshots/view_mode.png" alt="VersionDock view modes">
+The editor presents the current version, editable result and incoming version side by side, with per-conflict actions, navigation and synchronized scrolling. SVN property and tree conflicts are identified separately in the conflict list.
 
-#### Changelists
+## Install and start
 
-- Create, rename, and delete named changelists from the context menu.
-- Drag files between changelists or use the context menu to reassign them.
-- Default changelist and Unversioned Files list are always present.
+Runtime requirements: **VS Code 1.85.0+**, an available **Git** executable, and the `svn` command-line client for SVN working copies (1.14+ recommended). Installing Node.js separately is not required to run the packaged extension.
 
-#### Repository pills & commit targeting
+Building from source requires Node.js 24 and npm. The `nvm` commands below are for existing nvm installations; installing Node.js 24 directly also works.
 
-- The commit message area shows a pill for each repository with staged/selected files.
-- Click the **×** on a pill to quickly deselect that repository from the commit.
-- In VS Code mode, a per-repository checkbox in the Staged Changes section controls which repositories are included.
+Search the extension ID `chenqinru.versiondock` in VS Code, download an available VSIX from [Releases](https://github.com/chenqinru/VersionDock/releases), or build from source:
 
-### 🚀 Sync Tab
-
-- Shows incoming and outgoing commits for every repository, including branches without an upstream tracking branch.
-- Filters commits by incoming or outgoing direction and inspects per-commit or aggregated file changes.
-- Adapts the primary action to **Push**, **Pull**, or **Sync**; pull-then-push runs only when both directions have changes.
-- **Undo** an unpushed HEAD commit and jump from any commit row to its matching node in the Git Log panel.
-
-### 🗄️ Shelve & Stash
-
-- **Shelve** with patch-based shelves: create, apply (full or partial), delete, and inspect per-file diffs.
-- Binary-file handling and conflict detection on unshelve.
-- [Shared shelves with VersionDock Desktop](docs/shelf-interop.md) for the same local Git working directory.
-- **Native stash** support: list, apply, pop, drop, and file diff preview.
-
-<img src="media/screenshots/shelf_stash_push.png" alt="VersionDock commit panel">
-
-### 📜 Git Log Panel
-
-- Commit graph with branch visualization.
-- SVN working copies show linear revision history with revision number, author, date, message, changed paths, and per-file diffs.
-- Branch sidebar: local branches, remote branches, tags; single-repo workspaces hide the repository list.
-- Filters by text, author, branch, date, and repository.
-- Commit detail with changed-file list and per-file diffs.
-- Extended single-commit and aggregate-commit detail pages can explain historical Git/SVN changes with AI, including streamed typewriter output, cancellation, and explicit truncation notices for oversized diffs.
-- Click a commit title to expand/collapse the message; if the commit has a body, it opens as a Markdown document in a VS Code tab.
-- Author avatars in commit rows and commit detail: resolves GitHub noreply emails to GitHub avatars, other emails to Gravatar, with a colored-initials fallback.
-- Branch operations from the sidebar: checkout, fetch, pull, push, merge, rebase, delete, rename, compare, and create new branch.
-- **Tags section** in the sidebar: collapsible list with multi-repo dot indicators; tags with the same name across repos are merged into a single row; active tag highlighted when in detached HEAD state.
-- Tag context menu: checkout, merge into current, push to remote, and delete (local, remote, or both).
-- Commit context menu: **New Tag…** when the commit has no tags; **Manage Tags…** (QuickPick with merge/delete actions) when it does.
-- **Checkout…** in the commit context menu: QuickPick lets you choose between checking out the branch or the revision (detached HEAD); works for remote-only branches too.
-- **Branch options…** in the commit context menu: opens the Git Menu focused on that branch.
-- Log Panel auto-refreshes in the background after a commit or push, with a loading skeleton during the fetch.
-- Hides `origin/HEAD` from the remote branches list.
-
-<br>
-<img src="media/screenshots/log_options.png" alt="VersionDock log panel">
-
-### 🌿 Branch Status Bar
-
-- Shows the current branch name (truncated with ellipsis if long) with dirty, ahead, behind, and diverged states; shows the short commit hash when in detached HEAD state without a tag, or the tag name when checked out on a tag.
-- **Branch menu** with quick access to: update project, push, commit, branch operations, and log.
-- SVN working copies show the current trunk/branch/tag or repository-relative URL and provide update, commit, cleanup, switch, branch, and tag actions.
-- **Tags section** in the per-repository menu: checkout, merge, push to remote, and delete tags; delete dialog offers three options (local, remote, or both).
-- **Per-repository sub-menu** with full remote management: add, rename, change URL, and remove remotes.
-- GitHub and GitLab remote-source providers for the native VS Code Clone picker; GitLab.com and self-hosted GitLab are supported.
-- Push a repository with no configured remote to create a GitHub/GitLab repository, configure `origin`, and publish the current branch in one flow.
-- Tracks the active editor to reflect the correct repository in multi-repo workspaces.
-
-<br>
-<img src="media/screenshots/branches_menu.png" alt="VersionDock branches menu">
-
-### 👤 Version Control Accounts
-
-- Context-aware status bar account entry: Git repositories open the Git identity manager, while SVN working copies open SVN authentication management.
-- Named Git identity profiles (display name, `git user.name`, `git user.email`) are reusable across workspaces, with the active selection stored per workspace.
-- Fallback chain: active VersionDock profile → Local (repo `.git/config`) → Global (`git config --global`).
-- Set **Local** or **Global** as the default source per workspace without creating a named profile.
-- Reserved names `Local` and `Global` are displayed as implicit entries with source tooltip.
-- Active named profiles are injected only into commits made by VersionDock and do not rewrite `.git/config` or `~/.gitconfig`.
-- SVN account menus show the repository URL, detected username and credential source, and provide account switching, session credential reset, native SVN cache cleanup, and connection testing.
-- Mixed Git/SVN roots expose the Git identity and SVN account as separate entries.
-
-<br>
-<img src="media/screenshots/git_profiles.png" alt="VersionDock git profiles">
-
-### 🔍 Git Annotations (Blame)
-
-- Inline blame columns in the editor showing commit author, relative date, and summary.
-- Ghost text with the same information rendered at the end of the current line.
-- Hover actions link directly to the commit in the Git Log panel.
-- Accessible via editor context menu and Command Palette; toggled with dedicated commands.
-- Layout adapts around edits, tabs, CodeLens, and editor alignment.
-
-<br>
-<img src="media/screenshots/git_annotations.png" alt="VersionDock annotations">
-
-### 🗂️ Multi-Repository Workspaces
-
-- Per-project colors in the commit graph and commit panel.
-- Grouped changes and a shared commit flow across repositories.
-- Common branch actions applied across all repositories in one step.
-- Activity bar badge showing the total number of changed files across all repositories.
-- Supports project folders that contain multiple child repositories, including mixed Git/SVN layouts such as a root Git project with `api/`, `admin/`, and `app/` SVN working copies.
-- Nested child repositories own their files in the Commit panel, so parent repositories do not duplicate changes from child VCS roots.
-
-### 🧩 SVN Working Copies
-
-- Detects SVN 1.7+ working-copy roots through `.svn`; folders containing both `.git` and `.svn` are registered as separate Git and SVN repository instances.
-- Status support for modified, added, deleted, missing, unversioned, and conflicted files.
-- Diff support for working-copy changes and historical revisions through `svn diff`.
-- Commit selected files with `svn commit --targets`, including automatic `svn add` for selected unversioned files.
-- Update, revert, cleanup, resolve as working, lock, and unlock commands.
-- Branch and tag support for the conventional `/trunk`, `/branches/*`, and `/tags/*` repository layout through `svn switch` and `svn copy`.
-
-### ⚔️ Merge Editor
-
-- 3-way conflict editor for files containing Git conflict markers.
-- Side-by-side conflict panes with editable result.
-- Conflict navigation, save, and automatic staging on completion.
-
-## 📋 Requirements
-
-- Visual Studio Code `1.85.0` or newer.
-- Git installed and available in the workspace.
-- SVN support requires a local `svn` CLI in `PATH` for SVN working copies. The current implementation has been validated against SVN `1.14.5`.
-- Node.js `18` or newer and npm for development or packaging.
-
-VersionDock uses VS Code's built-in Git extension when available and falls back to direct Git operations through `simple-git`.
-SVN commands are executed through the local `svn` executable; no SVN npm runtime dependency is bundled.
-
-## 📦 Installation
-
-### From a VSIX
-
-Build and package the extension:
-
-```bash
-npm install
-npm run build
+```sh
+git clone https://github.com/chenqinru/VersionDock.git
+cd VersionDock
+# Install and use Node.js 24 as specified in .nvmrc
+nvm install
+nvm use
+npm ci
 npm run package
 ```
 
-Then install the generated `.vsix`:
+Run **Extensions: Install from VSIX…** in VS Code and select the generated `versiondock-<version>.vsix`. Open a folder containing Git repositories or SVN working copies.
 
-```bash
-code --install-extension versiondock-4.0.7.vsix
+- **VersionDock Commit** in the sidebar: inspect changes, select files, commit or save local changes.
+- **VersionDock Log** in the panel: inspect history, branches / tags, commits and diffs.
+- **Status bar branch entry**: repository-specific Git or SVN operations.
+- **Command Palette**: search for `VersionDock` to open history, conflicts, annotations and settings.
+
+## Common settings
+
+Search for `versiondock` in VS Code settings. The extension's configuration lists all available options.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `versiondock.changesViewMode` | `simplified` | Changes layout |
+| `versiondock.layoutDensity` | `comfortable` | UI density; also supports `compact` |
+| `versiondock.scrollbarVisibility` | `system` | System, automatically hidden or always visible scrollbars |
+| `versiondock.defaultSaveAction` | `stash` | Default to Git Stash or Shelve when saving changes |
+| `versiondock.ai.executionMode` | `provider` | Model service or `agent-cli` |
+| `versiondock.ai.provider` | `github-copilot` | Model provider |
+| `versiondock.ai.apiProtocol` | `chat-completions` | OpenAI / custom endpoint protocol |
+| `versiondock.ai.cli.provider` | `claude` | Local Agent CLI |
+
+## Recommended: VersionDock Desktop
+
+For Git/SVN management outside your editor, try [VersionDock Desktop](https://github.com/chenqinru/VersionDockDesktop). This standalone workbench runs on macOS, Windows and Linux, bringing changes, commits, synchronization, history and conflicts across multiple projects into one application.
+
+Desktop and this extension are installed separately and can be used independently or together. See the [Desktop installation guide](https://github.com/chenqinru/VersionDockDesktop/blob/main/README_en.md#installation), or [download the app from Releases](https://github.com/chenqinru/VersionDockDesktop/releases).
+
+## Git, SVN and Desktop
+
+- SVN has no Git index: selected files are the SVN commit targets. Git Stash and patch shelves are Git-only features.
+- SVN branch / tag operations recognize the conventional `trunk`, `branches` and `tags` layout. Availability depends on the repository structure.
+- [VersionDock Desktop](https://github.com/chenqinru/VersionDockDesktop) is a separate desktop project. Updated versions of both clients share Stash, the Git index and shelves for the **same local Git working directory**. Independent clones do not share local data; shelves are isolated between worktrees. See [shelf interoperability](docs/shelf-interop.md).
+- Restoring a shelf keeps its record by default. A full restore can also delete it. Refresh the other client to see additions or deletions.
+
+## Development
+
+Use Node.js 24 and npm. `npm run package` builds the host and all Webviews automatically.
+
+```sh
+npm ci
+npm run check      # Lint, type checks and repository regression tests
+npm run build      # Production build
+npm run watch      # Development watch
 ```
 
-### Development Host
+Press F5 in VS Code to start the Extension Development Host. Use temporary repositories to verify Git/SVN writes.
 
-Install dependencies, build once, then launch the extension host from VS Code:
+- [Contribution guide](CONTRIBUTING.md): structure, setup and acceptance checks.
+- [CI and release guide](docs/ci-release.md): workflows, VSIX artifacts, release tags and registry credentials.
+- [Security policy](SECURITY.md): private vulnerability reporting.
 
-```bash
-npm install
-npm run build
-```
+## Attribution and license
 
-Open this repository in VS Code and run **Run Extension** from the Debug panel.
+Thanks to RioNoir and the contributors to [GitCharm](https://github.com/RioNoir/GitCharm) for the original implementation. VersionDock is a modified, independently maintained derivative. Changes and issues in this project are the responsibility of this repository's maintainers.
 
-For iterative development:
-
-```bash
-npm run watch
-```
-
-## 🛠️ Usage
-
-Open a workspace that contains one or more Git repositories or SVN working copies. VersionDock adds:
-
-- **VersionDock Commit** in the Activity Bar.
-- **VersionDock Log** in the bottom Panel.
-- A **branch item** and a **profile item** in the Status Bar.
-- Commands in the Command Palette.
-
-Use the Commit panel to select files, inspect diffs, write a commit message, commit, commit and push Git changes, shelve Git changes, manage Git stashes, or review unpushed Git commits. For SVN, selected files are committed directly to the server.
-
-The default AI provider is `github-copilot`. Select `openai`, `claude`, `gemini`, or `custom` to configure a model and key. The API URL accepts either a service root such as `http://localhost:8317` (the standard provider path is appended automatically) or a complete endpoint; official providers use their default endpoint when left empty.
-
-Set `versiondock.ai.executionMode` to `agent-cli` to run an installed Claude, Codex, Antigravity, or OpenCode CLI on the extension host. VersionDock keeps the selected diff as the authoritative scope while the agent may inspect related repository files. Claude, Codex, and OpenCode enforce tool whitelists or read-only sandboxes. Antigravity runs in non-interactive plan mode under terminal sandbox restrictions, relying on sandbox containment and automatic denial of unapproved actions rather than declaring a hard read-only guarantee. Claude and Codex use non-persistent sessions, OpenCode sessions are deleted after each request, and Antigravity reuses one VersionDock conversation per working root. For multi-repository requests, VersionDock asks before granting access to a common parent outside the current workspace roots.
-
-Use **VersionDock: Edit Commit Prompt** to customize formatting. A workspace prompt is stored at `.vscode/ai-commit-message.prompt.md`; the global prompt is stored in VersionDock's global extension storage. Workspace prompts take precedence when all selected repositories belong to one workspace, followed by the global prompt and the built-in default.
-
-AI commit and explanation context is allocated in two phases: repository/commit metadata plus every file summary is added first, then diff hunks are included round-robin across files until the active provider's input limit is reached. This prevents an early large file from consuming the entire input budget. GitHub Copilot uses the selected model's own `maxInputTokens`; other providers use `versiondock.ai.maxInputTokens`.
-
-OpenAI and Custom providers support both Chat Completions and Responses API requests. Set `versiondock.ai.apiProtocol` to `responses`; a configured host or `/v1` base URL is then resolved to `/v1/responses`. Claude, Gemini, GitHub Copilot, and Agent CLI mode ignore this setting.
-
-For non-Copilot providers, `versiondock.ai.maxOutputTokens` is the global output ceiling. Each feature calculates a smaller request budget dynamically: commit messages scale with context complexity, explanations with commit and file counts, Composer with change-unit count, and conflict resolution with the expected replacement-code size. GitHub Copilot controls its own output budget.
-
-AI Commit Composer uses compact request-local unit IDs and validates that every selected change is assigned exactly once. Embedded JSON is recovered locally when possible; malformed JSON receives one focused syntax-repair request, and an output-limit finish can retry once with a larger budget. If an otherwise valid plan omits units, Composer makes one focused coverage-repair request and validates the merged plan again before it can be applied.
-
-Open an extended commit detail page and select **AI Explain** to generate a structured explanation from commit metadata and historical diffs. Use **VersionDock: Edit Commit Explanation Prompt** to customize the explanation. Its workspace prompt is stored at `.vscode/ai-commit-explanation.prompt.md`; the workspace, global, and built-in precedence matches the commit-message prompt. Explanations stay in the current detail page and are not cached on disk.
-
-Use the Log panel to browse history, filter commits or SVN revisions, inspect changed files, open diffs, and run supported branch or revision operations.
-
-Use the Status Bar branch menu for fast project-wide actions such as updating all repositories, pushing Git repositories, creating branches, switching branches, managing remotes, SVN cleanup, or handling merge/rebase states.
-
-## ⌨️ Commands
-
-| Command | Description |
-|:--|:--|
-| `VersionDock: Focus Git Log` | Focuses the Git Log panel. |
-| `VersionDock: Fetch All Remotes` | Fetches and prunes all remotes. |
-| `VersionDock: Manage Remote Accounts` | Connects GitHub through VS Code and manages GitLab PATs stored in VS Code SecretStorage. |
-| `VersionDock: Open Merge Editor` | Opens the merge editor for the active file when conflict markers are present. |
-| `VersionDock: Refresh Commit Panel` | Refreshes the Commit panel state. |
-| `VersionDock: Branch Menu` | Opens the Status Bar branch menu. |
-| `VersionDock: Update Project` | Pulls all repositories using merge or rebase. |
-| `VersionDock: Settings` | Opens VersionDock settings. |
-| `VersionDock: Edit Commit Prompt` | Edits the workspace or global prompt used by every AI provider. |
-| `VersionDock: Reset Commit Prompt` | Removes a workspace or global custom prompt. |
-| `VersionDock: Edit Commit Explanation Prompt` | Edits the workspace or global prompt used for AI commit explanations. |
-| `VersionDock: Reset Commit Explanation Prompt` | Removes a workspace or global custom commit-explanation prompt. |
-| `VersionDock: Check Current AI CLI` | Verifies the selected CLI executable and required non-interactive/session options without starting a model request. |
-| `VersionDock: Reset Antigravity CLI Conversation` | Forgets the VersionDock conversation mapping for the current working roots. The Antigravity conversation itself is not deleted. |
-| `VersionDock: Manage Version Control Accounts` | Opens the context-aware Git identity or SVN account manager. |
-| `VersionDock: Switch Git Profile` | Switches the active Git profile for the current workspace. |
-| `VersionDock: SVN Cleanup` | Runs `svn cleanup` for an SVN working copy. |
-| `VersionDock: SVN Resolve as Working` | Marks the selected SVN conflicted file as resolved with the working copy content. |
-| `VersionDock: SVN Lock` | Locks the selected SVN file, with an optional lock message. |
-| `VersionDock: SVN Unlock` | Unlocks the selected SVN file. |
-| `VersionDock: SVN Switch` | Switches an SVN working copy to trunk, a branch, or a tag. |
-| `VersionDock: SVN Create Branch` | Creates an SVN branch under `/branches`. |
-| `VersionDock: SVN Create Tag` | Creates an SVN tag under `/tags`. |
-| `Open Git Annotations` | Shows inline blame annotations in the active editor. |
-| `Close Git Annotations` | Hides inline blame annotations in the active editor. |
-| `VersionDock: Navigate to Commit` | Navigates to the commit linked from a blame annotation. |
-
-## ⌨️ Keybindings
-
-| Keybinding | macOS | Command |
-|:--|:--|:--|
-| `Ctrl+Alt+L` | `Cmd+Alt+L` | `VersionDock: Focus Git Log` |
-| `Ctrl+Alt+K` | `Cmd+Alt+K` | `VersionDock: Commit` |
-
-## ⚙️ Settings
-
-| Setting | Default | Description |
-|:--|:--|:--|
-| `versiondock.graphMaxCommits` | `1000` | Maximum commits displayed in Git Log. Lightweight Git ancestry may load beyond this limit to keep graph lanes stable. |
-| `versiondock.fetchOnStartup` | `false` | Fetches all remotes when VersionDock activates. |
-| `versiondock.projectColors` | `{}` | Maps workspace folder/repository names to hex colors for multi-repo views. |
-| `versiondock.repositoryScanMaxDepth` | `1` | Maximum depth of workspace subfolders to scan for Git repositories. `0` only checks workspace folders. |
-| `versiondock.repositoryScanIgnoredFolders` | `["node_modules"]` | Folder names or workspace-relative paths skipped while scanning for nested Git repositories. |
-| `versiondock.autoRefreshInterval` | `0` | Auto-refresh interval in seconds. `0` disables interval refresh and uses file watchers only. |
-| `versiondock.scrollbarVisibility` | `"system"` | Scrollbars across all VersionDock panels/pages: `system` preserves existing behavior, `auto` shows on hover/scroll, `visible` always shows when content overflows. Forced modes overlay content without reserving layout space, and follow VS Code's Modern UI sizing, animation timing and reduced-motion settings. Changes apply immediately. |
-| `versiondock.changesViewMode` | `"simplified"` | How to display changed files: `simplified`, `changelists`, or `vscode`. Chosen via QuickPick on first install. |
-| `versiondock.gitAnnotations.enabled` | `true` | Enable inline Git blame annotations in the editor. |
-| `versiondock.gitGhostText.enabled` | `true` | Enable inline Git ghost text in the editor. |
-| `versiondock.ai.executionMode` | `"provider"` | AI execution mode: existing provider integration or a local `agent-cli`. |
-| `versiondock.ai.provider` | `"github-copilot"` | AI provider: `github-copilot`, `openai`, `claude`, `gemini`, or `custom`. |
-| `versiondock.ai.apiProtocol` | `"chat-completions"` | HTTP API protocol for OpenAI and Custom: `chat-completions` or `responses`. |
-| `versiondock.ai.cli.provider` | `"claude"` | Local agent CLI: `claude`, `codex`, `antigravity`, or `opencode`. |
-| `versiondock.ai.cli.model` | `""` | Optional model override for the selected CLI. |
-| `versiondock.ai.cli.timeoutSeconds` | `300` | Timeout for one CLI request. |
-| `versiondock.ai.cli.*Path` | CLI name | Executable name or absolute path for each supported CLI on the extension host. |
-| `versiondock.ai.model` | `""` | Provider-mode model name. GitHub Copilot selects a model automatically when empty; Agent CLI mode ignores this setting. |
-| `versiondock.ai.apiUrl` | `""` | Optional base URL or full endpoint for official providers; Custom requires it. A bare host automatically receives the selected protocol path. Ignored in Agent CLI mode. |
-| `versiondock.ai.apiKey` | `""` | API key required by non-Copilot providers; ignored in Agent CLI mode. |
-| `versiondock.ai.maxInputTokens` | `128000` | Maximum locally estimated prepared-context size. Copilot uses its model limit; Agent CLI mode uses this as a local safety budget. |
-| `versiondock.ai.maxOutputTokens` | `128000` | Output ceiling for HTTP providers and local feature-budget calculations. Copilot controls its own output budget. |
-
-Example:
-
-```json
-{
-  "versiondock.fetchOnStartup": true,
-  "versiondock.graphMaxCommits": 2000,
-  "versiondock.projectColors": {
-    "api": "#ff6b6b",
-    "web": "#4ec9b0"
-  },
-  "versiondock.gitAnnotations.enabled": true
-}
-```
-
-## 🏗️ Project Structure
-
-```text
-src/host/                 VS Code extension host code
-src/host/git/             Git, diff, conflict, blame, workspace, and shelve services
-src/host/svn/             SVN CLI adapter and status/log/diff parsing
-src/host/vcs/             Shared VCS types and CLI helpers
-src/host/panels/          Webview providers for Commit, Log, and Merge Editor
-src/host/ui/              Status bar controllers, badge controller, and annotation controller
-src/webview/commitPanel/  React Commit panel
-src/webview/gitLog/       React Git Log panel
-src/webview/mergeEditor/  React 3-way merge editor
-src/webview/shared/       Shared webview components, hooks, and message types
-media/                    Extension icons, codicons, and assets
-out/                      Built extension and webview bundles
-```
-
-## 🔧 Development Scripts
-
-Use Node.js 24 (`nvm use`) and install dependencies with `npm ci`. See [CI and VSIX release](docs/ci-release.md) for Actions artifacts, release tags and registry credentials.
-
-`npm run test:scrollbars` checks scrollbar configuration and Webview lifecycle. `npm run test:scrollbars:browser` runs real Chromium interaction tests for overlays, zero reserved gutter, dragging, animations, nested clipping and modal behavior. The browser suite requires Node.js 22+ and an installed Chromium browser; set `CHROME_PATH` when it is not in a default location. It uses an isolated temporary browser profile.
-
-| Script | Description |
-|:--|:--|
-| `npm run build` | Builds both extension host and webview bundles. |
-| `npm run build:host` | Builds the extension host bundle with esbuild. |
-| `npm run build:webview` | Builds all React webview bundles. |
-| `npm run watch` | Watches host and webview sources in parallel. |
-| `npm run check` | Runs lint, type checks and all repository regression tests. |
-| `npm run lint` | Runs ESLint on TypeScript and TSX sources. |
-| `npm run typecheck` | Type-checks the main TypeScript project. |
-| `npm run typecheck:webview` | Type-checks the webview TypeScript project. |
-| `npm run package` | Creates a VSIX package with `vsce`. |
-| `npm run publish` | Publishes the extension with `vsce publish`. |
-
-## 📌 Notes
-
-- VersionDock is designed for Git workspaces and multi-root workspaces where each folder may be its own repository.
-- SVN support is designed for working copies with a conventional `/trunk`, `/branches`, and `/tags` layout. Branch/tag actions are hidden or limited when that layout cannot be listed by the SVN server.
-- SVN has no Git index. The Commit panel treats checked files as the SVN commit target instead of staged files.
-- Destructive operations (rollback, delete, branch delete, reset, stash drop, shelve drop, commit undo) ask for confirmation.
-- GitHub Copilot generation requires an available VS Code language model; HTTP providers require a compatible URL, model, and API key; Agent CLI mode requires the selected CLI to be installed and authenticated on the extension host.
-- The merge editor works on files that contain Git/SVN text conflict markers. SVN conflicts can be marked resolved as working after saving.
-- Git Annotations require the file to be tracked in a Git repository with at least one commit.
-
-## 🌐 Ecosystem
- 
-Looking for a standalone desktop application that runs independently without VS Code?
- 
-Check out [**VersionDock Desktop**](https://github.com/chenqinru/VersionDockDesktop) — a high-performance desktop Git & SVN client built with Tauri 2, Rust, and React 18.
- 
-## 🤝 Contributing
- 
-Contributions are welcome! Please read our [**Contributing Guide**](CONTRIBUTING.md) and [**Code of Conduct**](CODE_OF_CONDUCT.md) for details on our code of conduct and the process for submitting pull requests.
- 
-- 🐛 Found a bug? [Report it here](https://github.com/chenqinru/VersionDock/issues/new?template=bug_report.yml)
-- 💡 Have an idea? [Request a feature](https://github.com/chenqinru/VersionDock/issues/new?template=feature_request.yml)
-- 💬 Want to discuss? [Join the discussion](https://github.com/chenqinru/VersionDock/discussions)
- 
-## 🔒 Security
- 
-If you discover a security vulnerability, please follow our [Security Policy](SECURITY.md).
- 
-## 📄 License
- 
-This project is licensed under the [GNU General Public License v3.0](LICENSE).
+Distributed under [GPL-3.0-only](LICENSE). See [NOTICE](NOTICE.md) and [third-party notices](THIRD_PARTY_NOTICES.md) for source and resource attribution.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "VersionDock 插件发布"
+  short_description: "完成 VS Code 插件版本整理、检查打包、市场发布和结果核验"
+  default_prompt: "使用 $versiondock-extension-release 发布当前插件版本，完成版本核对、更新说明、检查打包、市场发布和结果核验。"

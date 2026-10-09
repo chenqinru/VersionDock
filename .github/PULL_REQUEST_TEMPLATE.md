@@ -17,8 +17,8 @@
 
 ## Checklist
 
-- [ ] My code follows the code style of this project (`npm run lint`).
+- [ ] My code follows the code style of this project (`npm run check`).
 - [ ] I have verified the TypeScript types (`npm run typecheck`).
-- [ ] I have verified the extension build (`npm run build`).
+- [ ] I have verified the extension build (`npm run package`).
 - [ ] I have added appropriate documentation if applicable.
 - [ ] I have manually verified the changes in VS Code extension host.

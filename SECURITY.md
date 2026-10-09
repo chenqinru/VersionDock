@@ -1,23 +1,13 @@
 # Security Policy
 
-## Supported Versions
+Report VersionDock security vulnerabilities through the private channels described below.
 
-We actively provide security updates for the latest released versions:
+## Reporting
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 3.x     | :white_check_mark: |
-| < 3.0   | :x:                |
+Use [GitHub private vulnerability reporting](https://github.com/chenqinru/VersionDock/security/advisories/new) when it is enabled. Do not include working credentials, private repository contents or exploitable details in public issues. If the private reporting channel is unavailable, contact the maintainer to arrange a private channel before sharing details.
 
-## Reporting a Vulnerability
+Include the affected VersionDock version, platform, reproduction steps, impact and a minimal example when possible. Reproduce against current `main` or the latest available release; this project does not promise separate maintenance of every older version.
 
-If you discover a security vulnerability within VersionDock, please do **NOT** open a public issue.
+## AI integrations
 
-Instead, please report security vulnerabilities through [GitHub Security Advisories](https://github.com/chenqinru/VersionDock/security/advisories/new) or directly contact the maintainer via GitHub.
-
-### What to include in your report:
-- A description of the vulnerability and its potential impact.
-- Clear steps or a minimal proof of concept (PoC) to reproduce the issue.
-- Any suggested fixes or mitigations if available.
-
-We will review your submission promptly and work with you to resolve the issue responsibly before any public disclosure.
+AI features use the service or Agent CLI selected by the user and may provide it with selected code, diffs, commit metadata and conflict context. Review the selected provider's data policy and your repository's requirements. AI API keys are configured through VS Code settings; keep them out of committed workspace configuration.

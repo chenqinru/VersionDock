@@ -1,179 +1,140 @@
 <p align="center">
-  <img src="media/icons/versiondock-logo-dark.png" alt="VersionDock logo" width="160">
+  <img src="media/icons/versiondock-logo-dark.png" alt="VersionDock" width="128" height="128">
 </p>
 
 <h1 align="center">VersionDock</h1>
 
+<p align="center">在 VS Code 中集中处理 Git / SVN 更改、提交、历史和冲突。</p>
+
 <p align="center">
-  <strong>专为 VS Code 打造的高效 Git 与 SVN 版本控制工作台</strong>
+  <a href="package.json"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"></a>
+  <a href="https://code.visualstudio.com/"><img src="https://img.shields.io/badge/VS_Code-%3E%3D1.85.0-007ACC" alt="VS Code minimum version"></a>
+  <a href="#能做什么"><img src="https://img.shields.io/badge/VCS-Git_%2B_SVN-F05032?logo=git&amp;logoColor=white" alt="Git and SVN"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="GPL-3.0-only"></a>
+  <a href="https://github.com/chenqinru/VersionDock/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/CI-GitHub_Actions-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions workflow"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/chenqinru/VersionDock/actions/workflows/ci.yml"><img alt="CI Status" src="https://img.shields.io/github/actions/workflow/status/chenqinru/VersionDock/ci.yml?branch=main&label=CI&logo=github"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=chenqinru.versiondock"><img alt="VS Code Marketplace Version" src="https://img.shields.io/visual-studio-marketplace/v/chenqinru.versiondock?color=blue&logo=visual-studio-code"></a>
-  <a href="https://marketplace.visualstudio.com/items?itemName=chenqinru.versiondock"><img alt="VS Code Marketplace Installs" src="https://img.shields.io/visual-studio-marketplace/i/chenqinru.versiondock"></a>
-  <a href="https://github.com/chenqinru/VersionDock/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/chenqinru/VersionDock?color=green"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-red"></a>
+  <strong>简体中文</strong> · <a href="README.md">English</a> ·
+  <a href="https://github.com/chenqinru/VersionDock/issues">问题反馈</a> ·
+  <a href="CONTRIBUTING.md">贡献指南</a> ·
+  <a href="CHANGELOG.md">更改日志</a>
 </p>
 
-<p align="center">
-  <a href="README.md"><strong>English</strong></a> | <a href="README_zh.md"><strong>简体中文</strong></a>
-</p>
+VersionDock 支持 Git / SVN 混合工作区、多仓库操作、三栏冲突处理和可选 AI 辅助工作流。
 
-VersionDock 为 Visual Studio Code 带来了媲美专业 IDE（如 JetBrains/PhpStorm）的版本控制工作流：包含直观的提交面板、带分支拓扑图谱的日志面板、Git/SVN 多仓库混合管理、变更列表（Changelists）、补丁搁置（Shelf）、代码暂存（Stash）、三栏合并冲突编辑器以及内置 AI 提交信息生成。
+## 能做什么
 
-当打开的工作区包含 Git 仓库或 SVN 工作副本时，VersionDock 会自动激活。
+| 工作流 | 当前能力 |
+| --- | --- |
+| 更改与提交 | 树状 / 扁平文件列表、差异预览、按文件提交、Git 暂存 / 取消暂存、Amend、提交并推送、提交信息历史 |
+| 多仓库工作区 | Git / SVN 混合发现、仓库颜色、显示 / 隐藏仓库、跨仓库查看更改与历史；嵌套仓库分别管理自己的文件 |
+| 提交历史 | Git 分支图谱、SVN 修订历史、文件 / 选区历史、作者 / 文本 / 日期 / 分支筛选、提交详情与比较 |
+| 分支与标签 | Git 分支创建、检出、合并、变基、比较、重命名和删除；标签创建、检出、合并、推送及本地 / 远程删除 |
+| 同步 | 待推送 / 待拉取提交、抓取、拉取、推送、同步、未推送提交的撤销，以及更新前的本地更改备份 |
+| 本地变更管理 | 命名变更列表、原生 Git Stash、补丁搁置、完整 / 按文件恢复、差异预览；与 Desktop 共享搁置 |
+| 冲突处理 | Git / SVN 冲突列表、文本冲突三栏合并编辑器、保存结果与标记解决、进行中操作的状态与中止入口 |
+| 仓库结构 | Git submodule 初始化 / 更新、worktree 创建 / 清理、subtree 添加 / 拉取 / 推送 / 拆分等管理 |
+| 身份与远程 | Git 提交身份 Profile、SVN 认证管理、GitHub / GitLab / Gitee 远程账号与仓库克隆 / 发布入口 |
+| 编辑器追溯 | Git / SVN 行注释、当前行提交提示，以及跳转到对应历史 |
 
-<img src="media/screenshots/full.png" alt="VersionDock 全景展示">
+提交面板提供 `simplified`、`changelists`、`vscode` 三种视图，支持深浅主题、布局密度、滚动条行为和独立窗口。
 
-## ✨ 核心特性
+## AI 辅助工作流
 
-### 📝 提交面板（Commit Panel）
+AI 为可选能力，需要自行配置可用的模型服务或本地 Agent CLI。普通 Git / SVN 操作可独立使用。
 
-- **暂存/未暂存文件列表**：支持树状（Tree）和扁平（Flat）两种视图，状态自动持久化。
-- **文件差异即时预览**：在面板内即可直接查看选中文件的 Diff。
-- **文件快捷操作**：打开文件、回滚更改、删除文件、添加到 `.gitignore`。
-- **精细化提交控制**：支持仅提交选中文件或提交所有已暂存的更改。
-- **SVN 无缝支持**：由于 SVN 没有 Git 暂存区概念，面板自动以勾选的文件作为提交目标。
-- **组合提交按钮**：支持一键 **Commit** / **Commit & Push**，以及通过下拉菜单进行 **Amend** / **Amend & Push**。
-- **智能 AI 工作流**：原生接入 GitHub Copilot，支持 OpenAI、Claude、Gemini、自定义 OpenAI 兼容端点，以及本地 Claude、Codex、Antigravity、OpenCode Agent CLI；OpenAI 与自定义端点可通过 `versiondock.ai.apiProtocol` 选择 `chat-completions` 或 `responses`。
-- **本地 Agent 上下文**：CLI 模式保留 VersionDock 选中的变更范围，并允许外部 Agent 自主检查相关仓库文件；Claude/Codex/OpenCode 限制只读或白名单沙箱，Antigravity 采用非交互计划模式与终端沙箱限制；Claude/Codex 使用无持久化会话，OpenCode 会话执行后删除，Antigravity 每个工作根复用一个专用会话。
-- **简化 API 地址**：Provider 模式可只填写 `http://localhost:8317` 等基础地址，VersionDock 会按所选协议自动补齐标准接口路径；OpenAI、Claude、Gemini 留空时使用官方接口。
-- **流式打字机效果**：生成的提交信息以打字机动效平滑输入，提供可自定义的 Prompt 模板。
+- **生成提交信息**：基于选中的更改生成信息，并支持自定义 Prompt。
+- **提交解释**：从历史提交和文件差异解释改动。
+- **代码审查**：分析所选更改并展示审查结果。
+- **冲突解决**：为文本冲突生成候选结果，供审阅后应用。
+- **智能提交编排**：将选中的更改组织成提交方案，调整分组和信息后再执行。
 
-#### 视图模式
+支持的接入方式：
 
-首次安装时可通过 QuickPick 选择您偏好的视图模式，也可以随时在 VS Code 设置中的 `versiondock.changesViewMode` 切换：
+| 模式 | 接入 |
+| --- | --- |
+| 模型服务 | GitHub Copilot、OpenAI、Claude、Gemini、自定义 OpenAI 兼容接口 |
+| 本地 Agent CLI | Claude、Codex、Antigravity、OpenCode |
 
-| 模式 | 说明 |
-|:--|:--|
-| **Simplified** | 按仓库分组展示暂存和未暂存分区（默认模式） |
-| **Changelists** | PhpStorm 风格的命名变更列表，支持在列表间自由拖拽与移动文件 |
-| **VS Code** | 原生风格的暂存/未暂存分区，提供内联暂存与取消暂存按钮 |
+OpenAI 和自定义接口支持 `chat-completions` 与 `responses`。CLI 模式需要对应工具已安装且完成认证。AI 功能会将所选代码、差异或冲突上下文交给配置的服务 / Agent；请按仓库要求选择接入方式。AI API Key 使用 VS Code 设置配置，建议放在用户设置中，避免提交到工作区配置。
 
-<img src="media/screenshots/view_mode.png" alt="VersionDock 视图模式">
+## 冲突编辑器
 
-#### 变更列表（Changelists）
+文本冲突以“当前版本 / 合并结果 / 对方版本”三栏展示，支持逐段接受更改、编辑结果、冲突导航和同步滚动。SVN 的属性冲突、树冲突在冲突列表中单独识别，不以文本合并代替处理。
 
-- 支持从右键菜单创建、重命名和删除命名变更列表。
-- 支持在变更列表之间直接拖拽文件，或使用右键菜单重新分配。
-- 默认变更列表（Default）和未跟踪文件列表（Unversioned Files）始终常驻。
+## 安装与开始使用
 
-### 🚀 同步管理（Sync Tab）
+运行要求：**VS Code 1.85.0+**、可执行的 **Git**；使用 SVN 时另需 `svn` 命令行客户端（推荐 1.14+）。已安装的插件不需要额外安装 Node.js。
 
-- 统一展示各仓库的待推送与待拉取提交，包含未关联 upstream 的分支。
-- 支持按待推送、待拉取方向筛选，并检查单次提交或聚合文件变更。
-- 主操作根据实际差异自动切换为推送、拉取或同步，只有同时存在双向差异时才先拉取再推送。
-- 支持撤销（Undo）未推送的 HEAD 提交，点击提交行可跳转到 Git Log 中的对应节点。
+从源码构建需要 Node.js 24 和 npm；以下 `nvm` 命令适用于已安装 nvm 的环境，也可自行安装 Node.js 24。
 
-### 🗄️ 搁置与暂存（Shelve & Stash）
+可在 VS Code 扩展页按 ID `chenqinru.versiondock` 查找，或从 [Releases](https://github.com/chenqinru/VersionDock/releases) 获取已发布的 VSIX。也可从源码构建：
 
-- **补丁搁置（Shelve）**：基于 Patch 的搁置系统，支持创建、完整/部分应用、删除以及检查差异。
-- **与 Desktop 共享搁置**：两端新版在同一本地 Git 工作目录中共用记录，支持双向恢复与删除，详见[互通说明](docs/shelf-interop.md)。
-- **原生 Git Stash**：列表浏览、应用、弹出、丢弃和差异预览。
-
-<img src="media/screenshots/shelf_stash_push.png" alt="VersionDock 提交面板">
-
-### 📜 Git 日志与图谱（Git Log Panel）
-
-- **拓扑图谱**：清晰美观的分支与合并泳道渲染。
-- **SVN 历史**：展示线性修订历史，包含版本号、作者、日期、日志及变更文件列表。
-- **分支侧边栏**：本地分支、远程分支、Tag 标签分类浏览；单仓库自动精简展示。
-- **多维度筛选**：支持按文本、作者、分支、日期范围和仓库进行极速过滤。
-- **提交详情与 AI 解释**：深度解析单次或聚合提交，支持 AI 结构化总结变更内容。
-- **作者头像解析**：自动解析 GitHub noreply 邮箱头像、Gravatar 头像及首字母彩色占位符。
-- **完整分支操作**：检出、抓取、拉取、推送、合并、变基、删除、重命名、比较和创建分支。
-
-<img src="media/screenshots/log_options.png" alt="VersionDock 日志面板">
-
-### 🌿 分支状态栏与多账户管理
-
-- **状态栏分支项**：实时显示当前分支名、脏状态、ahead/behind 计数，点击唤出全局 Git/SVN 快捷菜单。
-- **身份多 Profile 切换**：可为不同工作区配置专属的 Git 提交身份（用户名与邮箱），提交时无缝注入，不污染全局 `~/.gitconfig`。
-- **SVN 账号安全管理**：管理 SVN 认证凭据，支持连接测试与凭据重置。
-
-### 🔍 行内代码追溯（Git Blame）
-
-- **行内 Blame 列**：在编辑器中直观展示每行代码的作者、相对时间与提交摘要。
-- **行尾幽灵文本（Ghost Text）**：光标移动时光标所在行末自动渲染提交元数据。
-- 点击直接跳转到 Git Log 对应提交。
-
-### ⚔️ 三栏合并编辑器（3-Way Merge Editor）
-
-- 专为冲突解决打造的三栏编辑器（本地修改、冲突标记、最终合并结果）。
-- 快捷接受当前/传入更改、保存并自动标记冲突为已解决（Git stage / SVN resolve）。
-
----
-
-## 📋 环境要求
-
-- Visual Studio Code `1.85.0` 或更高版本。
-- 本地环境中已安装 **Git**。
-- SVN 功能需要系统 `PATH` 中包含 **`svn`** 命令行工具（推荐 SVN 1.14+）。
-- 纯净运行：运行时不依赖多余外部重量级依赖，轻量快速。
-
----
-
-## 📦 安装与使用
-
-### 从 VS Code 插件市场安装
-
-在 VS Code 扩展面板中搜索 **`VersionDock`** 并点击安装。
-
-### 从 VSIX 文件安装
-
-```bash
-code --install-extension versiondock-3.6.0.vsix
-```
-
-### 本地开发与调试
-
-开发和流水线统一使用 Node.js 24（`nvm use`）。流水线构建、安装包产物和发布凭据见 [CI 与 VSIX 发布说明](docs/ci-release.md)。
-
-```bash
-# 安装依赖
+```sh
+git clone https://github.com/chenqinru/VersionDock.git
+cd VersionDock
+# 安装并使用 .nvmrc 指定的 Node.js 24
+nvm install
+nvm use
 npm ci
-
-# 监听编译
-npm run watch
-
-# 在 VS Code 中按 F5 启动 Extension Development Host
+npm run package
 ```
 
----
+在 VS Code 执行 **Extensions: Install from VSIX…**，选择生成的 `versiondock-<版本号>.vsix`，然后打开包含 Git 仓库或 SVN 工作副本的目录。
 
-## ⚙️ 滚动条设置
+- 侧栏 **VersionDock Commit**：查看更改、选择文件、提交或保存本地更改。
+- 面板 **VersionDock Log**：查看历史、分支 / 标签、提交详情与差异。
+- 状态栏分支入口：按当前仓库类型执行 Git 或 SVN 操作。
+- 命令面板搜索 `VersionDock`：打开历史、冲突、注释、设置等入口。
 
-在 VS Code 设置中搜索 `versiondock.scrollbarVisibility`，控制 VersionDock 所有面板和页面的滚动条，包括独立窗口、提交详情、编辑提交信息、AI 页面和合并编辑器：
+## 常用设置
 
-- `system`（默认）：跟随系统，保留现有滚动条行为。
-- `auto`：自动隐藏，鼠标悬停或滚动时显示，其余时间隐藏。
-- `visible`：始终显示，内容溢出时保持可见。
+在 VS Code 设置中搜索 `versiondock`。以下仅列常用项，完整设置以扩展配置为准。
 
-修改后即时生效，无需重启 VS Code。此设置仅控制 VersionDock 自己的页面；VS Code 原生树视图、编辑器和差异编辑器由 VS Code 控制。
+| 设置 | 默认值 | 用途 |
+| --- | --- | --- |
+| `versiondock.changesViewMode` | `simplified` | 更改列表布局 |
+| `versiondock.layoutDensity` | `comfortable` | 界面密度，可选 `compact` |
+| `versiondock.scrollbarVisibility` | `system` | 系统滚动条、自动隐藏或常显 |
+| `versiondock.defaultSaveAction` | `stash` | 保存更改时默认使用 Stash 或 Shelve |
+| `versiondock.ai.executionMode` | `provider` | 模型服务或 `agent-cli` |
+| `versiondock.ai.provider` | `github-copilot` | 模型服务提供方 |
+| `versiondock.ai.apiProtocol` | `chat-completions` | OpenAI / 自定义接口协议 |
+| `versiondock.ai.cli.provider` | `claude` | 本地 Agent CLI |
 
-`auto` 和 `visible` 使用覆盖在内容上方的浮动滚动条，不占用布局空间，并跟随 VS Code 的 Modern UI 开关调整粗细和圆角。自动模式采用与 VS Code 面板一致的淡入淡出时间，并遵循“减少动画”设置；`system` 保留原有系统行为。
+## 推荐：VersionDock Desktop
 
-## 🌐 生态系统
+如果希望在编辑器之外集中管理 Git / SVN 仓库，推荐 [VersionDock Desktop](https://github.com/chenqinru/VersionDockDesktop)。它是独立运行的桌面工作台，支持 macOS、Windows 和 Linux，将多个项目的更改、提交、同步、历史与冲突处理放在同一个应用中。
 
-如果您需要一个无需打开 VS Code 即可独立运行的高性能桌面端应用：
+Desktop 与本扩展分别安装，可独立使用，也可按工作习惯搭配使用。查看 [Desktop 安装说明](https://github.com/chenqinru/VersionDockDesktop#下载安装)，或前往 [Releases 下载应用](https://github.com/chenqinru/VersionDockDesktop/releases)。
 
-👉 欢迎体验 [**VersionDock Desktop**](https://github.com/chenqinru/VersionDockDesktop) —— 基于 Tauri 2、Rust 和 React 18 打造的独立 Git/SVN 桌面工作台。
+## Git、SVN 与 Desktop 的边界
 
----
+- SVN 没有 Git index；提交面板以选中文件作为 SVN 提交目标。Git Stash 和补丁搁置只用于 Git 仓库。
+- SVN 分支 / 标签操作按常见的 `trunk`、`branches`、`tags` 目录结构识别，具体行为取决于仓库布局。
+- [VersionDock Desktop](https://github.com/chenqinru/VersionDockDesktop) 是独立桌面项目。两端新版在**同一本地 Git 工作目录**中共享 Stash、index 和搁置记录；独立 clone 不共享这些本地数据，不同 worktree 的搁置分别存储。详见[搁置互通说明](docs/shelf-interop.md)。
+- 恢复搁置默认保留记录；完整恢复时可选择同时删除。另一端刷新列表后可见新增或删除。
 
-## 🤝 参与贡献
+## 开发与贡献
 
-非常欢迎社区贡献！请在参与前查阅我们的 [**贡献指南**](CONTRIBUTING.md) 和 [**行为准则**](CODE_OF_CONDUCT.md)。
+使用 Node.js 24 和 npm。`npm run package` 会自动构建宿主与全部 Webview，无需先重复运行 build。
 
-- 🐛 发现 Bug？[提交 Bug 报告](https://github.com/chenqinru/VersionDock/issues/new?template=bug_report.yml)
-- 💡 提出新想法？[提交功能建议](https://github.com/chenqinru/VersionDock/issues/new?template=feature_request.yml)
-- 💬 交流讨论？[访问 GitHub Discussions](https://github.com/chenqinru/VersionDock/discussions)
+```sh
+npm ci
+npm run check      # Lint、类型检查和仓库回归测试
+npm run build      # 生产构建
+npm run watch      # 开发监听
+```
 
-## 🔒 安全政策
+在 VS Code 中按 F5 启动 Extension Development Host。涉及 Git / SVN 写操作的验证请使用临时仓库。
 
-如发现安全漏洞，请阅读 [安全政策（SECURITY.md）](SECURITY.md) 并通过私密渠道报告。
+- [贡献指南](CONTRIBUTING.md)：代码结构、开发调试和验收方式。
+- [CI 与发布](docs/ci-release.md)：工作流、VSIX 产物、版本标签及市场凭据。
+- [安全政策](SECURITY.md)：私密报告安全问题。
 
-## 📄 开源协议
+## 来源与许可
 
-本项目采用 [GNU General Public License v3.0](LICENSE) 协议开源。
+感谢 [GitCharm](https://github.com/RioNoir/GitCharm) 作者 RioNoir 及其贡献者提供的基础实现。VersionDock 是经过修改、独立维护的衍生项目；本项目的改动与问题由本仓库维护者负责。
+
+项目采用 [GPL-3.0-only](LICENSE)。上游来源和第三方资源说明见 [NOTICE](NOTICE.md) 与 [第三方声明](THIRD_PARTY_NOTICES.md)。

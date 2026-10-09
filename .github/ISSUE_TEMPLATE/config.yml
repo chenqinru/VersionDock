@@ -1,5 +1,1 @@
-blank_issues_enabled: false
-contact_links:
-  - name: 💬 GitHub Discussions
-    url: https://github.com/chenqinru/VersionDock/discussions
-    about: Ask questions, share ideas, or discuss features with the community.
+blank_issues_enabled: true
