@@ -340,6 +340,8 @@ out/                      Built extension and webview bundles
 
 ## 🔧 Development Scripts
 
+Use Node.js 24 (`nvm use`) and install dependencies with `npm ci`. See [CI and VSIX release](docs/ci-release.md) for Actions artifacts, release tags and registry credentials.
+
 `npm run test:scrollbars` checks scrollbar configuration and Webview lifecycle. `npm run test:scrollbars:browser` runs real Chromium interaction tests for overlays, zero reserved gutter, dragging, animations, nested clipping and modal behavior. The browser suite requires Node.js 22+ and an installed Chromium browser; set `CHROME_PATH` when it is not in a default location. It uses an isolated temporary browser profile.
 
 | Script | Description |
@@ -348,6 +350,7 @@ out/                      Built extension and webview bundles
 | `npm run build:host` | Builds the extension host bundle with esbuild. |
 | `npm run build:webview` | Builds all React webview bundles. |
 | `npm run watch` | Watches host and webview sources in parallel. |
+| `npm run check` | Runs lint, type checks and all repository regression tests. |
 | `npm run lint` | Runs ESLint on TypeScript and TSX sources. |
 | `npm run typecheck` | Type-checks the main TypeScript project. |
 | `npm run typecheck:webview` | Type-checks the webview TypeScript project. |

@@ -128,9 +128,11 @@ code --install-extension versiondock-3.6.0.vsix
 
 ### 本地开发与调试
 
+开发和流水线统一使用 Node.js 24（`nvm use`）。流水线构建、安装包产物和发布凭据见 [CI 与 VSIX 发布说明](docs/ci-release.md)。
+
 ```bash
 # 安装依赖
-npm install
+npm ci
 
 # 监听编译
 npm run watch

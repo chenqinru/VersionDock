@@ -4,117 +4,67 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Optional tag to create/release. Defaults to v<package.json version>'
+        description: 'Release tag matching package.json (defaults to v<version>)'
         required: false
         type: string
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
+
+# Manual dispatch and tag pushes must not publish the same version concurrently.
+concurrency:
+  group: versiondock-release
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Build VSIX and publish GitHub Release
-    runs-on: ubuntu-latest
-
+    name: Check, package and publish GitHub Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
-      - name: Resolve release tag
-        id: release_tag
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          VERSION="$(node -p "require('./package.json').version")"
-          EXPLICIT_TAG="false"
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            INPUT_TAG="${{ inputs.tag }}"
-            if [ -n "${INPUT_TAG}" ]; then
-              TAG="${INPUT_TAG}"
-              EXPLICIT_TAG="true"
-            else
-              TAG="v${VERSION}"
-            fi
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-
-          TAG_EXISTS="false"
-          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            TAG_EXISTS="true"
-          fi
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${EXPLICIT_TAG}" = "false" ] && [ "${TAG_EXISTS}" = "true" ]; then
-            echo "Tag ${TAG} already exists. Bump package.json version or provide an explicit tag to rebuild an existing release." >&2
-            exit 1
-          fi
-
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "tag_exists=${TAG_EXISTS}" >> "$GITHUB_OUTPUT"
-          echo "explicit_tag=${EXPLICIT_TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout existing manual tag
-        if: github.event_name == 'workflow_dispatch' && steps.release_tag.outputs.explicit_tag == 'true' && steps.release_tag.outputs.tag_exists == 'true'
+      - name: Validate version and resolve release tag
+        id: release
         env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-          fi
-          git checkout "refs/tags/${RELEASE_TAG}"
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+        run: node scripts/release.mjs prepare
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck host
-        run: npm run typecheck:host
+      - name: Check source and run regression tests
+        run: npm run check
 
-      - name: Typecheck webviews
-        run: npm run typecheck:webview
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Read package version
-        id: package
-        shell: bash
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Package VSIX
+      - name: Build and package VSIX
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           mkdir -p dist
-          npm run package -- --out "dist/versiondock-${{ steps.package.outputs.version }}.vsix"
+          npm run package -- --out "dist/versiondock-${VERSION}.vsix"
 
-      - name: Create and push tag
-        if: github.event_name == 'workflow_dispatch' && steps.release_tag.outputs.tag_exists == 'false'
+      - name: Generate release notes
         env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${RELEASE_TAG}" -m "Release ${RELEASE_TAG}"
-          git push origin "refs/tags/${RELEASE_TAG}"
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: node scripts/release.mjs notes
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v6
@@ -123,89 +73,93 @@ jobs:
           path: dist/*.vsix
           if-no-files-found: error
 
-      - name: Generate changelog
-        id: changelog
+      - name: Create release tag after successful checks
+        if: steps.release.outputs.tag_exists == 'false'
         env:
-          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-        shell: bash
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          set -euo pipefail
-
-          # Find the previous tag (exclude the current one if it already exists)
-          PREV_TAG="$(git tag --sort=-version:refname | grep -v "^${RELEASE_TAG}$" | head -1)"
-
-          if [ -z "${PREV_TAG}" ]; then
-            RANGE="HEAD"
-          else
-            RANGE="${PREV_TAG}..HEAD"
-          fi
-
-          # Collect commits: hash (short) + subject, exclude merge commits and version bumps
-          COMMITS="$(git log "${RANGE}" --no-merges --pretty=format:"%s" \
-            | grep -v '^chore: bump version' || true)"
-
-          if [ -z "${COMMITS}" ]; then
-            echo "notes=No changes." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Group by conventional commit prefix — write directly to file to preserve newlines
-          NOTES_FILE="/tmp/release-notes.md"
-          > "${NOTES_FILE}"
-
-          append_section() {
-            local title="$1"; local prefix="$2"
-            local lines
-            lines="$(echo "${COMMITS}" | grep -E "^${prefix}" | sed "s/^${prefix}[^:]*: /- /" || true)"
-            if [ -n "${lines}" ]; then
-              printf "### %s\n%s\n\n" "${title}" "${lines}" >> "${NOTES_FILE}"
-            fi
-          }
-
-          append_section "Features"      "feat"
-          append_section "Bug Fixes"     "fix"
-          append_section "Performance"   "perf"
-          append_section "Refactoring"   "refactor"
-          append_section "Documentation" "docs"
-          append_section "Chores"        "chore"
-
-          # Any commits that don't match a conventional prefix go into "Other"
-          OTHER="$(echo "${COMMITS}" | grep -Ev "^(feat|fix|perf|refactor|docs|chore|test|style|ci|build)[(:!]" \
-            | sed 's/^/- /' || true)"
-          if [ -n "${OTHER}" ]; then
-            printf "### Other\n%s\n\n" "${OTHER}" >> "${NOTES_FILE}"
-          fi
-
-          if [ -n "${PREV_TAG}" ]; then
-            REPO="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-            printf "**Full diff**: %s/compare/%s...%s\n" "${REPO}" "${PREV_TAG}" "${RELEASE_TAG}" >> "${NOTES_FILE}"
-          fi
-
-          echo "notes_file=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${RELEASE_TAG}" -m "Release ${RELEASE_TAG}"
+          git push origin "refs/tags/${RELEASE_TAG}"
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-          NOTES_FILE: ${{ steps.changelog.outputs.notes_file }}
-        shell: bash
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          VSIX_NAME: versiondock-${{ steps.release.outputs.version }}.vsix
         run: |
           set -euo pipefail
-
           if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" dist/*.vsix --clobber
+            HAS_ASSET="$(gh release view "${RELEASE_TAG}" --json assets --jq '[.assets[].name] | index(env.VSIX_NAME) != null')"
+            if [ "${HAS_ASSET}" = "false" ]; then
+              gh release upload "${RELEASE_TAG}" "dist/${VSIX_NAME}"
+            fi
           else
-            gh release create "${RELEASE_TAG}" dist/*.vsix \
-              --title "VersionDock ${RELEASE_TAG}" \
-              --notes-file "${NOTES_FILE}"
+            gh release create "${RELEASE_TAG}" "dist/${VSIX_NAME}" \
+              --verify-tag --title "VersionDock ${RELEASE_TAG}" \
+              --notes-file dist/release-notes.md
           fi
 
-      - name: Publish to VS Code Marketplace
-        run: npx vsce publish --packagePath dist/*.vsix
+  publish:
+    name: Publish to ${{ matrix.registry }}
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        registry: [marketplace, open-vsx]
+    env:
+      REGISTRY: ${{ matrix.registry }}
+    steps:
+      - name: Check publishing credentials
+        id: credentials
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-
-      - name: Publish to Open VSX Registry
-        run: npx ovsx publish dist/*.vsix
-        env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if { [ "${REGISTRY}" = "marketplace" ] && [ -n "${VSCE_PAT}" ]; } || \
+             { [ "${REGISTRY}" = "open-vsx" ] && [ -n "${OVSX_PAT}" ]; }; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipped ${REGISTRY}: its publishing token is not configured." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout validated release source
+        if: steps.credentials.outputs.enabled == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Setup Node.js
+        if: steps.credentials.outputs.enabled == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install locked publishing tools
+        if: steps.credentials.outputs.enabled == 'true'
+        run: npm ci
+
+      - name: Download validated VSIX
+        if: steps.credentials.outputs.enabled == 'true'
+        uses: actions/download-artifact@v7
+        with:
+          name: versiondock-vsix
+          path: dist
+
+      - name: Publish the packaged extension
+        if: steps.credentials.outputs.enabled == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          if [ "${REGISTRY}" = "marketplace" ]; then
+            npm exec -- vsce publish --packagePath "dist/versiondock-${VERSION}.vsix" --skip-duplicate
+          else
+            npm exec -- ovsx publish "dist/versiondock-${VERSION}.vsix" --skip-duplicate
+          fi

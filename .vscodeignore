@@ -27,3 +27,6 @@ media/image/**
 media/icons/versiondock-logo.png
 media/icons/versiondock-logo-light.png
 media/icons/versiondock-logo-v2.png
+
+dist/**
+.nvmrc

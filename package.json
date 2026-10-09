@@ -1369,6 +1369,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "test": "npm run test:tags && npm run test:shelves && npm run test:scrollbars && npm run test:release",
+    "test:release": "node --test scripts/release.test.mjs",
     "build": "npm run build:host && npm run build:webview",
     "build:host": "node esbuild.mjs --prod",
     "build:webview": "node build-webview.mjs",
@@ -1409,6 +1412,7 @@
     "eslint": "^8.56.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "material-icon-theme": "^5.34.0",
+    "ovsx": "1.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "shiki": "^3.23.0",

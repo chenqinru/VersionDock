@@ -8,3 +8,5 @@ MEMORY.md
 .idea/
 .vscode/versiondock-changelists.json
 *.tsbuildinfo
+
+dist/

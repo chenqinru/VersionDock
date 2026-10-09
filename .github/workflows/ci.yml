@@ -2,41 +2,48 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
-    name: Lint, Typecheck and Build
-    runs-on: ubuntu-latest
-
+    name: Check, test and package VSIX
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run ESLint
-        run: npm run lint
+      - name: Check source and run regression tests
+        run: npm run check
 
-      - name: Typecheck host
-        run: npm run typecheck:host
+      - name: Build and package VSIX
+        run: |
+          mkdir -p dist
+          npm run package -- --out dist/versiondock-ci.vsix
 
-      - name: Typecheck webviews
-        run: npm run typecheck:webview
-
-      - name: Build extension and webviews
-        run: npm run build
+      - name: Upload installable VSIX
+        uses: actions/upload-artifact@v6
+        with:
+          name: versiondock-vsix-${{ github.sha }}
+          path: dist/versiondock-ci.vsix
+          if-no-files-found: error
+          retention-days: 14
