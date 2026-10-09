@@ -1,5 +1,19 @@
 # 更改日志 / Changelog
 
+## 1.0.2
+
+### 发布支持
+
+- 接入 GitHub Actions OIDC 与 Microsoft Entra 应用身份，可自动发布到 VS Code Marketplace，无需保存 PAT。
+- 提供独立的 OIDC 认证与发布者访问校验，保留未配置 OIDC 时的 PAT 发布方式。
+- 本次更新不改变插件的 Git / SVN 运行功能。
+
+### Publishing support
+
+- Support automated VS Code Marketplace publishing with GitHub Actions OIDC and a Microsoft Entra application identity, without storing a PAT.
+- Add a separate OIDC authentication and publisher-access check, while retaining PAT publishing when OIDC is not configured.
+- This update does not change the extension's Git/SVN runtime functionality.
+
 ## 1.0.1
 
 ### 改进

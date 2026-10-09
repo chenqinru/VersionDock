@@ -7,7 +7,7 @@
 <p align="center">Manage Git and SVN changes, commits, history and conflicts inside VS Code.</p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/version-1.0.1-blue" alt="Version"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/version-1.0.2-blue" alt="Version"></a>
   <a href="https://code.visualstudio.com/"><img src="https://img.shields.io/badge/VS_Code-%3E%3D1.85.0-007ACC" alt="VS Code minimum version"></a>
   <a href="#workflows"><img src="https://img.shields.io/badge/VCS-Git_%2B_SVN-F05032?logo=git&amp;logoColor=white" alt="Git and SVN"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="GPL-3.0-only"></a>
