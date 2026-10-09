@@ -27,6 +27,8 @@ Skill 在发布请求下推进完整流程；用户明确只要求打包或生�
 
 可以在 Actions 中手工运行 **Release VSIX**，标签输入留空时使用 `v<package.json.version>`；也可以推送 `vX.Y.Z` 标签触发发布。
 
+手工运行时，`registry` 可选择 `marketplace`（只发布 VS Code Marketplace）、`open-vsx`（只发布 Open VSX）或 `all`（默认，两者都尝试）。推送标签仍按两者处理，缺少对应 Token 时跳过该市场。只发布一个市场时，使用手工运行并选择对应目标。
+
 - 正式标签必须与 `package.json`、`package-lock.json` 顶层版本和 `packages[""].version` 一致，只接受稳定版本 `X.Y.Z`。
 - 工作流发布当前所选 ref 的源码。已有标签必须指向当前提交，否则拒绝发布；不会移动已有标签。发布新代码应先升版本并提交，重试旧版本应选择原标签作为 workflow ref。
 - 手工运行时，只有检查、测试和 VSIX 打包全部成功后才创建并推送新标签。

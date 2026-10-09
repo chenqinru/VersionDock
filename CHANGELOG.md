@@ -1,5 +1,19 @@
 # 更改日志 / Changelog
 
+## 1.0.1
+
+### 改进
+
+- 补充扩展内可查看的中英文更改日志，并在 README 中提供入口。
+- 更新中英文 README 的功能说明、安装指引及 VersionDock Desktop 推荐。
+- 简化贡献与安全反馈文案，集中保留来源与许可说明。
+
+### Improvements
+
+- Add a bilingual changelog available in the extension details, with links from both READMEs.
+- Update feature descriptions, installation instructions and the VersionDock Desktop recommendation in both READMEs.
+- Simplify contribution and security-reporting text while retaining attribution and license notices in their dedicated sections.
+
 ## 1.0.0
 
 ### 首次版本

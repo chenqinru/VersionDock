@@ -7,6 +7,15 @@ on:
         description: 'Release tag matching package.json (defaults to v<version>)'
         required: false
         type: string
+      registry:
+        description: 'Extension registry to publish to'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - marketplace
+          - open-vsx
   push:
     tags: ['v*']
 
@@ -109,7 +118,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        registry: [marketplace, open-vsx]
+        registry: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.registry == 'marketplace' && '["marketplace"]' || github.event_name == 'workflow_dispatch' && inputs.registry == 'open-vsx' && '["open-vsx"]' || '["marketplace", "open-vsx"]') }}
     env:
       REGISTRY: ${{ matrix.registry }}
     steps:
