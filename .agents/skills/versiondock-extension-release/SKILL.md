@@ -52,7 +52,7 @@ description: "完成当前 VersionDock VS Code 插件的版本准备、更新说
 - **手动 Marketplace 上架**：确认用户实际拥有与 manifest 一致的 publisher，交付新生成的 VSIX；网页上传由用户完成时报告等待上传，不声称已上架。该方式不需要 GitHub Actions 或流水线 Secret。
 - **本地 CLI 发布**：认证已就绪时，发布经过校验的包：`npm exec -- vsce publish --packagePath "dist/versiondock-${task_release_version}.vsix"`。版本变量来自当前 metadata，凭据由安全的现有认证方式提供，不能要求用户把 Token 发在聊天中。
 - **自动发布**：先确认远端含有所需工作流与发布提交、目标渠道凭据及 runner 可用，再推送匹配版本的标签或触发 **Release VSIX**。用户仅指定一个渠道时选择匹配的发布路径，避免同时发布其他渠道。
-- 当前工作流依赖 `VSCE_PAT` / `OVSX_PAT`。缺少某项时对应市场任务会跳过；GitHub Release 成功不代表市场成功。认证规范会变化，发布前按[官方文档](https://code.visualstudio.com/api/working-with-extensions/publishing-extension)确认适用方式，不把当前 PAT 流程写成永久要求或宣称 Entra ID 已接入。
+- Marketplace 优先使用 `marketplace` Environment 中的 `AZURE_CLIENT_ID` / `AZURE_TENANT_ID`，通过 GitHub OIDC 与 Entra 应用身份发布；未配置两者时可使用 `VSCE_PAT`。Open VSX 仍用 `OVSX_PAT`。只配置一个 OIDC ID 会失败；OIDC 失败不能静默降级为 PAT。Environment 主题使用仓库实际的 immutable subject，配置与授权方法见[发布维护指南](../../../docs/ci-release.md#marketplace-oidc-配置)。初次配置先运行 **Check Marketplace OIDC**：profile 输出用于将应用身份加入 publisher，随后重新校验访问权限；工作流存在、ID 已配置或 Entra 登录成功都不能作为市场授权 / 发布成功的证据。
 - 发布请求按当前和此前有效的指令推进，不对已经明确的提交、标签、推送或发布动作重复确认。仅在发布身份、凭据或关键目标确实缺失且无法自行核实时询问；先完成不依赖该信息的检查和安装包。仓库公开状态与插件上架状态分别核验，不因发布插件改变仓库可见性。
 
 ## 发布核验与失败处理

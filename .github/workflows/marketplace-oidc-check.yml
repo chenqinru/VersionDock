@@ -1,0 +1,61 @@
+name: Check Marketplace OIDC
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Entra identity and Marketplace access
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+    steps:
+      - name: Check OIDC configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+        run: |
+          if [ -z "${AZURE_CLIENT_ID}" ] || [ -z "${AZURE_TENANT_ID}" ]; then
+            echo "Configure AZURE_CLIENT_ID and AZURE_TENANT_ID in the marketplace environment." >&2
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install locked publishing tools
+        run: npm ci
+
+      - name: Sign in to Microsoft Entra with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Show Marketplace identity for publisher membership
+        run: |
+          task_profile_id=$(az rest --method GET --url 'https://app.vssps.visualstudio.com/_apis/profile/profiles/me' --resource '499b84ac-1321-427f-aa17-267ca6975798' --query id --output tsv)
+          if [ -z "${task_profile_id}" ]; then
+            echo "The Marketplace identity profile did not return an ID." >&2
+            exit 1
+          fi
+          echo "Marketplace identity ID: ${task_profile_id}"
+          echo "Add identity ${task_profile_id} to publisher chenqinru with the Contributor role, then rerun this check." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify publisher access without publishing
+        run: npm exec -- vsce verify-pat --azure-credential chenqinru

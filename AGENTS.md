@@ -53,7 +53,7 @@
 | 本地安装包 | `npm run package -- --out dist/versiondock-check.vsix`，先创建 `dist/`；package 会自动构建，无需预先重复 build |
 | 浏览器滚动条交互 | `npm run test:scrollbars:browser`，另需 Chromium，可用 `CHROME_PATH` 指定 |
 | 插件 / Desktop 互通 | `npm run test:shelves -- --desktop /path/to/VersionDockDesktop`，另需 Desktop 工具链 |
-| 工作流语法 | 已安装 actionlint 时运行 `actionlint .github/workflows/ci.yml .github/workflows/release-vsix.yml` |
+| 工作流语法 | 已安装 actionlint 时运行 `actionlint .github/workflows/*.yml` |
 | 格式 | `git diff --check` |
 
 - 重要仓库操作修复补充真实临时仓库中的行为与失败边界验证，不用用户工作仓库做破坏性试验，也不编写仅复述实现的测试。

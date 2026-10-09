@@ -110,30 +110,99 @@ jobs:
               --notes-file dist/release-notes.md
           fi
 
-  publish:
-    name: Publish to ${{ matrix.registry }}
+  publish-marketplace:
+    name: Publish to Marketplace
     needs: release
+    if: github.event_name == 'push' || inputs.registry != 'open-vsx'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        registry: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.registry == 'marketplace' && '["marketplace"]' || github.event_name == 'workflow_dispatch' && inputs.registry == 'open-vsx' && '["open-vsx"]' || '["marketplace", "open-vsx"]') }}
-    env:
-      REGISTRY: ${{ matrix.registry }}
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Check publishing credentials
+      - name: Select Marketplace authentication
         id: credentials
         env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -n "${AZURE_CLIENT_ID}" ] && [ -n "${AZURE_TENANT_ID}" ]; then
+            echo "method=oidc" >> "$GITHUB_OUTPUT"
+          elif [ -n "${AZURE_CLIENT_ID}" ] || [ -n "${AZURE_TENANT_ID}" ]; then
+            echo "OIDC requires both AZURE_CLIENT_ID and AZURE_TENANT_ID." >&2
+            exit 1
+          elif [ -n "${VSCE_PAT}" ]; then
+            echo "method=pat" >> "$GITHUB_OUTPUT"
+          else
+            echo "method=none" >> "$GITHUB_OUTPUT"
+            echo "Skipped Marketplace: neither OIDC variables nor VSCE_PAT are configured." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout validated release source
+        if: steps.credentials.outputs.method != 'none'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Setup Node.js
+        if: steps.credentials.outputs.method != 'none'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install locked publishing tools
+        if: steps.credentials.outputs.method != 'none'
+        run: npm ci
+
+      - name: Download validated VSIX
+        if: steps.credentials.outputs.method != 'none'
+        uses: actions/download-artifact@v7
+        with:
+          name: versiondock-vsix
+          path: dist
+
+      - name: Sign in to Microsoft Entra with GitHub OIDC
+        if: steps.credentials.outputs.method == 'oidc'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Publish with Microsoft Entra identity
+        if: steps.credentials.outputs.method == 'oidc'
+        env:
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: npm exec -- vsce publish --azure-credential --packagePath "dist/versiondock-${VERSION}.vsix" --skip-duplicate
+
+      - name: Publish with PAT
+        if: steps.credentials.outputs.method == 'pat'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: npm exec -- vsce publish --packagePath "dist/versiondock-${VERSION}.vsix" --skip-duplicate
+
+  publish-open-vsx:
+    name: Publish to Open VSX
+    needs: release
+    if: github.event_name == 'push' || inputs.registry != 'marketplace'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check Open VSX credentials
+        id: credentials
+        env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          if { [ "${REGISTRY}" = "marketplace" ] && [ -n "${VSCE_PAT}" ]; } || \
-             { [ "${REGISTRY}" = "open-vsx" ] && [ -n "${OVSX_PAT}" ]; }; then
+          if [ -n "${OVSX_PAT}" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipped ${REGISTRY}: its publishing token is not configured." >> "$GITHUB_STEP_SUMMARY"
+            echo "Skipped Open VSX: OVSX_PAT is not configured." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Checkout validated release source
@@ -163,12 +232,6 @@ jobs:
       - name: Publish the packaged extension
         if: steps.credentials.outputs.enabled == 'true'
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           VERSION: ${{ needs.release.outputs.version }}
-        run: |
-          if [ "${REGISTRY}" = "marketplace" ]; then
-            npm exec -- vsce publish --packagePath "dist/versiondock-${VERSION}.vsix" --skip-duplicate
-          else
-            npm exec -- ovsx publish "dist/versiondock-${VERSION}.vsix" --skip-duplicate
-          fi
+        run: npm exec -- ovsx publish "dist/versiondock-${VERSION}.vsix" --skip-duplicate
