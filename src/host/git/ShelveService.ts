@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import * as os from 'os';
 import { TextDecoder } from 'util';
 import { type SimpleGit } from 'simple-git';
 import type { ShelveEntry } from '../types/messages';
@@ -28,12 +29,16 @@ interface ShelveEntryInternal extends ShelveEntry {
 
 interface ShelfMetaInternal {
   shelves: ShelveEntryInternal[];
+  migratedSources?: string[];
+  deletedIds?: string[];
 }
 
 export class ShelveService {
   private git: SimpleGit;
-  private shelfDir: string;
-  private metaPath: string;
+  private shelfDir = '';
+  private metaPath = '';
+  private storageReady?: Promise<void>;
+  private readonly legacyDirs: string[];
 
   constructor(
     public readonly rootPath: string,
@@ -44,8 +49,109 @@ export class ShelveService {
     // GitOperationLock and optional index refreshes are disabled below.
     this.git = createGitClient(rootPath);
     const repoHash = crypto.createHash('sha1').update(rootPath).digest('hex').slice(0, 16);
-    this.shelfDir = path.join(globalStorage, 'shelves', repoHash);
+    const desktopId = `git-${crypto.createHash('sha256').update(`${rootPath}::Git`).digest('hex').slice(0, 16)}`;
+    const configRoot = process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Application Support')
+      : process.platform === 'win32' ? (process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'))
+        : (process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'));
+    this.legacyDirs = [
+      path.join(globalStorage, 'shelves', repoHash),
+      ...['com.versiondock.desktop', 'com.versiondock.desktop.dev'].map(id => path.join(configRoot, id, 'shelves', desktopId)),
+    ];
+  }
+
+  private async initializeStorage(): Promise<void> {
+    const gitDir = (await this.git.raw(['rev-parse', '--absolute-git-dir'])).trim();
+    this.shelfDir = path.join(gitDir, 'versiondock', 'shelves');
+    this.assertNoSymlinkComponents(gitDir, this.shelfDir);
     this.metaPath = path.join(this.shelfDir, META_FILE);
+    this.ensureShelfDir();
+  }
+
+  /** Shared with Desktop: mkdir is atomic across processes; never steal a lock. */
+  private async withStorageLock<T>(operation: () => T | Promise<T>): Promise<T> {
+    this.storageReady ??= this.initializeStorage().catch(error => {
+      this.storageReady = undefined;
+      throw error;
+    });
+    await this.storageReady;
+    const lockPath = path.join(this.shelfDir, '.lock');
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        fs.mkdirSync(lockPath);
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (Date.now() >= deadline) throw new Error(t('Shelf storage is busy: {0}', lockPath));
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+    try {
+      this.migrateLegacyStorage();
+      return await operation();
+    } finally {
+      fs.rmdirSync(lockPath);
+    }
+  }
+
+  private migrateLegacyStorage(): void {
+    const meta = this.readMeta();
+    let changed = false;
+    for (const directory of this.legacyDirs) {
+      const source = path.resolve(directory);
+      if (meta.migratedSources?.includes(source)) continue;
+      const metaPath = ['index.json', META_FILE].map(name => path.join(source, name)).find(file => fs.existsSync(file));
+      if (!metaPath) continue;
+      this.assertNoSymlinkComponents(source, metaPath);
+      const legacy = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as ShelfMetaInternal;
+      if (!Array.isArray(legacy.shelves)) throw new Error(`Invalid shelf index: ${metaPath}`);
+      for (const raw of legacy.shelves) {
+        if (!/^shelf-[a-zA-Z0-9_-]+$/.test(raw.id)) throw new Error(`Invalid shelf id: ${raw.id}`);
+        if (meta.deletedIds?.includes(raw.id)) continue;
+        const existing = meta.shelves.find(entry => entry.id === raw.id);
+        if (existing && (existing.binaryFiles?.length || !raw.binaryFiles?.length)) continue;
+        // Desktop's former importer retained patchFile but renamed its copy to id.patch.
+        let patchFile = raw.patchFile || `${raw.id}.patch`;
+        if (!fs.existsSync(this.resolveRelativeFile(source, patchFile))) patchFile = `${raw.id}.patch`;
+        const copy = (name: string): string => {
+          const from = this.resolveRelativeFile(source, name);
+          this.assertNoSymlinkComponents(source, from);
+          if (!fs.lstatSync(from).isFile()) throw new Error(`Invalid shelf content: ${from}`);
+          const targetName = `${raw.id}-${crypto.createHash('sha1').update(name).digest('hex')}.data`;
+          const target = this.resolveShelfFile(targetName);
+          // A failed migration may have left a copy. Replace only identical content.
+          if (fs.existsSync(target)) {
+            if (!fs.readFileSync(from).equals(fs.readFileSync(this.resolveStoredRegularFile(targetName)))) {
+              throw new Error(`Shelf content collision: ${targetName}`);
+            }
+          } else {
+            const temporary = `${target}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+            try {
+              fs.copyFileSync(from, temporary, fs.constants.COPYFILE_EXCL);
+              fs.renameSync(temporary, target);
+            } finally {
+              try { fs.unlinkSync(temporary); } catch { /* renamed or never created */ }
+            }
+          }
+          return targetName;
+        };
+        const binaryFiles = raw.binaryFiles?.map(binary => ({ ...binary, storeName: copy(binary.storeName) }));
+        if (existing) {
+          existing.binaryFiles = binaryFiles;
+        } else {
+          const { createdAt, ...legacyEntry } = raw as Omit<ShelveEntryInternal, 'files'> & { createdAt?: string; files: Array<{ path: string; status: string } | string> };
+          meta.shelves.push({
+            ...legacyEntry,
+            date: raw.date ?? createdAt ?? '',
+            files: legacyEntry.files.map(file => typeof file === 'string' ? { path: file, status: 'modified' } : file),
+            patchFile: copy(patchFile), binaryFiles,
+          });
+        }
+      }
+      meta.migratedSources = [...(meta.migratedSources ?? []), source];
+      changed = true;
+    }
+    if (changed) this.writeMeta(meta);
   }
 
   private ensureShelfDir(): void {
@@ -124,6 +230,7 @@ export class ShelveService {
 
     return selected.map(binary => {
       try {
+        if (binary.kind && binary.kind !== 'file' && binary.kind !== 'symlink') throw new Error('Unsupported shelf attachment kind');
         const src = this.resolveStoredRegularFile(binary.storeName);
 
         const dst = this.resolveRepoFile(binary.repoRelPath);
@@ -142,12 +249,10 @@ export class ShelveService {
   }
 
   private readMeta(): ShelfMetaInternal {
-    try {
-      if (fs.existsSync(this.metaPath)) {
-        return JSON.parse(fs.readFileSync(this.metaPath, 'utf8')) as ShelfMetaInternal;
-      }
-    } catch { /* corrupt meta → start fresh */ }
-    return { shelves: [] };
+    if (!fs.existsSync(this.metaPath)) return { shelves: [] };
+    const meta = JSON.parse(fs.readFileSync(this.resolveStoredRegularFile(META_FILE), 'utf8')) as ShelfMetaInternal;
+    if (!Array.isArray(meta.shelves)) throw new Error(`Invalid shelf index: ${this.metaPath}`);
+    return meta;
   }
 
   private writeMeta(meta: ShelfMetaInternal): void {
@@ -162,18 +267,19 @@ export class ShelveService {
   }
 
   async list(): Promise<ShelveEntry[]> {
-    const meta = this.readMeta();
-    const valid = meta.shelves.filter(s => {
-      try {
-        this.resolveStoredRegularFile(s.patchFile);
-        return true;
-      } catch {
-        return false;
-      }
+    return this.withStorageLock(() => {
+      const meta = this.readMeta();
+      const valid = meta.shelves.filter(s => {
+        try {
+          this.resolveStoredRegularFile(s.patchFile);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      // Strip internal fields before returning to webview
+      return valid.map(({ binaryFiles: _b, ...rest }) => rest);
     });
-    if (valid.length !== meta.shelves.length) this.writeMeta({ shelves: valid });
-    // Strip internal fields before returning to webview
-    return valid.map(({ binaryFiles: _b, ...rest }) => rest);
   }
 
   /**
@@ -284,6 +390,8 @@ export class ShelveService {
   }
 
   private patchChunkTouchesPath(chunk: string, repoRelPath: string): boolean {
+    if (chunk.startsWith(`diff --git a/${repoRelPath} b/${repoRelPath}\n`)
+      || chunk.startsWith(`diff --git ${this.quoteGitPatchPath(`a/${repoRelPath}`)} ${this.quoteGitPatchPath(`b/${repoRelPath}`)}\n`)) return true;
     const decode = (rawPath: string, stripDiffPrefix: boolean): string => {
       if (!rawPath || rawPath === '/dev/null') return '';
       // Git appends a tab sentinel to unquoted ---/+++ paths containing spaces.
@@ -309,8 +417,23 @@ export class ShelveService {
   }
 
   async push(name: string, paths?: string[], changelistAssignments?: ChangelistAssignment[]): Promise<ShelveEntry> {
-    const run = () => withGitWriteLock(this.rootPath, () => this.pushLocked(name, paths, changelistAssignments));
+    const run = () => withGitWriteLock(this.rootPath, () => this.withStorageLock(() => this.pushLocked(name, paths, changelistAssignments)));
     return this.suppressStatusUpdates ? this.suppressStatusUpdates(run, 'stash', name) : run();
+  }
+
+  private async readPatchBytes(args: string[]): Promise<Buffer> {
+    // simple-git.raw decodes stdout as UTF-8. Git text patches can contain other
+    // encodings or raw symlink targets, so capture stdout before that decoding.
+    const chunks: Buffer[] = [];
+    this.git.outputHandler((_command, stdout) => {
+      stdout.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    });
+    try {
+      await this.git.raw(args);
+      return Buffer.concat(chunks);
+    } finally {
+      this.git.outputHandler(undefined);
+    }
   }
 
   private async pushLocked(name: string, paths?: string[], changelistAssignments?: ChangelistAssignment[]): Promise<ShelveEntry> {
@@ -345,14 +468,14 @@ export class ShelveService {
     // ── Tracked files: use git diff HEAD --binary ─────────────────────────────
     // --binary produces a complete patch including binary deltas that git apply
     // can reconstruct, with the full index line required for binary files.
-    let combinedDiff = '';
+    const patchChunks: Buffer[] = [];
     if (trackedDiffPaths.length > 0) {
       // Never continue with an empty patch after a Git failure: doing so and
       // then restoring the worktree would discard changes that were not saved.
-      combinedDiff = await this.git.raw([
+      patchChunks.push(await this.readPatchBytes([
         '-c', 'core.quotepath=false',
-        'diff', 'HEAD', '--binary', '--', ...this.literalPathspecs(trackedDiffPaths),
-      ]);
+        'diff', 'HEAD', '--no-ext-diff', '--no-textconv', '--binary', '--', ...this.literalPathspecs(trackedDiffPaths),
+      ]));
     }
 
     // ── Untracked files ───────────────────────────────────────────────────────
@@ -396,20 +519,21 @@ export class ShelveService {
       } else {
         try {
           const content = fs.readFileSync(absPath, 'utf8');
-          combinedDiff += this.buildUntrackedTextPatch(f, content, stat.mode);
+          patchChunks.push(Buffer.from(this.buildUntrackedTextPatch(f, content, stat.mode), 'utf8'));
         } catch (error) {
           throw new Error(t('Unable to save untracked file {0}: {1}', f, String(error)));
         }
       }
     }
 
-    if (!combinedDiff.trim() && binaryFiles.length === 0) {
+    const combinedDiff = Buffer.concat(patchChunks);
+    if (combinedDiff.length === 0 && binaryFiles.length === 0) {
       throw new Error(t('Nothing to shelve (diff is empty)'));
     }
 
     // ── Write patch file ──────────────────────────────────────────────────────
     const patchFileName = `${id}.patch`;
-    fs.writeFileSync(this.resolveShelfFile(patchFileName), combinedDiff, { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(this.resolveShelfFile(patchFileName), combinedDiff, { flag: 'wx' });
 
     // ── Build file list with status ───────────────────────────────────────────
     const statusMap: Record<string, string> = {};
@@ -479,11 +603,12 @@ export class ShelveService {
   }
 
   async apply(shelveId: string, paths?: string[]): Promise<ChangelistAssignment[] | undefined> {
-    const run = () => withGitWriteLock(this.rootPath, () => this.applyLocked(shelveId, paths));
+    const run = () => withGitWriteLock(this.rootPath, () => this.withStorageLock(() => this.applyLocked(shelveId, paths)));
     return this.suppressStatusUpdates ? this.suppressStatusUpdates(run, 'stash', shelveId) : run();
   }
 
   private async applyLocked(shelveId: string, paths?: string[]): Promise<ChangelistAssignment[] | undefined> {
+    if (paths?.length === 0) paths = undefined;
     const meta = this.readMeta();
     const entry = meta.shelves.find(s => s.id === shelveId);
     if (!entry) throw new Error(t('Shelve "{0}" not found', shelveId));
@@ -496,19 +621,23 @@ export class ShelveService {
     }
 
     // ── Apply text/binary patch ───────────────────────────────────────────────
-    const fullPatch = fs.readFileSync(patchAbs, 'utf8');
+    const patchBytes = fs.readFileSync(patchAbs);
+    const fullPatch = patchBytes.toString('utf8');
 
     // When applying a subset of files, extract only their chunks into a temp patch.
     let applyAbs: string | undefined = patchAbs;
     let tmpPath: string | undefined;
     if (paths && paths.length > 0 && fullPatch.trim()) {
-      const chunks = fullPatch.split(/(?=^diff --git )/m);
-      const selected = chunks.filter(c =>
-        paths.some(p => this.patchChunkTouchesPath(c, p))
-      );
+      const boundaries: number[] = [];
+      const marker = Buffer.from('diff --git ');
+      for (let offset = patchBytes.indexOf(marker); offset !== -1; offset = patchBytes.indexOf(marker, offset + marker.length)) {
+        if (offset === 0 || patchBytes[offset - 1] === 10) boundaries.push(offset);
+      }
+      const selected = boundaries.map((start, index) => patchBytes.subarray(start, boundaries[index + 1] ?? patchBytes.length))
+        .filter(chunk => paths.some(p => this.patchChunkTouchesPath(chunk.toString('utf8'), p)));
       if (selected.length > 0) {
         tmpPath = this.resolveShelfFile(`_tmp_${crypto.randomBytes(8).toString('hex')}.patch`);
-        fs.writeFileSync(tmpPath, selected.join(''), { encoding: 'utf8', flag: 'wx' });
+        fs.writeFileSync(tmpPath, Buffer.concat(selected), { flag: 'wx' });
         applyAbs = tmpPath;
       } else {
         // A subset request that has no text patch must not fall back to applying
@@ -567,22 +696,31 @@ export class ShelveService {
     return undefined;
   }
 
-  drop(shelveId: string): void {
+  async drop(shelveId: string): Promise<void> {
+    return this.withStorageLock(() => this.dropLocked(shelveId));
+  }
+
+  private dropLocked(shelveId: string): void {
     const meta = this.readMeta();
     const idx = meta.shelves.findIndex(s => s.id === shelveId);
     if (idx === -1) throw new Error(t('Shelve "{0}" not found', shelveId));
     const entry = meta.shelves[idx];
+    meta.shelves.splice(idx, 1);
+    meta.deletedIds = [...(meta.deletedIds ?? []), shelveId];
+    this.writeMeta(meta);
     // Delete patch file
     try { fs.unlinkSync(this.resolveShelfFile(entry.patchFile)); } catch { /* already gone or unsafe */ }
     // Delete any stored binary copies
     for (const bf of entry.binaryFiles ?? []) {
       try { fs.unlinkSync(this.resolveShelfFile(bf.storeName)); } catch { /* already gone or unsafe */ }
     }
-    meta.shelves.splice(idx, 1);
-    this.writeMeta(meta);
   }
 
-  rename(shelveId: string, newName: string): void {
+  async rename(shelveId: string, newName: string): Promise<void> {
+    return this.withStorageLock(() => this.renameLocked(shelveId, newName));
+  }
+
+  private renameLocked(shelveId: string, newName: string): void {
     const meta = this.readMeta();
     const entry = meta.shelves.find(s => s.id === shelveId);
     if (!entry) throw new Error(t('Shelve "{0}" not found', shelveId));
@@ -590,7 +728,11 @@ export class ShelveService {
     this.writeMeta(meta);
   }
 
-  getFileDiff(shelveId: string, filePath: string): string {
+  async getFileDiff(shelveId: string, filePath: string): Promise<string> {
+    return this.withStorageLock(() => this.getFileDiffLocked(shelveId, filePath));
+  }
+
+  private getFileDiffLocked(shelveId: string, filePath: string): string {
     const meta = this.readMeta();
     const entry = meta.shelves.find(s => s.id === shelveId);
     if (!entry) throw new Error(t('Shelve "{0}" not found', shelveId));

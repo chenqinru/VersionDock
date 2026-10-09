@@ -1,4 +1,5 @@
 {
+  "Shelf storage is busy: {0}": "搁置存储正在被其他进程使用：{0}",
   "Cut": "剪切",
   "Copy": "复制",
   "Paste": "粘贴",

@@ -1385,7 +1385,8 @@
     "test:scrollbars:browser": "node scripts/test-webview-scrollbar-overlays.mjs",
     "bump": "node scripts/bump-version.mjs",
     "version:bump": "node scripts/bump-version.mjs",
-    "test:tags": "node scripts/test-git-tags.mjs"
+    "test:tags": "node scripts/test-git-tags.mjs",
+    "test:shelves": "node scripts/test-shelf-interop.mjs"
   },
   "dependencies": {
     "cross-spawn": "^7.0.6",

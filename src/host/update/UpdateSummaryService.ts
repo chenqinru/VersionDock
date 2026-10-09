@@ -310,7 +310,7 @@ export class UpdateSummaryService {
             repoIds: [repo.repoId],
           });
         } else {
-          shelveSvc.drop(shelvedBackupId);
+          await shelveSvc.drop(shelvedBackupId);
         }
       } catch {
         void vscode.window.showWarningMessage(

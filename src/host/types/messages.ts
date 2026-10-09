@@ -61,7 +61,7 @@ export interface ShelveEntry {
   date: string;         // ISO date string
   branch?: string;      // source branch (missing for shelves created by older versions)
   files: Array<{ path: string; status: string }>;
-  patchFile: string;    // relative path inside .versiondock/shelf/
+  patchFile: string;    // relative path inside the worktree Git dir/versiondock/shelves/
   changelistAssignments?: Array<{ path: string; changelistId: string; changelistName: string }>;
 }
 

@@ -4781,7 +4781,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
           const paths = msg.paths?.map(filePath => repo.resolveRepoPath(filePath).relativePath);
           const clAssignments = await svc.apply(msg.shelveId, paths);
           if (msg.drop && (!paths || paths.length === 0)) {
-            svc.drop(msg.shelveId);
+            await svc.drop(msg.shelveId);
           }
           const status = await this.manager.getAllStatusesFresh();
           this.post({ type: 'COMMIT_STATUS_UPDATE', repos: this.manager.getRepoMetas(), status });
@@ -4830,7 +4830,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         );
         if (confirmDrop !== t('Delete')) { this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'drop', ok: false, error: 'Cancelled' }); return; }
         try {
-          svc.drop(msg.shelveId);
+          await svc.drop(msg.shelveId);
           this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'drop', ok: true });
         } catch (e: unknown) {
           this.post({ type: 'SHELVE_OP_RESULT', requestId: msg.requestId, repoId: msg.repoId, op: 'drop', ok: false, error: String(e) });
@@ -4844,7 +4844,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (!svc || !repo) { this.post({ type: 'SHELVE_DIFF_RESULT', requestId: msg.requestId, repoId: msg.repoId, shelveId: msg.shelveId, filePath: msg.filePath, diff: '', error: t('Repo not found') }); return; }
         try {
           const relativePath = repo.resolveRepoPath(msg.filePath).relativePath;
-          const diff = svc.getFileDiff(msg.shelveId, relativePath);
+          const diff = await svc.getFileDiff(msg.shelveId, relativePath);
           this.post({ type: 'SHELVE_DIFF_RESULT', requestId: msg.requestId, repoId: msg.repoId, shelveId: msg.shelveId, filePath: relativePath, diff });
         } catch (e: unknown) {
           this.post({ type: 'SHELVE_DIFF_RESULT', requestId: msg.requestId, repoId: msg.repoId, shelveId: msg.shelveId, filePath: msg.filePath, diff: '', error: String(e) });
@@ -4858,7 +4858,7 @@ export class CommitPanelProvider implements vscode.WebviewViewProvider, vscode.D
         if (!svc || !repo) return;
         try {
           const resolvedPath = repo.resolveRepoPath(msg.filePath);
-          const diffChunk = svc.getFileDiff(msg.shelveId, resolvedPath.relativePath);
+          const diffChunk = await svc.getFileDiff(msg.shelveId, resolvedPath.relativePath);
           const absFilePath = resolvedPath.absolutePath;
           const fileName = resolvedPath.relativePath.split('/').pop() ?? resolvedPath.relativePath;
           const shelves = await svc.list();

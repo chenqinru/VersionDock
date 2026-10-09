@@ -69,6 +69,7 @@ VersionDock 为 Visual Studio Code 带来了媲美专业 IDE（如 JetBrains/Php
 ### 🗄️ 搁置与暂存（Shelve & Stash）
 
 - **补丁搁置（Shelve）**：基于 Patch 的搁置系统，支持创建、完整/部分应用、删除以及检查差异。
+- **与 Desktop 共享搁置**：两端新版在同一本地 Git 工作目录中共用记录，支持双向恢复与删除，详见[互通说明](docs/shelf-interop.md)。
 - **原生 Git Stash**：列表浏览、应用、弹出、丢弃和差异预览。
 
 <img src="media/screenshots/shelf_stash_push.png" alt="VersionDock 提交面板">

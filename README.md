@@ -76,6 +76,7 @@ On first install, a QuickPick lets you choose your preferred view mode. You can 
 
 - **Shelve** with patch-based shelves: create, apply (full or partial), delete, and inspect per-file diffs.
 - Binary-file handling and conflict detection on unshelve.
+- [Shared shelves with VersionDock Desktop](docs/shelf-interop.md) for the same local Git working directory.
 - **Native stash** support: list, apply, pop, drop, and file diff preview.
 
 <img src="media/screenshots/shelf_stash_push.png" alt="VersionDock commit panel">
