@@ -50,6 +50,7 @@ interface SvnInfo {
   url: string;
   rootUrl: string;
   relativeUrl: string;
+  repositoryUuid?: string;
   revision?: string;
 }
 
@@ -1015,6 +1016,7 @@ export class SvnService extends GitService {
       url: textTag(raw, 'url'),
       rootUrl: textTag(raw, 'root'),
       relativeUrl: decodeSvnRelativeUrl(textTag(raw, 'relative-url').replace(/^\^\/?/, '')),
+      repositoryUuid: textTag(raw, 'uuid') || undefined,
       revision: attr(raw.match(/<entry\b[^>]*>/)?.[0] ?? '', 'revision'),
     };
     this.infoCache = { info, metadataMtimeMs };
@@ -3380,117 +3382,179 @@ export class SvnService extends GitService {
 
   async commitPaths(message: string, paths: string[]): Promise<string> {
     return this.runStatusSensitiveOperation(async () => {
-      const uniquePaths = Array.from(new Set(paths.map(filePath => this.normalizeSvnTarget(filePath))));
-      if (uniquePaths.length === 0) throw new Error(t('No SVN files selected to commit.'));
-      const statuses = await this.parseSvnStatus();
-      const truncatedPaths = new Set(statuses.filter(file => file.isTruncated).map(file => file.path));
-      const truncatedSelected = uniquePaths.filter(p => truncatedPaths.has(p));
-      if (truncatedSelected.length > 0) {
-        throw new Error(
-          t('Cannot commit truncated directory "{0}" directly because its contents exceed display limits. Please use "Add entire truncated directory" first to confirm recursive inclusion.', truncatedSelected[0])
-        );
-      }
-      const selected = new Set(uniquePaths);
-      const pathsToAdd = statuses.filter(file => file.svnItem === 'unversioned' && selected.has(file.path)).map(file => file.path);
-      const pathsToDelete = statuses.filter(file => file.svnItem === 'missing' && selected.has(file.path)).map(file => file.path);
-
-      const vcsPath = pathsToAdd.find(p => isNestedVcsPath(p));
-      if (vcsPath) {
-        throw new Error(
-          t('Adding nested repository metadata "{0}" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.', vcsPath)
-        );
-      }
-
-      const [inheritedIgnores] = await Promise.all([
-        this.getInheritedGlobalIgnores().catch(() => []),
-      ]);
-      const clientGlobalIgnores = this.getClientGlobalIgnores();
-
-      for (const targetPath of pathsToAdd) {
-        const nestedVcs = await this.findUnignoredNestedVcsInDir(targetPath, clientGlobalIgnores, inheritedIgnores);
-        if (nestedVcs) {
-          throw new Error(
-            t('Directory "{0}" contains nested repository metadata "{1}". Please add it to svn:ignore or add files selectively.', targetPath, nestedVcs)
-          );
-        }
-      }
-
-      const prunedPathsToAdd = pruneRedundantChildPaths(pathsToAdd);
-      if (prunedPathsToAdd.length > 0) await this.runWithTargets(['add', '--parents'], prunedPathsToAdd);
-      if (pathsToDelete.length > 0) await this.runWithTargets(['delete', '--force'], pathsToDelete);
-      let commitTargets = uniquePaths;
-      const commitArgs = ['commit', '-m', message, '--depth', 'empty'];
-      // SVN directory commit targets recurse by default and can silently include
-      // unchecked child changes. Keep every target depth-empty. A newly selected
-      // unversioned directory is the one exception: it had no visible child status
-      // rows before `svn add`, so explicitly include the descendants it just added.
-      const newlyAddedDirectories = prunedPathsToAdd.filter(filePath => {
-        if (filePath === '.') return false;
-        const absolutePath = path.join(this.rootPath, filePath);
-        try { return fs.lstatSync(absolutePath).isDirectory(); } catch { return false; }
-      });
-      if (newlyAddedDirectories.length > 0) {
-        const refreshedStatuses = await this.parseSvnStatus();
-        commitTargets = Array.from(new Set([
-          ...uniquePaths,
-          ...refreshedStatuses
-            .filter(status => newlyAddedDirectories.some(directory => status.path.startsWith(`${directory}/`)))
-            .map(status => status.path),
-        ]));
-      }
-
-      // 若有新加入版本控制的文件（例如嵌套在新目录下的文件），
-      // SVN commit --depth empty 要求其祖先新增目录也必须作为 commit target 提交，否则报 E200009 错误。
-      if (pathsToAdd.length > 0) {
-        const rawStatusAfterAdd = await this.svn(['status', '--xml']).catch(() => '');
-        const addedPaths = new Set<string>();
-        const entryRegex = /<entry\b([^>]*)>([\s\S]*?)<\/entry>/g;
-        let entryMatch: RegExpExecArray | null;
-        while ((entryMatch = entryRegex.exec(rawStatusAfterAdd)) !== null) {
-          const rawPath = attr(entryMatch[1], 'path') ?? '';
-          const normalizedPath = path.isAbsolute(rawPath)
-            ? normalizeRelPath(path.relative(this.rootPath, rawPath))
-            : normalizeRelPath(rawPath);
-          const wcTag = entryMatch[2].match(/<wc-status\b([^>]*)\/?>/);
-          if (wcTag && attr(wcTag[1], 'item') === 'added') {
-            addedPaths.add(normalizedPath === '' ? '.' : normalizedPath);
-          }
-        }
-
-        const ancestorDirectoriesToInclude: string[] = [];
-        for (const targetPath of commitTargets) {
-          const parts = targetPath.split('/');
-          for (let i = 1; i < parts.length; i++) {
-            const ancestor = parts.slice(0, i).join('/');
-            if (ancestor && addedPaths.has(ancestor) && !commitTargets.includes(ancestor)) {
-              ancestorDirectoriesToInclude.push(ancestor);
-            }
-          }
-        }
-
-        if (ancestorDirectoriesToInclude.length > 0) {
-          commitTargets = Array.from(new Set([...ancestorDirectoriesToInclude, ...commitTargets]));
-        }
-      }
-      const output = await this.runWithTargets(commitArgs, commitTargets);
-      const outputNumbers = Array.from(output.matchAll(/\d+/g), match => Number(match[0]));
-      const committedRevision = outputNumbers.at(-1);
-      if (committedRevision !== undefined && Number.isSafeInteger(committedRevision)) {
-        this.localRevisionFloor = Math.max(this.localRevisionFloor ?? 0, committedRevision);
-        this.localRevisionMetadataMtimeMs = this.getWorkingCopyMetadataMtime();
-      }
-      this.clearIncomingStateCache();
-      this.clearLogHistoryCache();
-      this.blameCache.clear();
-      if (this.pendingMerge) {
-        const remainingStatuses = await this.parseSvnStatus().catch(() => []);
-        const remainingPaths = new Set(remainingStatuses.map(file => file.path));
-        this.pendingMerge.paths = this.pendingMerge.paths.filter(filePath => remainingPaths.has(filePath));
-        this.pendingMerge.addedPaths = this.pendingMerge.addedPaths.filter(filePath => remainingPaths.has(filePath));
-        if (this.pendingMerge.paths.length === 0) this.pendingMerge = undefined;
-      }
-      return output;
+      const targets = await this.prepareCommitTargetsInternal(paths);
+      return this.commitAbsoluteTargetsInternal(message, targets);
     }, 'commit', message);
+  }
+
+  /**
+   * Prepare this working copy's selected paths for a commit and return the
+   * absolute commit targets. Split from `commitPaths` so working copies of the
+   * same repository can be committed as a single revision.
+   */
+  async prepareCommitTargets(paths: string[]): Promise<string[]> {
+    return this.runStatusSensitiveOperation(() => this.prepareCommitTargetsInternal(paths), 'commit');
+  }
+
+  /**
+   * Commit absolute targets as one revision. Targets may live in other working
+   * copies of the same repository; SVN rejects unrelated repositories.
+   */
+  async commitAbsoluteTargets(message: string, absoluteTargets: string[]): Promise<string> {
+    return this.runStatusSensitiveOperation(
+      () => this.commitAbsoluteTargetsInternal(message, absoluteTargets),
+      'commit',
+      message,
+    );
+  }
+
+  /** Drop revision caches after another working copy of this repository committed. */
+  invalidateAfterExternalCommit(): void {
+    this.clearIncomingStateCache();
+    this.clearLogHistoryCache();
+    this.blameCache.clear();
+    this.infoCache = undefined;
+  }
+
+  private async prepareCommitTargetsInternal(paths: string[]): Promise<string[]> {
+    const uniquePaths = Array.from(new Set(paths.map(filePath => this.normalizeSvnTarget(filePath))));
+    if (uniquePaths.length === 0) throw new Error(t('No SVN files selected to commit.'));
+    const statuses = await this.parseSvnStatus();
+    const truncatedPaths = new Set(statuses.filter(file => file.isTruncated).map(file => file.path));
+    const truncatedSelected = uniquePaths.filter(p => truncatedPaths.has(p));
+    if (truncatedSelected.length > 0) {
+      throw new Error(
+        t('Cannot commit truncated directory "{0}" directly because its contents exceed display limits. Please use "Add entire truncated directory" first to confirm recursive inclusion.', truncatedSelected[0])
+      );
+    }
+    const selected = new Set(uniquePaths);
+    const pathsToAdd = statuses.filter(file => file.svnItem === 'unversioned' && selected.has(file.path)).map(file => file.path);
+    const pathsToDelete = statuses.filter(file => file.svnItem === 'missing' && selected.has(file.path)).map(file => file.path);
+
+    const vcsPath = pathsToAdd.find(p => isNestedVcsPath(p));
+    if (vcsPath) {
+      throw new Error(
+        t('Adding nested repository metadata "{0}" to SVN is blocked to prevent exposing repository history or credentials. Please add it to svn:ignore.', vcsPath)
+      );
+    }
+
+    const [inheritedIgnores] = await Promise.all([
+      this.getInheritedGlobalIgnores().catch(() => []),
+    ]);
+    const clientGlobalIgnores = this.getClientGlobalIgnores();
+
+    for (const targetPath of pathsToAdd) {
+      const nestedVcs = await this.findUnignoredNestedVcsInDir(targetPath, clientGlobalIgnores, inheritedIgnores);
+      if (nestedVcs) {
+        throw new Error(
+          t('Directory "{0}" contains nested repository metadata "{1}". Please add it to svn:ignore or add files selectively.', targetPath, nestedVcs)
+        );
+      }
+    }
+
+    const prunedPathsToAdd = pruneRedundantChildPaths(pathsToAdd);
+    if (prunedPathsToAdd.length > 0) await this.runWithTargets(['add', '--parents'], prunedPathsToAdd);
+    if (pathsToDelete.length > 0) await this.runWithTargets(['delete', '--force'], pathsToDelete);
+    let commitTargets = uniquePaths;
+    // SVN directory commit targets recurse by default and can silently include
+    // unchecked child changes. Keep every target depth-empty. A newly selected
+    // unversioned directory is the one exception: it had no visible child status
+    // rows before `svn add`, so explicitly include the descendants it just added.
+    const newlyAddedDirectories = prunedPathsToAdd.filter(filePath => {
+      if (filePath === '.') return false;
+      const absolutePath = path.join(this.rootPath, filePath);
+      try { return fs.lstatSync(absolutePath).isDirectory(); } catch { return false; }
+    });
+    if (newlyAddedDirectories.length > 0) {
+      const refreshedStatuses = await this.parseSvnStatus();
+      commitTargets = Array.from(new Set([
+        ...uniquePaths,
+        ...refreshedStatuses
+          .filter(status => newlyAddedDirectories.some(directory => status.path.startsWith(`${directory}/`)))
+          .map(status => status.path),
+      ]));
+    }
+
+    // 若有新加入版本控制的文件（例如嵌套在新目录下的文件），
+    // SVN commit --depth empty 要求其祖先新增目录也必须作为 commit target 提交，否则报 E200009 错误。
+    if (pathsToAdd.length > 0) {
+      const rawStatusAfterAdd = await this.svn(['status', '--xml']).catch(() => '');
+      const addedPaths = new Set<string>();
+      const entryRegex = /<entry\b([^>]*)>([\s\S]*?)<\/entry>/g;
+      let entryMatch: RegExpExecArray | null;
+      while ((entryMatch = entryRegex.exec(rawStatusAfterAdd)) !== null) {
+        const rawPath = attr(entryMatch[1], 'path') ?? '';
+        const normalizedPath = path.isAbsolute(rawPath)
+          ? normalizeRelPath(path.relative(this.rootPath, rawPath))
+          : normalizeRelPath(rawPath);
+        const wcTag = entryMatch[2].match(/<wc-status\b([^>]*)\/?>/);
+        if (wcTag && attr(wcTag[1], 'item') === 'added') {
+          addedPaths.add(normalizedPath === '' ? '.' : normalizedPath);
+        }
+      }
+
+      const ancestorDirectoriesToInclude: string[] = [];
+      for (const targetPath of commitTargets) {
+        const parts = targetPath.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          const ancestor = parts.slice(0, i).join('/');
+          if (ancestor && addedPaths.has(ancestor) && !commitTargets.includes(ancestor)) {
+            ancestorDirectoriesToInclude.push(ancestor);
+          }
+        }
+      }
+
+      if (ancestorDirectoriesToInclude.length > 0) {
+        commitTargets = Array.from(new Set([...ancestorDirectoriesToInclude, ...commitTargets]));
+      }
+    }
+    return commitTargets.map(target => this.absoluteWorkingCopyPath(target));
+  }
+
+  private async commitAbsoluteTargetsInternal(message: string, absoluteTargets: string[]): Promise<string> {
+    const targets = Array.from(new Set(absoluteTargets.filter(target => target.length > 0)));
+    if (targets.length === 0) throw new Error(t('No SVN files selected to commit.'));
+    const output = await this.runWithAbsoluteTargets(['commit', '-m', message, '--depth', 'empty'], targets);
+    const outputNumbers = Array.from(output.matchAll(/\d+/g), match => Number(match[0]));
+    const committedRevision = outputNumbers.at(-1);
+    if (committedRevision !== undefined && Number.isSafeInteger(committedRevision)) {
+      this.localRevisionFloor = Math.max(this.localRevisionFloor ?? 0, committedRevision);
+      this.localRevisionMetadataMtimeMs = this.getWorkingCopyMetadataMtime();
+    }
+    this.clearIncomingStateCache();
+    this.clearLogHistoryCache();
+    this.blameCache.clear();
+    if (this.pendingMerge) {
+      const remainingStatuses = await this.parseSvnStatus().catch(() => []);
+      const remainingPaths = new Set(remainingStatuses.map(file => file.path));
+      this.pendingMerge.paths = this.pendingMerge.paths.filter(filePath => remainingPaths.has(filePath));
+      this.pendingMerge.addedPaths = this.pendingMerge.addedPaths.filter(filePath => remainingPaths.has(filePath));
+      if (this.pendingMerge.paths.length === 0) this.pendingMerge = undefined;
+    }
+    return output;
+  }
+
+  private absoluteWorkingCopyPath(filePath: string): string {
+    return filePath === '.' ? this.rootPath : path.resolve(this.rootPath, filePath);
+  }
+
+  private async runWithAbsoluteTargets(args: string[], absolutePaths: string[]): Promise<string> {
+    const targets = Array.from(new Set(absolutePaths.map(target => escapePegRevision(target))));
+    if (targets.length === 0) throw new Error(t('No SVN paths selected.'));
+    if (targets.some(target => /[\r\n]/.test(target) || target !== target.trim())) {
+      return this.svn([...args, '--', ...targets]);
+    }
+    const targetFile = await this.writeTargets(targets);
+    try {
+      return await this.svn([...args, '--targets', targetFile]);
+    } finally {
+      await fs.promises.unlink(targetFile).catch(() => undefined);
+    }
+  }
+
+  /** Repository UUID shared by every working copy of the same SVN repository. */
+  async getRepositoryUuid(): Promise<string | undefined> {
+    return (await this.getInfo()).repositoryUuid;
   }
 
   async pull(): Promise<string> {

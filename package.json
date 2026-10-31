@@ -1370,7 +1370,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "check": "npm run lint && npm run typecheck && npm test",
-    "test": "npm run test:tags && npm run test:branches && npm run test:branch-names && npm run test:worktrees && npm run test:shelves && npm run test:scrollbars && npm run test:release",
+    "test": "npm run test:tags && npm run test:branches && npm run test:branch-names && npm run test:worktrees && npm run test:shelves && npm run test:svn-multi-wc && npm run test:git-worktree-commit && npm run test:scrollbars && npm run test:release",
     "test:branches": "node scripts/test-branch-refresh.mjs",
     "test:worktrees": "node scripts/test-worktree-workflow.mjs",
     "test:branch-names": "node scripts/test-ai-branch-names.mjs",
@@ -1392,7 +1392,9 @@
     "bump": "node scripts/bump-version.mjs",
     "version:bump": "node scripts/bump-version.mjs",
     "test:tags": "node scripts/test-git-tags.mjs",
-    "test:shelves": "node scripts/test-shelf-interop.mjs"
+    "test:shelves": "node scripts/test-shelf-interop.mjs",
+    "test:svn-multi-wc": "node scripts/test-svn-multi-wc-commit.mjs",
+    "test:git-worktree-commit": "node scripts/test-git-worktree-commit.mjs"
   },
   "dependencies": {
     "cross-spawn": "^7.0.6",

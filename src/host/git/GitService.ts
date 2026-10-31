@@ -3112,6 +3112,83 @@ export class GitService {
     }, 'commit', message);
   }
 
+  /**
+   * Shared common dir of the repository instance behind this worktree.
+   * All worktrees of one repository instance resolve to the same path, while
+   * separate clones never do — the group key for combined worktree commits.
+   */
+  async getGitCommonDir(): Promise<string> {
+    const raw = await this.git.raw(['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    return path.resolve(raw.trim());
+  }
+
+  /** Current HEAD commit id, or undefined when the repository has no commits yet. */
+  async getHeadCommitId(): Promise<string | undefined> {
+    const raw = await this.git.raw(['rev-parse', 'HEAD']).catch(() => '');
+    const id = raw.trim();
+    return /^[0-9a-f]{40,64}$/.test(id) ? id : undefined;
+  }
+
+  /** Blob id of a path as recorded at a commit, or undefined when absent there. */
+  async getBlobIdAtCommit(commitId: string, filePath: string): Promise<string | undefined> {
+    const rel = this.normalizeRepoPath(filePath);
+    const raw = await this.git.raw(['rev-parse', '--verify', '--quiet', `${commitId}:${rel}`]).catch(() => '');
+    return raw.trim() || undefined;
+  }
+
+  /** Blob id of a path's current working-tree content, or undefined when the file does not exist. */
+  async getWorktreeBlobId(filePath: string): Promise<string | undefined> {
+    const abs = path.resolve(this.rootPath, this.normalizeRepoPath(filePath));
+    try {
+      const raw = await this.git.raw(['hash-object', '--', abs]);
+      return raw.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Binary-safe patch of everything staged in this worktree (index vs HEAD). */
+  async createStagedBinaryPatch(): Promise<string> {
+    return this.rawPathSafe(['diff', '--cached', '--binary', '--full-index', '--no-ext-diff', '--no-renames']);
+  }
+
+  /** Apply a binary-safe patch to this worktree's index only; the working tree is untouched. */
+  async applyBinaryPatchToIndex(patch: string): Promise<void> {
+    const patchFile = path.join(os.tmpdir(), `versiondock-worktree-apply-${process.pid}-${Date.now()}.patch`);
+    await fs.promises.writeFile(patchFile, patch, 'utf8');
+    try {
+      await this.rawPathSafe(['apply', '--cached', '--binary', '--whitespace=nowarn', '--', patchFile]);
+    } finally {
+      await fs.promises.rm(patchFile, { force: true });
+    }
+  }
+
+  /** Move the checked-out branch and index to a commit without touching the working tree. */
+  async resetIndexToCommit(commitId: string): Promise<void> {
+    await this.git.raw(['reset', '--mixed', '--quiet', commitId]);
+  }
+
+  /** Reset the index to HEAD without touching the working tree (undo external index edits). */
+  async resetIndexToHead(): Promise<void> {
+    await this.git.raw(['reset', '--mixed', '--quiet']);
+  }
+
+  /** Paths whose working-tree content differs from the index. */
+  async listWorktreeIndexDiffPaths(): Promise<string[]> {
+    const raw = await this.rawPathSafe(['diff', '--name-only', '--no-renames']);
+    return raw.split('\n').map(line => line.trim()).filter(Boolean);
+  }
+
+  /** Restore a path in the working tree from the index. */
+  async restoreWorktreePath(filePath: string): Promise<void> {
+    await this.rawPathSafe(['checkout', '--', this.literalPathspec(filePath)]);
+  }
+
+  /** Remove an untracked path from the working tree (a file deleted by a combined commit elsewhere). */
+  async removeUntrackedWorktreePath(filePath: string): Promise<void> {
+    await this.rawPathSafe(['clean', '-f', '--', this.literalPathspec(filePath)]);
+  }
+
   private async getAbsoluteGitDir(): Promise<string | undefined> {
     const rawGitDir = await this.git.raw(['rev-parse', '--absolute-git-dir'])
       .catch(() => this.git.raw(['rev-parse', '--git-dir']).catch(() => ''));
